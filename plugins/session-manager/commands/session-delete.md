@@ -12,7 +12,7 @@ Current session ID: **$SESSION_ID**
 
 Target: **$ARGUMENTS**
 
-!`bash ${CLAUDE_PLUGIN_ROOT}/scripts/search-sessions.sh "$ARGUMENTS"`
+!`[ -n "$ARGUMENTS" ] && bash ${CLAUDE_PLUGIN_ROOT}/scripts/search-sessions.sh "$ARGUMENTS" || echo ""`
 
 ## Instructions
 
