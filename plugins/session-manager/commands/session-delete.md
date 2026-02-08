@@ -1,12 +1,12 @@
 ---
-description: Delete a session and all its related data files (no args = current session)
+description: Delete a session and all its related data files (no args = interactive select)
 argument-hint: [session-id-or-name]
 allowed-tools: Bash(bash:*)
 ---
 
-## Session Context
+## Available Sessions
 
-Current session ID: **$SESSION_ID**
+!`bash ${CLAUDE_PLUGIN_ROOT}/scripts/list-sessions.sh`
 
 ## Find Session
 
@@ -16,7 +16,7 @@ Target: **$ARGUMENTS**
 
 ## Instructions
 
-1. **If $ARGUMENTS is empty**: The user wants to delete the **current session**. Use $SESSION_ID as the target. Show the current session details and ask the user for confirmation using AskUserQuestion with options "Yes, delete current session" and "No, cancel".
+1. **If $ARGUMENTS is empty**: Show the available sessions from above as a numbered table and use AskUserQuestion to let the user pick which session to delete. Include session name and ID in each option. After selection, show the session details and ask for final confirmation with AskUserQuestion using options "Yes, delete it" and "No, cancel".
 
 2. **If no sessions matched**: Report that no session was found and suggest `/session-search` or `/session-list`.
 
@@ -29,10 +29,6 @@ Target: **$ARGUMENTS**
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/delete-session.sh <full-uuid>
    ```
    Then report what was deleted.
-   **If the deleted session was the current session ($SESSION_ID)**, display this message after the deletion report:
-   ```
-   ⚠️ Session deleted. Please restart Claude Code.
-   ```
 
 6. **If the user cancels**: Report that deletion was cancelled.
 
