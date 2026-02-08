@@ -12,7 +12,7 @@
     {
       "name": "session-manager",
       "description": "List, search, and delete Claude Code sessions and all related data across projects. Supported platforms: macOS, Linux, Windows (WSL).",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "author": {
         "name": "Girish Attri"
       },
