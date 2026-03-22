@@ -19,6 +19,15 @@ A structured process for creating and updating project documentation. Documents 
 7. **Check size and split if needed** — After writing, check if the doc should be split (see Document Size and Splitting below). Proactively suggest splitting to the user if the doc covers 3+ distinct subsystems at 80+ lines each.
 8. **Cross-reference** — Link to related docs and update them if your new doc changes the picture.
 
+## Naming Convention
+
+**All documentation filenames MUST use UPPER_CASE with underscores** (e.g., `AUTH_OVERVIEW.md`, `API_REFERENCE.md`, `DATABASE_SCHEMA.md`). This makes docs visually distinct from code files and easy to spot in directory listings.
+
+- Good: `AUTH_OVERVIEW.md`, `API_REFERENCE.md`, `DEPLOYMENT_GUIDE.md`
+- Bad: `auth-overview.md`, `api_reference.md`, `deployment-guide.md`
+
+Tracker files follow this convention: `TODO.md`, `ISSUES.md`.
+
 ## Where to Save
 
 Place docs where readers will find them:
@@ -36,7 +45,7 @@ The metadata header (Date/Status/Related) is recommended for discoverability but
 
 **Date**: YYYY-MM-DD
 **Status**: Draft | Active | Deprecated
-**Related**: `doc1.md`, `doc2.md`
+**Related**: `AUTH_OVERVIEW.md`, `API_REFERENCE.md`
 
 ## Overview
 
@@ -213,7 +222,7 @@ Captures planned improvements, missing features, and future work discovered duri
 ## [Feature/Module Name]
 
 - [ ] Description of what needs to be done
-  - Context: discovered while documenting [doc-name.md]
+  - Context: discovered while documenting [DOC_NAME.md]
   - Priority: high | medium | low
 
 - [ ] Another item
@@ -232,7 +241,7 @@ Captures bugs, inconsistencies, security concerns, and technical debt discovered
 
 - [ ] Description of the issue
   - Impact: what breaks or degrades
-  - Discovered: while documenting [doc-name.md]
+  - Discovered: while documenting [DOC_NAME.md]
   - Severity: critical | high | medium | low
 
 - [ ] Another issue
@@ -269,7 +278,7 @@ A single document should cover a single coherent topic. Use these guidelines to 
 **How to split:**
 - Create one overview doc that links to the detail docs
 - Each split doc should be self-contained — a reader shouldn't need to read 3 other docs to understand it
-- Name split docs by concept: `AUTH_OVERVIEW.md`, `AUTH_API_REFERENCE.md`, `AUTH_MOBILE.md` — not `AUTH_PART1.md`
+- Name split docs by concept: `AUTH_OVERVIEW.md`, `AUTH_API_REFERENCE.md`, `AUTH_MOBILE.md` — never `AUTH_PART1.md` or lowercase names
 - Update cross-references in all affected docs
 
 **Auto-split check:** After writing a document, scan its Table of Contents. If you see 3+ sections that are each 80+ lines and serve different purposes, proactively suggest splitting to the user rather than delivering one massive file. Explain what the split would look like and let them decide.
