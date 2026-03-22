@@ -6,7 +6,7 @@ user-invocable: true
 
 # Creating Documentation
 
-A structured process for creating and updating project documentation. Documents use **reference-based notation** (function names, table names, file paths) rather than code snippets or line numbers, because references stay accurate as code evolves while line numbers and copied code rot immediately.
+A structured process for creating and updating project documentation. Documents use **reference-based notation** (function names, table names, file paths) for describing what exists, because references stay accurate as code evolves while line numbers and copied code rot immediately. Use **focused code examples** for showing how to do things — recurring patterns, conventions, and interfaces that developers need to copy and adapt.
 
 ## Process
 
@@ -78,7 +78,12 @@ Use reference names instead of line numbers. Line numbers shift with every edit;
 | Endpoints | `METHOD /path` |
 | Env vars | `VAR_NAME` |
 
-**Code snippets** are valuable when they help the reader understand the actual interface — JSON request/response examples for APIs, SQL schema definitions, config formats, query key structures, or algorithms that are unclear in prose. Keep snippets focused on the interface, not implementation internals.
+**When to use code examples:**
+- **Interfaces** — JSON request/response examples for APIs, SQL schema definitions, config formats
+- **Recurring patterns** — Error handling, auth middleware, data access, testing setup (see `references/CODE_PATTERNS.md`)
+- **Conventions** — How the codebase structures things that new developers need to follow
+
+Keep examples focused and short (5-15 lines). Show the pattern, not the full implementation. Prefer references for describing *what* exists; use code examples for showing *how* to do things.
 
 ## Key References Table Format
 
@@ -134,7 +139,8 @@ Run the link validator after every doc creation/update. Run the freshness checke
 
 For detailed guidance on specific topics, consult:
 
-- **`references/DOCUMENT_TYPES.md`** — Document type sections (API Reference, System/Architecture, Module/Feature, Integration, Plan/Design) and optional sections
+- **`references/DOCUMENT_TYPES.md`** — Document type sections (API Reference, System/Architecture, Module/Feature, Integration, Plan/Design, Code Patterns, ADR) and optional sections
+- **`references/CODE_PATTERNS.md`** — How to document recurring code patterns, conventions, and architectural decisions
 - **`references/DIAGRAMS_GUIDE.md`** — Mermaid diagram types, when to include them, and examples
 - **`references/TODO_TRACKING.md`** — TODO.md and ISSUES.md format, when to create entries, and resolution workflow
 - **`references/SPLITTING_GUIDE.md`** — When to split docs, when long is fine, and how to split by concept
