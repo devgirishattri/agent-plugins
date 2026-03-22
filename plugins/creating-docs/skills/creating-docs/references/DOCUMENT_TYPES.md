@@ -52,6 +52,33 @@ For docs with many endpoints, start with a summary table (`Method | Endpoint | D
 | **Error Handling** | Failure handling, retry patterns |
 | **Troubleshooting** | Common errors and their fixes |
 
+## Code Patterns
+
+For documenting recurring patterns and conventions that developers need to follow. See `references/CODE_PATTERNS.md` for detailed guidance.
+
+| Section | Purpose |
+|---------|---------|
+| **Pattern Name** | Short, descriptive name |
+| **When to Use** | Scenarios where this pattern applies |
+| **Example** | Focused code example (5-15 lines) showing the pattern |
+| **Anti-patterns** | What NOT to do, with brief explanation |
+| **Related Patterns** | Links to related patterns |
+
+## Architecture Decision Record (ADR)
+
+For capturing *why* decisions were made — not just what exists. ADRs prevent re-litigating settled decisions and give new team members context.
+
+| Section | Purpose |
+|---------|---------|
+| **Title** | Short decision name (e.g., "Use PostgreSQL for user data") |
+| **Status** | Proposed / Accepted / Deprecated / Superseded by [ADR_NAME.md] |
+| **Context** | What situation or problem prompted this decision |
+| **Decision** | What was decided and why |
+| **Alternatives Considered** | Other options evaluated, with reasons for rejection |
+| **Consequences** | Trade-offs accepted, both positive and negative |
+
+Name ADR files by topic: `ADR_AUTH_JWT.md`, `ADR_DATABASE_CHOICE.md` — not by number.
+
 ## Plan / Design
 
 | Section | Purpose |
