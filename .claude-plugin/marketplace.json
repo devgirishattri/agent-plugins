@@ -20,6 +20,18 @@
       "category": "productivity",
       "keywords": ["session", "cleanup", "management", "maintenance"],
       "license": "MIT"
+    },
+    {
+      "name": "creating-docs",
+      "description": "Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Girish Attri"
+      },
+      "source": "./plugins/creating-docs",
+      "category": "productivity",
+      "keywords": ["documentation", "docs", "writing", "markdown", "reference"],
+      "license": "MIT"
     }
   ]
 }
