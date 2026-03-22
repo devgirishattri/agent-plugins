@@ -1,7 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Checks for embedded TODO/FIXME/HACK markers in doc files
 # Usage: check-todos.sh [docs-directory]
 # Returns non-zero if markers found in files other than TODO.md and ISSUES.md
+# Supported platforms: macOS, Linux
 
 docs_dir="${1:-.}"
 found=0
