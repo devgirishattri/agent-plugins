@@ -14,7 +14,8 @@ while IFS= read -r file; do
     continue
   fi
 
-  hits=$(grep -nEi 'TODO[: ]|FIXME[: ]|HACK[: ]|XXX[: ]' "$file" 2>/dev/null | head -10)
+  # Match TODO/FIXME/HACK markers — XXX excluded (too many false positives with placeholder text)
+  hits=$(grep -nE 'TODO[: ]|FIXME[: ]|HACK[: ]' "$file" 2>/dev/null | head -10)
   if [ -n "$hits" ]; then
     echo "FOUND in $file:"
     echo "$hits" | sed 's/^/  /'
