@@ -1,7 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Validates cross-references in docs/*.md files
 # Usage: validate-links.sh [docs-directory]
 # Returns non-zero if broken links found
+# Supported platforms: macOS, Linux
 
 docs_dir="${1:-.}"
 broken=0
@@ -10,8 +11,10 @@ checked=0
 # Find all markdown files in the docs directory
 while IFS= read -r file; do
   # Extract markdown links to local .md files: [text](./path.md) or [text](path.md)
-  grep -oP '\[.*?\]\(\s*\.?/?(?!http)([^)]+\.md)\s*\)' "$file" 2>/dev/null | \
-    grep -oP '\(\s*\.?/?\K[^)]+\.md' | while read -r link; do
+  # Uses sed instead of grep -P for macOS compatibility
+  grep -o '\[.*\]([^)]*.md)' "$file" 2>/dev/null | \
+    sed 's/.*(\(.*\.md\))/\1/' | sed 's|^\./||' | \
+    grep -v '^http' | while read -r link; do
       # Resolve relative to the file's directory
       dir=$(dirname "$file")
       target="$dir/$link"
@@ -23,8 +26,8 @@ while IFS= read -r file; do
     done
 
   # Extract Related: header references like `doc1.md`, `doc2.md`
-  grep -P '^\*\*Related\*\*:' "$file" 2>/dev/null | \
-    grep -oP '`([^`]+\.md)`' | tr -d '`' | while read -r ref; do
+  grep '^\*\*Related\*\*:' "$file" 2>/dev/null | \
+    grep -oE '`[^`]+\.md`' | tr -d '`' | while read -r ref; do
       dir=$(dirname "$file")
       target="$dir/$ref"
       checked=$((checked + 1))
