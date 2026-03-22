@@ -275,14 +275,14 @@ A single document should cover a single coherent topic. Use these guidelines to 
 
 ## Validation Tools
 
-This skill bundles three scripts in `~/.claude/skills/creating-docs/scripts/` for verifying doc health. Run them after writing or updating docs.
+This skill bundles three scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/` for verifying doc health. Run them after writing or updating docs.
 
 ### check-todos.sh
 
 Scans doc files for embedded TODO/FIXME/HACK markers that should be in the dedicated tracker files instead. Run this after every doc creation or update.
 
 ```bash
-bash ~/.claude/skills/creating-docs/scripts/check-todos.sh docs/
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-todos.sh docs/
 ```
 
 Skips `TODO.md` and `ISSUES.md` (markers belong there). Reports file, line number, and the offending text.
@@ -292,7 +292,7 @@ Skips `TODO.md` and `ISSUES.md` (markers belong there). Reports file, line numbe
 Checks that all cross-references in docs actually point to existing files. Catches stale links after renames or deletions.
 
 ```bash
-bash ~/.claude/skills/creating-docs/scripts/validate-links.sh docs/
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/validate-links.sh docs/
 ```
 
 Checks:
@@ -304,7 +304,7 @@ Checks:
 Compares doc modification dates against the code files they reference using git history. Flags docs that haven't been updated since their referenced code changed.
 
 ```bash
-bash ~/.claude/skills/creating-docs/scripts/check-freshness.sh docs/ 30
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-freshness.sh docs/ 30
 ```
 
 Arguments: `[docs-directory]` and `[days-threshold]` (default: 30 days).
