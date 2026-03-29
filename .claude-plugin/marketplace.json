@@ -35,14 +35,14 @@
     },
     {
       "name": "session-chat",
-      "description": "Peer-to-peer messaging between Claude sessions via tmux and task dispatch to worker panes with real-time visibility and automatic result collection.",
-      "version": "0.5.2",
+      "description": "Peer-to-peer messaging, task dispatch, and cross-project context sharing between Claude sessions via tmux.",
+      "version": "0.6.0",
       "author": {
         "name": "Girish Attri"
       },
       "source": "./plugins/session-chat",
       "category": "productivity",
-      "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent", "peer-to-peer"],
+      "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent", "peer-to-peer", "context-sharing"],
       "license": "MIT"
     }
   ]
