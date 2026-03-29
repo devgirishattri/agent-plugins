@@ -1,16 +1,22 @@
 ---
-description: Label this session's tmux pane for messaging
-argument-hint: <name>
+description: Show or set this session's tmux pane name for messaging
+argument-hint: [name]
 allowed-tools: Bash(bash:*)
 ---
 
+## Current Name
+
+!`[ -n "$TMUX" ] && tmux display-message -p -t "$TMUX_PANE" '#{@name}' 2>/dev/null || echo ""`
+
 ## Instructions
 
-1. If $ARGUMENTS is empty, ask the user for a name
-2. Validate the name: no spaces, no special characters except hyphens and underscores
-3. Run this command to set the pane name:
-   ```
-   bash -c 'source ${CLAUDE_PLUGIN_ROOT}/scripts/lib.sh && set_pane_name "$TMUX_PANE" "$ARGUMENTS"'
-   ```
-4. Report: "This pane is now '$ARGUMENTS'. Other sessions can reach you via `/send $ARGUMENTS <message>`."
-5. Suggest: "Run `/panes` to see all named panes."
+1. If a current name is shown above (non-empty), and $ARGUMENTS is empty:
+   - Report: "This pane is named '**<name>**'. Other sessions can reach you via `/send <name> <message>`."
+
+2. If $ARGUMENTS is provided, set a new name:
+   - Validate: only alphanumeric, hyphens, underscores allowed
+   - Run: `bash -c 'source ${CLAUDE_PLUGIN_ROOT}/scripts/lib.sh && set_pane_name "$TMUX_PANE" "<name>"'`
+   - Report: "Pane renamed to '**<name>**'."
+
+3. If both current name and $ARGUMENTS are empty:
+   - Report: "No name set. Use `/whoami <name>` to set one, or `/rename <name>` and it will sync automatically."
