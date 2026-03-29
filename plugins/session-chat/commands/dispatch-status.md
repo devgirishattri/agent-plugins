@@ -1,6 +1,6 @@
 ---
-description: Show status of all dispatched worker tasks
-argument-hint: [label]
+description: Show status of dispatched tasks to other sessions
+argument-hint: [session-name]
 allowed-tools: Bash(bash:*)
 ---
 
@@ -12,9 +12,8 @@ allowed-tools: Bash(bash:*)
 
 Present the tab-separated data above as a markdown table:
 
-| Label | Status | Model | Pane | Created |
+| Session | Status | Pane | Created |
 
 Rules:
 - If no tasks found, report that
-- For running tasks, suggest `/dispatch-cancel <label>` to cancel
-- For completed tasks, suggest `/dispatch-collect <label>` to read results
+- For completed tasks, suggest `/dispatch-collect <session>` to read results

@@ -50,8 +50,7 @@ cp "$PROMPT_FILE" "$TASK_DIR/prompt.txt"
 echo "running" > "$TASK_DIR/status.txt"
 
 cat > "$TASK_DIR/meta.txt" <<EOF
-label: $TARGET_NAME
-type: existing
+target: $TARGET_NAME
 pane_id: $TARGET_PANE
 sender_pane: $TMUX_PANE
 sender_name: $MY_NAME
