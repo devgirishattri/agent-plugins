@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Current Name
 
-!`[ -n "$TMUX" ] && tmux display-message -p -t "$TMUX_PANE" '#{@name}' 2>/dev/null || echo ""`
+!`bash ${CLAUDE_PLUGIN_ROOT}/scripts/get-my-name.sh`
 
 ## Instructions
 

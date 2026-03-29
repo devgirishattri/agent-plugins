@@ -36,7 +36,7 @@
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging between Claude sessions via tmux and task dispatch to worker panes with real-time visibility and automatic result collection.",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "author": {
         "name": "Girish Attri"
       },
