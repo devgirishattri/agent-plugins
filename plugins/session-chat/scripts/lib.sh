@@ -32,13 +32,6 @@ validate_label() {
   fi
 }
 
-validate_model() {
-  local model="$1"
-  if ! [[ "$model" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo "ERROR: Invalid model name." >&2
-    return 1
-  fi
-}
 
 # --- Dispatch directory ---
 

@@ -1,6 +1,6 @@
 ---
-description: Collect results from completed worker tasks
-argument-hint: [label | all]
+description: Collect results from completed dispatched tasks
+argument-hint: [session-name | all]
 allowed-tools: Bash(bash:*), Read
 ---
 
@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*), Read
 
 ## Instructions
 
-Present each task result clearly:
-- Show the task label as a heading
-- Show the worker's response text
+Present each result clearly:
+- Show the session name as a heading
+- Show the response text
 - If no completed tasks, report that and suggest checking `/dispatch-status`

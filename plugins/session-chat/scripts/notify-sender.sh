@@ -34,7 +34,7 @@ STATUS=$(cat "$TASK_DIR/status.txt" 2>/dev/null || echo "unknown")
 # Only process running tasks
 [ "$STATUS" != "running" ] && exit 0
 
-LABEL=$(read_field "$TASK_META" "label")
+LABEL=$(read_field "$TASK_META" "target")
 SENDER_PANE=$(read_field "$TASK_META" "sender_pane")
 
 # Read hook input from stdin to get transcript path

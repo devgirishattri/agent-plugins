@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# check-status.sh — Check status of dispatched worker tasks
-# Usage: check-status.sh [label|all]
+# check-status.sh — Check status of dispatched tasks
+# Usage: check-status.sh [session-name|all]
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
@@ -9,7 +9,7 @@ source "$(dirname "$0")/lib.sh"
 FILTER="${1:-all}"
 TASKS_DIR=".claude/dispatch/tasks"
 
-# Validate label against path traversal/injection
+# Validate input against path traversal/injection
 if [ "$FILTER" != "all" ]; then
   validate_label "$FILTER" || exit 1
 fi
@@ -24,15 +24,14 @@ found=0
 for task_dir in "$TASKS_DIR"/*/; do
   [ -d "$task_dir" ] || continue
 
-  label=$(read_field "$task_dir/meta.txt" "label") || continue
+  target=$(read_field "$task_dir/meta.txt" "target") || continue
 
-  # Filter by label if specified
-  if [ "$FILTER" != "all" ] && [ "$label" != "$FILTER" ]; then
+  # Filter by session name if specified
+  if [ "$FILTER" != "all" ] && [ "$target" != "$FILTER" ]; then
     continue
   fi
 
   status=$(cat "$task_dir/status.txt" 2>/dev/null || echo "unknown")
-  model=$(read_field "$task_dir/meta.txt" "model")
   pane_id=$(read_field "$task_dir/meta.txt" "pane_id")
   created_at=$(read_field "$task_dir/meta.txt" "created_at")
 
@@ -44,7 +43,7 @@ for task_dir in "$TASKS_DIR"/*/; do
     fi
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$status" "$model" "$pane_id" "$created_at"
+  printf '%s\t%s\t%s\t%s\n' "$target" "$status" "$pane_id" "$created_at"
   found=$((found + 1))
 done
 
@@ -52,6 +51,6 @@ if [ "$found" -eq 0 ]; then
   if [ "$FILTER" = "all" ]; then
     echo "No dispatched tasks found."
   else
-    echo "No task found with label: $FILTER"
+    echo "No task found for session: $FILTER"
   fi
 fi
