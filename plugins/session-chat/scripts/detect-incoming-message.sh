@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # detect-incoming-message.sh — UserPromptSubmit hook: detect cross-session messages
 # and inject instructions for Claude to auto-respond back to the sender.
+# Also marks dispatched tasks as completed when replies arrive.
 # Supported platforms: macOS, Linux
 
 # Quick exit if not inside tmux
@@ -10,7 +11,6 @@
 HOOK_INPUT=$(cat)
 
 # Check if the input contains a [from:X pane:Y] pattern anywhere
-# (the user_prompt is embedded in the JSON, so search the whole input)
 if ! echo "$HOOK_INPUT" | grep -q '\[from:'; then
   exit 0
 fi
@@ -25,9 +25,25 @@ if [ -z "$SENDER_NAME" ] || [ -z "$SENDER_PANE" ]; then
   exit 0
 fi
 
-# Sanitize extracted values (prevent injection into JSON output)
+# Sanitize extracted values
 SENDER_NAME=$(echo "$SENDER_NAME" | tr -cd 'a-zA-Z0-9_:-')
 SENDER_PANE=$(echo "$SENDER_PANE" | tr -cd 'a-zA-Z0-9_%')
+
+# Check if this is a reply to a dispatched task (mark it completed)
+TASKS_DIR=".claude/dispatch/tasks"
+if [ -d "$TASKS_DIR/$SENDER_NAME" ]; then
+  TASK_STATUS=$(cat "$TASKS_DIR/$SENDER_NAME/status.txt" 2>/dev/null || echo "")
+  if [ "$TASK_STATUS" = "running" ]; then
+    # Extract the message content (everything after the [from:...] header)
+    MSG_CONTENT=$(echo "$HOOK_INPUT" | grep -oE '\] .*' | head -1 | sed 's/^\] //')
+    if [ -n "$MSG_CONTENT" ]; then
+      echo "$MSG_CONTENT" > "$TASKS_DIR/$SENDER_NAME/result.md"
+    fi
+    echo "completed" > "$TASKS_DIR/$SENDER_NAME/status.txt"
+    # This is a reply, not a new query — don't inject auto-reply instructions
+    exit 0
+  fi
+fi
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 
