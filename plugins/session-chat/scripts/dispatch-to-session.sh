@@ -58,8 +58,8 @@ created_at: $(portable_date_iso)
 cwd: $(pwd)
 EOF
 
-# Send the task as a message (the auto-reply hook will process it)
+# Send the task via file-based dispatch (handles multi-line + special chars)
 PROMPT_TEXT=$(cat "$PROMPT_FILE")
-send_message "$TARGET_NAME" "$PROMPT_TEXT"
+dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"
 
 echo "Dispatched task to existing session '$TARGET_NAME' ($TARGET_PANE)"

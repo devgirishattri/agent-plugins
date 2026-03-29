@@ -108,22 +108,35 @@ send_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
+  local formatted="[from:${my_name} pane:${TMUX_PANE}] ${message}"
+  send_text "$target_pane" "$formatted"
+}
 
-  # Write full message to shared file (handles multi-line + special chars)
+dispatch_message() {
+  local target_name="$1"
+  local message="$2"
+  local my_name
+  my_name=$(get_my_name)
+  if [ -z "$my_name" ]; then
+    echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
+    return 1
+  fi
+  local target_pane
+  target_pane=$(resolve_pane "$target_name") || return 1
+
+  # Write full message to file (handles multi-line + special chars)
   ensure_messages_dir
   local msg_id
   msg_id="$(date +%s)-${my_name}-to-${target_name}"
   local msg_file="$MESSAGES_DIR/${msg_id}.md"
-
   cat > "$msg_file" <<EOF
 $message
 EOF
 
-  # Send single-line notification to target pane with file reference
+  # Send single-line notification with file reference
   local preview
   preview=$(echo "$message" | head -1 | cut -c1-80)
-  local notification="[from:${my_name} pane:${TMUX_PANE} msg:${msg_file}] ${preview}"
-  send_text "$target_pane" "$notification"
+  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file}] ${preview}"
 }
 
 read_pane() {
