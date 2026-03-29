@@ -1,5 +1,13 @@
 {
   "hooks": {
+    "SessionStart": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "[ -n \"$TMUX\" ] && tmux source-file ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-tmux.conf 2>/dev/null; exit 0",
+        "timeout": 5
+      }]
+    }],
     "UserPromptSubmit": [{
       "matcher": "",
       "hooks": [{
