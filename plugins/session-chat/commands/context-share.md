@@ -1,18 +1,18 @@
 ---
-description: Share a project context snapshot with another named session
-argument-hint: <session-name> [project-name]
+description: Share a session context summary with another named session
+argument-hint: <session-name> [snapshot-name]
 allowed-tools: Bash(bash:*)
 ---
 
 ## Instructions
 
-1. Parse $ARGUMENTS: first word is the target session, second word (optional) is the project name.
-   - If no project name given, derive from current directory name.
+1. Parse $ARGUMENTS: first word is the target session, second word (optional) is the snapshot name.
+   - If no snapshot name given, derive from current directory name.
 
 2. Run the share script:
    ```
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/share-context.sh "<project-name>" "<session-name>"
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/share-context.sh "<snapshot-name>" "<session-name>"
    ```
 
-3. Report what was shared and how the target can load it.
+3. Report: "Shared session context '<snapshot-name>' with <session>. They can load it with `/context-load <snapshot-name>`."
 4. If the snapshot doesn't exist, suggest running `/context-generate` first.

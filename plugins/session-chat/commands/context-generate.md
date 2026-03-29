@@ -1,61 +1,53 @@
 ---
-description: Generate a context snapshot of the current project for sharing with other sessions
-argument-hint: [project-name]
+description: Generate a session context summary — what you worked on, decisions made, where you left off
+argument-hint: [snapshot-name]
 allowed-tools: Read, Glob, Grep, Bash(bash:*)
 ---
 
 ## Instructions
 
-Generate a concise context snapshot of the current project that another session can use to understand the project's interfaces, conventions, and architecture.
+Generate a concise summary of what THIS session has been working on — for handing off to another session.
 
-1. **Determine project name**: Use $ARGUMENTS if provided, otherwise derive from the current directory name (last path component, lowercase, hyphens for spaces).
+1. **Determine snapshot name**: Use $ARGUMENTS if provided, otherwise derive from the Claude session name or current directory name.
 
-2. **Scan the project** — Read these sources (skip any that don't exist):
-   - `CLAUDE.md` — project guidelines and conventions
-   - `README.md` — project overview
-   - Route/endpoint definitions (Express, Laravel, FastAPI, Django, etc.)
-   - Database schema (Prisma schema, migrations, models)
-   - API documentation in `docs/`
-   - Package manifests (`package.json`, `composer.json`, `pyproject.toml`, `Cargo.toml`)
-   - Auth/middleware patterns
-   - Environment variable usage (`.env.example`)
+2. **Gather session context** by checking:
+   - `git diff --stat HEAD` — files currently modified
+   - `git log --oneline -10` — recent commits in this session
+   - `git diff --name-only HEAD~5..HEAD` — files changed in last 5 commits
+   - Any `docs/TODO.md` or `docs/ISSUES.md` — tracked items
+   - Any open problems or blockers encountered during the conversation
 
-3. **Generate the snapshot** with these sections (include only what's relevant):
+3. **Generate the summary** with these sections (include only what's relevant):
 
    ```
-   # <Project Name> Context Snapshot
-   Generated: YYYY-MM-DD
+   # Session Context: <name>
+   Generated: YYYY-MM-DD HH:MM
+   Project: <current directory>
 
-   ## Overview
-   [1-2 sentences: what this project does]
+   ## What Was Done
+   [Bullet list of completed work — features added, bugs fixed, refactors made]
 
-   ## Tech Stack
-   [Language, framework, database, key dependencies]
+   ## Files Changed
+   [List of files modified/created/deleted with brief description]
 
-   ## API Endpoints
-   [Method, path, auth, description — table format]
+   ## Key Decisions
+   [Decisions made during the session and WHY — these are the hardest to reconstruct]
 
-   ## Data Models
-   [Key tables/models with important fields]
+   ## Open Issues
+   [Problems discovered, unresolved bugs, things that need attention]
 
-   ## Auth Pattern
-   [How auth works: token type, middleware, key fields]
+   ## Where I Left Off
+   [Current state — what's in progress, what the next step should be]
 
-   ## Error Format
-   [Standard error response shape]
-
-   ## Conventions
-   [Coding patterns, naming, file structure conventions]
-
-   ## Environment Variables
-   [Key env vars needed, from .env.example]
+   ## Notes for Next Session
+   [Gotchas, context that isn't obvious from the code, warnings]
    ```
 
 4. **Save the snapshot**: Write it to a temp file, then run:
    ```
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/save-context.sh "<project-name>" "<temp-file>"
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/save-context.sh "<snapshot-name>" "<temp-file>"
    ```
 
-5. **Report**: "Context snapshot for '<project-name>' generated. Share it with `/context-share <session> <project-name>`."
+5. **Report**: "Session context saved as '<snapshot-name>'. Share with `/context-share <session> <snapshot-name>` or load later with `/context-load <snapshot-name>`."
 
-Keep the snapshot **concise** — under 300 lines. Focus on interfaces (what other sessions need to know), not implementation details.
+Keep the summary **concise** — under 150 lines. Focus on what another session needs to continue the work, not a transcript of everything that happened.
