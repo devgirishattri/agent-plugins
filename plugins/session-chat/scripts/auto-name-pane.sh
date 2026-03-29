@@ -26,13 +26,19 @@ fi
 # Extract last custom-title from transcript
 SESSION_NAME=$(grep -a '"customTitle":"[^"]*"' "$TRANSCRIPT" 2>/dev/null | tail -1 | grep -oE '"customTitle":"[^"]*"' | cut -d'"' -f4) || true
 
-[ -z "$SESSION_NAME" ] && exit 0
-
-# Get current @name — only update if different
+# Get current @name
 CURRENT_NAME=$(tmux display-message -p -t "$TMUX_PANE" '#{@name}' 2>/dev/null) || true
 
-if [ "$CURRENT_NAME" != "$SESSION_NAME" ]; then
-  tmux set-option -p -t "$TMUX_PANE" @name "$SESSION_NAME" 2>/dev/null || true
+if [ -n "$SESSION_NAME" ]; then
+  # Session has a name — set @name if different
+  if [ "$CURRENT_NAME" != "$SESSION_NAME" ]; then
+    tmux set-option -p -t "$TMUX_PANE" @name "$SESSION_NAME" 2>/dev/null || true
+  fi
+else
+  # No session name — clear stale @name from previous session
+  if [ -n "$CURRENT_NAME" ]; then
+    tmux set-option -p -u -t "$TMUX_PANE" @name 2>/dev/null || true
+  fi
 fi
 
 exit 0
