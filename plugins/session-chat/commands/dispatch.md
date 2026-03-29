@@ -4,16 +4,15 @@ argument-hint: [target-session] <prompt> [--model sonnet|opus|haiku] [--label na
 allowed-tools: Bash(bash:*)
 ---
 
-## Named Panes
-
-!`bash ${CLAUDE_PLUGIN_ROOT}/scripts/list-panes.sh`
-
 ## Instructions
 
-1. Parse $ARGUMENTS and determine the dispatch mode:
+1. First, check if the first word of $ARGUMENTS is an existing named pane by running:
+   ```
+   tmux list-panes -a -F '#{@name}' 2>/dev/null | grep -qx "<first-word>"
+   ```
 
-   **Mode A — Existing session**: If the first word matches a named pane from the list above, dispatch TO that session.
-   - Target = first word, prompt = everything after
+2. **If the first word matches an existing pane name** → dispatch TO that session:
+   - Target = first word, prompt = everything after the first word
    - Run:
      ```
      PROMPT_FILE=$(mktemp)
@@ -23,9 +22,9 @@ allowed-tools: Bash(bash:*)
      ```
    - Report: "Dispatched task to **<target>**. Track with `/dispatch-status`."
 
-   **Mode B — New worker**: If the first word does NOT match any named pane, create a new worker pane.
+3. **If the first word does NOT match any pane** → create a new worker pane:
    - Extract `--model` flag (default: sonnet)
-   - Extract `--label` flag (auto-generate 6-char hex if not provided)
+   - Extract `--label` flag (auto-generate if not provided: `head -c3 /dev/urandom | od -An -tx1 | tr -d ' '`)
    - Prompt = everything that's not a flag
    - Run:
      ```
@@ -36,5 +35,4 @@ allowed-tools: Bash(bash:*)
      ```
    - Report: "Dispatched new worker **<label>** using <model>."
 
-2. If error about no name, tell user to run `/whoami <name>` or `/rename <name>` first.
-3. If target not found, show the available panes from above.
+4. If error about no name, tell user to run `/whoami <name>` or `/rename <name>` first.
