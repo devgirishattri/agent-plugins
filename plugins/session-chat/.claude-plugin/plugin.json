@@ -1,6 +1,6 @@
 {
   "name": "session-chat",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Peer-to-peer messaging between Claude sessions and task dispatch to tmux worker panes. Any session can send messages to any other named session, dispatch background workers, and collect results automatically.",
   "author": {
     "name": "Girish Attri"
