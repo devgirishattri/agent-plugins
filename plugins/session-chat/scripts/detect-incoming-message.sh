@@ -32,24 +32,11 @@ fi
 SENDER_NAME=$(echo "$SENDER_NAME" | tr -cd 'a-zA-Z0-9_:-')
 SENDER_PANE=$(echo "$SENDER_PANE" | tr -cd 'a-zA-Z0-9_%')
 
-# Check if this is a reply to a dispatched task
-TASKS_DIR=".claude/dispatch/tasks"
-if [ -d "$TASKS_DIR/$SENDER_NAME" ]; then
-  TASK_STATUS=$(cat "$TASKS_DIR/$SENDER_NAME/status.txt" 2>/dev/null || echo "")
-  if [ "$TASK_STATUS" = "running" ]; then
-    if [ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ]; then
-      cp "$MSG_FILE" "$TASKS_DIR/$SENDER_NAME/result.md"
-    fi
-    echo "completed" > "$TASKS_DIR/$SENDER_NAME/status.txt"
-    exit 0
-  fi
-fi
-
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 
 # Build instruction based on message type
 if [ -n "$MSG_FILE" ]; then
-  # File-based dispatch — tell Claude to read the full message from file
+  # File-based /dispatch — tell Claude to read the full message from file
   printf '{"decision":"approve","systemMessage":"MANDATORY INSTRUCTION: This is a dispatched task from session [%s]. The full task is in file: %s. You MUST: 1) Read the full message from that file using the Read tool. 2) Complete the task using your knowledge of the current project. 3) Send your response back by running: bash %s/scripts/send-message.sh %s YOUR_ANSWER (single-quoted string). 4) Do this IMMEDIATELY without asking permission."}\n' "$SENDER_NAME" "$MSG_FILE" "$PLUGIN_ROOT" "$SENDER_NAME"
 else
   # Direct /send — respond to the inline message

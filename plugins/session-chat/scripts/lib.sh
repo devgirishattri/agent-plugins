@@ -40,17 +40,6 @@ ensure_messages_dir() {
   mkdir -p "$MESSAGES_DIR"
 }
 
-# --- Dispatch directory ---
-
-ensure_dispatch_dir() {
-  mkdir -p ".claude/dispatch/tasks"
-}
-
-task_dir() {
-  local label="$1"
-  echo ".claude/dispatch/tasks/$label"
-}
-
 # --- Pane naming (smux @name pattern) ---
 
 set_pane_name() {
@@ -151,23 +140,3 @@ portable_date_iso() {
   date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
 }
 
-# --- Field read/write for plain-text state files ---
-
-read_field() {
-  local file="$1"
-  local field="$2"
-  grep "^${field}:" "$file" 2>/dev/null | sed "s/^${field}: *//"
-}
-
-write_field() {
-  local file="$1"
-  local field="$2"
-  local value="$3"
-  if grep -q "^${field}:" "$file" 2>/dev/null; then
-    local tmp="${file}.tmp.$$"
-    sed "s|^${field}:.*|${field}: ${value}|" "$file" > "$tmp"
-    mv "$tmp" "$file"
-  else
-    echo "${field}: ${value}" >> "$file"
-  fi
-}

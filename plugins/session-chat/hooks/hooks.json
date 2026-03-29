@@ -19,14 +19,6 @@
         "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect-incoming-message.sh",
         "timeout": 5
       }]
-    }],
-    "Stop": [{
-      "matcher": "",
-      "hooks": [{
-        "type": "command",
-        "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/notify-sender.sh",
-        "timeout": 15
-      }]
     }]
   }
 }
