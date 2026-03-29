@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib.sh — Shared functions for task-dispatcher plugin
+# lib.sh — Shared functions for session-chat plugin
 # Source this file: source "$(dirname "$0")/lib.sh"
 # Supported platforms: macOS, Linux
 
@@ -32,6 +32,13 @@ validate_label() {
   fi
 }
 
+# --- Message directory ---
+
+MESSAGES_DIR="$HOME/.claude/messages"
+
+ensure_messages_dir() {
+  mkdir -p "$MESSAGES_DIR"
+}
 
 # --- Dispatch directory ---
 
@@ -101,8 +108,22 @@ send_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
-  local formatted="[from:${my_name} pane:${TMUX_PANE}] ${message}"
-  send_text "$target_pane" "$formatted"
+
+  # Write full message to shared file (handles multi-line + special chars)
+  ensure_messages_dir
+  local msg_id
+  msg_id="$(date +%s)-${my_name}-to-${target_name}"
+  local msg_file="$MESSAGES_DIR/${msg_id}.md"
+
+  cat > "$msg_file" <<EOF
+$message
+EOF
+
+  # Send single-line notification to target pane with file reference
+  local preview
+  preview=$(echo "$message" | head -1 | cut -c1-80)
+  local notification="[from:${my_name} pane:${TMUX_PANE} msg:${msg_file}] ${preview}"
+  send_text "$target_pane" "$notification"
 }
 
 read_pane() {

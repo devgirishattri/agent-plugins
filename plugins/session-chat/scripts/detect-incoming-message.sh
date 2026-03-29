@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # detect-incoming-message.sh — UserPromptSubmit hook: detect cross-session messages
-# and inject instructions for Claude to auto-respond back to the sender.
-# Also marks dispatched tasks as completed when replies arrive.
+# and inject instructions for Claude to read the full message and auto-respond.
 # Supported platforms: macOS, Linux
 
 # Quick exit if not inside tmux
@@ -17,8 +16,12 @@ fi
 
 # Extract sender name: [from:SENDER_NAME pane:...]
 SENDER_NAME=$(echo "$HOOK_INPUT" | grep -oE '\[from:[^ ]+ ' | head -1 | sed 's/\[from://' | sed 's/ $//')
-# Extract sender pane: [from:... pane:SENDER_PANE]
-SENDER_PANE=$(echo "$HOOK_INPUT" | grep -oE 'pane:[^]]+' | head -1 | sed 's/pane://')
+
+# Extract sender pane: pane:SENDER_PANE
+SENDER_PANE=$(echo "$HOOK_INPUT" | grep -oE 'pane:%[0-9]+' | head -1 | sed 's/pane://')
+
+# Extract message file path: msg:/path/to/file.md
+MSG_FILE=$(echo "$HOOK_INPUT" | grep -oE 'msg:[^ \]]+' | head -1 | sed 's/msg://')
 
 # Quick exit if extraction failed
 if [ -z "$SENDER_NAME" ] || [ -z "$SENDER_PANE" ]; then
@@ -34,18 +37,22 @@ TASKS_DIR=".claude/dispatch/tasks"
 if [ -d "$TASKS_DIR/$SENDER_NAME" ]; then
   TASK_STATUS=$(cat "$TASKS_DIR/$SENDER_NAME/status.txt" 2>/dev/null || echo "")
   if [ "$TASK_STATUS" = "running" ]; then
-    # Extract the message content (everything after the [from:...] header)
-    MSG_CONTENT=$(echo "$HOOK_INPUT" | grep -oE '\] .*' | head -1 | sed 's/^\] //')
-    if [ -n "$MSG_CONTENT" ]; then
-      echo "$MSG_CONTENT" > "$TASKS_DIR/$SENDER_NAME/result.md"
+    # Read full message from file if available
+    if [ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ]; then
+      cp "$MSG_FILE" "$TASKS_DIR/$SENDER_NAME/result.md"
     fi
     echo "completed" > "$TASKS_DIR/$SENDER_NAME/status.txt"
-    # This is a reply, not a new query — don't inject auto-reply instructions
     exit 0
   fi
 fi
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 
-# Inject system message instructing Claude to respond back automatically
-printf '{"decision":"approve","systemMessage":"MANDATORY INSTRUCTION: The user prompt is a cross-session message from session [%s]. You MUST: 1) Answer their question using your knowledge of the current project. 2) Send your response back by running this exact Bash command: bash %s/scripts/send-message.sh %s YOUR_ANSWER (replace YOUR_ANSWER with your concise 1-3 sentence answer as a single-quoted string). 3) Do this IMMEDIATELY without asking the user for permission. This is an automated inter-session query — respond and send back automatically."}\n' "$SENDER_NAME" "$PLUGIN_ROOT" "$SENDER_NAME"
+# Build the instruction — include file path if available
+READ_INSTRUCTION=""
+if [ -n "$MSG_FILE" ]; then
+  READ_INSTRUCTION="IMPORTANT: The notification in the prompt is only a preview. Read the FULL message from the file at: ${MSG_FILE} using the Read tool BEFORE responding. "
+fi
+
+# Inject system message instructing Claude to read the full message and respond back
+printf '{"decision":"approve","systemMessage":"MANDATORY INSTRUCTION: The user prompt is a cross-session message from session [%s]. %sYou MUST: 1) Read the full message file if a msg: path is provided. 2) Answer their question using your knowledge of the current project. 3) Send your response back by running: bash %s/scripts/send-message.sh %s YOUR_ANSWER (replace YOUR_ANSWER with your answer as a single-quoted string). 4) Do this IMMEDIATELY without asking the user for permission."}\n' "$SENDER_NAME" "$READ_INSTRUCTION" "$PLUGIN_ROOT" "$SENDER_NAME"
