@@ -1,6 +1,6 @@
 {
   "name": "session-manager",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "List, search, and delete Codex session data across projects.",
   "author": {
     "name": "Girish Attri",
@@ -8,6 +8,7 @@
   },
   "license": "MIT",
   "keywords": ["session", "cleanup", "management", "maintenance"],
+  "skills": "./skills/",
   "interface": {
     "displayName": "Session Manager",
     "shortDescription": "List, search, and delete local Codex sessions.",
