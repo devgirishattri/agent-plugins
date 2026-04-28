@@ -1,6 +1,6 @@
 ---
 name: session-manager
-description: Use this skill when the user wants to list, search, inspect, or delete local Codex sessions. Trigger for requests like "list sessions", "find old Codex sessions", "search sessions by project", "delete this session", or references to /session-list, /session-search, and /session-delete.
+description: "Use this skill when the user wants to list, search, inspect, or delete local Codex sessions. Trigger for requests like list sessions, find old Codex sessions, search sessions by project, delete this session, or references to /session-list, /session-search, and /session-delete."
 ---
 
 # Session Manager
@@ -8,7 +8,7 @@ description: Use this skill when the user wants to list, search, inspect, or del
 Use the plugin scripts to inspect local Codex session data. Resolve the plugin root first:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.2}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.3}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
 ```
 

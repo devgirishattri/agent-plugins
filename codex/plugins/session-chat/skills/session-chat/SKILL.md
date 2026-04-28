@@ -1,6 +1,6 @@
 ---
 name: session-chat
-description: Use this skill when the user wants to coordinate Codex sessions through tmux: name panes, list named panes, send messages, dispatch tasks, generate/list/load/share context snapshots, or use workflows formerly described as /whoami, /panes, /send, /dispatch, /context-generate, /context-list, /context-load, and /context-share.
+description: "Use this skill when the user wants to coordinate Codex sessions through tmux: name panes, list named panes, send messages, dispatch tasks, generate/list/load/share context snapshots, or use workflows formerly described as /whoami, /panes, /send, /dispatch, /context-generate, /context-list, /context-load, and /context-share."
 ---
 
 # Session Chat
@@ -8,7 +8,7 @@ description: Use this skill when the user wants to coordinate Codex sessions thr
 Use this skill for tmux-based coordination between Codex sessions. Resolve the plugin root first:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.2}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.3}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
 ```
 
