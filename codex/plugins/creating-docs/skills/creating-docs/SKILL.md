@@ -103,14 +103,19 @@ Group entries by file for scannability. For large docs (20+ references), include
 
 ## Validation Tools
 
-This skill bundles three scripts in `${CODEX_PLUGIN_ROOT:-codex/plugins/creating-docs}/scripts/` for verifying doc health. Run them after writing or updating docs.
+This skill bundles three scripts in the plugin's `scripts/` directory for verifying doc health. Resolve the plugin root with:
+
+```bash
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/creating-docs/1.0.0}"
+[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/creating-docs"
+```
 
 ### check-todos.sh
 
 Scans doc files for embedded TODO/FIXME/HACK markers that should be in the dedicated tracker files instead. Run this after every doc creation or update.
 
 ```bash
-bash "${CODEX_PLUGIN_ROOT:-codex/plugins/creating-docs}/scripts/check-todos.sh" docs/
+bash "$PLUGIN_ROOT/scripts/check-todos.sh" docs/
 ```
 
 ### validate-links.sh
@@ -118,7 +123,7 @@ bash "${CODEX_PLUGIN_ROOT:-codex/plugins/creating-docs}/scripts/check-todos.sh" 
 Checks that all cross-references in docs actually point to existing files. Catches stale links after renames or deletions.
 
 ```bash
-bash "${CODEX_PLUGIN_ROOT:-codex/plugins/creating-docs}/scripts/validate-links.sh" docs/
+bash "$PLUGIN_ROOT/scripts/validate-links.sh" docs/
 ```
 
 ### check-freshness.sh
@@ -126,7 +131,7 @@ bash "${CODEX_PLUGIN_ROOT:-codex/plugins/creating-docs}/scripts/validate-links.s
 Compares doc modification dates against the code files they reference using git history. Flags docs not updated since their referenced code changed.
 
 ```bash
-bash "${CODEX_PLUGIN_ROOT:-codex/plugins/creating-docs}/scripts/check-freshness.sh" docs/ 30
+bash "$PLUGIN_ROOT/scripts/check-freshness.sh" docs/ 30
 ```
 
 Arguments: `[docs-directory]` and `[days-threshold]` (default: 30 days).
