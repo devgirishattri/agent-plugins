@@ -10,16 +10,11 @@
   - Context: identified during plugin review session
   - Priority: low
 
-- [ ] `/context` — Share current work summary with another session
-  - Context: identified during plugin review session
+- [ ] Auto-attach context snapshots during `/dispatch`
+  - Context: manual context generation, listing, loading, and sharing commands exist; automatic attachment is still future work
   - Priority: medium
 
 ## New Plugins
-
-- [ ] Cross-Project Context Sharing plugin
-  - Context: orchestrator workflow needs sessions to share project knowledge (APIs, schemas, conventions)
-  - Priority: high
-
 
 - [ ] Prompt Templates plugin
   - Context: orchestrator repeatedly types similar dispatch prompts
@@ -28,3 +23,13 @@
 - [ ] Session Dashboard plugin
   - Context: single-command view of all sessions and their status
   - Priority: low
+
+## Provider Support
+
+- [ ] Keep Claude and Codex plugin command parity in sync
+  - Context: this repo now publishes provider-specific plugin trees
+  - Priority: high
+
+- [ ] Add release checklist for Claude and Codex marketplace metadata
+  - Context: each provider has its own manifest and marketplace file
+  - Priority: medium
