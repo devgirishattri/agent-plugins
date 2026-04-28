@@ -1,0 +1,26 @@
+{
+  "name": "creating-docs",
+  "version": "1.0.0",
+  "description": "Create and update project documentation with structured templates and validation tools.",
+  "author": {
+    "name": "Girish Attri",
+    "email": "dev@girishattri.com"
+  },
+  "license": "MIT",
+  "keywords": ["documentation", "docs", "writing", "markdown", "reference"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Creating Docs",
+    "shortDescription": "Structured documentation workflows for Codex.",
+    "longDescription": "A documentation workflow plugin with reusable writing guidance, reference-based notation, and validation scripts for project docs.",
+    "developerName": "Girish Attri",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Document this project feature.",
+      "Update docs for recent changes.",
+      "Validate the project docs."
+    ],
+    "brandColor": "#0F766E"
+  }
+}
