@@ -1,0 +1,27 @@
+---
+name: send
+description: "Send a message to another named tmux pane through session-chat. Use when the user asks to message, send, notify, or talk to another named Codex session."
+---
+
+# Send
+
+Resolve the plugin root:
+
+```bash
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.5}"
+[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
+```
+
+Parse the first argument as the target pane name and the rest as the message. If either is missing, tell the user:
+
+```text
+Usage: $session-chat:send <pane-name> <message>
+```
+
+Run:
+
+```bash
+bash "$PLUGIN_ROOT/scripts/send-message.sh" "<target-name>" "<message>"
+```
+
+If tmux is not active, explain that messaging requires running Codex inside tmux.

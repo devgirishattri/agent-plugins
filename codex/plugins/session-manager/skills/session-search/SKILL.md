@@ -1,0 +1,31 @@
+---
+name: session-search
+description: "Search local Codex sessions by title, session ID, or project path."
+---
+
+# Session Search
+
+Resolve the plugin root:
+
+```bash
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.4}"
+[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
+```
+
+If no query is provided, tell the user:
+
+```text
+Usage: $session-manager:session-search <query>
+```
+
+Run:
+
+```bash
+bash "$PLUGIN_ROOT/scripts/search-sessions.sh" "<query>"
+```
+
+Present tab-separated output as:
+
+```text
+| Name | Session ID | Project | Size | Last Modified |
+```
