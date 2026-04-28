@@ -1,6 +1,6 @@
 {
   "name": "session-manager",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "List, search, and delete Codex session data across projects.",
   "author": {
     "name": "Girish Attri",
