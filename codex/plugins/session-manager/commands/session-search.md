@@ -6,7 +6,13 @@ argument-hint: <search-query>
 ## Instructions
 
 1. If `$ARGUMENTS` is empty, tell the user: `Usage: /session-search <name-or-id-or-project>`.
-2. Set `PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-codex/plugins/session-manager}"`.
+2. Resolve the plugin root:
+
+   ```bash
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.0}"
+   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
+   ```
+
 3. Run:
 
    ```bash

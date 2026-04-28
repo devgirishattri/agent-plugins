@@ -7,7 +7,13 @@ argument-hint: <pane-name> <message>
 
 1. Parse `$ARGUMENTS`: the first word is the target pane name, and everything after it is the message.
 2. If either value is missing, tell the user: `Usage: /send <pane-name> <message>`.
-3. Set `PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-codex/plugins/session-chat}"`.
+3. Resolve the plugin root:
+
+   ```bash
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.0}"
+   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
+   ```
+
 4. Run:
 
    ```bash

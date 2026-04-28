@@ -5,7 +5,13 @@ argument-hint: [all]
 
 ## Instructions
 
-1. Set `PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-codex/plugins/session-manager}"`.
+1. Resolve the plugin root:
+
+   ```bash
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.0}"
+   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
+   ```
+
 2. Run:
 
    ```bash

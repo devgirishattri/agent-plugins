@@ -5,7 +5,13 @@ argument-hint: [name]
 
 ## Instructions
 
-1. Set `PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-codex/plugins/session-chat}"`.
+1. Resolve the plugin root:
+
+   ```bash
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.0}"
+   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
+   ```
+
 2. Run this to read the current pane name:
 
    ```bash
