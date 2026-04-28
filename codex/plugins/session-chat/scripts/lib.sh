@@ -7,12 +7,12 @@
 
 ensure_tmux() {
   if ! command -v tmux >/dev/null 2>&1; then
-    echo "ERROR: tmux is not installed." >&2
-    echo "Install with: brew install tmux (macOS) or apt install tmux (Ubuntu)" >&2
+    echo "tmux is required for this session-chat action." >&2
+    echo "Install it with: brew install tmux (macOS) or apt install tmux (Ubuntu)." >&2
     exit 1
   fi
   if [ -z "${TMUX:-}" ]; then
-    echo "ERROR: Not inside a tmux session." >&2
+    echo "This session-chat action needs to run inside tmux." >&2
     echo "Start one with: tmux new -s <name>" >&2
     exit 1
   fi
