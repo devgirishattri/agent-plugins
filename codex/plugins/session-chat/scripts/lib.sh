@@ -11,7 +11,7 @@ ensure_tmux() {
     echo "Install with: brew install tmux (macOS) or apt install tmux (Ubuntu)" >&2
     exit 1
   fi
-  if [ -z "$TMUX" ]; then
+  if [ -z "${TMUX:-}" ]; then
     echo "ERROR: Not inside a tmux session." >&2
     echo "Start one with: tmux new -s <name>" >&2
     exit 1
@@ -55,7 +55,7 @@ get_pane_name() {
 }
 
 get_my_name() {
-  get_pane_name "$TMUX_PANE"
+  get_pane_name "${TMUX_PANE:-}"
 }
 
 # --- Pane resolution (searches ALL tmux sessions) ---
@@ -98,7 +98,7 @@ send_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
-  local formatted="[from:${my_name} pane:${TMUX_PANE}] ${message}"
+  local formatted="[from:${my_name} pane:${TMUX_PANE:-}] ${message}"
   send_text "$target_pane" "$formatted"
 }
 
@@ -126,7 +126,7 @@ EOF
   # Send single-line notification with file reference
   local preview
   preview=$(echo "$message" | head -1 | cut -c1-80)
-  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file}] ${preview}"
+  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file}] ${preview}"
 }
 
 read_pane() {
