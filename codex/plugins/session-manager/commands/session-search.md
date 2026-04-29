@@ -9,7 +9,7 @@ argument-hint: <search-query>
 2. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.6}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.7}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
    ```
 
@@ -22,7 +22,7 @@ argument-hint: <search-query>
 4. Present matching sessions as a markdown table:
 
    ```text
-   | Name | Session ID | Project | Size | Last Modified |
+   | Thread | Session ID | Project | Size | Last Modified |
    ```
 
 Rules:

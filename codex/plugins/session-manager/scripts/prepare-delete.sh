@@ -7,7 +7,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 TARGET="${1:-}"
 
 print_header() {
-    printf 'NAME\tSESSION_ID\tPROJECT\tSIZE\tLAST_MODIFIED\n'
+    printf 'THREAD\tSESSION_ID\tPROJECT\tSIZE\tLAST_MODIFIED\n'
 }
 
 count_session_rows() {
