@@ -78,13 +78,29 @@ codex plugin marketplace add /path/to/agent-plugins
 
 ### Claude
 
-Use the repository as a Claude plugin marketplace. The Claude marketplace file is:
+Add this repo as a Claude marketplace from GitHub:
 
-```text
-.claude-plugin/marketplace.json
+```bash
+claude plugin marketplace add https://github.com/devgirishattri/agent-plugins.git
 ```
 
-It points to the Claude plugin implementations under `plugins/`.
+Install a plugin from the marketplace:
+
+```bash
+claude plugin install <plugin-name>@girishattri-plugins
+```
+
+Upgrade all installed plugins to the latest marketplace versions:
+
+```bash
+claude plugin upgrade
+```
+
+For local development, add a checkout path instead:
+
+```bash
+claude plugin marketplace add /path/to/agent-plugins
+```
 
 ## Development Notes
 
