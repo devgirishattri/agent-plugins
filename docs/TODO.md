@@ -10,6 +10,8 @@
   - Context: identified during plugin review session
   - Priority: low
 
+## session-context Plugin Enhancements
+
 - [ ] Auto-attach context snapshots during `/dispatch`
   - Context: manual context generation, listing, loading, and sharing commands exist; automatic attachment is still future work
   - Priority: medium

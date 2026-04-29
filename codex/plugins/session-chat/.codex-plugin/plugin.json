@@ -1,25 +1,25 @@
 {
   "name": "session-chat",
-  "version": "0.9.6",
-  "description": "Peer-to-peer messaging, task dispatch, and context sharing between Codex sessions via tmux.",
+  "version": "0.9.7",
+  "description": "Peer-to-peer messaging and task dispatch between Codex sessions via tmux.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
   },
   "license": "MIT",
-  "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent", "context-sharing"],
+  "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent"],
   "skills": "./skills/",
   "interface": {
     "displayName": "Session Chat",
     "shortDescription": "Message and coordinate Codex sessions over tmux.",
-    "longDescription": "Slash-command workflows for naming panes, sending messages, dispatching work, and sharing context between local Codex sessions in tmux.",
+    "longDescription": "Slash-command workflows for naming panes, sending messages, and dispatching work between local Codex sessions in tmux.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
     "defaultPrompt": [
       "List named Codex panes.",
       "Send a message to another session.",
-      "Share context with another session."
+      "Dispatch work to another session."
     ],
     "brandColor": "#7C3AED"
   }

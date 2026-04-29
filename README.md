@@ -7,7 +7,8 @@ This repository contains provider-specific plugins for Claude Code and Codex. Th
 | Plugin | Purpose |
 |--------|---------|
 | `session-manager` | List, search, and delete local agent session data |
-| `session-chat` | Name tmux panes, send messages, dispatch tasks, and share context between sessions |
+| `session-chat` | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-context` | Generate, list, load, and share session context snapshots |
 | `creating-docs` | Create and update documentation using structured guidance and validation scripts |
 
 ## Repository Layout
@@ -83,4 +84,4 @@ It points to the Claude plugin implementations under `plugins/`.
 ## Documentation
 
 - `docs/TODO.md` tracks planned plugin work.
-- `docs/CROSS_PROJECT_CONTEXT_DESIGN.md` describes the context-sharing workflow used by `session-chat`.
+- `docs/CROSS_PROJECT_CONTEXT_DESIGN.md` describes the context-sharing workflow used by `session-context`.

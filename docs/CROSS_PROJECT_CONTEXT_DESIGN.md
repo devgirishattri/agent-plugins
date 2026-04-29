@@ -1,13 +1,13 @@
 # Cross-Project Context Sharing
 
 **Date**: 2026-03-29
-**Updated**: 2026-04-28
+**Updated**: 2026-04-29
 **Status**: Implemented manually; automatic dispatch attachment is future work
 **Related**: `TODO.md`
 
 ## Overview
 
-The `session-chat` plugin lets agent sessions working in different project directories exchange project knowledge. A session can generate a concise context snapshot, list available snapshots, load one into its current work, or share it with another named tmux session.
+The `session-context` plugin lets agent sessions working in different project directories exchange project knowledge. A session can generate a concise context snapshot, list available snapshots, load one into its current work, or share it with another named tmux session.
 
 This is useful when an orchestrator session dispatches work to another project. The receiving session can load API contracts, schemas, conventions, and architecture notes before making changes.
 
@@ -33,8 +33,8 @@ The repo contains separate provider implementations:
 
 | Provider | Plugin Path |
 |----------|-------------|
-| Claude | `plugins/session-chat/` |
-| Codex | `codex/plugins/session-chat/` |
+| Claude | `plugins/session-context/` |
+| Codex | `codex/plugins/session-context/` |
 
 ## Snapshot Content
 
@@ -71,4 +71,4 @@ The next useful enhancement is automatic context attachment in `/dispatch`:
 
 ## Design Decision
 
-Context sharing belongs inside `session-chat`, not as a separate plugin. It is part of the same cross-session coordination workflow as pane naming, messaging, and dispatch.
+Context sharing is split into `session-context` instead of living inside `session-chat`. The workflow still interoperates with `session-chat` for tmux pane naming and notifications, but snapshot generation, listing, loading, and sharing are a separate installable capability.
