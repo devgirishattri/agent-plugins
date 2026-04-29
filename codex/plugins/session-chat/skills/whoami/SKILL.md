@@ -10,7 +10,7 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.8}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.9}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
 ```
 
@@ -27,3 +27,4 @@ bash -lc 'source "$0/scripts/lib.sh" && set_pane_name "$TMUX_PANE" "$1"' "$PLUGI
 ```
 
 If this is not running inside tmux, explain that pane naming requires tmux and suggest starting one with `tmux new -s <name>`.
+If a current name is shown and no new name was provided, report that name and explain that other sessions can message it. If no name is set and no new name was provided, suggest `$session-chat:whoami <name>`.

@@ -10,7 +10,7 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.8}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.9.9}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
 ```
 
@@ -26,4 +26,4 @@ Present tab-separated output as:
 | Name | Pane | Command | Location |
 ```
 
-If the command says tmux is required or not active, explain that this action must run inside tmux. If no panes are listed, say no named panes were found and suggest `$session-chat:whoami <name>`.
+If the command says tmux is required or not active, explain that this action must run inside tmux. If no panes are listed, say no named panes were found and suggest `$session-chat:whoami <name>`. If panes are listed, mention that `$session-chat:send <name> <message>` can message a pane.
