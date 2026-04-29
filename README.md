@@ -7,7 +7,8 @@ This repository contains provider-specific plugins for Claude Code and Codex. Th
 | Plugin | Purpose |
 |--------|---------|
 | `session-manager` | List, search, and delete local agent session data |
-| `session-chat` | Name tmux panes, send messages, dispatch tasks, and share context between sessions |
+| `session-chat` | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-context` | Generate, list, load, and share session context snapshots |
 | `creating-docs` | Create and update documentation using structured guidance and validation scripts |
 
 ## Repository Layout

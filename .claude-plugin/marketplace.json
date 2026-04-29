@@ -35,14 +35,26 @@
     },
     {
       "name": "session-chat",
-      "description": "Peer-to-peer messaging, task dispatch, and cross-project context sharing between Claude sessions via tmux.",
-      "version": "0.9.0",
+      "description": "Peer-to-peer messaging and task dispatch between Claude sessions via tmux.",
+      "version": "0.9.1",
       "author": {
         "name": "Girish Attri"
       },
       "source": "./plugins/session-chat",
       "category": "productivity",
-      "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent", "peer-to-peer", "context-sharing"],
+      "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent", "peer-to-peer"],
+      "license": "MIT"
+    },
+    {
+      "name": "session-context",
+      "description": "Generate, list, load, and share Claude session context snapshots for handoff across sessions.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Girish Attri"
+      },
+      "source": "./plugins/session-context",
+      "category": "productivity",
+      "keywords": ["context", "handoff", "snapshot", "session", "multi-agent"],
       "license": "MIT"
     }
   ]
