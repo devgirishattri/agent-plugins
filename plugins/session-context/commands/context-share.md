@@ -11,7 +11,7 @@ allowed-tools: Bash(bash:*)
 
 2. Run the share script:
    ```
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/share-context.sh "<snapshot-name>" "<session-name>"
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/share-context.sh "<session-name>" "<snapshot-name>"
    ```
 
 3. Report: "Shared session context '<snapshot-name>' with <session>. They can load it with `/context-load <snapshot-name>`."

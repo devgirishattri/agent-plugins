@@ -19,7 +19,7 @@ allowed-tools: Bash(bash:*)
    rm -f "$PROMPT_FILE"
    ```
 
-4. Report: "Dispatched task to **<target>**. Track with `/dispatch-status`, collect with `/dispatch-collect <target>`."
+4. Report: "Dispatched task to **<target>**. Use `/panes` to check their status, or `/send <target> <message>` to follow up."
 
 5. If error about target not found, run `/panes` to show available sessions.
-6. If error about no name, tell user to run `/rename <name>` first.
+6. If error about no name, tell user to run `/whoami <name>` first.

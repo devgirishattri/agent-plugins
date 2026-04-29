@@ -19,4 +19,4 @@ allowed-tools: Bash(bash:*)
    - Report: "Pane renamed to '**<name>**'."
 
 3. If both current name and $ARGUMENTS are empty:
-   - Report: "No name set. Use `/whoami <name>` to set one, or `/rename <name>` and it will sync automatically."
+   - Report: "No name set. Use `/whoami <name>` to set one."
