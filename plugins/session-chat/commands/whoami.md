@@ -10,6 +10,8 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
+Do not narrate or add a preamble. Run the action directly and report only the result.
+
 1. If a current name is shown above (non-empty), and $ARGUMENTS is empty:
    - Report: "This pane is named '**<name>**'. Other sessions can reach you via `/send <name> <message>`."
 

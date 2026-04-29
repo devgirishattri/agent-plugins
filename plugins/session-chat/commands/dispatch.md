@@ -6,6 +6,8 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
+Do not narrate or add a preamble. Run the script directly and report only the result.
+
 1. Parse $ARGUMENTS: first word is the target session name, everything after is the prompt.
 
 2. If $ARGUMENTS is empty or has no prompt after the session name, ask the user:

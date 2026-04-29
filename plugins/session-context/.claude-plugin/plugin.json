@@ -1,6 +1,6 @@
 {
   "name": "session-context",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generate, list, load, and share Claude session context snapshots for handoff across sessions.",
   "author": {
     "name": "Girish Attri"
