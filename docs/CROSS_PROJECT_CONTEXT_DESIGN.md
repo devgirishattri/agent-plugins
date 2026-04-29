@@ -3,7 +3,6 @@
 **Date**: 2026-03-29
 **Updated**: 2026-04-29
 **Status**: Implemented manually; automatic dispatch attachment is future work
-**Related**: `TODO.md`
 
 ## Overview
 
@@ -59,7 +58,7 @@ For API-heavy projects, include endpoint contracts, data models, auth requiremen
 
 The current implementation supports manual generation, listing, loading, and sharing. The share command sends a tmux message telling the target session which snapshot to load.
 
-The next useful enhancement is automatic context attachment in `/dispatch`:
+One useful future enhancement is automatic context attachment in `/dispatch`:
 
 ```text
 /dispatch auth-service "Build the payment webhook handler"

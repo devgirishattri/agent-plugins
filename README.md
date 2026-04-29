@@ -58,6 +58,18 @@ Add this repo as a Codex marketplace from GitHub:
 codex plugin marketplace add https://github.com/devgirishattri/agent-plugins.git
 ```
 
+Upgrade the configured marketplace after new plugin versions are published:
+
+```bash
+codex plugin marketplace upgrade girishattri-codex-plugins
+```
+
+To upgrade all configured Git marketplaces:
+
+```bash
+codex plugin marketplace upgrade
+```
+
 For local development, add a checkout path instead:
 
 ```bash
@@ -80,8 +92,8 @@ It points to the Claude plugin implementations under `plugins/`.
 - Keep command behavior aligned across `plugins/<name>/commands/` and `codex/plugins/<name>/commands/`.
 - Shared ideas can be documented in `docs/`, but runtime files should remain provider-local.
 - Generated logs such as `firebase-debug.log` are ignored and should not be committed.
+- Run `bash scripts/validate-release.sh` before publishing plugin updates.
 
 ## Documentation
 
-- `docs/TODO.md` tracks planned plugin work.
 - `docs/CROSS_PROJECT_CONTEXT_DESIGN.md` describes the context-sharing workflow used by `session-context`.
