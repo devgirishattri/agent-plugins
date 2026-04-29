@@ -8,7 +8,7 @@ argument-hint: [all]
 1. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.6}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.7}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
    ```
 
@@ -21,13 +21,13 @@ argument-hint: [all]
 3. Present the tab-separated output as a clean markdown table:
 
    ```text
-   | Name | Session ID | Project | Size | Last Modified |
+   | Thread | Session ID | Project | Size | Last Modified |
    ```
 
 Rules:
 - Sort by Last Modified, most recent first. The script output is already sorted.
 - Show full Session IDs so users can copy them for `/session-delete`.
-- If a session has no name, show `(untitled)`.
+- If a session has no thread title, show `(untitled)`.
 - Show the total count of sessions at the bottom.
 - If the output is empty or says `No sessions found`, report that no sessions were found.
 - Mention that `/session-list all` shows sessions across all projects.

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # list-sessions.sh - List Codex sessions.
 # Usage: list-sessions.sh [project-path|all]
-# Output: tab-separated lines: NAME\tSESSION_ID\tPROJECT\tSIZE\tLAST_MODIFIED
+# Output: tab-separated lines: THREAD\tSESSION_ID\tPROJECT\tSIZE\tLAST_MODIFIED
 set -uo pipefail
 
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 SESSIONS_DIR="$CODEX_DIR/sessions"
+STATE_DB="$CODEX_DIR/state_5.sqlite"
 FILTER="${1:-$(pwd)}"
 
 if [ ! -d "$SESSIONS_DIR" ]; then
@@ -38,12 +39,26 @@ human_size() {
     fi
 }
 
-session_title() {
-    local file="$1"
+thread_title() {
+    local session_id="$1"
     local title=""
 
+    if command -v sqlite3 >/dev/null 2>&1 && [ -f "$STATE_DB" ]; then
+        title=$(sqlite3 "$STATE_DB" "select title from threads where id = '$session_id' limit 1;" 2>/dev/null | head -1)
+    fi
+
+    printf '%s' "$title"
+}
+
+session_title() {
+    local file="$1"
+    local session_id="$2"
+    local title=""
+
+    title=$(thread_title "$session_id")
+
     if command -v jq >/dev/null 2>&1; then
-        title=$(jq -r '
+        [ -z "$title" ] && title=$(jq -r '
             select(.type == "event_msg" and .payload.type == "user_message")
             | .payload.message // .payload.text // empty
         ' "$file" 2>/dev/null | head -1)
@@ -57,7 +72,7 @@ session_title() {
         title="(untitled)"
     fi
 
-    printf '%s' "$title" | tr '\t\r\n' '   ' | cut -c 1-80
+    printf '%s' "$title" | tr '\t\r\n' '   '
 }
 
 find "$SESSIONS_DIR" -type f -name '*.jsonl' 2>/dev/null | while read -r jsonl_file; do
@@ -85,7 +100,7 @@ find "$SESSIONS_DIR" -type f -name '*.jsonl' 2>/dev/null | while read -r jsonl_f
     fi
 
     printf '%s\t%s\t%s\t%s\t%s\n' \
-        "$(session_title "$jsonl_file")" \
+        "$(session_title "$jsonl_file" "$session_id")" \
         "$session_id" \
         "$project_path" \
         "$(human_size "$file_size")" \

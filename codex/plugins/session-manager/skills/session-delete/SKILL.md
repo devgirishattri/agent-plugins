@@ -10,7 +10,7 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.6}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.7}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
 ```
 
@@ -22,7 +22,7 @@ bash "$PLUGIN_ROOT/scripts/prepare-delete.sh" "<session-id-or-name>"
 
 Interpret the first line:
 
-- `STATUS<TAB>SELECT`: show the returned sessions as a numbered table and ask which full session UUID to delete.
+- `STATUS<TAB>SELECT`: show the returned sessions as a numbered table with thread title and full session UUID, then ask which UUID to delete.
 - `STATUS<TAB>NONE`: report that no session was found and suggest `$session-manager:session-list` or `$session-manager:session-search <query>`.
 - `STATUS<TAB>MULTIPLE`: show the returned matches as a table and ask for the full UUID.
 - `STATUS<TAB>ONE`: show the session details and ask the user to confirm by replying exactly `delete <full-uuid>`.

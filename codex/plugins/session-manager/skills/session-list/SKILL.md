@@ -10,7 +10,7 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.6}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.4.7}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
 ```
 
@@ -24,7 +24,7 @@ bash "$PLUGIN_ROOT/scripts/list-sessions.sh" all
 Present tab-separated output as:
 
 ```text
-| Name | Session ID | Project | Size | Last Modified |
+| Thread | Session ID | Project | Size | Last Modified |
 ```
 
-Show full session IDs and a total count.
+Show full session IDs and a total count. The first column is the Codex thread title from `~/.codex/state_5.sqlite`, falling back to the first user message only when the thread title is unavailable.
