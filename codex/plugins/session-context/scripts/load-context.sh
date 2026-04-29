@@ -2,6 +2,7 @@
 # load-context.sh — Load a context snapshot and print its contents
 # Usage: load-context.sh <project-name>
 # Supported platforms: macOS, Linux
+set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 

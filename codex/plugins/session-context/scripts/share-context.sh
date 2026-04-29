@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # share-context.sh — Share a context snapshot with another named session
-# Usage: share-context.sh <project-name> <target-session>
+# Usage: share-context.sh <target-session> <project-name>
 # Supported platforms: macOS, Linux
+set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
-PROJECT_NAME="${1:-}"
-TARGET_SESSION="${2:-}"
+TARGET_SESSION="${1:-}"
+PROJECT_NAME="${2:-}"
 
 if [ -z "$PROJECT_NAME" ] || [ -z "$TARGET_SESSION" ]; then
-  echo "ERROR: Usage: share-context.sh <project-name> <target-session>"
+  echo "ERROR: Usage: share-context.sh <target-session> <project-name>"
   exit 1
 fi
 

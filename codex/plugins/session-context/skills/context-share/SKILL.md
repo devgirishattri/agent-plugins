@@ -10,7 +10,7 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.1.1}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.1.2}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
 ```
 
@@ -23,7 +23,7 @@ Usage: $session-context:context-share <session-name> [snapshot-name]
 If no snapshot name is provided, derive one from the current directory. Run:
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/share-context.sh" "<snapshot-name>" "<session-name>"
+bash "$PLUGIN_ROOT/scripts/share-context.sh" "<session-name>" "<snapshot-name>"
 ```
 
 If tmux is not active, explain that sharing requires running Codex inside tmux.
