@@ -24,7 +24,7 @@
     {
       "name": "creating-docs",
       "description": "Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": {
         "name": "Girish Attri"
       },
@@ -36,7 +36,7 @@
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude sessions via tmux.",
-      "version": "0.9.2",
+      "version": "0.9.3",
       "author": {
         "name": "Girish Attri"
       },
@@ -48,7 +48,7 @@
     {
       "name": "session-context",
       "description": "Generate, list, load, and share Claude session context snapshots for handoff across sessions.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Girish Attri"
       },

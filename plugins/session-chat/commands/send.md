@@ -6,6 +6,8 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
+Do not narrate or add a preamble. Run the script directly and report only the result.
+
 1. Parse $ARGUMENTS: first word is the target pane name, everything after is the message
 2. Run the send script with properly quoted arguments:
    ```

@@ -9,6 +9,8 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
+Do not narrate or add a preamble. Render the table directly.
+
 Present the tab-separated data above as a markdown table:
 
 | Name | Pane | Command | Location |
