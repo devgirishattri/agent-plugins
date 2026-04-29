@@ -2,6 +2,7 @@
 # list-contexts.sh — List all available context snapshots
 # Usage: list-contexts.sh
 # Supported platforms: macOS, Linux
+set -uo pipefail
 
 SNAPSHOTS_DIR="${CODEX_HOME:-$HOME/.codex}/context-snapshots"
 

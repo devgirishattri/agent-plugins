@@ -2,6 +2,7 @@
 # lib.sh — Shared functions for session-context plugin
 # Source this file: source "$(dirname "$0")/lib.sh"
 # Supported platforms: macOS, Linux
+set -uo pipefail
 
 # --- tmux checks ---
 

@@ -3,6 +3,7 @@
 # Usage: check-freshness.sh [docs-directory] [days-threshold]
 # Flags docs not modified in N days (default: 30) when referenced code has changed
 # Supported platforms: macOS, Linux
+set -uo pipefail
 
 docs_dir="${1:-.}"
 threshold="${2:-30}"

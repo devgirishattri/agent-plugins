@@ -2,6 +2,7 @@
 # save-context.sh — Save a context snapshot for the current project
 # Usage: save-context.sh <project-name> <snapshot-file>
 # Supported platforms: macOS, Linux
+set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
