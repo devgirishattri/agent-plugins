@@ -16,11 +16,11 @@ fi
 
 validate_label "$PROJECT_NAME" || exit 1
 
-SNAPSHOTS_DIR="${CODEX_HOME:-$HOME/.codex}/context-snapshots"
+SNAPSHOTS_DIR="$(get_contexts_dir)"
 SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 
 if [ ! -f "$SNAPSHOT" ]; then
-  echo "ERROR: No context snapshot found for '$PROJECT_NAME'."
+  echo "ERROR: No context snapshot found for '$PROJECT_NAME' in this project."
   echo "Available snapshots:"
   ls "$SNAPSHOTS_DIR/"*.md 2>/dev/null | xargs -I{} basename {} .md || echo "  (none)"
   exit 1

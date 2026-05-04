@@ -1,5 +1,5 @@
 ---
-description: List all available project context snapshots
+description: List available context snapshots for the current project
 ---
 
 ## Instructions
@@ -7,7 +7,7 @@ description: List all available project context snapshots
 1. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.1.2}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.1.3}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
    ```
 

@@ -40,6 +40,14 @@ ensure_messages_dir() {
   mkdir -p "$MESSAGES_DIR"
 }
 
+# --- Context snapshots directory (project-local) ---
+
+get_contexts_dir() {
+  local root
+  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  echo "$root/tmp/contexts"
+}
+
 # --- Pane naming (smux @name pattern) ---
 
 set_pane_name() {

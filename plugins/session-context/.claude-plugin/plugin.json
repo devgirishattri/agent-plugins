@@ -1,7 +1,7 @@
 {
   "name": "session-context",
-  "version": "0.1.1",
-  "description": "Generate, list, load, and share Claude session context snapshots for handoff across sessions.",
+  "version": "0.2.0",
+  "description": "Generate, list, load, share, and remove Claude session context snapshots for the current project.",
   "author": {
     "name": "Girish Attri"
   },

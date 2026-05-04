@@ -21,7 +21,7 @@ if [ ! -f "$SNAPSHOT_FILE" ]; then
   exit 1
 fi
 
-SNAPSHOTS_DIR="${CODEX_HOME:-$HOME/.codex}/context-snapshots"
+SNAPSHOTS_DIR="$(get_contexts_dir)"
 mkdir -p "$SNAPSHOTS_DIR"
 
 cp "$SNAPSHOT_FILE" "$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
