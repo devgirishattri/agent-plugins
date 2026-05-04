@@ -18,10 +18,11 @@ validate_label "$PROJECT_NAME" || exit 1
 
 ensure_tmux
 
-SNAPSHOT="${CODEX_HOME:-$HOME/.codex}/context-snapshots/${PROJECT_NAME}.md"
+SNAPSHOTS_DIR="$(get_contexts_dir)"
+SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 
 if [ ! -f "$SNAPSHOT" ]; then
-  echo "ERROR: No context snapshot found for '$PROJECT_NAME'. Run /context-generate first."
+  echo "ERROR: No context snapshot found for '$PROJECT_NAME' in this project. Run /context-generate first."
   exit 1
 fi
 

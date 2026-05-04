@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# list-contexts.sh — List all available context snapshots
+# list-contexts.sh — List available context snapshots for the current project
 # Usage: list-contexts.sh
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
-SNAPSHOTS_DIR="${CODEX_HOME:-$HOME/.codex}/context-snapshots"
+source "$(dirname "$0")/lib.sh"
+
+SNAPSHOTS_DIR="$(get_contexts_dir)"
 
 if [ ! -d "$SNAPSHOTS_DIR" ] || [ -z "$(ls "$SNAPSHOTS_DIR"/*.md 2>/dev/null)" ]; then
-  echo "No context snapshots found. Use /context-generate to create one."
+  echo "No context snapshots found for this project. Use /context-generate to create one."
   exit 0
 fi
 

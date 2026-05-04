@@ -42,6 +42,7 @@
     },
     {
       "name": "session-context",
+      "version": "0.1.3",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-context"

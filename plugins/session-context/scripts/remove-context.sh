@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# load-context.sh — Load a context snapshot and print its contents
-# Usage: load-context.sh <project-name>
+# remove-context.sh — Delete a context snapshot for the current project
+# Usage: remove-context.sh <project-name>
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
@@ -9,7 +9,7 @@ source "$(dirname "$0")/lib.sh"
 PROJECT_NAME="${1:-}"
 
 if [ -z "$PROJECT_NAME" ]; then
-  echo "ERROR: Usage: load-context.sh <project-name>"
+  echo "ERROR: Usage: remove-context.sh <project-name>"
   echo "Run /context-list to see available snapshots."
   exit 1
 fi
@@ -26,4 +26,5 @@ if [ ! -f "$SNAPSHOT" ]; then
   exit 1
 fi
 
-cat "$SNAPSHOT"
+rm -f "$SNAPSHOT"
+echo "Removed context snapshot '$PROJECT_NAME' ($SNAPSHOT)"

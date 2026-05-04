@@ -1,9 +1,9 @@
 ---
-description: List all available project context snapshots
+description: List context snapshots for the current project
 allowed-tools: Bash(bash:*)
 ---
 
-## Available Context Snapshots
+## Context Snapshots (Current Project)
 
 !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/list-contexts.sh`
 
@@ -11,8 +11,9 @@ allowed-tools: Bash(bash:*)
 
 Present the tab-separated data above as a markdown table:
 
-| Project | Lines | Last Updated |
+| Snapshot | Lines | Last Updated |
 
 - If no snapshots found, suggest `/context-generate` to create one
-- Suggest `/context-load <project>` to load a snapshot
-- Suggest `/context-share <session> <project>` to share with another session
+- Suggest `/context-load <snapshot>` to load a snapshot
+- Suggest `/context-share <session> <snapshot>` to share with another session
+- Suggest `/context-remove <snapshot>` to delete a snapshot
