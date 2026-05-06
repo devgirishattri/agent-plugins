@@ -81,10 +81,50 @@ resolve_pane() {
 send_text() {
   local pane_id="$1"
   local text="$2"
+  local settle_ms="${SESSION_CHAT_SETTLE_MS:-300}"
   # Literal mode + split text/Enter for TUI safety (smux pattern)
-  tmux send-keys -t "$pane_id" -l -- "$text"
-  sleep 0.1
-  tmux send-keys -t "$pane_id" Enter
+  tmux send-keys -t "$pane_id" -l -- "$text" || return 1
+
+  if [ "${SESSION_CHAT_SKIP_VERIFY:-}" != "1" ]; then
+    local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}"
+    local marker="$text"
+    local captured
+    local attempts
+    local i
+
+    case "$timeout_ms" in
+      ''|*[!0-9]*) timeout_ms=2000 ;;
+    esac
+
+    if [ "${#marker}" -gt 40 ]; then
+      marker="${marker: -40}"
+    fi
+
+    attempts=$(( (timeout_ms + 49) / 50 ))
+    i=0
+    while [ "$i" -lt "$attempts" ]; do
+      captured=$(tmux capture-pane -t "$pane_id" -p -S -20 2>/dev/null || true)
+      if [[ "$captured" == *"$marker"* ]]; then
+        break
+      fi
+      sleep 0.05
+      i=$((i + 1))
+    done
+
+    if [ "$i" -ge "$attempts" ]; then
+      echo "ERROR: send to $pane_id did not land within ${timeout_ms}ms — recipient may be busy." >&2
+      return 1
+    fi
+  fi
+
+  tmux send-keys -t "$pane_id" Enter || return 1
+
+  case "$settle_ms" in
+    ''|*[!0-9]*) settle_ms=300 ;;
+  esac
+  local settle_sec=$((settle_ms / 1000))
+  local settle_rem=$((settle_ms % 1000))
+  sleep "${settle_sec}.$(printf '%03d' "$settle_rem")"
 }
 
 send_message() {
@@ -99,7 +139,7 @@ send_message() {
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
   local formatted="[from:${my_name} pane:${TMUX_PANE:-}] ${message}"
-  send_text "$target_pane" "$formatted"
+  send_text "$target_pane" "$formatted" || return 1
 }
 
 dispatch_message() {
@@ -126,7 +166,7 @@ EOF
   # Send single-line notification with file reference
   local preview
   preview=$(echo "$message" | head -1 | cut -c1-80)
-  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file}] ${preview}"
+  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file}] ${preview}" || return 1
 }
 
 read_pane() {

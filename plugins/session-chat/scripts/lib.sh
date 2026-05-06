@@ -82,8 +82,43 @@ send_text() {
   local text="$2"
   # Literal mode + split text/Enter for TUI safety (smux pattern)
   tmux send-keys -t "$pane_id" -l -- "$text"
-  sleep 0.1
+
+  # Verify the literal text drained into the recipient pane before pressing Enter.
+  # Without this, back-to-back sends to different panes can race: the second
+  # send-keys can fire before the first paste has finished, dropping the first
+  # message silently. Opt out via SESSION_CHAT_SKIP_VERIFY=1.
+  if [ "${SESSION_CHAT_SKIP_VERIFY:-0}" != "1" ]; then
+    local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}"
+    # Use the last ~40 chars of the payload as a uniqueness marker. The
+    # session-chat formatter always suffixes [from:... pane:%N] / msg:..., so
+    # the tail is reliably unique across concurrent sends.
+    local marker="${text: -40}"
+    local elapsed=0
+    local landed=0
+    while [ "$elapsed" -lt "$timeout_ms" ]; do
+      if tmux capture-pane -t "$pane_id" -p -S -20 2>/dev/null | grep -qF -- "$marker"; then
+        landed=1
+        break
+      fi
+      sleep 0.05
+      elapsed=$((elapsed + 50))
+    done
+    if [ "$landed" -ne 1 ]; then
+      echo "ERROR: send to ${pane_id} did not land within ${timeout_ms}ms (recipient may be busy or paste was dropped)." >&2
+      return 1
+    fi
+  fi
+
   tmux send-keys -t "$pane_id" Enter
+
+  # Settle window so the next send (often to a different pane) doesn't race
+  # this pane's paste buffer drain. Override via SESSION_CHAT_SETTLE_MS.
+  local settle_ms="${SESSION_CHAT_SETTLE_MS:-300}"
+  if [ "$settle_ms" -gt 0 ] 2>/dev/null; then
+    local settle_s
+    settle_s=$(awk -v ms="$settle_ms" 'BEGIN { printf "%.3f", ms/1000 }')
+    sleep "$settle_s"
+  fi
 }
 
 send_message() {
@@ -98,7 +133,7 @@ send_message() {
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
   local formatted="[from:${my_name} pane:${TMUX_PANE}] ${message}"
-  send_text "$target_pane" "$formatted"
+  send_text "$target_pane" "$formatted" || return 1
 }
 
 dispatch_message() {
@@ -125,7 +160,7 @@ EOF
   # Send single-line notification with file reference
   local preview
   preview=$(echo "$message" | head -1 | cut -c1-80)
-  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file}] ${preview}"
+  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file}] ${preview}" || return 1
 }
 
 read_pane() {
