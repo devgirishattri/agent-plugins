@@ -22,5 +22,8 @@ if [ -z "$MESSAGE" ]; then
 fi
 
 ensure_tmux
-send_message "$TARGET_NAME" "$MESSAGE"
+if ! send_message "$TARGET_NAME" "$MESSAGE"; then
+  echo "ERROR: Failed to send message to $TARGET_NAME." >&2
+  exit 1
+fi
 echo "Sent to $TARGET_NAME."

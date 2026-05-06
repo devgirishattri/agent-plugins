@@ -22,6 +22,9 @@ ensure_tmux
 
 # Send the task via file-based dispatch
 PROMPT_TEXT=$(cat "$PROMPT_FILE")
-dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"
+if ! dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"; then
+  echo "ERROR: Failed to dispatch task to '$TARGET_NAME'." >&2
+  exit 1
+fi
 
 echo "Dispatched task to '$TARGET_NAME'"
