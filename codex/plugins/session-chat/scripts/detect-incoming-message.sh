@@ -33,6 +33,10 @@ SENDER_NAME=$(echo "$SENDER_NAME" | tr -cd 'a-zA-Z0-9_:-')
 SENDER_PANE=$(echo "$SENDER_PANE" | tr -cd 'a-zA-Z0-9_%')
 
 PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-}"
+if [ -z "$PLUGIN_ROOT" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
 MESSAGES_DIR="${CODEX_HOME:-$HOME/.codex}/messages"
 INCOMING_MODE="${SESSION_CHAT_INCOMING_MODE:-notify}"
 
