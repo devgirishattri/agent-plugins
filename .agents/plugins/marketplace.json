@@ -30,7 +30,7 @@
     },
     {
       "name": "session-chat",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-chat"
