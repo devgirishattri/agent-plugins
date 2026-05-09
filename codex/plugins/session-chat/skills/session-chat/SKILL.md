@@ -42,7 +42,7 @@ The dispatch notification intentionally has no task preview. The receiver must r
 
 ## Reliability Contract
 
-Session-chat sends text to the target pane with `tmux send-keys -l`, verifies a marker in `capture-pane -S -200`, then sends Enter only after verification succeeds. If verification times out, it sends `C-u` to clear any partial paste before returning failure.
+Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies a marker in `capture-pane -S -200`, then sends Enter only after verification succeeds. If verification times out, it sends `C-u` to clear any partial paste, backs off, and retries before returning failure.
 
 Codex TUI redraws, wrapping, approval prompts, and active command output can still hide typed markers from `capture-pane`. If a valid send reports that it did not land, retry after the target is idle or raise the verification timeout.
 
@@ -53,14 +53,26 @@ Codex TUI redraws, wrapping, approval prompts, and active command output can sti
 - `SESSION_CHAT_SEND_MAX_LEN`: maximum `/send` payload length. Default: `1024`.
 - `SESSION_CHAT_SKIP_VERIFY`: set to `1` to skip marker verification.
 - `SESSION_CHAT_INCOMING_MODE`: receiver behavior. Values: `notify`, `assist`, `auto`, `off`. Default: `notify`.
+- `SESSION_CHAT_LOCK_TIMEOUT_MS`: how long a sender waits for a per-pane send lock. Default: `3000`.
+- `SESSION_CHAT_SEND_RETRIES`: retry count after verify timeouts. Default: `2`.
+- `SESSION_CHAT_RETRY_BACKOFF_MS`: linear retry backoff base in milliseconds. Default: `200`.
 
 ## Common Failures
 
-- `did not land within Xms`: target may be busy, redrawing, or in an approval prompt. Retry when idle or increase `SESSION_CHAT_VERIFY_TIMEOUT_MS`.
+- `did not land within Xms after N attempts`: target may be busy, redrawing, or in an approval prompt. Retry when idle or increase `SESSION_CHAT_VERIFY_TIMEOUT_MS`.
+- `timed out waiting for send lock`: another sender is writing to the pane or left a stale lock with a live PID. Retry or raise `SESSION_CHAT_LOCK_TIMEOUT_MS`.
 - `Multiple panes named X`: rename one pane with `$session-chat:whoami <name>` in that pane.
 - `No pane named X`: run `$session-chat:panes` and confirm the recipient has run `$session-chat:whoami <name>`.
 - `/send only supports single-line messages`: use `$session-chat:dispatch`.
 - `/send payload exceeds ... characters`: use `$session-chat:dispatch`.
+
+## Incoming Mode
+
+Use `$session-chat:incoming-mode` to show the current receiver mode and explain `notify`, `assist`, `auto`, and `off`. Use `$session-chat:incoming-mode auto` or another mode to print an `export SESSION_CHAT_INCOMING_MODE=<mode>` command. Run that export in the shell that starts Codex, then restart or reload the session; a child script cannot mutate the parent Codex environment.
+
+## Message Files
+
+Use `$session-chat:messages-list` to inspect trusted dispatch message files in `$CODEX_HOME/messages`. Use `$session-chat:messages-clean` to preview cleanup by age, sender, or recipient. Cleanup is a dry run by default; add `--apply` to delete matching files.
 
 ## Reinstalling Source Changes
 
@@ -70,4 +82,4 @@ This source tree may be newer than the running Codex plugin cache. To make the r
 codex plugin marketplace upgrade girishattri-codex-plugins
 ```
 
-Then restart or reload Codex if the session still shows an older cached path such as `session-chat/0.9.9`.
+Then restart Codex or use `/reload-plugins` if the runtime supports it. To verify the cached version, inspect `$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/`; if the session still shows an older cached path such as `session-chat/0.10.1`, reload before testing new commands.
