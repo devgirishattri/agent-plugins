@@ -62,32 +62,48 @@ get_my_name() {
 
 resolve_pane() {
   local label="$1"
-  local result
-  result=$(tmux list-panes -a -F '#{pane_id} #{@name}' 2>/dev/null | while read -r pid pname; do
-    if [ "$pname" = "$label" ]; then
-      echo "$pid"
-      break
-    fi
-  done)
-  if [ -z "$result" ]; then
+  local matches
+  local count
+  local panes
+  matches=$(tmux list-panes -a -F '#{pane_id} #{@name}' 2>/dev/null | awk -v label="$label" '$2 == label { print $1 }')
+  count=$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')
+
+  if [ "$count" -eq 0 ]; then
     echo "ERROR: No pane named '$label'. Run /panes to see available." >&2
     return 1
   fi
-  echo "$result"
+  if [ "$count" -gt 1 ]; then
+    panes=$(printf '%s\n' "$matches" | sed '/^$/d' | awk 'BEGIN { out="" } { out = out (out ? ", " : "") $0 } END { print out }')
+    echo "ERROR: Multiple panes named '$label' ($panes). Rename one with /whoami in that pane." >&2
+    return 1
+  fi
+
+  printf '%s\n' "$matches" | sed '/^$/d' | head -1
 }
 
 # --- Communication ---
 
+SEND_MAX_LEN="${SESSION_CHAT_SEND_MAX_LEN:-1024}"
+
+generate_id() {
+  if command -v od >/dev/null 2>&1; then
+    od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
+  else
+    printf '%s%s' "$$" "${RANDOM:-0}${RANDOM:-0}"
+  fi
+}
+
 send_text() {
   local pane_id="$1"
   local text="$2"
+  local marker_supplied="${3+x}"
+  local marker="${3:-$text}"
   local settle_ms="${SESSION_CHAT_SETTLE_MS:-300}"
   # Literal mode + split text/Enter for TUI safety (smux pattern)
   tmux send-keys -t "$pane_id" -l -- "$text" || return 1
 
   if [ "${SESSION_CHAT_SKIP_VERIFY:-}" != "1" ]; then
     local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}"
-    local marker="$text"
     local captured
     local attempts
     local i
@@ -96,14 +112,14 @@ send_text() {
       ''|*[!0-9]*) timeout_ms=2000 ;;
     esac
 
-    if [ "${#marker}" -gt 40 ]; then
+    if [ -z "$marker_supplied" ] && [ "${#marker}" -gt 40 ]; then
       marker="${marker: -40}"
     fi
 
     attempts=$(( (timeout_ms + 49) / 50 ))
     i=0
     while [ "$i" -lt "$attempts" ]; do
-      captured=$(tmux capture-pane -t "$pane_id" -p -S -20 2>/dev/null || true)
+      captured=$(tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null || true)
       if [[ "$captured" == *"$marker"* ]]; then
         break
       fi
@@ -112,6 +128,7 @@ send_text() {
     done
 
     if [ "$i" -ge "$attempts" ]; then
+      tmux send-keys -t "$pane_id" C-u >/dev/null 2>&1 || true
       echo "ERROR: send to $pane_id did not land within ${timeout_ms}ms — recipient may be busy." >&2
       return 1
     fi
@@ -136,10 +153,23 @@ send_message() {
     echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
     return 1
   fi
+  case "$SEND_MAX_LEN" in
+    ''|*[!0-9]*) SEND_MAX_LEN=1024 ;;
+  esac
+  if [[ "$message" == *$'\n'* ]]; then
+    echo "ERROR: /send only supports single-line messages. Use /dispatch <target> <task> for multi-line content." >&2
+    return 1
+  fi
+  if [ "${#message}" -gt "$SEND_MAX_LEN" ]; then
+    echo "ERROR: /send payload exceeds ${SEND_MAX_LEN} characters. Use /dispatch <target> <task> for long content." >&2
+    return 1
+  fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
-  local formatted="[from:${my_name} pane:${TMUX_PANE:-}] ${message}"
-  send_text "$target_pane" "$formatted" || return 1
+  local uid
+  uid=$(generate_id)
+  local formatted="[from:${my_name} pane:${TMUX_PANE:-} id:${uid}] ${message}"
+  send_text "$target_pane" "$formatted" "id:${uid}" || return 1
 }
 
 dispatch_message() {
@@ -156,17 +186,17 @@ dispatch_message() {
 
   # Write full message to file (handles multi-line + special chars)
   ensure_messages_dir
+  local uid
+  uid=$(generate_id)
   local msg_id
-  msg_id="$(date +%s)-${my_name}-to-${target_name}"
+  msg_id="$(date +%s)-$$-${uid}-${my_name}-to-${target_name}"
   local msg_file="$MESSAGES_DIR/${msg_id}.md"
-  cat > "$msg_file" <<EOF
-$message
-EOF
+  printf '%s\n' "$message" > "$msg_file"
 
   # Send single-line notification with file reference
-  local preview
-  preview=$(echo "$message" | head -1 | cut -c1-80)
-  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file}] ${preview}" || return 1
+  local line_count
+  line_count=$(printf '%s\n' "$message" | wc -l | tr -d ' ')
+  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task" "id:${uid}" || return 1
 }
 
 read_pane() {
