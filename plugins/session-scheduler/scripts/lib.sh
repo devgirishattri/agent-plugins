@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# lib.sh — shared helpers for session-scheduler plugin.
+# Storage:
+#   ${CLAUDE_HOME:-$HOME/.claude}/scheduler/tasks/<id>.json
+#   ${CLAUDE_HOME:-$HOME/.claude}/scheduler/prompts/<id>.md
+# One JSON file per task. Atomic writes (tmp + mv).
+# Requires: jq, bash 4+. Depends on session-chat lib.sh for /send.
+
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+SCHEDULER_DIR="$CLAUDE_HOME/scheduler"
+TASKS_DIR="$SCHEDULER_DIR/tasks"
+PROMPTS_DIR="$SCHEDULER_DIR/prompts"
+
+ensure_dirs() {
+  mkdir -p "$TASKS_DIR" "$PROMPTS_DIR"
+}
+
+require_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq is required but not installed. Install with: brew install jq" >&2
+    return 1
+  fi
+}
+
+# Locate session-chat scripts. Prefer the test override env var, then the
+# cached install, then a sibling source dir.
+session_chat_root() {
+  if [ -n "${SESSION_CHAT_ROOT_OVERRIDE:-}" ]; then
+    printf '%s\n' "$SESSION_CHAT_ROOT_OVERRIDE"
+    return 0
+  fi
+  local versioned
+  versioned=$(ls -1 "$HOME/.claude/plugins/cache/girishattri-plugins/session-chat" 2>/dev/null | sort -V | tail -1)
+  if [ -n "$versioned" ]; then
+    printf '%s/.claude/plugins/cache/girishattri-plugins/session-chat/%s\n' "$HOME" "$versioned"
+    return 0
+  fi
+  local here
+  here=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+  if [ -d "$here/session-chat" ]; then
+    printf '%s/session-chat\n' "$here"
+    return 0
+  fi
+  return 1
+}
+
+# Send a one-line message via session-chat /send. Best-effort: if session-chat
+# is missing or send fails, log to stderr but do not abort the scheduler op.
+session_chat_send() {
+  local target="$1"
+  local message="$2"
+  local root
+  if ! root=$(session_chat_root); then
+    echo "WARN: session-chat not installed; skipping ack to '$target'." >&2
+    return 0
+  fi
+  if ! bash "$root/scripts/send-message.sh" "$target" "$message" >/dev/null 2>&1; then
+    echo "WARN: session-chat /send to '$target' failed (recipient busy or absent)." >&2
+  fi
+}
+
+session_chat_dispatch() {
+  local target="$1"
+  local prompt_file="$2"
+  local root
+  if ! root=$(session_chat_root); then
+    echo "ERROR: session-chat not installed; cannot dispatch task. Install session-chat>=0.11.0." >&2
+    return 1
+  fi
+  bash "$root/scripts/dispatch-to-session.sh" "$target" "$prompt_file"
+}
+
+# Get current pane name via session-chat helper, or fall back to '?'.
+current_pane_name() {
+  local root
+  if ! root=$(session_chat_root); then
+    echo "?"
+    return 0
+  fi
+  local name
+  name=$(bash "$root/scripts/get-my-name.sh" 2>/dev/null | tail -1 | tr -d '[:space:]')
+  if [ -z "$name" ] || [ "$name" = "(unnamed)" ]; then
+    echo "?"
+  else
+    echo "$name"
+  fi
+}
+
+# Generate task id: 8 hex chars from /dev/urandom.
+generate_task_id() {
+  if command -v od >/dev/null 2>&1; then
+    od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
+  else
+    printf '%s%s' "$$" "${RANDOM:-0}${RANDOM:-0}"
+  fi
+}
+
+iso_now() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+task_path() {
+  printf '%s/%s.json\n' "$TASKS_DIR" "$1"
+}
+
+prompt_path() {
+  printf '%s/%s.md\n' "$PROMPTS_DIR" "$1"
+}
+
+task_exists() {
+  [ -f "$(task_path "$1")" ]
+}
+
+# Read a task field via jq. Usage: task_get <id> <jq-expr>
+task_get() {
+  local id="$1"
+  local expr="$2"
+  jq -r "$expr" "$(task_path "$id")" 2>/dev/null
+}
+
+# Atomic write of JSON content to a task file.
+task_write() {
+  local id="$1"
+  local json="$2"
+  local target
+  target=$(task_path "$id")
+  local tmp="${target}.tmp.$$"
+  printf '%s\n' "$json" > "$tmp" || return 1
+  mv "$tmp" "$target"
+}
+
+# Append a history entry. Usage: task_append_history <id> <event> <actor> <note>
+task_append_history() {
+  local id="$1" event="$2" actor="$3" note="$4"
+  local current
+  current=$(cat "$(task_path "$id")")
+  local updated
+  updated=$(printf '%s' "$current" | jq \
+    --arg ts "$(iso_now)" \
+    --arg event "$event" \
+    --arg actor "$actor" \
+    --arg note "$note" \
+    '.updated_at = $ts
+     | .history += [{ts: $ts, event: $event, actor: $actor, note: $note}]')
+  task_write "$id" "$updated"
+}
+
+# Update status + history together. Usage: task_set_status <id> <status> <actor> [note]
+task_set_status() {
+  local id="$1" status="$2" actor="$3" note="${4:-}"
+  local current
+  current=$(cat "$(task_path "$id")")
+  local updated
+  updated=$(printf '%s' "$current" | jq \
+    --arg ts "$(iso_now)" \
+    --arg status "$status" \
+    --arg actor "$actor" \
+    --arg note "$note" \
+    '.status = $status
+     | .updated_at = $ts
+     | .history += [{ts: $ts, event: $status, actor: $actor, note: $note}]')
+  task_write "$id" "$updated"
+}
+
+# Set assignee (used by task-assign).
+task_set_assignee() {
+  local id="$1" assignee="$2" prompt_file="$3"
+  local current
+  current=$(cat "$(task_path "$id")")
+  local updated
+  updated=$(printf '%s' "$current" | jq \
+    --arg assignee "$assignee" \
+    --arg prompt_file "$prompt_file" \
+    '.assignee = $assignee | .prompt_file = $prompt_file')
+  task_write "$id" "$updated"
+}
+
+validate_task_id() {
+  local id="$1"
+  if [ -z "$id" ]; then
+    echo "ERROR: task id required." >&2
+    return 1
+  fi
+  if ! [[ "$id" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "ERROR: invalid task id '$id' (alphanumeric, _, - only)." >&2
+    return 1
+  fi
+}
