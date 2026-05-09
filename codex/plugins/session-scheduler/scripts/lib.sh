@@ -67,6 +67,10 @@ current_pane_name() {
 }
 
 session_chat_root() {
+  if [ -n "${SESSION_CHAT_ROOT_OVERRIDE:-}" ] && [ -d "$SESSION_CHAT_ROOT_OVERRIDE" ]; then
+    printf '%s\n' "$SESSION_CHAT_ROOT_OVERRIDE"
+    return 0
+  fi
   if [ -n "${SESSION_CHAT_PLUGIN_ROOT:-}" ] && [ -d "$SESSION_CHAT_PLUGIN_ROOT" ]; then
     printf '%s\n' "$SESSION_CHAT_PLUGIN_ROOT"
     return 0
