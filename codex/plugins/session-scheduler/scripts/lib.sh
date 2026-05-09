@@ -6,7 +6,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
-SCHEDULER_DIR="${SESSION_SCHEDULER_HOME:-$CODEX_DIR/scheduler}"
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+SCHEDULER_DIR="${SESSION_SCHEDULER_HOME:-$PROJECT_ROOT/tmp/scheduler}"
 TASKS_DIR="$SCHEDULER_DIR/tasks"
 PROMPTS_DIR="$SCHEDULER_DIR/prompts"
 SESSION_CHAT_MIN_VERSION="0.11.0"
@@ -96,8 +97,12 @@ session_chat_version() {
 
 write_json_atomic() {
   local file="$1"
-  local tmp="${file}.tmp.$$"
-  cat > "$tmp"
+  local tmp
+  tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
+  cat > "$tmp" || {
+    rm -f "$tmp"
+    return 1
+  }
   mv "$tmp" "$file"
 }
 

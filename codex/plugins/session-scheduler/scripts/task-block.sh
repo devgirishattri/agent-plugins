@@ -21,7 +21,7 @@ FILE=$(task_file "$ID") || exit 1
 [ -f "$FILE" ] || { echo "ERROR: Task not found: $ID" >&2; exit 1; }
 ACTOR=$(current_pane_name)
 
-append_history_update "$FILE" "blocked" "blocked" "$ACTOR" "$REASON"
+append_history_update "$FILE" "blocked" "blocked" "$ACTOR" "$REASON" || exit 1
 
 ASSIGNER=$(jq -r '.assigner // ""' "$FILE")
 if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "$ACTOR" ]; then

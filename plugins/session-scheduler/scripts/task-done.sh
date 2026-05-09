@@ -19,7 +19,10 @@ ACTOR=$(current_pane_name)
 ASSIGNER=$(task_get "$ID" '.assigner')
 NAME=$(task_get "$ID" '.name')
 
-task_set_status "$ID" "done" "$ACTOR" "$NOTE"
+if ! task_set_status "$ID" "done" "$ACTOR" "$NOTE"; then
+  echo "ERROR: ledger write failed for $ID; task NOT marked done." >&2
+  exit 1
+fi
 
 if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
   msg="task ${ID} (${NAME}) done by ${ACTOR}"

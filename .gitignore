@@ -2,3 +2,4 @@ firebase-debug.log
 .claude/settings.local.json
 .claude/dispatch/
 .claude/scheduled_tasks.lock
+tmp/
