@@ -87,31 +87,66 @@ generate_id() {
   fi
 }
 
+# --- Per-target send lock ---
+# Serializes sends targeting the same pane so concurrent senders don't
+# interleave keystrokes. Lock dir is created with mkdir (atomic). Stale
+# locks (owner PID gone) are reclaimed.
+
+session_chat_lock_path() {
+  local safe
+  safe=$(printf '%s' "$1" | tr -c 'a-zA-Z0-9._-' '_')
+  printf '%s/session-chat-locks/%s.lock' "${TMPDIR:-/tmp}" "$safe"
+}
+
+acquire_lock() {
+  local pane="$1"
+  local lock
+  lock=$(session_chat_lock_path "$pane")
+  mkdir -p "$(dirname "$lock")" 2>/dev/null || true
+  local timeout_ms="${SESSION_CHAT_LOCK_TIMEOUT_MS:-3000}"
+  local elapsed=0
+  while [ "$elapsed" -lt "$timeout_ms" ]; do
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s\n' "$$" > "$lock/pid"
+      return 0
+    fi
+    local owner_pid=""
+    [ -f "$lock/pid" ] && owner_pid=$(tr -d '[:space:]' < "$lock/pid" 2>/dev/null)
+    if [ -n "$owner_pid" ] && ! kill -0 "$owner_pid" 2>/dev/null; then
+      rm -rf "$lock" 2>/dev/null
+      continue
+    fi
+    sleep 0.05
+    elapsed=$((elapsed + 50))
+  done
+  echo "ERROR: could not acquire send-lock for ${pane} within ${timeout_ms}ms (held by another sender)." >&2
+  return 1
+}
+
+release_lock() {
+  local pane="$1"
+  local lock
+  lock=$(session_chat_lock_path "$pane")
+  rm -rf "$lock" 2>/dev/null
+}
+
 # --- Communication ---
 
-send_text() {
+# Single paste→verify→Enter attempt. On verify failure: C-u to clear the
+# partial paste, return 1 (no error message — caller decides whether to retry).
+_send_text_attempt() {
   local pane_id="$1"
   local text="$2"
-  local marker="${3:-}"
-  # Literal mode + split text/Enter for TUI safety (smux pattern)
+  local marker="$3"
   tmux send-keys -t "$pane_id" -l -- "$text"
-
-  # Verify the literal text drained into the recipient pane before pressing Enter.
-  # Without this, back-to-back sends to different panes can race: the second
-  # send-keys can fire before the first paste has finished, dropping the first
-  # message silently. Opt out via SESSION_CHAT_SKIP_VERIFY=1.
   if [ "${SESSION_CHAT_SKIP_VERIFY:-0}" != "1" ]; then
     local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}"
-    # Prefer caller-supplied unique marker (e.g. "id:abcd1234"). Fall back to
-    # last 40 chars of payload only if no marker was given.
     if [ -z "$marker" ]; then
       marker="${text: -40}"
     fi
     local elapsed=0
     local landed=0
     while [ "$elapsed" -lt "$timeout_ms" ]; do
-      # Capture a generous scrollback window: busy TUIs (spinners, list
-      # output, approval prompts) push the input line past 20 lines fast.
       if tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null | grep -qF -- "$marker"; then
         landed=1
         break
@@ -120,24 +155,47 @@ send_text() {
       elapsed=$((elapsed + 50))
     done
     if [ "$landed" -ne 1 ]; then
-      # Clear partial paste from recipient's prompt buffer so it doesn't
-      # poison the next interaction or concatenate with later sends.
       tmux send-keys -t "$pane_id" C-u 2>/dev/null || true
-      echo "ERROR: send to ${pane_id} did not land within ${timeout_ms}ms; recipient input cleared (C-u). Recipient may be busy or in an approval gate." >&2
       return 1
     fi
   fi
-
   tmux send-keys -t "$pane_id" Enter
-
-  # Settle window so the next send (often to a different pane) doesn't race
-  # this pane's paste buffer drain. Override via SESSION_CHAT_SETTLE_MS.
   local settle_ms="${SESSION_CHAT_SETTLE_MS:-300}"
   if [ "$settle_ms" -gt 0 ] 2>/dev/null; then
     local settle_s
     settle_s=$(awk -v ms="$settle_ms" 'BEGIN { printf "%.3f", ms/1000 }')
     sleep "$settle_s"
   fi
+  return 0
+}
+
+send_text() {
+  local pane_id="$1"
+  local text="$2"
+  local marker="${3:-}"
+
+  acquire_lock "$pane_id" || return 1
+
+  local retries="${SESSION_CHAT_SEND_RETRIES:-2}"
+  local backoff_ms="${SESSION_CHAT_RETRY_BACKOFF_MS:-200}"
+  local attempt=0
+  while :; do
+    if _send_text_attempt "$pane_id" "$text" "$marker"; then
+      release_lock "$pane_id"
+      return 0
+    fi
+    if [ "$attempt" -ge "$retries" ]; then
+      release_lock "$pane_id"
+      local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}"
+      echo "ERROR: send to ${pane_id} did not land within ${timeout_ms}ms after $((retries + 1)) attempts; recipient input cleared (C-u). Recipient may be busy or in an approval gate." >&2
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    local wait_ms=$((backoff_ms * attempt))
+    local wait_s
+    wait_s=$(awk -v ms="$wait_ms" 'BEGIN { printf "%.3f", ms/1000 }')
+    sleep "$wait_s"
+  done
 }
 
 SEND_MAX_LEN="${SESSION_CHAT_SEND_MAX_LEN:-1024}"

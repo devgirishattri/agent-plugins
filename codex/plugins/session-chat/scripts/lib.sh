@@ -85,6 +85,23 @@ resolve_pane() {
 
 SEND_MAX_LEN="${SESSION_CHAT_SEND_MAX_LEN:-1024}"
 
+normalize_positive_int() {
+  local value="$1"
+  local fallback="$2"
+  case "$value" in
+    ''|*[!0-9]*) printf '%s\n' "$fallback" ;;
+    *) printf '%s\n' "$value" ;;
+  esac
+}
+
+sleep_ms() {
+  local ms
+  ms=$(normalize_positive_int "${1:-0}" 0)
+  local sec=$((ms / 1000))
+  local rem=$((ms % 1000))
+  sleep "${sec}.$(printf '%03d' "$rem")"
+}
+
 generate_id() {
   if command -v od >/dev/null 2>&1; then
     od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
@@ -93,7 +110,60 @@ generate_id() {
   fi
 }
 
-send_text() {
+send_lock_path() {
+  local pane_id="$1"
+  local safe_id
+  safe_id=$(printf '%s' "$pane_id" | tr -c 'a-zA-Z0-9_.-' '_')
+  printf '%s/session-chat-locks/%s.lock\n' "${TMPDIR:-/tmp}" "${safe_id:-pane}"
+}
+
+process_is_alive() {
+  local pid="$1"
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  kill -0 "$pid" 2>/dev/null
+}
+
+acquire_send_lock() {
+  local lock_dir="$1"
+  local pane_id="$2"
+  local timeout_ms
+  timeout_ms=$(normalize_positive_int "${SESSION_CHAT_LOCK_TIMEOUT_MS:-3000}" 3000)
+  local attempts=$(( (timeout_ms + 49) / 50 ))
+  local i=0
+  local pid
+
+  mkdir -p "$(dirname "$lock_dir")"
+  while [ "$i" -le "$attempts" ]; do
+    if mkdir "$lock_dir" 2>/dev/null; then
+      printf '%s\n' "$$" > "$lock_dir/pid"
+      return 0
+    fi
+
+    pid=""
+    [ -f "$lock_dir/pid" ] && pid=$(cat "$lock_dir/pid" 2>/dev/null || true)
+    if [ -n "$pid" ] && ! process_is_alive "$pid"; then
+      rm -f "$lock_dir/pid"
+      rmdir "$lock_dir" 2>/dev/null || true
+      continue
+    fi
+
+    sleep 0.05
+    i=$((i + 1))
+  done
+
+  echo "ERROR: timed out waiting for send lock for $pane_id after ${timeout_ms}ms." >&2
+  return 1
+}
+
+release_send_lock() {
+  local lock_dir="$1"
+  rm -f "$lock_dir/pid" 2>/dev/null || true
+  rmdir "$lock_dir" 2>/dev/null || true
+}
+
+send_text_once() {
   local pane_id="$1"
   local text="$2"
   local marker_supplied="${3+x}"
@@ -129,8 +199,7 @@ send_text() {
 
     if [ "$i" -ge "$attempts" ]; then
       tmux send-keys -t "$pane_id" C-u >/dev/null 2>&1 || true
-      echo "ERROR: send to $pane_id did not land within ${timeout_ms}ms — recipient may be busy." >&2
-      return 1
+      return 2
     fi
   fi
 
@@ -139,9 +208,54 @@ send_text() {
   case "$settle_ms" in
     ''|*[!0-9]*) settle_ms=300 ;;
   esac
-  local settle_sec=$((settle_ms / 1000))
-  local settle_rem=$((settle_ms % 1000))
-  sleep "${settle_sec}.$(printf '%03d' "$settle_rem")"
+  sleep_ms "$settle_ms"
+}
+
+send_text() {
+  local pane_id="$1"
+  local text="$2"
+  local marker_supplied="${3+x}"
+  local marker="${3:-$text}"
+  local retries
+  local backoff_ms
+  local max_attempts
+  local attempt=1
+  local status=0
+  local lock_dir
+
+  retries=$(normalize_positive_int "${SESSION_CHAT_SEND_RETRIES:-2}" 2)
+  backoff_ms=$(normalize_positive_int "${SESSION_CHAT_RETRY_BACKOFF_MS:-200}" 200)
+  max_attempts=$((retries + 1))
+  lock_dir=$(send_lock_path "$pane_id")
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    acquire_send_lock "$lock_dir" "$pane_id" || return 1
+    if [ -n "$marker_supplied" ]; then
+      send_text_once "$pane_id" "$text" "$marker"
+    else
+      send_text_once "$pane_id" "$text"
+    fi
+    status=$?
+    release_send_lock "$lock_dir"
+
+    if [ "$status" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$status" -ne 2 ]; then
+      return "$status"
+    fi
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      local timeout_ms
+      timeout_ms=$(normalize_positive_int "${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}" 2000)
+      echo "ERROR: send to $pane_id did not land within ${timeout_ms}ms after ${max_attempts} attempts — recipient may be busy." >&2
+      return 1
+    fi
+
+    sleep_ms $((backoff_ms * attempt))
+    attempt=$((attempt + 1))
+  done
+
+  return 1
 }
 
 send_message() {

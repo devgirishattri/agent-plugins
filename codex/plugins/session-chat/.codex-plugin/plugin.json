@@ -1,6 +1,6 @@
 {
   "name": "session-chat",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Peer-to-peer messaging and task dispatch between Codex sessions via tmux.",
   "author": {
     "name": "Girish Attri",
@@ -19,7 +19,8 @@
     "defaultPrompt": [
       "List named Codex panes.",
       "Send a message to another session.",
-      "Dispatch work to another session."
+      "Dispatch work to another session.",
+      "Check incoming message mode."
     ],
     "brandColor": "#7C3AED"
   }
