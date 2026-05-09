@@ -8,6 +8,7 @@ This repository contains provider-specific plugins for Claude Code and Codex. Th
 |--------|---------|
 | `session-manager` | List, search, and delete local agent session data |
 | `session-chat` | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `session-context` | Generate, list, load, and share session context snapshots |
 | `creating-docs` | Create and update documentation using structured guidance and validation scripts |
 
@@ -115,6 +116,7 @@ claude plugin marketplace add /path/to/agent-plugins
 - Shared ideas can be documented in `docs/`, but runtime files should remain provider-local.
 - Generated logs such as `firebase-debug.log` are ignored and should not be committed.
 - Run `bash scripts/validate-release.sh` before publishing plugin updates.
+- `session-scheduler` is intentionally a file-backed ledger layered on `session-chat`; keep scheduling state out of the transport plugin.
 
 ## Documentation
 

@@ -56,6 +56,18 @@
       "category": "productivity",
       "keywords": ["context", "handoff", "snapshot", "session", "multi-agent"],
       "license": "MIT"
+    },
+    {
+      "name": "session-scheduler",
+      "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Girish Attri"
+      },
+      "source": "./plugins/session-scheduler",
+      "category": "productivity",
+      "keywords": ["scheduler", "orchestration", "tasks", "ledger", "multi-agent", "tmux"],
+      "license": "MIT"
     }
   ]
 }

@@ -1,0 +1,26 @@
+{
+  "name": "session-scheduler",
+  "version": "0.1.0",
+  "description": "File-backed task scheduling and status tracking for multi-pane Codex orchestration over session-chat.",
+  "author": {
+    "name": "Girish Attri",
+    "email": "dev@girishattri.com"
+  },
+  "license": "MIT",
+  "keywords": ["scheduler", "tmux", "tasks", "orchestration", "multi-agent"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Session Scheduler",
+    "shortDescription": "Track and assign tasks across named Codex panes.",
+    "longDescription": "A lightweight file-backed task ledger layered on session-chat for orchestrator, executor, and reviewer workflows.",
+    "developerName": "Girish Attri",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Create a scheduler task.",
+      "Assign a task to a named pane.",
+      "Show scheduler task status."
+    ],
+    "brandColor": "#2563EB"
+  }
+}
