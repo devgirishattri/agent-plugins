@@ -8,11 +8,16 @@ allowed-tools: Bash(bash:*)
 
 Do not narrate or add a preamble. Run the script directly and report only the result.
 
+`/send` is for **short, single-line** messages (status, acks, replies). The script refuses payloads with newlines or >1024 chars — for those, use `/dispatch`. See the `session-chat` skill for the full decision table and recipient prerequisites.
+
 1. Parse $ARGUMENTS: first word is the target pane name, everything after is the message
 2. Run the send script with properly quoted arguments:
    ```
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/send-message.sh "<target-name>" "<message>"
    ```
 3. If the output says "Sent to ...", confirm to the user
-4. If there's an error about no name, tell the user to run `/whoami <name>` first
-5. If the target is not found, run `/panes` to show available targets
+4. If the error mentions newlines or length, retry with `/dispatch <target> <message>`
+5. If the error is about no name, tell the user to run `/whoami <name>` first
+6. If the target is not found, run `/panes` to show available targets
+7. If the error mentions duplicate names, ask the user to rename one pane via `/whoami`
+8. If "did not land within Xms", the recipient is likely busy; retry once after a short pause, or raise `SESSION_CHAT_VERIFY_TIMEOUT_MS`

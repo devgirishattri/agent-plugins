@@ -61,18 +61,30 @@ get_my_name() {
 
 resolve_pane() {
   local label="$1"
-  local result
-  result=$(tmux list-panes -a -F '#{pane_id} #{@name}' 2>/dev/null | while read -r pid pname; do
-    if [ "$pname" = "$label" ]; then
-      echo "$pid"
-      break
-    fi
-  done)
-  if [ -z "$result" ]; then
+  local matches
+  matches=$(tmux list-panes -a -F '#{pane_id} #{@name}' 2>/dev/null | awk -v want="$label" '$2 == want { print $1 }')
+  local count
+  count=$(printf '%s\n' "$matches" | grep -c .)
+  if [ "$count" -eq 0 ]; then
     echo "ERROR: No pane named '$label'. Run /panes to see available." >&2
     return 1
   fi
-  echo "$result"
+  if [ "$count" -gt 1 ]; then
+    echo "ERROR: Multiple panes named '$label' ($matches). Rename one with /whoami in that pane." >&2
+    return 1
+  fi
+  printf '%s\n' "$matches"
+}
+
+# --- Unique id for verify markers (guaranteed unique per call) ---
+
+generate_id() {
+  # 8 hex chars from /dev/urandom; no python/awk dependency
+  if command -v od >/dev/null 2>&1; then
+    od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
+  else
+    printf '%s%s' "$$" "${RANDOM:-0}${RANDOM:-0}"
+  fi
 }
 
 # --- Communication ---
@@ -80,6 +92,7 @@ resolve_pane() {
 send_text() {
   local pane_id="$1"
   local text="$2"
+  local marker="${3:-}"
   # Literal mode + split text/Enter for TUI safety (smux pattern)
   tmux send-keys -t "$pane_id" -l -- "$text"
 
@@ -89,14 +102,17 @@ send_text() {
   # message silently. Opt out via SESSION_CHAT_SKIP_VERIFY=1.
   if [ "${SESSION_CHAT_SKIP_VERIFY:-0}" != "1" ]; then
     local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}"
-    # Use the last ~40 chars of the payload as a uniqueness marker. The
-    # session-chat formatter always suffixes [from:... pane:%N] / msg:..., so
-    # the tail is reliably unique across concurrent sends.
-    local marker="${text: -40}"
+    # Prefer caller-supplied unique marker (e.g. "id:abcd1234"). Fall back to
+    # last 40 chars of payload only if no marker was given.
+    if [ -z "$marker" ]; then
+      marker="${text: -40}"
+    fi
     local elapsed=0
     local landed=0
     while [ "$elapsed" -lt "$timeout_ms" ]; do
-      if tmux capture-pane -t "$pane_id" -p -S -20 2>/dev/null | grep -qF -- "$marker"; then
+      # Capture a generous scrollback window: busy TUIs (spinners, list
+      # output, approval prompts) push the input line past 20 lines fast.
+      if tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null | grep -qF -- "$marker"; then
         landed=1
         break
       fi
@@ -104,7 +120,10 @@ send_text() {
       elapsed=$((elapsed + 50))
     done
     if [ "$landed" -ne 1 ]; then
-      echo "ERROR: send to ${pane_id} did not land within ${timeout_ms}ms (recipient may be busy or paste was dropped)." >&2
+      # Clear partial paste from recipient's prompt buffer so it doesn't
+      # poison the next interaction or concatenate with later sends.
+      tmux send-keys -t "$pane_id" C-u 2>/dev/null || true
+      echo "ERROR: send to ${pane_id} did not land within ${timeout_ms}ms; recipient input cleared (C-u). Recipient may be busy or in an approval gate." >&2
       return 1
     fi
   fi
@@ -121,6 +140,8 @@ send_text() {
   fi
 }
 
+SEND_MAX_LEN="${SESSION_CHAT_SEND_MAX_LEN:-1024}"
+
 send_message() {
   local target_name="$1"
   local message="$2"
@@ -130,10 +151,24 @@ send_message() {
     echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
     return 1
   fi
+  # Length / newline guard: tmux send-keys -l truncates large literal pastes
+  # and the first \n submits a partial prompt. Refuse and steer to /dispatch.
+  case "$message" in
+    *$'\n'*)
+      echo "ERROR: /send payload contains newlines. Use /dispatch <target> <task> for multi-line content." >&2
+      return 1
+      ;;
+  esac
+  if [ "${#message}" -gt "$SEND_MAX_LEN" ]; then
+    echo "ERROR: /send payload is ${#message} chars (>${SEND_MAX_LEN}). Use /dispatch <target> <task> for long content." >&2
+    return 1
+  fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
-  local formatted="[from:${my_name} pane:${TMUX_PANE}] ${message}"
-  send_text "$target_pane" "$formatted" || return 1
+  local uid
+  uid=$(generate_id)
+  local formatted="[from:${my_name} pane:${TMUX_PANE} id:${uid}] ${message}"
+  send_text "$target_pane" "$formatted" "id:${uid}" || return 1
 }
 
 dispatch_message() {
@@ -150,17 +185,22 @@ dispatch_message() {
 
   # Write full message to file (handles multi-line + special chars)
   ensure_messages_dir
+  local uid
+  uid=$(generate_id)
+  # PID + uid prevents same-second / same-target collisions overwriting files.
   local msg_id
-  msg_id="$(date +%s)-${my_name}-to-${target_name}"
+  msg_id="$(date +%s)-$$-${uid}-${my_name}-to-${target_name}"
   local msg_file="$MESSAGES_DIR/${msg_id}.md"
   cat > "$msg_file" <<EOF
 $message
 EOF
-
-  # Send single-line notification with file reference
-  local preview
-  preview=$(echo "$message" | head -1 | cut -c1-80)
-  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file}] ${preview}" || return 1
+  local line_count
+  line_count=$(printf '%s' "$message" | awk 'END { print NR + 1 }')
+  # Notification line: no truncated preview. Recipient hook + receiver agent
+  # are responsible for reading $msg_file. The 'id:' field is the verify marker.
+  send_text "$target_pane" \
+    "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task" \
+    "id:${uid}" || return 1
 }
 
 read_pane() {
