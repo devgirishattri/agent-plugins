@@ -5,7 +5,11 @@ description: When and how to track multi-pane orchestrator → executor work wit
 
 # session-scheduler: file-backed task ledger
 
-A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `~/.claude/scheduler/tasks/<id>.json`; prompts go to `~/.claude/scheduler/prompts/<id>.md`. No daemon, no priority queue, no automatic reassignment — just a ledger you can read with `/task-status`.
+A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `<project_root>/tmp/scheduler/tasks/<id>.json`; prompts go to `<project_root>/tmp/scheduler/prompts/<id>.md`. Project root resolves via `git rev-parse --show-toplevel` (or pwd). Override via `SESSION_SCHEDULER_HOME=<dir>`.
+
+Project-local storage means **claude and codex panes working in the same project share the same ledger** — orchestrator and reviewer can both read/write the same task list.
+
+No daemon, no priority queue, no automatic reassignment — just a ledger you can read with `/task-status`.
 
 ## When to use this plugin
 

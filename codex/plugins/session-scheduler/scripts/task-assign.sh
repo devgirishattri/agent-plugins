@@ -60,6 +60,6 @@ jq \
    | .prompt_file=$prompt_file
    | .updated_at=$now
    | .history += [{ts:$now,event:"assigned",actor:$assigner,note:$note}]' \
-  "$FILE" | write_json_atomic "$FILE"
+  "$FILE" | write_json_atomic "$FILE" || exit 1
 
 echo "Assigned task $ID to $ASSIGNEE"

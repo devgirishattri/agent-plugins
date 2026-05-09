@@ -1,6 +1,6 @@
 {
   "name": "session-scheduler",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat (>=0.11.0) for transport.",
   "author": {
     "name": "Girish Attri"

@@ -47,8 +47,14 @@ if ! session_chat_dispatch "$PANE" "$PROMPT_FILE"; then
   exit 1
 fi
 
-task_set_assignee "$ID" "$PANE" "$PROMPT_FILE"
-task_set_status "$ID" "assigned" "$ASSIGNER" "dispatched to $PANE"
+if ! task_set_assignee "$ID" "$PANE" "$PROMPT_FILE"; then
+  echo "ERROR: dispatch succeeded but ledger update failed for $ID. Inspect $(task_path "$ID")." >&2
+  exit 1
+fi
+if ! task_set_status "$ID" "assigned" "$ASSIGNER" "dispatched to $PANE"; then
+  echo "ERROR: dispatch succeeded but status update failed for $ID. Inspect $(task_path "$ID")." >&2
+  exit 1
+fi
 
 echo "Assigned task $ID ($NAME) to $PANE."
 echo "  prompt:  $PROMPT_FILE"

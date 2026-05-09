@@ -24,7 +24,10 @@ ACTOR=$(current_pane_name)
 ASSIGNER=$(task_get "$ID" '.assigner')
 NAME=$(task_get "$ID" '.name')
 
-task_set_status "$ID" "blocked" "$ACTOR" "$REASON"
+if ! task_set_status "$ID" "blocked" "$ACTOR" "$REASON"; then
+  echo "ERROR: ledger write failed for $ID; task NOT marked blocked." >&2
+  exit 1
+fi
 
 if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
   session_chat_send "$ASSIGNER" "task ${ID} (${NAME}) BLOCKED by ${ACTOR}: ${REASON}"

@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
 # lib.sh — shared helpers for session-scheduler plugin.
-# Storage:
-#   ${CLAUDE_HOME:-$HOME/.claude}/scheduler/tasks/<id>.json
-#   ${CLAUDE_HOME:-$HOME/.claude}/scheduler/prompts/<id>.md
+# Storage (default): <project_root>/tmp/scheduler/{tasks,prompts}/...
+#   project_root resolves via `git rev-parse --show-toplevel` or pwd.
+# Override: SESSION_SCHEDULER_HOME=<dir>  (same env var as codex side, so
+#   claude and codex panes in the same project share a ledger).
 # One JSON file per task. Atomic writes (tmp + mv).
 # Requires: jq, bash 4+. Depends on session-chat lib.sh for /send.
 
-CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
-SCHEDULER_DIR="$CLAUDE_HOME/scheduler"
+resolve_scheduler_home() {
+  if [ -n "${SESSION_SCHEDULER_HOME:-}" ]; then
+    printf '%s\n' "$SESSION_SCHEDULER_HOME"
+    return 0
+  fi
+  local root
+  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  printf '%s/tmp/scheduler\n' "$root"
+}
+
+SCHEDULER_DIR="$(resolve_scheduler_home)"
 TASKS_DIR="$SCHEDULER_DIR/tasks"
 PROMPTS_DIR="$SCHEDULER_DIR/prompts"
 
@@ -118,15 +128,26 @@ task_get() {
   jq -r "$expr" "$(task_path "$id")" 2>/dev/null
 }
 
-# Atomic write of JSON content to a task file.
+# Atomic write of JSON content to a task file. Returns non-zero on any
+# write/mv failure so callers can refuse to claim success on a corrupted
+# ledger.
 task_write() {
   local id="$1"
   local json="$2"
   local target
   target=$(task_path "$id")
   local tmp="${target}.tmp.$$"
-  printf '%s\n' "$json" > "$tmp" || return 1
-  mv "$tmp" "$target"
+  if ! printf '%s\n' "$json" > "$tmp"; then
+    rm -f "$tmp" 2>/dev/null
+    echo "ERROR: failed to stage ledger write for $id at $tmp" >&2
+    return 1
+  fi
+  if ! mv "$tmp" "$target"; then
+    rm -f "$tmp" 2>/dev/null
+    echo "ERROR: failed to commit ledger write for $id at $target" >&2
+    return 1
+  fi
+  return 0
 }
 
 # Append a history entry. Usage: task_append_history <id> <event> <actor> <note>
