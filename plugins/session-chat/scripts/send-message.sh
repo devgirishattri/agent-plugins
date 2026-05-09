@@ -25,6 +25,6 @@ ensure_tmux
 if send_message "$TARGET_NAME" "$MESSAGE"; then
   echo "Sent to $TARGET_NAME."
 else
-  echo "ERROR: Send to $TARGET_NAME did not land. The pane may be busy; retry with a small delay or set SESSION_CHAT_VERIFY_TIMEOUT_MS." >&2
+  # send_message already emitted a specific error. Just propagate.
   exit 1
 fi

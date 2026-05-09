@@ -25,6 +25,5 @@ PROMPT_TEXT=$(cat "$PROMPT_FILE")
 if dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"; then
   echo "Dispatched task to '$TARGET_NAME'"
 else
-  echo "ERROR: Dispatch to '$TARGET_NAME' did not land. The pane may be busy; retry with a small delay or set SESSION_CHAT_VERIFY_TIMEOUT_MS." >&2
   exit 1
 fi
