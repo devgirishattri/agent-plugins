@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Session Chat">
+  <rect width="128" height="128" rx="24" fill="#7C3AED"/>
+  <path d="M26 34h56a14 14 0 0 1 14 14v20a14 14 0 0 1-14 14H58L38 98v-16H26z" fill="#F5F3FF"/>
+  <path d="M42 53h38M42 66h26" stroke="#7C3AED" stroke-width="7" stroke-linecap="round"/>
+</svg>
