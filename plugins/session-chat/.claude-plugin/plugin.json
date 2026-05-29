@@ -1,9 +1,12 @@
 {
   "name": "session-chat",
-  "version": "0.11.2",
+  "version": "0.11.4",
   "description": "Peer-to-peer messaging and task dispatch between Claude sessions via tmux. Send messages and dispatch tracked tasks across sessions.",
   "author": {
     "name": "Girish Attri"
   },
-  "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent", "peer-to-peer"]
+  "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent", "peer-to-peer"],
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
+  "license": "MIT"
 }

@@ -12,7 +12,9 @@ SCOPE="${1:-current}"
 case "$SCOPE" in
   current|"")
     CURRENT_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
-    TARGET_ARGS=(-t "$CURRENT_SESSION")
+    # -s targets a whole session (all its windows). Without -s, -t is treated as
+    # a window spec and only the session's active window would be listed.
+    TARGET_ARGS=(-s -t "$CURRENT_SESSION")
     ;;
   all|--all)
     TARGET_ARGS=(-a)

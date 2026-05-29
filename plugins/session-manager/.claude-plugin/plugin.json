@@ -1,9 +1,12 @@
 {
   "name": "session-manager",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "List, search, and delete Claude Code sessions and all related data across projects. Supported platforms: macOS, Linux, Windows (WSL).",
   "author": {
     "name": "Girish Attri"
   },
-  "keywords": ["session", "cleanup", "management", "maintenance"]
+  "keywords": ["session", "cleanup", "management", "maintenance"],
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
+  "license": "MIT"
 }

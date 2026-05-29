@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Claude Code plugins by Girish Attri",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "session-manager",
       "description": "List, search, and delete Claude Code sessions and all related data across projects. Supported platforms: macOS, Linux, Windows (WSL).",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": {
         "name": "Girish Attri"
       },
@@ -23,8 +23,8 @@
     },
     {
       "name": "creating-docs",
-      "description": "Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks.",
-      "version": "1.0.1",
+      "description": "Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks. Includes a doc-reviewer subagent for independent accuracy passes.",
+      "version": "1.1.0",
       "author": {
         "name": "Girish Attri"
       },
@@ -35,8 +35,8 @@
     },
     {
       "name": "session-chat",
-      "description": "Peer-to-peer messaging and task dispatch between Claude sessions via tmux.",
-      "version": "0.11.2",
+      "description": "Peer-to-peer messaging and task dispatch between Claude sessions via tmux. Send messages and dispatch tracked tasks across sessions.",
+      "version": "0.11.4",
       "author": {
         "name": "Girish Attri"
       },
@@ -47,8 +47,8 @@
     },
     {
       "name": "session-context",
-      "description": "Generate, list, load, share, and remove Claude session context snapshots for the current project.",
-      "version": "0.2.0",
+      "description": "Generate, list, load, share, and remove Claude session context snapshots for the current project. Surfaces available snapshots on session start.",
+      "version": "0.4.0",
       "author": {
         "name": "Girish Attri"
       },
@@ -59,8 +59,8 @@
     },
     {
       "name": "session-scheduler",
-      "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat.",
-      "version": "0.1.1",
+      "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat (>=0.11.0) for transport.",
+      "version": "0.2.0",
       "author": {
         "name": "Girish Attri"
       },
