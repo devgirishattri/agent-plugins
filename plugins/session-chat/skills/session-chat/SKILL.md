@@ -84,7 +84,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 ## Common failure modes
 
 - **"This pane has no name"** — run `/whoami <name>` in the sending pane first.
-- **"No pane named X"** — run `/panes` to see registered names; the recipient may not have run `/whoami`.
+- **"No pane named X"** — run `/panes all` to see registered names across tmux sessions; the recipient may not have run `/whoami`.
 - **"Multiple panes named X"** — duplicate names exist; rename one with `/whoami` in that pane.
 - **"did not land within Xms after N attempts"** — recipient busy through retries. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`, or send when the recipient is idle.
 - **"could not acquire send-lock"** — another sender is targeting the same pane. Will resolve when they finish; raise `SESSION_CHAT_LOCK_TIMEOUT_MS` if you need to wait longer.

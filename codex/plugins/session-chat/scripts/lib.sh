@@ -69,7 +69,7 @@ resolve_pane() {
   count=$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')
 
   if [ "$count" -eq 0 ]; then
-    echo "ERROR: No pane named '$label'. Run /panes to see available." >&2
+    echo "ERROR: No pane named '$label'. Run /panes all to see all available named panes." >&2
     return 1
   fi
   if [ "$count" -gt 1 ]; then

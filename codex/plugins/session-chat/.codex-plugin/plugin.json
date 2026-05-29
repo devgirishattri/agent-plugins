@@ -1,6 +1,6 @@
 {
   "name": "session-chat",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Peer-to-peer messaging and task dispatch between Codex sessions via tmux.",
   "author": {
     "name": "Girish Attri",
