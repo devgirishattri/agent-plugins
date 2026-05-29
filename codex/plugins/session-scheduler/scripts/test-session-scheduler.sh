@@ -27,7 +27,7 @@ run_recipient() {
 }
 
 SESSION_CHAT_ROOT="${SESSION_CHAT_ROOT_OVERRIDE:-${SESSION_CHAT_PLUGIN_ROOT:-$SCRIPT_DIR/../../session-chat}}"
-[ -d "$SESSION_CHAT_ROOT" ] || SESSION_CHAT_ROOT="$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.12.1"
+[ -d "$SESSION_CHAT_ROOT" ] || SESSION_CHAT_ROOT="$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.12.2"
 
 tmux new-session -d -x 220 -y 40 -s "$SESSION" "cat"
 tmux split-window -t "$SESSION" "cat" >/dev/null

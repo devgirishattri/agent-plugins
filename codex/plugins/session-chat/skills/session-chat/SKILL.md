@@ -20,7 +20,7 @@ Use this skill when the user asks how session-chat works, which command to use, 
 
 - The recipient must be running inside tmux.
 - The recipient pane must have a unique name from `$session-chat:whoami <name>`.
-- Use `$session-chat:panes` to confirm the target exists and that no duplicate names are present.
+- Use `$session-chat:panes` to inspect the current tmux session, or `$session-chat:panes all` when the target may be in another tmux session.
 - In Codex, the plugin `hooks.json` runs on `SessionStart` and `UserPromptSubmit` to load tmux styling, auto-name unnamed panes when possible, and surface incoming messages according to `SESSION_CHAT_INCOMING_MODE`.
 - For orchestration, the recipient should set `SESSION_CHAT_INCOMING_MODE=auto` or `SESSION_CHAT_INCOMING_MODE=assist`.
 - The default `SESSION_CHAT_INCOMING_MODE=notify` treats incoming content as untrusted, forbids reading dispatch files, and asks the local user before acting. Dispatches can appear to no-op in this mode.
@@ -63,7 +63,7 @@ Codex TUI redraws, wrapping, approval prompts, and active command output can sti
 - `did not land within Xms after N attempts`: target may be busy, redrawing, or in an approval prompt. Retry when idle or increase `SESSION_CHAT_VERIFY_TIMEOUT_MS`.
 - `timed out waiting for send lock`: another sender is writing to the pane or left a stale lock with a live PID. Retry or raise `SESSION_CHAT_LOCK_TIMEOUT_MS`.
 - `Multiple panes named X`: rename one pane with `$session-chat:whoami <name>` in that pane.
-- `No pane named X`: run `$session-chat:panes` and confirm the recipient has run `$session-chat:whoami <name>`.
+- `No pane named X`: run `$session-chat:panes all` and confirm the recipient has run `$session-chat:whoami <name>`.
 - `/send only supports single-line messages`: use `$session-chat:dispatch`.
 - `/send payload exceeds ... characters`: use `$session-chat:dispatch`.
 

@@ -9,6 +9,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SOCKET="session-chat-test-$$"
 SESSION="sct"
+OTHER_SESSION="sct-other"
 VERBOSE=0
 PASS=0
 FAIL=0
@@ -49,16 +50,25 @@ echo "=== session-chat tests (socket: $SOCKET) ==="
 tmux -L "$SOCKET" new-session -d -s "$SESSION" -x 200 -y 50
 tmux -L "$SOCKET" split-window -t "$SESSION" -h
 tmux -L "$SOCKET" split-window -t "$SESSION" -h
+tmux -L "$SOCKET" new-session -d -s "$OTHER_SESSION" -x 120 -y 20
 
 # Pane ids
 PANES=$(tmux -L "$SOCKET" list-panes -t "$SESSION" -F '#{pane_id}')
 read -r SENDER_PANE RECIPIENT_PANE EXTRA_PANE <<< "$(echo "$PANES" | tr '\n' ' ')"
+OTHER_PANE=$(tmux -L "$SOCKET" list-panes -t "$OTHER_SESSION" -F '#{pane_id}' | sed -n '1p')
 log "sender=$SENDER_PANE recipient=$RECIPIENT_PANE extra=$EXTRA_PANE"
 
 # Name recipient and extra
 tmux -L "$SOCKET" set-option -p -t "$RECIPIENT_PANE" @name "alpha"
 tmux -L "$SOCKET" set-option -p -t "$EXTRA_PANE" @name "beta"
 tmux -L "$SOCKET" set-option -p -t "$SENDER_PANE" @name "sender"
+tmux -L "$SOCKET" set-option -p -t "$OTHER_PANE" @name "other-session"
+
+run_script() {
+  TMUX_PANE="$SENDER_PANE" \
+  TMUX="$(tmux -L "$SOCKET" display-message -p -t "$SENDER_PANE" '#{socket_path},#{pid},0')" \
+  bash "$HERE/list-panes.sh" "$@"
+}
 
 # Direct test driver: source lib.sh in subshell, override TMUX_PANE.
 run_lib() {
@@ -79,6 +89,20 @@ run_lib() {
 }
 
 # --- Test 1: /send happy path ---
+out=$(run_script 2>&1)
+if echo "$out" | grep -qF "sender" && echo "$out" | grep -qF "alpha" && ! echo "$out" | grep -qF "other-session"; then
+  pass "panes_current_session"
+else
+  fail "panes_current_session" "expected current session only, got: $out"
+fi
+
+out=$(run_script all 2>&1)
+if echo "$out" | grep -qF "other-session"; then
+  pass "panes_all_sessions"
+else
+  fail "panes_all_sessions" "expected all sessions output to include other-session, got: $out"
+fi
+
 out=$(SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "send_message alpha 'hello-from-test'" 2>&1)
 if echo "$out" | grep -q ERROR; then
   fail "send_happy" "got error: $out"

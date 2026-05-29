@@ -6,12 +6,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SESSION="session-chat-test-$$"
+OTHER_SESSION="${SESSION}-other"
 TEST_HOME="$(mktemp -d "${TMPDIR:-/tmp}/session-chat-test.XXXXXX")"
 PROMPT_FILE="$TEST_HOME/prompt.md"
 ERR_FILE="$TEST_HOME/error.log"
 
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux kill-session -t "$OTHER_SESSION" 2>/dev/null || true
   rm -rf "$TEST_HOME"
 }
 trap cleanup EXIT
@@ -48,11 +50,23 @@ capture_recipient() {
 
 tmux new-session -d -x 220 -y 40 -s "$SESSION" "cat"
 tmux split-window -t "$SESSION" "cat" >/dev/null
+tmux new-session -d -x 120 -y 20 -s "$OTHER_SESSION" "cat"
 SENDER="$(tmux list-panes -t "$SESSION" -F '#{pane_id}' | sed -n '1p')"
 RECIPIENT="$(tmux list-panes -t "$SESSION" -F '#{pane_id}' | sed -n '2p')"
+OTHER_PANE="$(tmux list-panes -t "$OTHER_SESSION" -F '#{pane_id}' | sed -n '1p')"
 tmux set-option -p -t "$SENDER" @name sender-test
 tmux set-option -p -t "$RECIPIENT" @name recipient-test
+tmux set-option -p -t "$OTHER_PANE" @name other-session-test
 TMUX_ENV="$(require_tmux_env "$SENDER")"
+
+run_as_sender bash "$SCRIPT_DIR/list-panes.sh" > "$TEST_HOME/panes-current.txt"
+assert_file_contains "$TEST_HOME/panes-current.txt" "sender-test"
+assert_file_contains "$TEST_HOME/panes-current.txt" "recipient-test"
+if grep -F "other-session-test" "$TEST_HOME/panes-current.txt" >/dev/null; then
+  fail "current-session pane list included another tmux session"
+fi
+run_as_sender bash "$SCRIPT_DIR/list-panes.sh" all > "$TEST_HOME/panes-all.txt"
+assert_file_contains "$TEST_HOME/panes-all.txt" "other-session-test"
 
 run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 \
   bash "$SCRIPT_DIR/send-message.sh" recipient-test "send happy path"

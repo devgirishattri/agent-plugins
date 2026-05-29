@@ -66,7 +66,7 @@ resolve_pane() {
   local count
   count=$(printf '%s\n' "$matches" | grep -c .)
   if [ "$count" -eq 0 ]; then
-    echo "ERROR: No pane named '$label'. Run /panes to see available." >&2
+    echo "ERROR: No pane named '$label'. Run /panes all to see all available named panes." >&2
     return 1
   fi
   if [ "$count" -gt 1 ]; then
@@ -272,4 +272,3 @@ read_pane() {
 portable_date_iso() {
   date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
 }
-
