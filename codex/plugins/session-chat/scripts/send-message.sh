@@ -22,7 +22,10 @@ if [ -z "$MESSAGE" ]; then
 fi
 
 ensure_tmux
-if ! send_message "$TARGET_NAME" "$MESSAGE"; then
-  exit 1
-fi
-echo "Sent to $TARGET_NAME."
+send_message "$TARGET_NAME" "$MESSAGE"
+rc=$?
+case "$rc" in
+  0) echo "Sent to $TARGET_NAME." ;;
+  3) echo "Queued to $TARGET_NAME — recipient was busy; it will arrive on their next turn." ;;
+  *) exit 1 ;;
+esac

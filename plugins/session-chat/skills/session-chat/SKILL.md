@@ -48,11 +48,22 @@ The `id:` field is a unique verification marker. The dispatch line **does not in
 `send_text` (used by both ops) does the following before returning success:
 
 1. Pastes the literal message into the recipient pane (no Enter yet).
-2. Polls `tmux capture-pane` (last 200 lines) for the unique `id:` marker, up to `SESSION_CHAT_VERIFY_TIMEOUT_MS` (default 2000ms).
+2. Polls `tmux capture-pane` (last 200 lines) for the unique `id:` marker, up to `SESSION_CHAT_VERIFY_TIMEOUT_MS` (default 4000ms).
 3. On success: presses Enter, waits `SESSION_CHAT_SETTLE_MS` (default 300ms), returns 0.
-4. On timeout: sends `C-u` to clear the partial paste from the recipient's prompt, returns 1 with an error.
+4. On timeout: sends `C-u` to clear the partial paste from the recipient's prompt, returns 1.
 
-This means a failed send **does not leave junk in the recipient's prompt**. If you see "did not land within Xms," the recipient was likely busy in an approval gate or rendering a long TUI frame. Retry after a short delay, or set `SESSION_CHAT_VERIFY_TIMEOUT_MS=5000` for slow recipients.
+This means a failed send **does not leave junk in the recipient's prompt**. If you see "did not land within Xms," the recipient was likely busy in an approval gate or rendering a long TUI frame.
+
+## Durable delivery & orchestrator fan-in
+
+Every `/send` and `/dispatch` is **written to the recipient's durable inbox before the live paste** (`~/.claude/messages/queue/<recipient>.tsv`). So delivery no longer depends on the paste landing while the recipient is busy:
+
+- **Live paste lands** → the message appears in the recipient's prompt now, and the durable copy is removed (no duplicate).
+- **Live paste fails** (recipient mid-generation / in an approval gate) → the wrapper returns **"Queued … will arrive on their next turn"** (exit/return code 3, still success). The recipient's `UserPromptSubmit` hook drains the inbox on its **next** turn and surfaces the message. Nothing is lost. Dedup across the two paths is by the `id:` marker.
+
+This specifically fixes the **orchestrator-misses-acks** case: when several executors/reviewers ack a busy orchestrator at once, their sends queue on the orchestrator's per-target lock instead of erroring, and any that can't paste live are recovered from the inbox. The send lock now **waits for the full per-send budget and resets whenever the queue moves**, so fan-in to one pane no longer trips "could not acquire send-lock". For an idle recipient the paste still lands immediately; the inbox is the safety net for busy ones.
+
+If a recipient is idle and never submits another prompt, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` so the live paste itself succeeds (the inbox only drains on the recipient's next turn).
 
 ## Quoting and shell safety
 
@@ -66,12 +77,12 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `SESSION_CHAT_VERIFY_TIMEOUT_MS` | 2000 | Max wait per attempt for paste to land in recipient pane. |
+| `SESSION_CHAT_VERIFY_TIMEOUT_MS` | 4000 | Max wait per attempt for paste to land in recipient pane. |
 | `SESSION_CHAT_SETTLE_MS` | 300 | Settle window after Enter so back-to-back sends don't race. |
 | `SESSION_CHAT_SEND_MAX_LEN` | 1024 | Max length for `/send` payload before forcing `/dispatch`. |
 | `SESSION_CHAT_SEND_RETRIES` | 2 | Retry count after a verify timeout (total attempts = retries + 1). |
 | `SESSION_CHAT_RETRY_BACKOFF_MS` | 200 | Linear backoff base between retries (200ms, 400ms, …). |
-| `SESSION_CHAT_LOCK_TIMEOUT_MS` | 3000 | Max wait for the per-target send lock; concurrent senders to the same pane queue. |
+| `SESSION_CHAT_LOCK_TIMEOUT_MS` | derived (~4× per-send budget) | Max wait for the per-target send lock. Auto-sized to the send budget and reset whenever the lock holder changes, so fan-in to one pane queues instead of failing. Override only to cap the wait. |
 | `SESSION_CHAT_SKIP_VERIFY` | 0 | Set `1` to skip receipt verification (not recommended). |
 | `SESSION_CHAT_INCOMING_MODE` | notify | Recipient-side: `auto` / `assist` / `notify` / `off`. Use `/incoming-mode` to inspect or generate the export line. |
 
@@ -86,7 +97,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 - **"This pane has no name"** — run `/whoami <name>` in the sending pane first.
 - **"No pane named X"** — run `/panes all` to see registered names across tmux sessions; the recipient may not have run `/whoami`.
 - **"Multiple panes named X"** — duplicate names exist; rename one with `/whoami` in that pane.
-- **"did not land within Xms after N attempts"** — recipient busy through retries. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`, or send when the recipient is idle.
+- **"did not land within Xms after N attempts"** — recipient busy through retries. The message is **not lost**: it's in the recipient's durable inbox and will surface on their next turn (the sender reports "Queued …"). To make more sends land *live*, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
 - **"could not acquire send-lock"** — another sender is targeting the same pane. Will resolve when they finish; raise `SESSION_CHAT_LOCK_TIMEOUT_MS` if you need to wait longer.
 - **Dispatch lands but recipient never acts** — recipient is in `INCOMING_MODE=notify` (default). They were told not to read the file. Run `/incoming-mode auto` (or `assist`) in the recipient's shell.
 
