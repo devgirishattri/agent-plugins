@@ -1,9 +1,12 @@
 {
   "name": "creating-docs",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks.",
   "author": {
     "name": "Girish Attri"
   },
-  "keywords": ["documentation", "docs", "writing", "markdown", "reference"]
+  "keywords": ["documentation", "docs", "writing", "markdown", "reference"],
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
+  "license": "MIT"
 }

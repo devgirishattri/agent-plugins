@@ -10,7 +10,8 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash(bash:*)
 2. Follow the structured process to create or update documentation
 3. If no topic is provided below, ask the user what they want to document
 4. After writing docs, run the validation scripts referenced in the skill using Bash
-5. Report validation results to the user
+5. For a thorough accuracy pass (multiple files, or docs that reference a lot of code), delegate verification to the **doc-reviewer** subagent via the Agent tool — it independently checks that every referenced path/symbol/link exists and runs the validators
+6. Report validation results to the user
 
 ## User Request
 
