@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Session Scheduler">
+  <rect width="128" height="128" rx="24" fill="#2563EB"/>
+  <path d="M36 28h56a10 10 0 0 1 10 10v54a10 10 0 0 1-10 10H36a10 10 0 0 1-10-10V38a10 10 0 0 1 10-10z" fill="#EFF6FF"/>
+  <path d="M44 22v18M84 22v18M26 52h76" stroke="#2563EB" stroke-width="8" stroke-linecap="round"/>
+  <path d="M46 70h18M46 86h36" stroke="#2563EB" stroke-width="7" stroke-linecap="round"/>
+</svg>

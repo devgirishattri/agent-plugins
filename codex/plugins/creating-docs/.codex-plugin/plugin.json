@@ -1,11 +1,13 @@
 {
   "name": "creating-docs",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Create and update project documentation with structured templates and validation tools.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
   },
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
   "license": "MIT",
   "keywords": ["documentation", "docs", "writing", "markdown", "reference"],
   "skills": "./skills/",
@@ -16,11 +18,15 @@
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/devgirishattri/agent-plugins",
     "defaultPrompt": [
       "Document this project feature.",
       "Update docs for recent changes.",
       "Validate the project docs."
     ],
-    "brandColor": "#0F766E"
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "brandColor": "#0F766E",
+    "screenshots": []
   }
 }

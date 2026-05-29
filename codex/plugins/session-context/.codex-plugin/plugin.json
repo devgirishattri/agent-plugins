@@ -1,11 +1,13 @@
 {
   "name": "session-context",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Generate, list, load, share, and remove Codex session context snapshots.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
   },
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
   "license": "MIT",
   "keywords": ["context", "handoff", "snapshot", "session", "multi-agent"],
   "skills": "./skills/",
@@ -16,12 +18,16 @@
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/devgirishattri/agent-plugins",
     "defaultPrompt": [
       "Generate a context snapshot.",
       "List saved context snapshots.",
       "Load a context snapshot.",
       "Remove a context snapshot."
     ],
-    "brandColor": "#0F766E"
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "brandColor": "#0F766E",
+    "screenshots": []
   }
 }

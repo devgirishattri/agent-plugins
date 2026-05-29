@@ -76,10 +76,14 @@ session_chat_root() {
     printf '%s\n' "$SESSION_CHAT_PLUGIN_ROOT"
     return 0
   fi
-  local cached="$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/$SESSION_CHAT_MIN_VERSION"
-  if [ -d "$cached" ]; then
-    printf '%s\n' "$cached"
-    return 0
+  local cache_base="$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat"
+  if [ -d "$cache_base" ]; then
+    local latest_version
+    latest_version=$(find "$cache_base" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+    if [ -n "$latest_version" ] && [ -d "$cache_base/$latest_version" ]; then
+      printf '%s\n' "$cache_base/$latest_version"
+      return 0
+    fi
   fi
   local sibling="$PLUGIN_ROOT/../session-chat"
   if [ -d "$sibling" ]; then

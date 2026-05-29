@@ -1,11 +1,13 @@
 {
   "name": "session-scheduler",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "File-backed task scheduling and status tracking for multi-pane Codex orchestration over session-chat.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
   },
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
   "license": "MIT",
   "keywords": ["scheduler", "tmux", "tasks", "orchestration", "multi-agent"],
   "skills": "./skills/",
@@ -16,11 +18,15 @@
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/devgirishattri/agent-plugins",
     "defaultPrompt": [
       "Create a scheduler task.",
       "Assign a task to a named pane.",
       "Show scheduler task status."
     ],
-    "brandColor": "#2563EB"
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "brandColor": "#2563EB",
+    "screenshots": []
   }
 }

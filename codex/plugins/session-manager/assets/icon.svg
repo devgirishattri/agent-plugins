@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Session Manager">
+  <rect width="128" height="128" rx="24" fill="#2563EB"/>
+  <path d="M32 36h64v16H32zM32 60h64v16H32zM32 84h64v16H32z" fill="#EFF6FF"/>
+  <circle cx="84" cy="44" r="5" fill="#2563EB"/>
+  <circle cx="84" cy="68" r="5" fill="#2563EB"/>
+  <circle cx="84" cy="92" r="5" fill="#2563EB"/>
+</svg>
