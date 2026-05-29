@@ -82,7 +82,9 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 | `SESSION_CHAT_SEND_MAX_LEN` | 1024 | Max length for `/send` payload before forcing `/dispatch`. |
 | `SESSION_CHAT_SEND_RETRIES` | 2 | Retry count after a verify timeout (total attempts = retries + 1). |
 | `SESSION_CHAT_RETRY_BACKOFF_MS` | 200 | Linear backoff base between retries (200ms, 400ms, …). |
-| `SESSION_CHAT_LOCK_TIMEOUT_MS` | derived (~4× per-send budget) | Max wait for the per-target send lock. Auto-sized to the send budget and reset whenever the lock holder changes, so fan-in to one pane queues instead of failing. Override only to cap the wait. |
+| `SESSION_CHAT_LOCK_TIMEOUT_MS` | derived (~4× per-send budget) | Max wait for the per-target send lock. When unset, auto-sized to the send budget and reset whenever the lock holder changes, so fan-in to one pane queues instead of failing. When set explicitly, it is an **absolute cap** (no reset) so total wait never exceeds it. |
+| `SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS` | derived (lock + send budget) | How long a freshly-queued durable row waits before the recipient hook may surface it, giving an in-flight live paste time to win. A known-failed live send marks its row ready immediately. |
+| `SESSION_CHAT_RECENT_ID_TTL_MS` | 600000 | How long a surfaced message `id` is remembered so a queued entry and its later live paste never both surface (cross-turn dedup). |
 | `SESSION_CHAT_SKIP_VERIFY` | 0 | Set `1` to skip receipt verification (not recommended). |
 | `SESSION_CHAT_INCOMING_MODE` | notify | Recipient-side: `auto` / `assist` / `notify` / `off`. Use `/incoming-mode` to inspect or generate the export line. |
 

@@ -36,7 +36,7 @@
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude sessions via tmux. Send messages and dispatch tracked tasks across sessions.",
-      "version": "0.12.0",
+      "version": "0.12.1",
       "author": {
         "name": "Girish Attri"
       },

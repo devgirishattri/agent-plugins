@@ -49,19 +49,21 @@ Codex TUI redraws, wrapping, approval prompts, and active command output can sti
 
 ## Tunables
 
-- `SESSION_CHAT_VERIFY_TIMEOUT_MS`: marker verification timeout in milliseconds. Default: `2000`.
+- `SESSION_CHAT_VERIFY_TIMEOUT_MS`: marker verification timeout in milliseconds. Default: `4000`.
 - `SESSION_CHAT_SETTLE_MS`: delay after a successful Enter. Default: `300`.
 - `SESSION_CHAT_SEND_MAX_LEN`: maximum `/send` payload length. Default: `1024`.
 - `SESSION_CHAT_SKIP_VERIFY`: set to `1` to skip marker verification.
 - `SESSION_CHAT_INCOMING_MODE`: receiver behavior. Values: `notify`, `assist`, `auto`, `off`. Default: `notify`.
-- `SESSION_CHAT_LOCK_TIMEOUT_MS`: how long a sender waits for a per-pane send lock. Default: `3000`.
+- `SESSION_CHAT_LOCK_TIMEOUT_MS`: how long a sender waits for a per-pane send lock. Default: auto-derived from the send budget (~4× one send) and reset whenever the lock holder changes, so fan-in to one pane queues instead of failing. When set explicitly, it is a hard cap.
 - `SESSION_CHAT_SEND_RETRIES`: retry count after verify timeouts. Default: `2`.
 - `SESSION_CHAT_RETRY_BACKOFF_MS`: linear retry backoff base in milliseconds. Default: `200`.
+- `SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS`: how long a pre-live durable queue row waits before hook recovery if the sender dies mid-send. Default: auto-derived from lock plus send budget; known live-send failures mark the row ready immediately.
+- `SESSION_CHAT_RECENT_ID_TTL_MS`: how long surfaced message ids suppress duplicate live arrivals. Default: `600000`.
 
 ## Common Failures
 
-- `did not land within Xms after N attempts`: target may be busy, redrawing, or in an approval prompt. Retry when idle or increase `SESSION_CHAT_VERIFY_TIMEOUT_MS`.
-- `timed out waiting for send lock`: another sender is writing to the pane or left a stale lock with a live PID. Retry or raise `SESSION_CHAT_LOCK_TIMEOUT_MS`.
+- `did not land within Xms after N attempts`: target was busy through all retries. The message is **not lost** — it's in the recipient's durable inbox (`~/.codex/messages/queue/<name>.tsv`) and surfaces after the failed live attempt or recovery grace (the sender reports "Queued …"). To land more sends live, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
+- `timed out waiting for send lock`: rare now that the unset lock timeout auto-sizes to the send budget and resets on holder change. If `SESSION_CHAT_LOCK_TIMEOUT_MS` is set, that value is treated as an absolute cap.
 - `Multiple panes named X`: rename one pane with `$session-chat:whoami <name>` in that pane.
 - `No pane named X`: run `$session-chat:panes all` and confirm the recipient has run `$session-chat:whoami <name>`.
 - `/send only supports single-line messages`: use `$session-chat:dispatch`.
@@ -69,7 +71,7 @@ Codex TUI redraws, wrapping, approval prompts, and active command output can sti
 
 ## Incoming Mode
 
-Use `$session-chat:incoming-mode` to show the current receiver mode and explain `notify`, `assist`, `auto`, and `off`. The `UserPromptSubmit` hook reads this value when incoming tmux messages are submitted to Codex. Use `$session-chat:incoming-mode auto` or another mode to print an `export SESSION_CHAT_INCOMING_MODE=<mode>` command. Run that export in the shell that starts Codex, then restart or reload the session; a child script cannot mutate the parent Codex environment.
+Use `$session-chat:incoming-mode` to show the current receiver mode and explain `notify`, `assist`, `auto`, and `off`. The `UserPromptSubmit` hook reads this value when incoming tmux messages are submitted to Codex, then emits model-visible `hookSpecificOutput.additionalContext` capped at 10000 characters. Use `$session-chat:incoming-mode auto` or another mode to print an `export SESSION_CHAT_INCOMING_MODE=<mode>` command. Run that export in the shell that starts Codex, then restart or reload the session; a child script cannot mutate the parent Codex environment.
 
 ## Message Files
 

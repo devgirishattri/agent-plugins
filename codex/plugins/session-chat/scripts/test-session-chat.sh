@@ -35,6 +35,12 @@ assert_file_contains() {
   grep -F "$needle" "$file" >/dev/null || fail "missing expected text in $file: $needle"
 }
 
+assert_empty() {
+  local value="$1"
+  local label="$2"
+  [ -z "$value" ] || fail "$label was not empty: $value"
+}
+
 require_tmux_env() {
   local pane="$1"
   tmux display-message -p -t "$pane" '#{socket_path},#{pid},0'
@@ -58,6 +64,21 @@ tmux set-option -p -t "$SENDER" @name sender-test
 tmux set-option -p -t "$RECIPIENT" @name recipient-test
 tmux set-option -p -t "$OTHER_PANE" @name other-session-test
 TMUX_ENV="$(require_tmux_env "$SENDER")"
+
+HOOK_OUT="$(printf '%s\n' '[from:sender-test pane:%999 id:feedface] hook hello' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" CODEX_PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto bash "$SCRIPT_DIR/detect-incoming-message.sh")"
+assert_contains '"hookSpecificOutput"' "$HOOK_OUT"
+assert_contains '"hookEventName":"UserPromptSubmit"' "$HOOK_OUT"
+assert_contains '"additionalContext":"session-chat:' "$HOOK_OUT"
+if printf '%s\n' "$HOOK_OUT" | grep -E '"decision"|"systemMessage"' >/dev/null; then
+  fail "hook output used legacy Claude envelope"
+fi
+
+QUEUE_OUT="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; enqueue_message recipient-test deadbeef send sender-test "queued fallback"; drain_inbox "" recipient-test' "$SCRIPT_DIR/lib.sh")"
+assert_empty "$QUEUE_OUT" "fresh queued message"
+QUEUE_OUT="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; mark_message_ready recipient-test deadbeef; drain_inbox "" recipient-test' "$SCRIPT_DIR/lib.sh")"
+assert_contains $'deadbeef\tsend\tsender-test\tqueued fallback' "$QUEUE_OUT"
+DUP_OUT="$(printf '%s\n' '[from:sender-test pane:%999 id:deadbeef] queued fallback' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" CODEX_PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto bash "$SCRIPT_DIR/detect-incoming-message.sh")"
+assert_empty "$DUP_OUT" "recent duplicate live hook output"
 
 run_as_sender bash "$SCRIPT_DIR/list-panes.sh" > "$TEST_HOME/panes-current.txt"
 assert_file_contains "$TEST_HOME/panes-current.txt" "sender-test"
