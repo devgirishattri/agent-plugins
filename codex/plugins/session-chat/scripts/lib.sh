@@ -125,6 +125,22 @@ process_is_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
+is_nonnegative_int() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+now_ms() {
+  local seconds
+  seconds=$(date +%s 2>/dev/null || printf '0')
+  case "$seconds" in
+    ''|*[!0-9]*) seconds=0 ;;
+  esac
+  printf '%s000\n' "$seconds"
+}
+
 # Worst-case duration of one send_text call: (retries+1) verify windows plus a
 # little headroom. Lock waits derive from this so fan-in (many panes acking one
 # orchestrator) queues instead of failing.
@@ -138,9 +154,12 @@ per_send_budget_ms() {
 acquire_send_lock() {
   local lock_dir="$1"
   local pane_id="$2"
-  local default_ms timeout_ms
+  local default_ms timeout_ms explicit_timeout=0
   default_ms=$(( $(per_send_budget_ms) * 4 ))
   timeout_ms=$(normalize_positive_int "${SESSION_CHAT_LOCK_TIMEOUT_MS:-$default_ms}" "$default_ms")
+  if [ "${SESSION_CHAT_LOCK_TIMEOUT_MS+x}" = "x" ]; then
+    explicit_timeout=1
+  fi
   local elapsed=0
   local last_owner=""
   local pid
@@ -161,8 +180,9 @@ acquire_send_lock() {
     fi
 
     # Holder changed => the queue is moving; reset patience so legitimate
-    # fan-in of many senders to one pane never trips the timeout.
-    if [ -n "$pid" ] && [ "$pid" != "$last_owner" ]; then
+    # fan-in of many senders to one pane never trips the auto-sized timeout.
+    # When the user sets SESSION_CHAT_LOCK_TIMEOUT_MS, treat it as a hard cap.
+    if [ "$explicit_timeout" = "0" ] && [ -n "$pid" ] && [ "$pid" != "$last_owner" ]; then
       last_owner="$pid"
       elapsed=0
     fi
@@ -188,7 +208,9 @@ release_send_lock() {
 # Records are single-line TAB-separated:  <id>\t<type>\t<from>\t<payload>
 #   type=send     -> payload = the (single-line) message text
 #   type=dispatch -> payload = the trusted msg file path
-# Dedup across the live paste and the inbox is by <id>.
+# Dedup across the live paste and the inbox is by <id>. New queue records carry
+# a ready-at timestamp so in-flight live sends get a chance to win before the
+# recipient hook surfaces the durable fallback.
 
 queue_file_for() {
   local name="$1"
@@ -197,15 +219,108 @@ queue_file_for() {
   printf '%s/queue/%s.tsv\n' "$MESSAGES_DIR" "$safe"
 }
 
+recent_file_for() {
+  local name="$1"
+  local safe
+  safe=$(printf '%s' "$name" | tr -c 'a-zA-Z0-9._-' '_')
+  printf '%s/queue/.recent-%s.tsv\n' "$MESSAGES_DIR" "$safe"
+}
+
+queue_recovery_delay_ms() {
+  local send_budget default_lock_budget default_delay
+  send_budget=$(per_send_budget_ms)
+  default_lock_budget=$(normalize_positive_int "${SESSION_CHAT_LOCK_TIMEOUT_MS:-$((send_budget * 4))}" "$((send_budget * 4))")
+  default_delay=$((default_lock_budget + send_budget + 1000))
+  normalize_positive_int "${SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS:-$default_delay}" "$default_delay"
+}
+
+recent_id_ttl_ms() {
+  normalize_positive_int "${SESSION_CHAT_RECENT_ID_TTL_MS:-600000}" 600000
+}
+
+queue_ready_at_ms() {
+  printf '%s\n' "$(( $(now_ms) + $(queue_recovery_delay_ms) ))"
+}
+
+normalize_queue_record() {
+  local qid="$1" qtype="$2" qfrom="$3" qready="$4" qpayload="$5"
+  if is_nonnegative_int "$qready"; then
+    printf '%s\t%s\t%s\t%s\t%s\n' "$qid" "$qtype" "$qfrom" "$qready" "$qpayload"
+  else
+    [ -n "$qpayload" ] && qready="${qready}	${qpayload}"
+    printf '%s\t%s\t%s\t0\t%s\n' "$qid" "$qtype" "$qfrom" "$qready"
+  fi
+}
+
+prune_recent_ids_unlocked() {
+  local recipient="$1" now="$2"
+  local rf tmp
+  rf=$(recent_file_for "$recipient")
+  [ -f "$rf" ] || return 0
+  tmp="${rf}.tmp.$$"
+  awk -F'\t' -v now="$now" '$1 != "" && $2 ~ /^[0-9]+$/ && $2 > now' "$rf" > "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$rf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+}
+
+recent_ids_unlocked() {
+  local recipient="$1"
+  local rf
+  rf=$(recent_file_for "$recipient")
+  [ -f "$rf" ] || return 0
+  awk -F'\t' '$1 != "" { print $1 }' "$rf" 2>/dev/null || true
+}
+
+mark_recent_id_unlocked() {
+  local recipient="$1" id="$2" now="$3"
+  [ -n "$recipient" ] && [ -n "$id" ] || return 0
+  local rf expires
+  rf=$(recent_file_for "$recipient")
+  mkdir -p "$(dirname "$rf")" 2>/dev/null || true
+  expires=$((now + $(recent_id_ttl_ms)))
+  awk -F'\t' -v id="$id" '$1 != id' "$rf" > "${rf}.tmp.$$" 2>/dev/null || true
+  mv -f "${rf}.tmp.$$" "$rf" 2>/dev/null || rm -f "${rf}.tmp.$$" 2>/dev/null
+  printf '%s\t%s\n' "$id" "$expires" >> "$rf"
+}
+
+recent_id_seen() {
+  local recipient="$1" id="$2"
+  [ -n "$recipient" ] && [ -n "$id" ] || return 1
+  ensure_messages_dir
+  local lock now found=1
+  lock=$(send_lock_path "queue:${recipient}")
+  acquire_send_lock "$lock" "queue:${recipient}" || return 1
+  now=$(now_ms)
+  prune_recent_ids_unlocked "$recipient" "$now"
+  if recent_ids_unlocked "$recipient" | grep -Fx "$id" >/dev/null 2>&1; then
+    found=0
+  fi
+  release_send_lock "$lock"
+  return "$found"
+}
+
+mark_recent_id() {
+  local recipient="$1" id="$2"
+  [ -n "$recipient" ] && [ -n "$id" ] || return 0
+  ensure_messages_dir
+  local lock now
+  lock=$(send_lock_path "queue:${recipient}")
+  acquire_send_lock "$lock" "queue:${recipient}" || return 1
+  now=$(now_ms)
+  prune_recent_ids_unlocked "$recipient" "$now"
+  mark_recent_id_unlocked "$recipient" "$id" "$now"
+  release_send_lock "$lock"
+}
+
 enqueue_message() {
   local recipient="$1" id="$2" type="$3" from="$4" payload="$5"
   ensure_messages_dir
-  local qf lock
+  local qf lock ready_at
   qf=$(queue_file_for "$recipient")
   mkdir -p "$(dirname "$qf")" 2>/dev/null || true
+  ready_at=$(queue_ready_at_ms)
   lock=$(send_lock_path "queue:${recipient}")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
-  printf '%s\t%s\t%s\t%s\n' "$id" "$type" "$from" "$payload" >> "$qf"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$type" "$from" "$ready_at" "$payload" >> "$qf"
   release_send_lock "$lock"
 }
 
@@ -222,29 +337,79 @@ dequeue_message_id() {
   release_send_lock "$lock"
 }
 
+mark_message_ready() {
+  local recipient="$1" id="$2"
+  local qf lock tmp now qid qtype qfrom qready qpayload
+  qf=$(queue_file_for "$recipient")
+  [ -f "$qf" ] || return 0
+  lock=$(send_lock_path "queue:${recipient}")
+  acquire_send_lock "$lock" "queue:${recipient}" || return 1
+  tmp="${qf}.tmp.$$"
+  now=$(now_ms)
+  : > "$tmp"
+  while IFS=$'\t' read -r qid qtype qfrom qready qpayload; do
+    [ -z "$qid" ] && continue
+    if [ "$qid" = "$id" ]; then
+      if ! is_nonnegative_int "$qready"; then
+        [ -n "$qpayload" ] && qready="${qready}	${qpayload}"
+        qpayload="$qready"
+      fi
+      printf '%s\t%s\t%s\t%s\t%s\n' "$qid" "$qtype" "$qfrom" "$now" "$qpayload" >> "$tmp"
+    else
+      normalize_queue_record "$qid" "$qtype" "$qfrom" "$qready" "$qpayload" >> "$tmp"
+    fi
+  done < "$qf"
+  mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  release_send_lock "$lock"
+}
+
 # drain_inbox <skip_ids> <recipient_name>: print queued records whose id is not
 # in the space-separated <skip_ids>, then remove every surfaced/skipped id.
 drain_inbox() {
   local skip_ids="$1"
   local recipient="$2"
   [ -n "$recipient" ] || return 0
-  local qf lock
+  local qf lock now recent_ids
   qf=$(queue_file_for "$recipient")
   [ -f "$qf" ] || return 0
   lock=$(send_lock_path "queue:${recipient}")
   acquire_send_lock "$lock" "queue:${recipient}" || return 0
-  local surfaced="" qid qtype qfrom qpayload rest
-  while IFS=$'\t' read -r qid qtype qfrom qpayload; do
+  now=$(now_ms)
+  prune_recent_ids_unlocked "$recipient" "$now"
+  recent_ids=$(recent_ids_unlocked "$recipient" | tr '\n' ' ')
+  local remove_ids="" qid qtype qfrom qready qpayload rest
+  while IFS=$'\t' read -r qid qtype qfrom qready qpayload; do
     [ -z "$qid" ] && continue
-    case " $skip_ids $surfaced " in *" $qid "*) continue ;; esac
+    if ! is_nonnegative_int "$qready"; then
+      [ -n "$qpayload" ] && qready="${qready}	${qpayload}"
+      qpayload="$qready"
+      qready=0
+    fi
+    case " $skip_ids $remove_ids " in
+      *" $qid "*)
+        mark_recent_id_unlocked "$recipient" "$qid" "$now"
+        remove_ids="$remove_ids $qid"
+        continue
+        ;;
+    esac
+    case " $recent_ids " in
+      *" $qid "*)
+        remove_ids="$remove_ids $qid"
+        continue
+        ;;
+    esac
+    if [ "$qready" -gt "$now" ]; then
+      continue
+    fi
     printf '%s\t%s\t%s\t%s\n' "$qid" "$qtype" "$qfrom" "$qpayload"
-    surfaced="$surfaced $qid"
+    mark_recent_id_unlocked "$recipient" "$qid" "$now"
+    remove_ids="$remove_ids $qid"
   done < "$qf"
   local tmp="${qf}.tmp.$$"
   : > "$tmp"
   while IFS=$'\t' read -r qid rest; do
     [ -z "$qid" ] && continue
-    case " $skip_ids $surfaced " in *" $qid "*) continue ;; esac
+    case " $skip_ids $remove_ids " in *" $qid "*) continue ;; esac
     printf '%s\t%s\n' "$qid" "$rest" >> "$tmp"
   done < "$qf"
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
@@ -377,6 +542,7 @@ send_message() {
     dequeue_message_id "$target_name" "$uid"
     return 0
   fi
+  mark_message_ready "$target_name" "$uid" || true
   return 3
 }
 
@@ -410,6 +576,7 @@ dispatch_message() {
     dequeue_message_id "$target_name" "$uid"
     return 0
   fi
+  mark_message_ready "$target_name" "$uid" || true
   return 3
 }
 

@@ -38,13 +38,22 @@ if [ "$HAVE_LIB" = "1" ]; then
 fi
 
 json_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\r' '  '
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$1" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read(), ensure_ascii=False)[1:-1])'
+  else
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr '\n\r' '  '
+  fi
 }
 
 emit_system_message() {
-  local message
-  message=$(json_escape "$1")
-  printf '{"decision":"approve","systemMessage":"%s"}\n' "$message"
+  local message="$1"
+  local suffix=" [truncated by session-chat to fit Codex additionalContext limit]"
+  local max_len=10000
+  if [ "${#message}" -gt "$max_len" ]; then
+    message="${message:0:$((max_len - ${#suffix}))}${suffix}"
+  fi
+  message=$(json_escape "$message")
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$message"
 }
 
 trusted_message_file() {
@@ -99,10 +108,19 @@ if printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
   s_name=$(printf '%s' "$s_name" | tr -cd 'a-zA-Z0-9_:-')
   if [ -n "$s_name" ]; then
     [ -n "$s_id" ] && LIVE_ID="$s_id"
-    if [ -n "$s_msgfile" ]; then
-      LINES+=("$(describe_record dispatch "$s_name" "$s_msgfile" 0)")
-    else
-      LINES+=("$(describe_record send "$s_name" "" 0)")
+    live_seen=0
+    if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen "$MY_NAME" "$LIVE_ID"; then
+      live_seen=1
+    fi
+    if [ "$live_seen" = "0" ]; then
+      if [ -n "$s_msgfile" ]; then
+        LINES+=("$(describe_record dispatch "$s_name" "$s_msgfile" 0)")
+      else
+        LINES+=("$(describe_record send "$s_name" "" 0)")
+      fi
+      if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
+        mark_recent_id "$MY_NAME" "$LIVE_ID" || true
+      fi
     fi
   fi
 fi

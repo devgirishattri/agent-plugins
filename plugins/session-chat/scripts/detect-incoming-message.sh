@@ -100,10 +100,21 @@ if printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
   s_name=$(printf '%s' "$s_name" | tr -cd 'a-zA-Z0-9_:-')
   if [ -n "$s_name" ]; then
     [ -n "$s_id" ] && LIVE_ID="$s_id"
-    if [ -n "$s_msgfile" ]; then
-      LINES+=("$(describe_record dispatch "$s_name" "$s_msgfile" 0)")
-    else
-      LINES+=("$(describe_record send "$s_name" "" 0)")
+    # Cross-turn dedup: if this id was already surfaced from the inbox on an
+    # earlier turn, don't surface it again now. Otherwise surface and remember it.
+    live_seen=0
+    if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen "$MY_NAME" "$LIVE_ID"; then
+      live_seen=1
+    fi
+    if [ "$live_seen" = "0" ]; then
+      if [ -n "$s_msgfile" ]; then
+        LINES+=("$(describe_record dispatch "$s_name" "$s_msgfile" 0)")
+      else
+        LINES+=("$(describe_record send "$s_name" "" 0)")
+      fi
+      if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
+        mark_recent_id "$MY_NAME" "$LIVE_ID" || true
+      fi
     fi
   fi
 fi
