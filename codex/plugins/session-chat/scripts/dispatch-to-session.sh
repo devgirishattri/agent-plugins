@@ -22,8 +22,10 @@ ensure_tmux
 
 # Send the task via file-based dispatch
 PROMPT_TEXT=$(cat "$PROMPT_FILE")
-if ! dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"; then
-  exit 1
-fi
-
-echo "Dispatched task to '$TARGET_NAME'"
+dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"
+rc=$?
+case "$rc" in
+  0) echo "Dispatched task to '$TARGET_NAME'" ;;
+  3) echo "Queued dispatch to '$TARGET_NAME' — recipient was busy; it will arrive on their next turn." ;;
+  *) exit 1 ;;
+esac

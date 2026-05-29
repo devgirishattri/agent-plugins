@@ -87,10 +87,22 @@ generate_id() {
   fi
 }
 
+# --- Send budget ---
+# Worst-case duration of one send_text call: (retries+1) verify windows plus a
+# little backoff/settle headroom. Lock waits derive from this so that fan-in
+# (many panes acking one orchestrator) queues instead of failing.
+per_send_budget_ms() {
+  local retries="${SESSION_CHAT_SEND_RETRIES:-2}"
+  local verify_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-4000}"
+  printf '%s' "$(( (retries + 1) * verify_ms + 1500 ))"
+}
+
 # --- Per-target send lock ---
 # Serializes sends targeting the same pane so concurrent senders don't
-# interleave keystrokes. Lock dir is created with mkdir (atomic). Stale
-# locks (owner PID gone) are reclaimed.
+# interleave keystrokes. Lock dir is created with mkdir (atomic). Stale locks
+# (owner PID gone) are reclaimed. The wait budget scales with the per-send
+# budget AND resets whenever the lock holder changes — so a burst of executors
+# acking the same orchestrator queues up instead of erroring out.
 
 session_chat_lock_path() {
   local safe
@@ -103,8 +115,9 @@ acquire_lock() {
   local lock
   lock=$(session_chat_lock_path "$pane")
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
-  local timeout_ms="${SESSION_CHAT_LOCK_TIMEOUT_MS:-3000}"
+  local timeout_ms="${SESSION_CHAT_LOCK_TIMEOUT_MS:-$(( $(per_send_budget_ms) * 4 ))}"
   local elapsed=0
+  local last_owner=""
   while [ "$elapsed" -lt "$timeout_ms" ]; do
     if mkdir "$lock" 2>/dev/null; then
       printf '%s\n' "$$" > "$lock/pid"
@@ -115,6 +128,12 @@ acquire_lock() {
     if [ -n "$owner_pid" ] && ! kill -0 "$owner_pid" 2>/dev/null; then
       rm -rf "$lock" 2>/dev/null
       continue
+    fi
+    # Holder changed => the queue is moving; reset patience so legitimate
+    # fan-in of many senders to one pane never trips the timeout.
+    if [ -n "$owner_pid" ] && [ "$owner_pid" != "$last_owner" ]; then
+      last_owner="$owner_pid"
+      elapsed=0
     fi
     sleep 0.05
     elapsed=$((elapsed + 50))
@@ -130,6 +149,84 @@ release_lock() {
   rm -rf "$lock" 2>/dev/null
 }
 
+# --- Durable per-recipient inbox (delivery fallback) ---
+# Every message is enqueued BEFORE the live paste. A successful paste delivers
+# it live and the entry is removed; a failed paste (busy recipient) leaves the
+# entry so the recipient's UserPromptSubmit hook recovers it on its next turn.
+# Records are single-line TAB-separated:  <id>\t<type>\t<from>\t<payload>
+#   type=send     -> payload = the (single-line) message text
+#   type=dispatch -> payload = the trusted msg file path
+# Dedup across the live paste and the inbox is by <id>.
+
+queue_file_for() {
+  local name="$1"
+  local safe
+  safe=$(printf '%s' "$name" | tr -c 'a-zA-Z0-9._-' '_')
+  printf '%s/queue/%s.tsv' "$MESSAGES_DIR" "$safe"
+}
+
+enqueue_message() {
+  # enqueue_message <recipient_name> <id> <type> <from> <payload>
+  local recipient="$1" id="$2" type="$3" from="$4" payload="$5"
+  ensure_messages_dir
+  local qf
+  qf=$(queue_file_for "$recipient")
+  mkdir -p "$(dirname "$qf")" 2>/dev/null || true
+  acquire_lock "queue:${recipient}" || return 1
+  printf '%s\t%s\t%s\t%s\n' "$id" "$type" "$from" "$payload" >> "$qf"
+  release_lock "queue:${recipient}"
+}
+
+dequeue_message_id() {
+  # dequeue_message_id <recipient_name> <id> — remove the entry with this id
+  local recipient="$1" id="$2"
+  local qf
+  qf=$(queue_file_for "$recipient")
+  [ -f "$qf" ] || return 0
+  acquire_lock "queue:${recipient}" || return 1
+  local tmp="${qf}.tmp.$$"
+  awk -F'\t' -v id="$id" '$1 != id' "$qf" > "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  release_lock "queue:${recipient}"
+}
+
+# drain_inbox <skip_ids> <recipient_name>
+# Prints every queued record whose id is NOT in the space-separated <skip_ids>
+# list (one per line: <id>\t<type>\t<from>\t<payload>) and removes every
+# surfaced or skipped id from the queue file. Used by the receiver hook.
+drain_inbox() {
+  local skip_ids="$1"
+  local recipient="$2"
+  [ -n "$recipient" ] || return 0
+  local qf
+  qf=$(queue_file_for "$recipient")
+  [ -f "$qf" ] || return 0
+  acquire_lock "queue:${recipient}" || return 0
+  local surfaced=""
+  local qid qtype qfrom qpayload
+  while IFS=$'\t' read -r qid qtype qfrom qpayload; do
+    [ -z "$qid" ] && continue
+    case " $skip_ids $surfaced " in
+      *" $qid "*) continue ;;
+    esac
+    printf '%s\t%s\t%s\t%s\n' "$qid" "$qtype" "$qfrom" "$qpayload"
+    surfaced="$surfaced $qid"
+  done < "$qf"
+  # Rewrite the queue, dropping everything we surfaced or were told to skip.
+  local tmp="${qf}.tmp.$$"
+  : > "$tmp"
+  local rest
+  while IFS=$'\t' read -r qid rest; do
+    [ -z "$qid" ] && continue
+    case " $skip_ids $surfaced " in
+      *" $qid "*) continue ;;
+    esac
+    printf '%s\t%s\n' "$qid" "$rest" >> "$tmp"
+  done < "$qf"
+  mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  release_lock "queue:${recipient}"
+}
+
 # --- Communication ---
 
 # Single paste→verify→Enter attempt. On verify failure: C-u to clear the
@@ -140,7 +237,7 @@ _send_text_attempt() {
   local marker="$3"
   tmux send-keys -t "$pane_id" -l -- "$text"
   if [ "${SESSION_CHAT_SKIP_VERIFY:-0}" != "1" ]; then
-    local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}"
+    local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-4000}"
     if [ -z "$marker" ]; then
       marker="${text: -40}"
     fi
@@ -186,7 +283,7 @@ send_text() {
     fi
     if [ "$attempt" -ge "$retries" ]; then
       release_lock "$pane_id"
-      local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-2000}"
+      local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-4000}"
       echo "ERROR: send to ${pane_id} did not land within ${timeout_ms}ms after $((retries + 1)) attempts; recipient input cleared (C-u). Recipient may be busy or in an approval gate." >&2
       return 1
     fi
@@ -199,6 +296,11 @@ send_text() {
 }
 
 SEND_MAX_LEN="${SESSION_CHAT_SEND_MAX_LEN:-1024}"
+
+# Return codes for send_message / dispatch_message:
+#   0 = delivered live (durable copy cleared)
+#   3 = recipient busy; message left in their durable inbox, arrives next turn
+#   1 = hard failure (no name, unknown/ambiguous target, enqueue failed)
 
 send_message() {
   local target_name="$1"
@@ -225,8 +327,15 @@ send_message() {
   target_pane=$(resolve_pane "$target_name") || return 1
   local uid
   uid=$(generate_id)
+  # Durable copy first so a busy/failed paste is never a lost message.
+  enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" || return 1
   local formatted="[from:${my_name} pane:${TMUX_PANE} id:${uid}] ${message}"
-  send_text "$target_pane" "$formatted" "id:${uid}" || return 1
+  if send_text "$target_pane" "$formatted" "id:${uid}"; then
+    dequeue_message_id "$target_name" "$uid"
+    return 0
+  fi
+  # Live paste failed; the entry stays queued for hook recovery.
+  return 3
 }
 
 dispatch_message() {
@@ -254,11 +363,17 @@ $message
 EOF
   local line_count
   line_count=$(printf '%s' "$message" | awk 'END { print NR + 1 }')
+  # Durable copy first (points at the task file), then the live nudge.
+  enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" || return 1
   # Notification line: no truncated preview. Recipient hook + receiver agent
   # are responsible for reading $msg_file. The 'id:' field is the verify marker.
-  send_text "$target_pane" \
+  if send_text "$target_pane" \
     "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task" \
-    "id:${uid}" || return 1
+    "id:${uid}"; then
+    dequeue_message_id "$target_name" "$uid"
+    return 0
+  fi
+  return 3
 }
 
 read_pane() {
