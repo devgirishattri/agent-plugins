@@ -21,11 +21,11 @@ Use this skill when the user asks to coordinate multiple panes, track assigned w
 
 ## Scope
 
-Version 0.1.1 intentionally includes task ids, assignment, status, done/block reports, cleanup, and diagnostics. It defers role registries, fanout, review gates, timeout reassignment, priority queues, and daemon behavior.
+Intentionally includes task ids, assignment, status, done/block reports, cleanup, and diagnostics. It defers role registries, fanout, review gates, timeout reassignment, priority queues, and daemon behavior.
 
 ## Requirements
 
-- `session-chat` 0.11.0 or newer must be available.
+- `session-chat` 0.13.0 or newer must be available. Its durable inbox means a dispatch or ack to a busy pane is recovered on that pane's next turn rather than lost.
 - Executor panes must have unique session-chat names.
 - Executor panes should use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to act on assigned dispatches.
 - Task files are stored under the current project at `tmp/scheduler/tasks` by default. Override with `SESSION_SCHEDULER_HOME` when a different shared ledger location is needed.

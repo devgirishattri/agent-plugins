@@ -33,7 +33,7 @@ Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executo
 
 ## Hard prerequisites
 
-1. **session-chat ≥ 0.11.0** installed. The lock + retry behavior in 0.11 prevents corrupted dispatches.
+1. **session-chat ≥ 0.12.0** installed. The lock + retry behavior prevents corrupted dispatches, and 0.12's durable inbox means a dispatch or ack to a busy pane is recovered on its next turn rather than lost.
 2. **Executor pane has `SESSION_CHAT_INCOMING_MODE=auto`** (or `assist`). Default `notify` tells the executor *not* to read dispatched files — your tasks will be assigned in the ledger but never acted on. Run `/session-chat:incoming-mode auto` in the executor's shell.
 3. **All participating panes have run `/whoami <name>`.** Pane names are the addressing scheme.
 
@@ -80,6 +80,7 @@ Atomic writes (tmp + mv) — concurrent executors updating different tasks won't
 
 ## Failure modes
 
-- **`session-chat dispatch failed; ledger NOT updated`** — fix the dispatch issue first (run `/session-chat:panes`, ensure executor has a name and is responsive), then retry `/task-assign`. The ledger only flips to `assigned` on a successful dispatch.
+- **`session-chat dispatch failed; ledger NOT updated`** — only happens on a hard failure (no name, unknown/ambiguous target). A *busy* executor is no longer a failure: with session-chat ≥ 0.12.0 the dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. For a hard failure, fix it (run `/session-chat:panes`, ensure the executor has a name), then retry `/task-assign`.
+- **Done/block acks are best-effort** — `/task-done` and `/task-block` always update the ledger first, then send the ack via session-chat. With ≥ 0.12.0 the ack is durably delivered (recovered on the assigner's next turn); if session-chat is missing the ledger is still updated and the ack is skipped with a warning.
 - **Tasks are `assigned` but executor never acts** — almost always `INCOMING_MODE=notify` on the executor side. Run `/session-chat:incoming-mode auto` in the executor's shell.
 - **`jq` missing** — `brew install jq`. The ledger is JSON; jq is a hard dependency.
