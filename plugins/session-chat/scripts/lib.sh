@@ -145,6 +145,15 @@ generate_id() {
   fi
 }
 
+clear_partial_input() {
+  local pane_id="$1"
+  # Claude/Codex TUIs can leave wrapped tail text behind if we only kill from
+  # the prompt start. Move to the logical end first, then kill backward.
+  tmux send-keys -t "$pane_id" C-e C-u >/dev/null 2>&1 || true
+  tmux send-keys -t "$pane_id" C-a C-k >/dev/null 2>&1 || true
+  tmux send-keys -t "$pane_id" C-e C-u >/dev/null 2>&1 || true
+}
+
 # --- Send budget ---
 # Worst-case duration of one send_text call: (retries+1) verify windows plus a
 # little backoff/settle headroom. Lock waits derive from this so that fan-in
@@ -468,8 +477,8 @@ drain_inbox() {
 
 # --- Communication ---
 
-# Single paste→verify→Enter attempt. On verify failure: C-u to clear the
-# partial paste, return 1 (no error message — caller decides whether to retry).
+# Single paste→verify→Enter attempt. On verify failure, clear any partial
+# paste and return 1 (no error message — caller decides whether to retry).
 _send_text_attempt() {
   local pane_id="$1"
   local text="$2"
@@ -491,7 +500,7 @@ _send_text_attempt() {
       elapsed=$((elapsed + 50))
     done
     if [ "$landed" -ne 1 ]; then
-      tmux send-keys -t "$pane_id" C-u 2>/dev/null || true
+      clear_partial_input "$pane_id"
       return 1
     fi
   fi
@@ -523,7 +532,7 @@ send_text() {
     if [ "$attempt" -ge "$retries" ]; then
       release_lock "$pane_id"
       local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-4000}"
-      echo "ERROR: send to ${pane_id} did not land within ${timeout_ms}ms after $((retries + 1)) attempts; recipient input cleared (C-u). Recipient may be busy or in an approval gate." >&2
+      echo "ERROR: send to ${pane_id} did not land within ${timeout_ms}ms after $((retries + 1)) attempts; recipient input cleared. Recipient may be busy or in an approval gate." >&2
       return 1
     fi
     attempt=$((attempt + 1))
