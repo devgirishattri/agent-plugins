@@ -77,6 +77,8 @@ QUEUE_OUT="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; enqueue_message recip
 assert_empty "$QUEUE_OUT" "fresh queued message"
 QUEUE_OUT="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; mark_message_ready recipient-test deadbeef; drain_inbox "" recipient-test' "$SCRIPT_DIR/lib.sh")"
 assert_contains $'deadbeef\tsend\tsender-test\tqueued fallback' "$QUEUE_OUT"
+QUEUE_LOCK="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; queue_lock_path recipient-test' "$SCRIPT_DIR/lib.sh")"
+[ "$QUEUE_LOCK" = "$TEST_HOME/messages/queue/.locks/recipient-test.lock" ] || fail "queue lock path was not messages-dir keyed: $QUEUE_LOCK"
 DUP_OUT="$(printf '%s\n' '[from:sender-test pane:%999 id:deadbeef] queued fallback' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" CODEX_PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto bash "$SCRIPT_DIR/detect-incoming-message.sh")"
 assert_empty "$DUP_OUT" "recent duplicate live hook output"
 
@@ -146,6 +148,19 @@ tmux set-option -p -t "$RETRY_PANE" @name retry-recipient
 run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=100 SESSION_CHAT_SEND_RETRIES=4 SESSION_CHAT_RETRY_BACKOFF_MS=200 \
   bash "$SCRIPT_DIR/send-message.sh" retry-recipient "retry happy path"
 tmux capture-pane -J -t "$RETRY_PANE" -p -S -200 | grep -F "retry happy path" >/dev/null || fail "retry send did not land"
+
+CROSS_DIR="$TEST_HOME/recipient-runtime/messages"
+CROSS_PANE="$(tmux new-window -t "$SESSION" -n cross-runtime -P -F '#{pane_id}' "sh -c 'stty -echo; sleep 2; stty echo; cat'")"
+tmux set-option -p -t "$CROSS_PANE" @name cross-runtime-recipient
+run_as_sender env SESSION_CHAT_TARGET_MESSAGES_DIR="$CROSS_DIR" SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=50 SESSION_CHAT_SEND_RETRIES=0 \
+  bash "$SCRIPT_DIR/send-message.sh" cross-runtime-recipient "cross runtime fallback" > "$TEST_HOME/cross-runtime.txt"
+assert_file_contains "$TEST_HOME/cross-runtime.txt" "Queued to cross-runtime-recipient"
+assert_file_contains "$CROSS_DIR/queue/cross-runtime-recipient.tsv" "cross runtime fallback"
+CROSS_LOCK="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; queue_lock_path cross-runtime-recipient "$1"' "$SCRIPT_DIR/lib.sh" "$CROSS_DIR")"
+[ "$CROSS_LOCK" = "$CROSS_DIR/queue/.locks/cross-runtime-recipient.lock" ] || fail "cross-runtime queue lock path was not target-dir keyed: $CROSS_LOCK"
+if [ -e "$TEST_HOME/messages/queue/cross-runtime-recipient.tsv" ]; then
+  fail "cross-runtime fallback wrote to sender CODEX_HOME queue"
+fi
 
 bash "$SCRIPT_DIR/incoming-mode.sh" > "$TEST_HOME/incoming.txt"
 assert_file_contains "$TEST_HOME/incoming.txt" "SESSION_CHAT_INCOMING_MODE=notify"

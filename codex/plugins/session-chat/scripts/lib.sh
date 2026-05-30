@@ -38,7 +38,8 @@ CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 MESSAGES_DIR="$CODEX_DIR/messages"
 
 ensure_messages_dir() {
-  mkdir -p "$MESSAGES_DIR"
+  local messages_dir="${1:-$MESSAGES_DIR}"
+  mkdir -p "$messages_dir"
 }
 
 # --- Pane naming (smux @name pattern) ---
@@ -81,6 +82,28 @@ resolve_pane() {
   printf '%s\n' "$matches" | sed '/^$/d' | head -1
 }
 
+target_messages_dir_for_pane() {
+  local pane_id="$1"
+  if [ -n "${SESSION_CHAT_TARGET_MESSAGES_DIR:-}" ]; then
+    printf '%s\n' "$SESSION_CHAT_TARGET_MESSAGES_DIR"
+    return 0
+  fi
+
+  local command
+  command=$(tmux display-message -p -t "$pane_id" '#{pane_current_command}' 2>/dev/null || true)
+  case "$command" in
+    codex|codex-*|*codex*)
+      printf '%s\n' "$MESSAGES_DIR"
+      ;;
+    claude|claude-*|*claude*|[0-9]*.[0-9]*.[0-9]*)
+      printf '%s/messages\n' "${CLAUDE_HOME:-$HOME/.claude}"
+      ;;
+    *)
+      printf '%s\n' "$MESSAGES_DIR"
+      ;;
+  esac
+}
+
 # --- Communication ---
 
 SEND_MAX_LEN="${SESSION_CHAT_SEND_MAX_LEN:-1024}"
@@ -106,7 +129,7 @@ generate_id() {
   if command -v od >/dev/null 2>&1; then
     od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
   else
-    printf '%s%s' "$$" "${RANDOM:-0}${RANDOM:-0}"
+    printf '%08x%04x%04x\n' "$$" "${RANDOM:-0}" "${RANDOM:-0}"
   fi
 }
 
@@ -115,6 +138,14 @@ send_lock_path() {
   local safe_id
   safe_id=$(printf '%s' "$pane_id" | tr -c 'a-zA-Z0-9_.-' '_')
   printf '%s/session-chat-locks/%s.lock\n' "${TMPDIR:-/tmp}" "${safe_id:-pane}"
+}
+
+queue_lock_path() {
+  local recipient="$1"
+  local messages_dir="${2:-$MESSAGES_DIR}"
+  local safe
+  safe=$(printf '%s' "$recipient" | tr -c 'a-zA-Z0-9._-' '_')
+  printf '%s/queue/.locks/%s.lock\n' "$messages_dir" "${safe:-pane}"
 }
 
 process_is_alive() {
@@ -205,7 +236,8 @@ release_send_lock() {
 # Every message is enqueued BEFORE the live paste. A successful paste delivers it
 # live and the entry is removed; a failed paste (busy recipient) leaves it so the
 # recipient's UserPromptSubmit hook recovers it on its next turn.
-# Records are single-line TAB-separated:  <id>\t<type>\t<from>\t<payload>
+# Records are single-line TAB-separated:
+#   <id>\t<type>\t<from>\t<ready_at_ms>\t<payload>
 #   type=send     -> payload = the (single-line) message text
 #   type=dispatch -> payload = the trusted msg file path
 # Dedup across the live paste and the inbox is by <id>. New queue records carry
@@ -214,16 +246,18 @@ release_send_lock() {
 
 queue_file_for() {
   local name="$1"
+  local messages_dir="${2:-$MESSAGES_DIR}"
   local safe
   safe=$(printf '%s' "$name" | tr -c 'a-zA-Z0-9._-' '_')
-  printf '%s/queue/%s.tsv\n' "$MESSAGES_DIR" "$safe"
+  printf '%s/queue/%s.tsv\n' "$messages_dir" "$safe"
 }
 
 recent_file_for() {
   local name="$1"
+  local messages_dir="${2:-$MESSAGES_DIR}"
   local safe
   safe=$(printf '%s' "$name" | tr -c 'a-zA-Z0-9._-' '_')
-  printf '%s/queue/.recent-%s.tsv\n' "$MESSAGES_DIR" "$safe"
+  printf '%s/queue/.recent-%s.tsv\n' "$messages_dir" "$safe"
 }
 
 queue_recovery_delay_ms() {
@@ -254,8 +288,9 @@ normalize_queue_record() {
 
 prune_recent_ids_unlocked() {
   local recipient="$1" now="$2"
+  local messages_dir="${3:-$MESSAGES_DIR}"
   local rf tmp
-  rf=$(recent_file_for "$recipient")
+  rf=$(recent_file_for "$recipient" "$messages_dir")
   [ -f "$rf" ] || return 0
   tmp="${rf}.tmp.$$"
   awk -F'\t' -v now="$now" '$1 != "" && $2 ~ /^[0-9]+$/ && $2 > now' "$rf" > "$tmp" 2>/dev/null || true
@@ -264,17 +299,19 @@ prune_recent_ids_unlocked() {
 
 recent_ids_unlocked() {
   local recipient="$1"
+  local messages_dir="${2:-$MESSAGES_DIR}"
   local rf
-  rf=$(recent_file_for "$recipient")
+  rf=$(recent_file_for "$recipient" "$messages_dir")
   [ -f "$rf" ] || return 0
   awk -F'\t' '$1 != "" { print $1 }' "$rf" 2>/dev/null || true
 }
 
 mark_recent_id_unlocked() {
   local recipient="$1" id="$2" now="$3"
+  local messages_dir="${4:-$MESSAGES_DIR}"
   [ -n "$recipient" ] && [ -n "$id" ] || return 0
   local rf expires
-  rf=$(recent_file_for "$recipient")
+  rf=$(recent_file_for "$recipient" "$messages_dir")
   mkdir -p "$(dirname "$rf")" 2>/dev/null || true
   expires=$((now + $(recent_id_ttl_ms)))
   awk -F'\t' -v id="$id" '$1 != id' "$rf" > "${rf}.tmp.$$" 2>/dev/null || true
@@ -287,7 +324,7 @@ recent_id_seen() {
   [ -n "$recipient" ] && [ -n "$id" ] || return 1
   ensure_messages_dir
   local lock now found=1
-  lock=$(send_lock_path "queue:${recipient}")
+  lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
@@ -303,7 +340,7 @@ mark_recent_id() {
   [ -n "$recipient" ] && [ -n "$id" ] || return 0
   ensure_messages_dir
   local lock now
-  lock=$(send_lock_path "queue:${recipient}")
+  lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
@@ -313,12 +350,13 @@ mark_recent_id() {
 
 enqueue_message() {
   local recipient="$1" id="$2" type="$3" from="$4" payload="$5"
-  ensure_messages_dir
+  local messages_dir="${6:-$MESSAGES_DIR}"
+  ensure_messages_dir "$messages_dir"
   local qf lock ready_at
-  qf=$(queue_file_for "$recipient")
+  qf=$(queue_file_for "$recipient" "$messages_dir")
   mkdir -p "$(dirname "$qf")" 2>/dev/null || true
   ready_at=$(queue_ready_at_ms)
-  lock=$(send_lock_path "queue:${recipient}")
+  lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
   printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$type" "$from" "$ready_at" "$payload" >> "$qf"
   release_send_lock "$lock"
@@ -326,10 +364,11 @@ enqueue_message() {
 
 dequeue_message_id() {
   local recipient="$1" id="$2"
+  local messages_dir="${3:-$MESSAGES_DIR}"
   local qf lock tmp
-  qf=$(queue_file_for "$recipient")
+  qf=$(queue_file_for "$recipient" "$messages_dir")
   [ -f "$qf" ] || return 0
-  lock=$(send_lock_path "queue:${recipient}")
+  lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
   tmp="${qf}.tmp.$$"
   awk -F'\t' -v id="$id" '$1 != id' "$qf" > "$tmp" 2>/dev/null || true
@@ -339,10 +378,11 @@ dequeue_message_id() {
 
 mark_message_ready() {
   local recipient="$1" id="$2"
+  local messages_dir="${3:-$MESSAGES_DIR}"
   local qf lock tmp now qid qtype qfrom qready qpayload
-  qf=$(queue_file_for "$recipient")
+  qf=$(queue_file_for "$recipient" "$messages_dir")
   [ -f "$qf" ] || return 0
-  lock=$(send_lock_path "queue:${recipient}")
+  lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
   tmp="${qf}.tmp.$$"
   now=$(now_ms)
@@ -372,7 +412,7 @@ drain_inbox() {
   local qf lock now recent_ids
   qf=$(queue_file_for "$recipient")
   [ -f "$qf" ] || return 0
-  lock=$(send_lock_path "queue:${recipient}")
+  lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 0
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
@@ -533,16 +573,18 @@ send_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
+  local target_messages_dir
+  target_messages_dir=$(target_messages_dir_for_pane "$target_pane")
   local uid
   uid=$(generate_id)
   # Durable copy first so a busy/failed paste is never a lost message.
-  enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" || return 1
+  enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" "$target_messages_dir" || return 1
   local formatted="[from:${my_name} pane:${TMUX_PANE:-} id:${uid}] ${message}"
   if send_text "$target_pane" "$formatted" "id:${uid}"; then
-    dequeue_message_id "$target_name" "$uid"
+    dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     return 0
   fi
-  mark_message_ready "$target_name" "$uid" || true
+  mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
   return 3
 }
 
@@ -557,26 +599,28 @@ dispatch_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
+  local target_messages_dir
+  target_messages_dir=$(target_messages_dir_for_pane "$target_pane")
 
   # Write full message to file (handles multi-line + special chars)
-  ensure_messages_dir
+  ensure_messages_dir "$target_messages_dir"
   local uid
   uid=$(generate_id)
   local msg_id
   msg_id="$(date +%s)-$$-${uid}-${my_name}-to-${target_name}"
-  local msg_file="$MESSAGES_DIR/${msg_id}.md"
+  local msg_file="$target_messages_dir/${msg_id}.md"
   printf '%s\n' "$message" > "$msg_file"
 
   # Send single-line notification with file reference
   local line_count
   line_count=$(printf '%s\n' "$message" | wc -l | tr -d ' ')
   # Durable copy first (points at the task file), then the live nudge.
-  enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" || return 1
+  enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" "$target_messages_dir" || return 1
   if send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task" "id:${uid}"; then
-    dequeue_message_id "$target_name" "$uid"
+    dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     return 0
   fi
-  mark_message_ready "$target_name" "$uid" || true
+  mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
   return 3
 }
 

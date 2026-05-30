@@ -170,6 +170,35 @@ else
   fail "retry_eventual_success" "no marker on recipient"
 fi
 
+# --- Test 9: mixed-runtime dir resolution + cross-runtime queue threading ---
+# No tmux needed: override short-circuits detection, and the queue helpers are
+# pure file ops. Verifies a Claude->Codex row/file lands in the CODEX dir only.
+mr_out=$(
+  source "$HERE/lib.sh"
+  MR_BASE=$(mktemp -d)
+  export MESSAGES_DIR="$MR_BASE/claude/messages"
+  CODEX_MSGS="$MR_BASE/codex/messages"
+  [ "$(SESSION_CHAT_TARGET_MESSAGES_DIR=/tmp/ov target_messages_dir_for_pane any)" = "/tmp/ov" ] && echo OVERRIDE_OK
+  uid=deadbeef
+  enqueue_message execpane "$uid" dispatch sender "$CODEX_MSGS/task.md" "$CODEX_MSGS"
+  cq=$(queue_file_for execpane "$CODEX_MSGS")
+  lq=$(queue_file_for execpane)
+  ql=$(queue_lock_path execpane "$CODEX_MSGS")
+  [ -f "$cq" ] && grep -qF "$uid" "$cq" && echo CODEX_HAS_ROW
+  [ ! -f "$lq" ] && echo LOCAL_CLEAN
+  [ "$ql" = "$CODEX_MSGS/queue/.locks/execpane.lock" ] && echo LOCK_TARGET_DIR
+  dequeue_message_id execpane "$uid" "$CODEX_MSGS"
+  [ ! -s "$cq" ] && echo DEQUEUE_OK
+  rm -rf "$MR_BASE"
+)
+if echo "$mr_out" | grep -q OVERRIDE_OK && echo "$mr_out" | grep -q CODEX_HAS_ROW \
+   && echo "$mr_out" | grep -q LOCAL_CLEAN && echo "$mr_out" | grep -q LOCK_TARGET_DIR \
+   && echo "$mr_out" | grep -q DEQUEUE_OK; then
+  pass "mixed_runtime_routing"
+else
+  fail "mixed_runtime_routing" "out=$mr_out"
+fi
+
 # --- Summary ---
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
