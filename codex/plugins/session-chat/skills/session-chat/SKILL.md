@@ -47,6 +47,8 @@ Session-chat takes a per-target lock before writing to a pane, sends text with `
 
 Codex TUI redraws, wrapping, approval prompts, and active command output can still hide typed markers from `capture-pane`. If a valid send reports that it did not land, retry after the target is idle or raise the verification timeout.
 
+For durable fallback, the sender writes the queue row and dispatch file into the recipient runtime's message directory. Codex recipients use `${CODEX_HOME:-~/.codex}/messages`; Claude recipients use `${CLAUDE_HOME:-~/.claude}/messages`. Queue operations lock under that recipient message directory so mixed Codex/Claude fallback does not depend on both runtimes sharing the same `TMPDIR`.
+
 ## Tunables
 
 - `SESSION_CHAT_VERIFY_TIMEOUT_MS`: marker verification timeout in milliseconds. Default: `4000`.
@@ -62,7 +64,7 @@ Codex TUI redraws, wrapping, approval prompts, and active command output can sti
 
 ## Common Failures
 
-- `did not land within Xms after N attempts`: target was busy through all retries. The message is **not lost** — it's in the recipient's durable inbox (`~/.codex/messages/queue/<name>.tsv`) and surfaces after the failed live attempt or recovery grace (the sender reports "Queued …"). To land more sends live, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
+- `did not land within Xms after N attempts`: target was busy through all retries. The message is **not lost** — it's in the recipient's durable inbox (`~/.codex/messages/queue/<name>.tsv` for Codex, `~/.claude/messages/queue/<name>.tsv` for Claude) and surfaces after the failed live attempt or recovery grace (the sender reports "Queued …"). To land more sends live, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
 - `timed out waiting for send lock`: rare now that the unset lock timeout auto-sizes to the send budget and resets on holder change. If `SESSION_CHAT_LOCK_TIMEOUT_MS` is set, that value is treated as an absolute cap.
 - `Multiple panes named X`: rename one pane with `$session-chat:whoami <name>` in that pane.
 - `No pane named X`: run `$session-chat:panes all` and confirm the recipient has run `$session-chat:whoami <name>`.

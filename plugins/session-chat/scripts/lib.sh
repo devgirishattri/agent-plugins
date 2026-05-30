@@ -34,10 +34,41 @@ validate_label() {
 
 # --- Message directory ---
 
-MESSAGES_DIR="$HOME/.claude/messages"
+MESSAGES_DIR="${CLAUDE_HOME:-$HOME/.claude}/messages"
 
 ensure_messages_dir() {
-  mkdir -p "$MESSAGES_DIR"
+  local messages_dir="${1:-$MESSAGES_DIR}"
+  mkdir -p "$messages_dir"
+}
+
+# Resolve the trusted messages dir for the *recipient* pane's runtime so a
+# cross-runtime dispatch/fallback lands where that pane actually drains. A
+# Claude pane drains ~/.claude/messages; a Codex pane drains ~/.codex/messages,
+# and each runtime only trusts dispatch files inside its own messages dir.
+# Detection uses the pane's foreground command: Codex panes report a *codex*
+# binary, Claude panes report node. SESSION_CHAT_TARGET_MESSAGES_DIR overrides.
+target_messages_dir_for_pane() {
+  local pane_id="$1"
+  if [ -n "${SESSION_CHAT_TARGET_MESSAGES_DIR:-}" ]; then
+    printf '%s\n' "$SESSION_CHAT_TARGET_MESSAGES_DIR"
+    return 0
+  fi
+  local command=""
+  command=$(tmux display-message -p -t "$pane_id" '#{pane_current_command}' 2>/dev/null || true)
+  # Codex panes report a *codex* binary (e.g. codex-aarch64-a); Claude panes
+  # report the CLI version (e.g. 2.1.156) or claude/node. Codex detection is the
+  # reliable signal — when in doubt we keep messages in our own (Claude) dir.
+  case "$command" in
+    codex|codex-*|*codex*)
+      printf '%s/messages\n' "${CODEX_HOME:-$HOME/.codex}"
+      ;;
+    claude|claude-*|*claude*|node|*node*|[0-9]*.[0-9]*.[0-9]*)
+      printf '%s\n' "$MESSAGES_DIR"
+      ;;
+    *)
+      printf '%s\n' "$MESSAGES_DIR"
+      ;;
+  esac
 }
 
 # --- Pane naming (smux @name pattern) ---
@@ -110,7 +141,7 @@ generate_id() {
   if command -v od >/dev/null 2>&1; then
     od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
   else
-    printf '%s%s' "$$" "${RANDOM:-0}${RANDOM:-0}"
+    printf '%08x%04x%04x\n' "$$" "${RANDOM:-0}" "${RANDOM:-0}"
   fi
 }
 
@@ -143,7 +174,8 @@ session_chat_lock_path() {
 acquire_lock() {
   local pane="$1"
   local lock
-  lock=$(session_chat_lock_path "$pane")
+  lock="${2:-}"
+  [ -n "$lock" ] || lock=$(session_chat_lock_path "$pane")
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
   local default_ms
   default_ms=$(( $(per_send_budget_ms) * 4 ))
@@ -181,7 +213,8 @@ acquire_lock() {
 release_lock() {
   local pane="$1"
   local lock
-  lock=$(session_chat_lock_path "$pane")
+  lock="${2:-}"
+  [ -n "$lock" ] || lock=$(session_chat_lock_path "$pane")
   rm -rf "$lock" 2>/dev/null
 }
 
@@ -199,16 +232,26 @@ release_lock() {
 
 queue_file_for() {
   local name="$1"
+  local messages_dir="${2:-$MESSAGES_DIR}"
   local safe
   safe=$(printf '%s' "$name" | tr -c 'a-zA-Z0-9._-' '_')
-  printf '%s/queue/%s.tsv' "$MESSAGES_DIR" "$safe"
+  printf '%s/queue/%s.tsv' "$messages_dir" "$safe"
 }
 
 recent_file_for() {
   local name="$1"
+  local messages_dir="${2:-$MESSAGES_DIR}"
   local safe
   safe=$(printf '%s' "$name" | tr -c 'a-zA-Z0-9._-' '_')
-  printf '%s/queue/.recent-%s.tsv' "$MESSAGES_DIR" "$safe"
+  printf '%s/queue/.recent-%s.tsv' "$messages_dir" "$safe"
+}
+
+queue_lock_path() {
+  local recipient="$1"
+  local messages_dir="${2:-$MESSAGES_DIR}"
+  local safe
+  safe=$(printf '%s' "$recipient" | tr -c 'a-zA-Z0-9._-' '_')
+  printf '%s/queue/.locks/%s.lock' "$messages_dir" "${safe:-pane}"
 }
 
 queue_recovery_delay_ms() {
@@ -275,13 +318,15 @@ recent_id_seen() {
   [ -n "$recipient" ] && [ -n "$id" ] || return 1
   ensure_messages_dir
   local now found=1
-  acquire_lock "queue:${recipient}" || return 1
+  local lock
+  lock=$(queue_lock_path "$recipient")
+  acquire_lock "queue:${recipient}" "$lock" || return 1
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
   if recent_ids_unlocked "$recipient" | grep -Fx "$id" >/dev/null 2>&1; then
     found=0
   fi
-  release_lock "queue:${recipient}"
+  release_lock "queue:${recipient}" "$lock"
   return "$found"
 }
 
@@ -290,37 +335,43 @@ mark_recent_id() {
   [ -n "$recipient" ] && [ -n "$id" ] || return 0
   ensure_messages_dir
   local now
-  acquire_lock "queue:${recipient}" || return 1
+  local lock
+  lock=$(queue_lock_path "$recipient")
+  acquire_lock "queue:${recipient}" "$lock" || return 1
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
   mark_recent_id_unlocked "$recipient" "$id" "$now"
-  release_lock "queue:${recipient}"
+  release_lock "queue:${recipient}" "$lock"
 }
 
 enqueue_message() {
-  # enqueue_message <recipient_name> <id> <type> <from> <payload>
+  # enqueue_message <recipient_name> <id> <type> <from> <payload> [messages_dir]
   local recipient="$1" id="$2" type="$3" from="$4" payload="$5"
-  ensure_messages_dir
-  local qf ready_at
-  qf=$(queue_file_for "$recipient")
+  local messages_dir="${6:-$MESSAGES_DIR}"
+  ensure_messages_dir "$messages_dir"
+  local qf ready_at lock
+  qf=$(queue_file_for "$recipient" "$messages_dir")
   mkdir -p "$(dirname "$qf")" 2>/dev/null || true
   ready_at=$(queue_ready_at_ms)
-  acquire_lock "queue:${recipient}" || return 1
+  lock=$(queue_lock_path "$recipient" "$messages_dir")
+  acquire_lock "queue:${recipient}" "$lock" || return 1
   printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$type" "$from" "$ready_at" "$payload" >> "$qf"
-  release_lock "queue:${recipient}"
+  release_lock "queue:${recipient}" "$lock"
 }
 
 dequeue_message_id() {
-  # dequeue_message_id <recipient_name> <id> — remove the entry with this id
+  # dequeue_message_id <recipient_name> <id> [messages_dir] — remove this id
   local recipient="$1" id="$2"
-  local qf
-  qf=$(queue_file_for "$recipient")
+  local messages_dir="${3:-$MESSAGES_DIR}"
+  local qf lock
+  qf=$(queue_file_for "$recipient" "$messages_dir")
   [ -f "$qf" ] || return 0
-  acquire_lock "queue:${recipient}" || return 1
+  lock=$(queue_lock_path "$recipient" "$messages_dir")
+  acquire_lock "queue:${recipient}" "$lock" || return 1
   local tmp="${qf}.tmp.$$"
   awk -F'\t' -v id="$id" '$1 != id' "$qf" > "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-  release_lock "queue:${recipient}"
+  release_lock "queue:${recipient}" "$lock"
 }
 
 # mark_message_ready <recipient> <id> — set a row's ready_at to now so the
@@ -328,10 +379,12 @@ dequeue_message_id() {
 # have failed; no point waiting out the grace window).
 mark_message_ready() {
   local recipient="$1" id="$2"
-  local qf tmp now qid qtype qfrom qready qpayload
-  qf=$(queue_file_for "$recipient")
+  local messages_dir="${3:-$MESSAGES_DIR}"
+  local qf tmp now qid qtype qfrom qready qpayload lock
+  qf=$(queue_file_for "$recipient" "$messages_dir")
   [ -f "$qf" ] || return 0
-  acquire_lock "queue:${recipient}" || return 1
+  lock=$(queue_lock_path "$recipient" "$messages_dir")
+  acquire_lock "queue:${recipient}" "$lock" || return 1
   tmp="${qf}.tmp.$$"
   now=$(now_ms)
   : > "$tmp"
@@ -348,7 +401,7 @@ mark_message_ready() {
     fi
   done < "$qf"
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-  release_lock "queue:${recipient}"
+  release_lock "queue:${recipient}" "$lock"
 }
 
 # drain_inbox <skip_ids> <recipient_name>
@@ -360,10 +413,11 @@ drain_inbox() {
   local skip_ids="$1"
   local recipient="$2"
   [ -n "$recipient" ] || return 0
-  local qf
+  local qf lock
   qf=$(queue_file_for "$recipient")
   [ -f "$qf" ] || return 0
-  acquire_lock "queue:${recipient}" || return 0
+  lock=$(queue_lock_path "$recipient")
+  acquire_lock "queue:${recipient}" "$lock" || return 0
   local now recent_ids
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
@@ -409,7 +463,7 @@ drain_inbox() {
     normalize_queue_record "$qid" "$qtype" "$qfrom" "$qready" "$qpayload" >> "$tmp"
   done < "$qf"
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-  release_lock "queue:${recipient}"
+  release_lock "queue:${recipient}" "$lock"
 }
 
 # --- Communication ---
@@ -510,17 +564,21 @@ send_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
+  # Durable rows land in the recipient runtime's dir so a Codex target drains
+  # them on its next turn (Codex hooks read ~/.codex/messages, not ~/.claude).
+  local target_messages_dir
+  target_messages_dir=$(target_messages_dir_for_pane "$target_pane")
   local uid
   uid=$(generate_id)
   # Durable copy first so a busy/failed paste is never a lost message.
-  enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" || return 1
+  enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" "$target_messages_dir" || return 1
   local formatted="[from:${my_name} pane:${TMUX_PANE} id:${uid}] ${message}"
   if send_text "$target_pane" "$formatted" "id:${uid}"; then
-    dequeue_message_id "$target_name" "$uid"
+    dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     return 0
   fi
   # Live paste failed; surface from the inbox on the recipient's next turn now.
-  mark_message_ready "$target_name" "$uid" || true
+  mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
   return 3
 }
 
@@ -535,31 +593,35 @@ dispatch_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
+  # Resolve the recipient runtime's trusted dir: the task file must live where
+  # that pane's hook will trust + read it (each runtime trusts only its own).
+  local target_messages_dir
+  target_messages_dir=$(target_messages_dir_for_pane "$target_pane")
 
   # Write full message to file (handles multi-line + special chars)
-  ensure_messages_dir
+  ensure_messages_dir "$target_messages_dir"
   local uid
   uid=$(generate_id)
   # PID + uid prevents same-second / same-target collisions overwriting files.
   local msg_id
   msg_id="$(date +%s)-$$-${uid}-${my_name}-to-${target_name}"
-  local msg_file="$MESSAGES_DIR/${msg_id}.md"
+  local msg_file="$target_messages_dir/${msg_id}.md"
   cat > "$msg_file" <<EOF
 $message
 EOF
   local line_count
   line_count=$(printf '%s' "$message" | awk 'END { print NR + 1 }')
   # Durable copy first (points at the task file), then the live nudge.
-  enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" || return 1
+  enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" "$target_messages_dir" || return 1
   # Notification line: no truncated preview. Recipient hook + receiver agent
   # are responsible for reading $msg_file. The 'id:' field is the verify marker.
   if send_text "$target_pane" \
     "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task" \
     "id:${uid}"; then
-    dequeue_message_id "$target_name" "$uid"
+    dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     return 0
   fi
-  mark_message_ready "$target_name" "$uid" || true
+  mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
   return 3
 }
 
