@@ -50,7 +50,7 @@ The `id:` field is a unique verification marker. The dispatch line **does not in
 1. Pastes the literal message into the recipient pane (no Enter yet).
 2. Polls `tmux capture-pane` (last 200 lines) for the unique `id:` marker, up to `SESSION_CHAT_VERIFY_TIMEOUT_MS` (default 4000ms).
 3. On success: presses Enter, waits `SESSION_CHAT_SETTLE_MS` (default 300ms), returns 0.
-4. On timeout: sends `C-u` to clear the partial paste from the recipient's prompt, returns 1.
+4. On timeout: sends a line-edit clear sequence (`C-e`, `C-u`, `C-a`, `C-k`) to clear the partial paste from the recipient's prompt, returns 1.
 
 This means a failed send **does not leave junk in the recipient's prompt**. If you see "did not land within Xms," the recipient was likely busy in an approval gate or rendering a long TUI frame.
 

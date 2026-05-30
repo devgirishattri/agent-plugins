@@ -125,6 +125,15 @@ sleep_ms() {
   sleep "${sec}.$(printf '%03d' "$rem")"
 }
 
+clear_partial_input() {
+  local pane_id="$1"
+  # Claude/Codex TUIs can leave wrapped tail text behind if we only kill from
+  # the prompt start. Move to the logical end first, then kill backward.
+  tmux send-keys -t "$pane_id" C-e C-u >/dev/null 2>&1 || true
+  tmux send-keys -t "$pane_id" C-a C-k >/dev/null 2>&1 || true
+  tmux send-keys -t "$pane_id" C-e C-u >/dev/null 2>&1 || true
+}
+
 generate_id() {
   if command -v od >/dev/null 2>&1; then
     od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
@@ -491,7 +500,7 @@ send_text_once() {
     done
 
     if [ "$i" -ge "$attempts" ]; then
-      tmux send-keys -t "$pane_id" C-u >/dev/null 2>&1 || true
+      clear_partial_input "$pane_id"
       return 2
     fi
   fi

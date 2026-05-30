@@ -43,7 +43,7 @@ The dispatch notification intentionally has no task preview. The receiver must r
 
 ## Reliability Contract
 
-Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies a marker in `capture-pane -S -200`, then sends Enter only after verification succeeds. If verification times out, it sends `C-u` to clear any partial paste, backs off, and retries before returning failure.
+Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies a marker in `capture-pane -S -200`, then sends a line-edit clear sequence (`C-e`, `C-u`, `C-a`, `C-k`) for any partial paste, backs off, and retries before returning failure.
 
 Codex TUI redraws, wrapping, approval prompts, and active command output can still hide typed markers from `capture-pane`. If a valid send reports that it did not land, retry after the target is idle or raise the verification timeout.
 
