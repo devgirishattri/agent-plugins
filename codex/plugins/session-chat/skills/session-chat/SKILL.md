@@ -30,20 +30,20 @@ Use this skill when the user asks how session-chat works, which command to use, 
 Direct messages are submitted as:
 
 ```text
-[from:<sender> pane:<pane-id> id:<id>] <message>
+[from:<sender> pane:<pane-id> id:<id>] <message> [id:<id>]
 ```
 
 Dispatch notifications are submitted as:
 
 ```text
-[from:<sender> pane:<pane-id> msg:<message-file> id:<id>] dispatch (<line-count> lines) — read msg file for full task
+[from:<sender> pane:<pane-id> msg:<message-file> id:<id>] dispatch (<line-count> lines) — read msg file for full task id:<id>
 ```
 
-The dispatch notification intentionally has no task preview. The receiver must read the referenced file only when its incoming mode and local user policy allow it.
+The trailing id keeps the verification marker visible in TUIs that show the end of long input lines. The dispatch notification intentionally has no task preview. The receiver must read the referenced file only when its incoming mode and local user policy allow it.
 
 ## Reliability Contract
 
-Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies a marker in `capture-pane -S -200`, then sends a line-edit clear sequence (`C-e`, `C-u`, `C-a`, `C-k`) for any partial paste, backs off, and retries before returning failure.
+Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies either a marker or a newly-created `[Pasted text #N]` placeholder in `capture-pane -S -200`, then sends a line-edit clear sequence (`C-e`, `C-u`, `C-a`, `C-k`) for any partial paste, backs off, and retries before returning failure.
 
 Codex TUI redraws, wrapping, approval prompts, and active command output can still hide typed markers from `capture-pane`. If a valid send reports that it did not land, retry after the target is idle or raise the verification timeout.
 

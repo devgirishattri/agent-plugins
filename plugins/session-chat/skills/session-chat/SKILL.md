@@ -38,17 +38,17 @@ If you are orchestrating peer agents, set `SESSION_CHAT_INCOMING_MODE=auto` in t
 
 Both operations produce a single line in the recipient's prompt buffer:
 
-- `/send` →  `[from:NAME pane:%N id:HEX8] <message text>`
-- `/dispatch` → `[from:NAME pane:%N msg:/path/to/file.md id:HEX8] dispatch (N lines) — read msg file for full task`
+- `/send` →  `[from:NAME pane:%N id:HEX8] <message text> [id:HEX8]`
+- `/dispatch` → `[from:NAME pane:%N msg:/path/to/file.md id:HEX8] dispatch (N lines) — read msg file for full task id:HEX8`
 
-The `id:` field is a unique verification marker. The dispatch line **does not include a preview** of the message body — the recipient must read `$msg_file`.
+The `id:` field is a unique verification marker and is repeated at the tail so it remains visible in TUIs that show the end of long input lines. The dispatch line **does not include a preview** of the message body — the recipient must read `$msg_file`.
 
 ## Reliability contract
 
 `send_text` (used by both ops) does the following before returning success:
 
 1. Pastes the literal message into the recipient pane (no Enter yet).
-2. Polls `tmux capture-pane` (last 200 lines) for the unique `id:` marker, up to `SESSION_CHAT_VERIFY_TIMEOUT_MS` (default 4000ms).
+2. Polls `tmux capture-pane` (last 200 lines) for the unique `id:` marker or a newly-created `[Pasted text #N]` placeholder, up to `SESSION_CHAT_VERIFY_TIMEOUT_MS` (default 4000ms).
 3. On success: presses Enter, waits `SESSION_CHAT_SETTLE_MS` (default 300ms), returns 0.
 4. On timeout: sends a line-edit clear sequence (`C-e`, `C-u`, `C-a`, `C-k`) to clear the partial paste from the recipient's prompt, returns 1.
 
