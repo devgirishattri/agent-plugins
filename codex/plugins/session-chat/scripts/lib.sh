@@ -134,6 +134,20 @@ clear_partial_input() {
   tmux send-keys -t "$pane_id" C-e C-u >/dev/null 2>&1 || true
 }
 
+count_paste_placeholders() {
+  awk '{
+    while (match($0, /\[Pasted text #[0-9]+\]/)) {
+      count++
+      $0 = substr($0, RSTART + RLENGTH)
+    }
+  } END { print count + 0 }'
+}
+
+capture_paste_placeholder_count() {
+  local pane_id="$1"
+  tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null | count_paste_placeholders
+}
+
 generate_id() {
   if command -v od >/dev/null 2>&1; then
     od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
@@ -471,6 +485,10 @@ send_text_once() {
   local marker_supplied="${3+x}"
   local marker="${3:-$text}"
   local settle_ms="${SESSION_CHAT_SETTLE_MS:-300}"
+  local paste_placeholders_before=0
+  if [ "${SESSION_CHAT_SKIP_VERIFY:-}" != "1" ]; then
+    paste_placeholders_before=$(capture_paste_placeholder_count "$pane_id")
+  fi
   # Literal mode + split text/Enter for TUI safety (smux pattern)
   tmux send-keys -t "$pane_id" -l -- "$text" || return 1
 
@@ -493,6 +511,9 @@ send_text_once() {
     while [ "$i" -lt "$attempts" ]; do
       captured=$(tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null || true)
       if [[ "$captured" == *"$marker"* ]]; then
+        break
+      fi
+      if [ "$(printf '%s\n' "$captured" | count_paste_placeholders)" -gt "$paste_placeholders_before" ]; then
         break
       fi
       sleep 0.05
@@ -588,7 +609,7 @@ send_message() {
   uid=$(generate_id)
   # Durable copy first so a busy/failed paste is never a lost message.
   enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" "$target_messages_dir" || return 1
-  local formatted="[from:${my_name} pane:${TMUX_PANE:-} id:${uid}] ${message}"
+  local formatted="[from:${my_name} pane:${TMUX_PANE:-} id:${uid}] ${message} [id:${uid}]"
   if send_text "$target_pane" "$formatted" "id:${uid}"; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     return 0
@@ -625,7 +646,7 @@ dispatch_message() {
   line_count=$(printf '%s\n' "$message" | wc -l | tr -d ' ')
   # Durable copy first (points at the task file), then the live nudge.
   enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" "$target_messages_dir" || return 1
-  if send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task" "id:${uid}"; then
+  if send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" "id:${uid}"; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     return 0
   fi
