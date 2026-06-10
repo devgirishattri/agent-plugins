@@ -79,9 +79,14 @@ Use `$session-chat:incoming-mode` to show the current receiver mode and explain 
 
 Use `$session-chat:messages-list` to inspect trusted dispatch message files in `$CODEX_HOME/messages`. Use `$session-chat:messages-clean` to preview cleanup by age, sender, or recipient. Cleanup is a dry run by default; add `--apply` to delete matching files.
 
+## Priorities and TTL
+
+`$session-chat:send`, `$session-chat:dispatch`, and `$session-chat:broadcast` accept `--priority high` (a queued message surfaces before normal ones when the recipient drains its inbox — use for abort signals and gating decisions) and `--ttl <minutes>` (a message still queued after the window is dropped unsurfaced — use for time-sensitive pings, never for tasks that must eventually run).
+
 ## Fleet Helpers
 
 - `$session-chat:broadcast [--all] [--match GLOB] <text>`: fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `$session-chat:send` per pane.
+- `$session-chat:message-search <pattern> [--days N] [--peer NAME]`: search the message archive (every sent + surfaced incoming message, 200-char excerpts, 30-day retention) plus full dispatch bodies.
 - `$session-chat:check-replies [--pending] [--since MIN]`: which sent messages have been answered and which still await a reply. Replies are matched by `[re:<id>]` tokens — when you reply to a message, include `[re:<its id>]` in your `$session-chat:send`; when you expect an answer, ask the peer to do the same.
 - `$session-chat:pane-health [name] [--all]`: liveness, inbox backlog, and lock state per named pane; catches dead or duplicate panes before sends time out against them.
 

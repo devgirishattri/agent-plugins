@@ -10,10 +10,10 @@ Do not narrate or add a preamble. Run the script directly and report only the re
 
 `/dispatch` is for **task hand-off** — multi-line prompts, code, structured work. The full prompt is written to a file under `~/.claude/messages/` and the recipient gets a one-line notification with the file path. See the `session-chat` skill for the full contract, recipient prerequisites, and `INCOMING_MODE` requirements.
 
-1. Parse $ARGUMENTS: first word is the target session name, everything after is the prompt.
+1. Parse $ARGUMENTS: optional `--priority high` (surfaces before normal messages if queued) and `--ttl <minutes>` (drop instead of surfacing if still queued after the window) come first; then the target session name; everything after is the prompt.
 
 2. If $ARGUMENTS is empty or has no prompt after the session name, ask the user:
-   "Usage: `/dispatch <session-name> <task prompt>`"
+   "Usage: `/dispatch [--priority high] [--ttl <minutes>] <session-name> <task prompt>`"
 
 3. Run the dispatch script. Use a heredoc (not `echo`) to preserve newlines and special chars:
    ```
@@ -21,7 +21,7 @@ Do not narrate or add a preamble. Run the script directly and report only the re
    cat > "$PROMPT_FILE" <<'PROMPT_EOF'
 <prompt body verbatim>
 PROMPT_EOF
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-to-session.sh "<target>" "$PROMPT_FILE"
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-to-session.sh [--priority high] [--ttl <minutes>] "<target>" "$PROMPT_FILE"
    rm -f "$PROMPT_FILE"
    ```
 

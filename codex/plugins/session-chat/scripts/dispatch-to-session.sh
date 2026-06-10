@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
 # dispatch-to-session.sh — Send a task to an existing named session via file-based messaging
-# Usage: dispatch-to-session.sh <target-name> <prompt-file>
+# Usage: dispatch-to-session.sh [--priority high|normal] [--ttl MINUTES] <target-name> <prompt-file>
+#   --priority high  queued recovery surfaces this before normal messages
+#   --ttl MINUTES    if still queued after this window, drop instead of surfacing
 # Supported platforms: macOS, Linux
 
 source "$(dirname "$0")/lib.sh"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --priority)
+      shift
+      export SESSION_CHAT_PRIORITY="${1:-normal}"
+      ;;
+    --ttl)
+      shift
+      _ttl_min=$(normalize_positive_int "${1:-0}" 0)
+      export SESSION_CHAT_TTL_MS=$((_ttl_min * 60000))
+      ;;
+    *) break ;;
+  esac
+  shift
+done
 
 TARGET_NAME="${1:-}"
 PROMPT_FILE="${2:-}"

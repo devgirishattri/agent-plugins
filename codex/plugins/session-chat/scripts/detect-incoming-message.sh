@@ -124,6 +124,12 @@ if printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
       # loop for a message this pane previously sent (check-replies).
       if [ "$HAVE_LIB" = "1" ]; then
         log_reply_ids "$s_name" "$HOOK_INPUT" || true
+        s_snippet=$(printf '%s' "$HOOK_INPUT" | grep -oE '\[from:[^]]*\][^"]{0,200}' | head -1)
+        if [ -n "$s_msgfile" ]; then
+          archive_message "in" "$s_name" "dispatch" "$LIVE_ID" "$s_msgfile" || true
+        else
+          archive_message "in" "$s_name" "send" "$LIVE_ID" "$s_snippet" || true
+        fi
       fi
     fi
   fi
@@ -139,6 +145,7 @@ if [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
     else
       LINES+=("$(describe_record dispatch "$qfrom" "$qpayload" 0)")
     fi
+    archive_message "in" "$qfrom" "$qtype" "$qid" "$qpayload" || true
   done < <(drain_inbox "$LIVE_ID" "$MY_NAME")
 fi
 

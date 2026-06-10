@@ -7,19 +7,19 @@ argument-hint: <pane-name> <message>
 
 `/send` is for single-line messages up to 1024 characters by default. For multi-line prompts, long tasks, code, logs, or quoting-sensitive content, use `/dispatch` and refer to the `session-chat` skill decision table.
 
-1. Parse `$ARGUMENTS`: the first word is the target pane name, and everything after it is the message.
+1. Parse `$ARGUMENTS`: optional `--priority high` (surfaces before normal messages if queued) and `--ttl <minutes>` (drop instead of surfacing if still queued after the window) come first; then the target pane name; everything after is the message.
 2. If either value is missing, tell the user: `Usage: /send <pane-name> <message>`.
 3. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.14.0}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.15.0}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
    ```
 
 4. Run:
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/send-message.sh" "<target-name>" "<message>"
+   bash "$PLUGIN_ROOT/scripts/send-message.sh" [--priority high] [--ttl <minutes>] "<target-name>" "<message>"
    ```
 
 5. If the output says `Sent to ...`, confirm to the user.

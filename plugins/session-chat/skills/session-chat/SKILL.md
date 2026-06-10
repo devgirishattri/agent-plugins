@@ -69,6 +69,13 @@ If a recipient pane sits at an idle prompt (no turn in progress, no prompt comin
 
 Every `/send` and `/dispatch` has a unique `id:HEX8`. When you reply to a message, include the token `[re:<that id>]` in your `/send` — the original sender's `/check-replies` matches replies to sent messages by that token. When you ask a peer a question and expect an answer, tell it to include `[re:<id>]`; then poll `/check-replies --pending` instead of re-pinging panes that already answered.
 
+## Priorities and TTL
+
+Both `/send` and `/dispatch` (and `/broadcast`) accept `--priority high` and `--ttl <minutes>`:
+
+- `--priority high` — if the message ends up queued (recipient busy), it surfaces **before** normal-priority messages when the recipient's hook drains the inbox. Live delivery is unaffected (it is already immediate). Use for abort signals and gating decisions, not routine status.
+- `--ttl <minutes>` — if the message is still sitting in the queue after this window, it is **dropped unsurfaced**. Use for time-sensitive pings whose answer is useless later (e.g. "status now"); never for task dispatches that must eventually run.
+
 ## Quoting and shell safety
 
 The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. When constructing the bash invocation:
@@ -89,6 +96,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 | `SESSION_CHAT_LOCK_TIMEOUT_MS` | derived (~4× per-send budget) | Max wait for the per-target send lock. When unset, auto-sized to the send budget and reset whenever the lock holder changes, so fan-in to one pane queues instead of failing. When set explicitly, it is an **absolute cap** (no reset) so total wait never exceeds it. |
 | `SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS` | derived (lock + send budget) | How long a freshly-queued durable row waits before the recipient hook may surface it, giving an in-flight live paste time to win. A known-failed live send marks its row ready immediately. |
 | `SESSION_CHAT_RECENT_ID_TTL_MS` | 600000 | How long a surfaced message `id` is remembered so a queued entry and its later live paste never both surface (cross-turn dedup). |
+| `SESSION_CHAT_ARCHIVE_RETENTION_DAYS` | 30 | How long daily message-archive files are kept for `/message-search`. |
 | `SESSION_CHAT_SKIP_VERIFY` | 0 | Set `1` to skip receipt verification (not recommended). |
 | `SESSION_CHAT_INCOMING_MODE` | notify | Recipient-side: `auto` / `assist` / `notify` / `off`. Use `/incoming-mode` to inspect or generate the export line. |
 
@@ -97,6 +105,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 - `/broadcast [--all] [--match GLOB] <text>` — fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `/send` per pane.
 - `/check-replies [--pending] [--since MIN]` — which sent messages have been answered (via `[re:<id>]` tokens) and which are still awaiting a reply.
 - `/pane-health [name] [--all]` — liveness, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them.
+- `/message-search <pattern> [--days N] [--peer NAME]` — search the message archive (every sent + surfaced incoming message, 200-char excerpts, 30-day retention via `SESSION_CHAT_ARCHIVE_RETENTION_DAYS`) plus full dispatch bodies.
 - `/incoming-mode` — show or set `SESSION_CHAT_INCOMING_MODE` (prints an `export` line to `eval`).
 - `/messages-list` — read-only inventory of dispatch files under `~/.claude/messages/`.
 - `/messages-clean` — delete old dispatch files (dry-run by default; pass `--apply` to actually delete).

@@ -10,10 +10,10 @@ Do not narrate or add a preamble. Run the script directly and report only the re
 
 `/send` is for **short, single-line** messages (status, acks, replies). The script refuses payloads with newlines or >1024 chars — for those, use `/dispatch`. See the `session-chat` skill for the full decision table and recipient prerequisites.
 
-1. Parse $ARGUMENTS: first word is the target pane name, everything after is the message
+1. Parse $ARGUMENTS: optional `--priority high` (surfaces before normal messages if queued) and `--ttl <minutes>` (drop instead of surfacing if still queued after the window) come first; then the target pane name; everything after is the message
 2. Run the send script with properly quoted arguments:
    ```
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/send-message.sh "<target-name>" "<message>"
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/send-message.sh [--priority high] [--ttl <minutes>] "<target-name>" "<message>"
    ```
 3. If the output says "Sent to ...", confirm to the user
 4. If the error mentions newlines or length, retry with `/dispatch <target> <message>`

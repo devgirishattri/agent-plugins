@@ -10,7 +10,7 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.14.0}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.15.0}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
 ```
 
@@ -25,7 +25,7 @@ Use this skill only for single-line messages up to `SESSION_CHAT_SEND_MAX_LEN` c
 Run:
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/send-message.sh" "<target-name>" "<message>"
+bash "$PLUGIN_ROOT/scripts/send-message.sh" [--priority high] [--ttl <minutes>] "<target-name>" "<message>"
 ```
 
 If tmux is not active, explain that messaging requires running Codex inside tmux.
