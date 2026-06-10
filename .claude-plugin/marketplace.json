@@ -18,7 +18,12 @@
       },
       "source": "./plugins/session-manager",
       "category": "productivity",
-      "keywords": ["session", "cleanup", "management", "maintenance"],
+      "keywords": [
+        "session",
+        "cleanup",
+        "management",
+        "maintenance"
+      ],
       "license": "MIT"
     },
     {
@@ -30,19 +35,32 @@
       },
       "source": "./plugins/creating-docs",
       "category": "productivity",
-      "keywords": ["documentation", "docs", "writing", "markdown", "reference"],
+      "keywords": [
+        "documentation",
+        "docs",
+        "writing",
+        "markdown",
+        "reference"
+      ],
       "license": "MIT"
     },
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude (and Codex) sessions via tmux. Durable delivery routes fallback/dispatch into the recipient runtime's messages dir.",
-      "version": "0.13.2",
+      "version": "0.14.0",
       "author": {
         "name": "Girish Attri"
       },
       "source": "./plugins/session-chat",
       "category": "productivity",
-      "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent", "peer-to-peer"],
+      "keywords": [
+        "dispatch",
+        "tmux",
+        "messaging",
+        "parallel",
+        "multi-agent",
+        "peer-to-peer"
+      ],
       "license": "MIT"
     },
     {
@@ -54,19 +72,32 @@
       },
       "source": "./plugins/session-context",
       "category": "productivity",
-      "keywords": ["context", "handoff", "snapshot", "session", "multi-agent"],
+      "keywords": [
+        "context",
+        "handoff",
+        "snapshot",
+        "session",
+        "multi-agent"
+      ],
       "license": "MIT"
     },
     {
       "name": "session-scheduler",
-      "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat (>=0.12.0) for durable transport.",
-      "version": "0.2.1",
+      "description": "Thin file-backed task ledger for orchestrator \u2192 executor workflows. Layered on session-chat (>=0.12.0) for durable transport.",
+      "version": "0.3.0",
       "author": {
         "name": "Girish Attri"
       },
       "source": "./plugins/session-scheduler",
       "category": "productivity",
-      "keywords": ["scheduler", "orchestration", "tasks", "ledger", "multi-agent", "tmux"],
+      "keywords": [
+        "scheduler",
+        "orchestration",
+        "tasks",
+        "ledger",
+        "multi-agent",
+        "tmux"
+      ],
       "license": "MIT"
     }
   ]
