@@ -106,7 +106,7 @@ Group entries by file for scannability. For large docs (20+ references), include
 This skill bundles three scripts in the plugin's `scripts/` directory for verifying doc health. Resolve the plugin root with:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/creating-docs/1.0.3}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/creating-docs/1.1.0}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/creating-docs"
 ```
 
