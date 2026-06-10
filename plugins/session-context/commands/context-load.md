@@ -17,4 +17,7 @@ allowed-tools: Bash(bash:*), Read
   - Notes and gotchas
 - Summarize: "Loaded context from '<name>'. They were working on X, left off at Y."
 - This context should inform your work going forward
+- If a staleness WARNING appears at the end of the output, surface it to the user and
+  suggest regenerating the snapshot with `/context-generate <name>` — treat the loaded
+  content as potentially out of date
 - If no snapshot found, suggest `/context-list` to see available ones

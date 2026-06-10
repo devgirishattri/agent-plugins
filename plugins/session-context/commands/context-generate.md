@@ -47,7 +47,10 @@ Generate a concise summary of what THIS session has been working on — for hand
    ```
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/save-context.sh "<snapshot-name>" "<temp-file>"
    ```
+   If a snapshot with the same name already exists, the previous version is archived
+   automatically to `tmp/contexts/.history/` (the 10 most recent versions are kept).
+   Compare versions later with `/context-diff <snapshot-name>`.
 
-5. **Report**: "Session context saved as '<snapshot-name>'. Share with `/context-share <session> <snapshot-name>` or load later with `/context-load <snapshot-name>`."
+5. **Report**: "Session context saved as '<snapshot-name>'. Share with `/context-share <session> <snapshot-name>` or load later with `/context-load <snapshot-name>`." If a previous version was archived, mention `/context-diff <snapshot-name>` to see what changed.
 
 Keep the summary **concise** — under 150 lines. Focus on what another session needs to continue the work, not a transcript of everything that happened.

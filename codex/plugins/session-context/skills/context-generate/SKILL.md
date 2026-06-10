@@ -10,7 +10,7 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.2.0}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.3.0}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
 ```
 
@@ -42,5 +42,7 @@ git diff --stat HEAD
 git log --oneline -10
 git diff --name-only HEAD~5..HEAD
 ```
+
+Saving over an existing snapshot archives the previous version to `tmp/contexts/.history/` automatically (the 10 most recent versions are kept); compare versions with `$session-context:context-diff <snapshot-name>`.
 
 After saving, report the snapshot name and mention `$session-context:context-share <session> <snapshot-name>` and `$session-context:context-load <snapshot-name>`.

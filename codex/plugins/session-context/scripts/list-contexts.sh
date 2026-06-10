@@ -7,6 +7,7 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 SNAPSHOTS_DIR="$(get_contexts_dir)"
+HISTORY_DIR="$SNAPSHOTS_DIR/.history"
 
 if [ ! -d "$SNAPSHOTS_DIR" ] || [ -z "$(ls "$SNAPSHOTS_DIR"/*.md 2>/dev/null)" ]; then
   echo "No context snapshots found for this project. Use /context-generate to create one."
@@ -22,5 +23,6 @@ for snapshot in "$SNAPSHOTS_DIR"/*.md; do
   else
     modified=$(stat -c '%y' "$snapshot" 2>/dev/null | cut -d'.' -f1)
   fi
-  printf '%s\t%s lines\t%s\n' "$name" "$size" "$modified"
+  versions=$(ls -1 "$HISTORY_DIR/${name}."*.md 2>/dev/null | wc -l | tr -d ' ')
+  printf '%s\t%s lines\t%s\t%s versions\n' "$name" "$size" "$modified" "$versions"
 done
