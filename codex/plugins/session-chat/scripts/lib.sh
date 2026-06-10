@@ -32,6 +32,18 @@ validate_label() {
   fi
 }
 
+# Coerce free-form text (session titles, prompts) into a valid pane label:
+# whitespace runs become single hyphens, every other invalid char is dropped,
+# repeated/edge hyphens collapse, length capped at 48. Empty output means the
+# input had nothing usable — caller should skip naming rather than set "".
+sanitize_label() {
+  printf '%s' "$1" \
+    | tr -s '[:space:]' '-' \
+    | tr -cd 'a-zA-Z0-9_-' \
+    | sed 's/--*/-/g; s/^-*//; s/-*$//' \
+    | cut -c1-48
+}
+
 # --- Message directory ---
 
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
@@ -47,6 +59,8 @@ ensure_messages_dir() {
 set_pane_name() {
   local pane_id="$1"
   local name="$2"
+  # Invalid names (spaces etc.) would be unreachable via resolve_pane forever.
+  validate_label "$name" || return 1
   tmux set-option -p -t "$pane_id" @name "$name"
 }
 
@@ -66,7 +80,9 @@ resolve_pane() {
   local matches
   local count
   local panes
-  matches=$(tmux list-panes -a -F '#{pane_id} #{@name}' 2>/dev/null | awk -v label="$label" '$2 == label { print $1 }')
+  # Tab delimiter: a legacy/manually-set name containing whitespace must not
+  # shift awk fields and silently become unreachable.
+  matches=$(tmux list-panes -a -F $'#{pane_id}\t#{@name}' 2>/dev/null | awk -F'\t' -v label="$label" '$2 == label { print $1 }')
   count=$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')
 
   if [ "$count" -eq 0 ]; then
@@ -371,6 +387,30 @@ mark_recent_id() {
   release_send_lock "$lock"
 }
 
+# Atomic check-and-mark: prune expired ids, test whether <id> was already
+# surfaced, and (only if fresh) mark it — all under one queue lock, so two
+# surfacing paths can never both claim the same id (the separate seen+mark
+# pair leaves a gap between lock releases).
+# Returns 0 if already seen (caller must NOT surface), 1 if fresh (now marked).
+# Lock-acquisition failure returns 1: surfacing twice beats losing a message.
+recent_id_seen_or_mark() {
+  local recipient="$1" id="$2"
+  [ -n "$recipient" ] && [ -n "$id" ] || return 1
+  ensure_messages_dir
+  local lock now seen=1
+  lock=$(queue_lock_path "$recipient")
+  acquire_send_lock "$lock" "queue:${recipient}" || return 1
+  now=$(now_ms)
+  prune_recent_ids_unlocked "$recipient" "$now"
+  if recent_ids_unlocked "$recipient" | grep -Fx "$id" >/dev/null 2>&1; then
+    seen=0
+  else
+    mark_recent_id_unlocked "$recipient" "$id" "$now"
+  fi
+  release_send_lock "$lock"
+  return "$seen"
+}
+
 enqueue_message() {
   local recipient="$1" id="$2" type="$3" from="$4" payload="$5"
   local messages_dir="${6:-$MESSAGES_DIR}"
@@ -477,6 +517,61 @@ drain_inbox() {
   done < "$qf"
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   release_send_lock "$lock"
+}
+
+# --- Outbound ledger (reply correlation) ---
+# Append-only TSVs in *this* runtime's messages dir, written with single
+# O_APPEND printf calls (atomic for short lines). Readers tolerate a partial
+# view; the occasional lost row under a concurrent trim is acceptable — this
+# ledger powers /check-replies reporting, not delivery.
+#   sent-log.tsv:    <ts_ms>\t<id>\t<from>\t<to>\t<type>\t<delivery>\t<excerpt>
+#   replies-log.tsv: <ts_ms>\t<reply_to_id>\t<from>
+
+sent_log_file() { printf '%s/sent-log.tsv' "$MESSAGES_DIR"; }
+replies_log_file() { printf '%s/replies-log.tsv' "$MESSAGES_DIR"; }
+
+log_excerpt() {
+  printf '%s' "$1" | tr '\t\n\r' '   ' | cut -c1-80
+}
+
+trim_log_file() {
+  local f="$1"
+  local max=5000 keep=2500
+  [ -f "$f" ] || return 0
+  local lines
+  lines=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
+  is_nonnegative_int "$lines" || return 0
+  [ "$lines" -gt "$max" ] || return 0
+  local tmp="${f}.tmp.$$"
+  tail -n "$keep" "$f" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+}
+
+log_sent_message() {
+  # log_sent_message <id> <from> <to> <type> <delivery> <excerpt-source>
+  local id="$1" from="$2" to="$3" type="$4" delivery="$5"
+  local excerpt
+  excerpt=$(log_excerpt "$6")
+  ensure_messages_dir
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$(sent_log_file)" 2>/dev/null || true
+  trim_log_file "$(sent_log_file)"
+}
+
+log_reply_ids() {
+  # log_reply_ids <from> <text> — record every [re:<id>] token in <text> as a
+  # reply from <from>. The bracketed form is required: a bare "re:" inside an
+  # arbitrary word (e.g. "more:<hex>") must not register as a reply.
+  local from="$1" text="$2"
+  [ -n "$from" ] || return 0
+  local rf id
+  rf=$(replies_log_file)
+  ensure_messages_dir
+  printf '%s' "$text" | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null | sed 's/^\[re://; s/\]$//' | sort -u | \
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    printf '%s\t%s\t%s\n' "$(now_ms)" "$id" "$from" >> "$rf" 2>/dev/null || true
+  done
+  trim_log_file "$rf"
 }
 
 send_text_once() {
@@ -612,9 +707,11 @@ send_message() {
   local formatted="[from:${my_name} pane:${TMUX_PANE:-} id:${uid}] ${message} [id:${uid}]"
   if send_text "$target_pane" "$formatted" "id:${uid}"; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
+    log_sent_message "$uid" "$my_name" "$target_name" "send" "live" "$message"
     return 0
   fi
   mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
+  log_sent_message "$uid" "$my_name" "$target_name" "send" "queued" "$message"
   return 3
 }
 
@@ -648,9 +745,11 @@ dispatch_message() {
   enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" "$target_messages_dir" || return 1
   if send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" "id:${uid}"; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
+    log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "live" "$message"
     return 0
   fi
   mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
+  log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "queued" "$message"
   return 3
 }
 
