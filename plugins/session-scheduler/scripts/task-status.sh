@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # task-status.sh — read-only ledger view.
 # Usage:
-#   task-status.sh                 # active tasks (created/assigned)
-#   task-status.sh <id>            # single task detail
+#   task-status.sh                 # active tasks (created/assigned/review)
+#   task-status.sh <id>            # single task detail (incl. deps + flags)
 #   task-status.sh --all           # all tasks
 #   task-status.sh --pending       # status=created
 #   task-status.sh --mine          # tasks where assigner=current pane
+#   task-status.sh --by-stage      # non-done tasks grouped by stage
+# Flags column: OVERDUE (past eta_at), STALE (assigned/review with no update
+# for SESSION_SCHEDULER_STALE_MINUTES, default 30).
 set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
@@ -20,8 +23,9 @@ case "${1:-}" in
   --all)       FILTER="all" ;;
   --pending)   FILTER="pending" ;;
   --mine)      FILTER="mine" ;;
+  --by-stage)  FILTER="by-stage" ;;
   -h|--help)
-    echo "Usage: task-status.sh [<id>|--active|--all|--pending|--mine]"
+    echo "Usage: task-status.sh [<id>|--active|--all|--pending|--mine|--by-stage]"
     exit 0
     ;;
   *)
@@ -36,6 +40,25 @@ if [ -n "$SINGLE_ID" ]; then
     exit 1
   fi
   jq . "$(task_path "$SINGLE_ID")"
+  flags=$(task_flags "$(task_path "$SINGLE_ID")")
+  if [ "$flags" != "-" ]; then
+    echo
+    echo "Flags: $flags"
+  fi
+  deps=$(task_get "$SINGLE_ID" '(.depends_on // [])[]')
+  if [ -n "$deps" ]; then
+    echo
+    echo "Dependencies:"
+    while IFS= read -r dep; do
+      [ -z "$dep" ] && continue
+      if task_exists "$dep"; then
+        dstatus=$(task_get "$dep" '.status')
+      else
+        dstatus="missing"
+      fi
+      printf '  %s\t%s\n' "$dep" "$dstatus"
+    done <<< "$deps"
+  fi
   exit 0
 fi
 
@@ -50,15 +73,46 @@ fi
 
 ME=$(current_pane_name)
 
-printf 'ID\tSTATUS\tASSIGNER\tASSIGNEE\tNAME\tUPDATED\n'
+if [ "$FILTER" = "by-stage" ]; then
+  rows=""
+  shown=0
+  for f in "${files[@]}"; do
+    status=$(jq -r '.status // ""' "$f" 2>/dev/null) || continue
+    [ "$status" = "done" ] && continue
+    row=$(jq -r '[(.stage // "(none)"), .id, .status, .assigner, (.assignee // "-"), .name, .updated_at] | @tsv' "$f" 2>/dev/null) || continue
+    flags=$(task_flags "$f")
+    rows="${rows}${row}	${flags}
+"
+    shown=$((shown + 1))
+  done
+  if [ "$shown" -eq 0 ]; then
+    echo "No non-done tasks in $TASKS_DIR."
+    exit 0
+  fi
+  printf '%s' "$rows" | sort -t '	' -k1,1 | awk -F'\t' '
+    $1 != prev {
+      if (prev != "") print ""
+      print "Stage: " $1
+      print "  ID\tSTATUS\tASSIGNER\tASSIGNEE\tNAME\tUPDATED\tFLAGS"
+      prev = $1
+    }
+    {
+      printf "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n", $2, $3, $4, $5, $6, $7, $8
+    }'
+  echo
+  printf '%d task(s) shown (filter: by-stage, non-done).\n' "$shown"
+  exit 0
+fi
+
+printf 'ID\tSTATUS\tSTAGE\tASSIGNER\tASSIGNEE\tNAME\tUPDATED\tFLAGS\n'
 shown=0
 for f in "${files[@]}"; do
-  row=$(jq -r '[.id, .status, .assigner, (.assignee // "-"), .name, .updated_at] | @tsv' "$f" 2>/dev/null) || continue
+  row=$(jq -r '[.id, .status, (.stage // "-"), .assigner, (.assignee // "-"), .name, .updated_at] | @tsv' "$f" 2>/dev/null) || continue
   status=$(printf '%s' "$row" | cut -f2)
-  assigner=$(printf '%s' "$row" | cut -f3)
+  assigner=$(printf '%s' "$row" | cut -f4)
   case "$FILTER" in
     active)
-      [[ "$status" == "created" || "$status" == "assigned" ]] || continue
+      [[ "$status" == "created" || "$status" == "assigned" || "$status" == "review" ]] || continue
       ;;
     pending)
       [[ "$status" == "created" ]] || continue
@@ -67,7 +121,8 @@ for f in "${files[@]}"; do
       [[ "$assigner" == "$ME" ]] || continue
       ;;
   esac
-  printf '%s\n' "$row"
+  flags=$(task_flags "$f")
+  printf '%s\t%s\n' "$row" "$flags"
   shown=$((shown + 1))
 done
 

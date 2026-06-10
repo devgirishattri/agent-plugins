@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # task-block.sh — Mark a scheduler task blocked
-# Usage: task-block.sh <task-id> <reason>
+# Usage: task-block.sh <task-id> [--force] <reason>
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
 if [ "$#" -lt 2 ]; then
-  echo "ERROR: Usage: task-block.sh <task-id> <reason>" >&2
+  echo "ERROR: Usage: task-block.sh <task-id> [--force] <reason>" >&2
   exit 1
 fi
 
@@ -16,7 +16,15 @@ ensure_dirs
 
 ID="$1"
 shift
+if [ "${1:-}" = "--force" ]; then
+  SESSION_SCHEDULER_FORCE=1; export SESSION_SCHEDULER_FORCE
+  shift
+fi
 REASON="$*"
+if [ -z "$REASON" ]; then
+  echo "ERROR: Usage: task-block.sh <task-id> [--force] <reason>" >&2
+  exit 1
+fi
 FILE=$(task_file "$ID") || exit 1
 [ -f "$FILE" ] || { echo "ERROR: Task not found: $ID" >&2; exit 1; }
 ACTOR=$(current_pane_name)

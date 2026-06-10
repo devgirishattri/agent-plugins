@@ -1,5 +1,5 @@
 ---
-description: Diagnostic check for scheduler dirs, session-chat, jq, tmux, and incoming-mode
+description: Diagnostic check for scheduler dirs, session-chat, jq, tmux, incoming-mode, and date math
 allowed-tools: Bash(bash:*)
 ---
 
@@ -9,4 +9,4 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Relay the diagnostic output as-is. Highlight any `WARN` or `MISSING` lines and suggest the matching fix (install jq, install session-chat, run `/session-chat:incoming-mode auto`).
+Relay the diagnostic output as-is. Highlight any `WARN` or `MISSING` lines and suggest the matching fix (install jq, install session-chat, run `/session-chat:incoming-mode auto`). The `date math` line verifies the ISO/epoch arithmetic used by `--eta`, OVERDUE/STALE flags, and duration tracking — a WARN there means those features will silently no-op on this platform.
