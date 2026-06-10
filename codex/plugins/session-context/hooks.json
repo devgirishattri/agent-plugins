@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ./scripts/detect-snapshots.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
