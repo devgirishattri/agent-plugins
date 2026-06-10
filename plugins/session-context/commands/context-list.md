@@ -11,9 +11,11 @@ allowed-tools: Bash(bash:*)
 
 Present the tab-separated data above as a markdown table:
 
-| Snapshot | Lines | Last Updated |
+| Snapshot | Lines | Last Updated | Versions |
 
+- The Versions column counts archived history entries (created each time a snapshot is overwritten, max 10 kept)
 - If no snapshots found, suggest `/context-generate` to create one
 - Suggest `/context-load <snapshot>` to load a snapshot
+- Suggest `/context-diff <snapshot>` to compare a snapshot with its previous version
 - Suggest `/context-share <session> <snapshot>` to share with another session
 - Suggest `/context-remove <snapshot>` to delete a snapshot

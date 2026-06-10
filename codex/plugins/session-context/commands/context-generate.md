@@ -35,7 +35,7 @@ Generate a concise summary of what this session has been working on.
 5. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.2.0}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.3.0}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
    ```
 
@@ -45,4 +45,6 @@ Generate a concise summary of what this session has been working on.
    bash "$PLUGIN_ROOT/scripts/save-context.sh" "<snapshot-name>" "<temp-file>"
    ```
 
-7. Report: `Session context saved as '<snapshot-name>'. Share with /context-share <session> <snapshot-name> or load later with /context-load <snapshot-name>.`
+   If a snapshot with the same name already exists, the previous version is archived automatically to `tmp/contexts/.history/` (the 10 most recent versions are kept). Compare versions later with `/context-diff <snapshot-name>`.
+
+7. Report: `Session context saved as '<snapshot-name>'. Share with /context-share <session> <snapshot-name> or load later with /context-load <snapshot-name>.` If a previous version was archived, mention `/context-diff <snapshot-name>` to see what changed.

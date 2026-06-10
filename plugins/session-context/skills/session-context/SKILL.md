@@ -39,10 +39,13 @@ produce the summary — never try to offload generation to a separate agent.
 
 ```
 /context-generate [name]   → writes <project_root>/tmp/contexts/<name>.md
+                             (overwrite archives the old version to tmp/contexts/.history/)
   ↓
-/context-list              → see what snapshots exist (name, size, last updated)
+/context-list              → see what snapshots exist (name, size, last updated, versions)
   ↓
 /context-load <name>       → read a snapshot back into the current session
+  ↓ (optional)
+/context-diff <name>       → compare the current snapshot with an archived version
   ↓ (optional)
 /context-share <session> [name]  → push a snapshot to another named pane
   ↓ (when stale)
@@ -53,9 +56,11 @@ produce the summary — never try to offload generation to a separate agent.
 
 | Command | Purpose |
 |---|---|
-| `/context-generate [name]` | Summarize the current session and save it (overwrites a same-named snapshot). Omit the name to derive one from the session/directory name. |
-| `/context-list` | List snapshots for this project (name, line count, last modified). |
-| `/context-load <name>` | Load a snapshot's contents into the current session. |
+| `/context-generate [name]` | Summarize the current session and save it (overwrites a same-named snapshot; the previous version is archived). Omit the name to derive one from the session/directory name. |
+| `/context-list` | List snapshots for this project (name, line count, last modified, history version count). |
+| `/context-load <name>` | Load a snapshot's contents into the current session. Warns if the snapshot is older than 7 days (override with `SESSION_CONTEXT_STALE_DAYS`). |
+| `/context-diff <name>` | Unified diff of the newest archived version vs. current. `--versions` lists timestamps; pass a timestamp to diff that version. |
+| `/context-search <pattern> [--list]` | Read-only search of snapshot *contents* across local projects (current repo always; other roots best-effort via decoded session paths — lossy for hyphenated directory names). |
 | `/context-share <session> [name]` | Send a snapshot to another named tmux pane. |
 | `/context-remove <name>` | Delete a snapshot. |
 
@@ -83,7 +88,12 @@ sharing requires it.
   snapshot set; a snapshot generated in repo A is not visible in repo B.
 - **Regenerate, don't append.** `/context-generate` with an existing name overwrites
   that snapshot with the current state — keep one authoritative snapshot per name
-  rather than many stale ones.
+  rather than many stale ones. Overwriting is safe: the previous version is archived
+  to `tmp/contexts/.history/<name>.<UTC timestamp>.md` (10 most recent kept), and
+  `/context-diff <name>` shows what changed since the last version.
+- **Watch for staleness.** `/context-load` appends a WARNING when a snapshot's file
+  is 7+ days old (threshold configurable via `SESSION_CONTEXT_STALE_DAYS`) — regenerate
+  rather than trusting old state.
 - **Clean up stale snapshots** with `/context-remove` so `/context-list` and the
   SessionStart hint stay meaningful.
 

@@ -27,3 +27,16 @@ if [ ! -f "$SNAPSHOT" ]; then
 fi
 
 cat "$SNAPSHOT"
+
+# Staleness warning: flag snapshots older than the threshold (days).
+# Override with SESSION_CONTEXT_STALE_DAYS.
+STALE_DAYS="${SESSION_CONTEXT_STALE_DAYS:-7}"
+mtime=$(stat -f %m "$SNAPSHOT" 2>/dev/null || stat -c %Y "$SNAPSHOT" 2>/dev/null || echo "")
+if [ -n "$mtime" ]; then
+  now=$(date +%s)
+  age_days=$(( (now - mtime) / 86400 ))
+  if [ "$age_days" -ge "$STALE_DAYS" ]; then
+    echo ""
+    echo "WARNING: Snapshot '$PROJECT_NAME' is ${age_days} day(s) old (stale threshold: ${STALE_DAYS} days). It may no longer reflect the project — consider regenerating it with /context-generate ${PROJECT_NAME}."
+  fi
+fi

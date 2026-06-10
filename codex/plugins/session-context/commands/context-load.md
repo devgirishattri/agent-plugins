@@ -9,7 +9,7 @@ argument-hint: <snapshot-name>
 2. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.2.0}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.3.0}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
    ```
 
@@ -26,4 +26,5 @@ argument-hint: <snapshot-name>
 - Notes and gotchas.
 
 5. Summarize: `Loaded context from '<name>'. They were working on X and left off at Y.`
-6. If no snapshot is found, suggest `/context-list`.
+6. If a staleness WARNING appears at the end of the output, surface it to the user and suggest regenerating with `/context-generate <name>` — treat the loaded content as potentially out of date.
+7. If no snapshot is found, suggest `/context-list`.
