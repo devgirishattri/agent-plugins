@@ -19,6 +19,14 @@ info() {
   echo "OK: $*"
 }
 
+# Warnings are non-fatal: they are counted and summarized at the end, but the
+# script still exits 0 when only warnings were emitted.
+WARN_COUNT=0
+warn() {
+  echo "WARN: $*" >&2
+  WARN_COUNT=$((WARN_COUNT + 1))
+}
+
 [ -f ".claude-plugin/marketplace.json" ] || fail "missing .claude-plugin/marketplace.json"
 [ -f ".agents/plugins/marketplace.json" ] || fail "missing .agents/plugins/marketplace.json"
 [ ! -e "docs/TODO.md" ] || fail "docs/TODO.md should not be published; use GitHub Issues instead"
@@ -274,3 +282,83 @@ for name in sorted(claude_plugins):
 
 print("OK: marketplace entries, manifests, command parity, Codex skills, and Codex hooks are valid")
 PY
+
+# ---------------------------------------------------------------------------
+# Mirror drift (Claude plugins/<name>/ vs Codex codex/plugins/<name>/)
+# All findings in this section are WARN-level and never change the exit code.
+# ---------------------------------------------------------------------------
+
+echo "-- mirror drift checks (warnings only) --"
+
+# Print sorted basenames of files directly inside a directory matching a glob.
+# Empty output when the directory does not exist.
+list_basenames() {
+  local dir="$1" pattern="$2"
+  if [ -d "$dir" ]; then
+    find "$dir" -maxdepth 1 -type f -name "$pattern" -exec basename {} \; | sort
+  fi
+}
+
+manifest_version() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version", "unknown"))' "$1"
+}
+
+# Warn about basenames present on one side but not the other.
+warn_set_diff() {
+  local plugin="$1" label="$2" claude_list="$3" codex_list="$4"
+  local only_claude only_codex
+  only_claude="$(comm -23 <(printf '%s\n' "$claude_list") <(printf '%s\n' "$codex_list") | xargs || true)"
+  only_codex="$(comm -13 <(printf '%s\n' "$claude_list") <(printf '%s\n' "$codex_list") | xargs || true)"
+  if [ -n "$only_claude" ]; then
+    warn "$plugin: $label missing on codex side: $only_claude"
+  fi
+  if [ -n "$only_codex" ]; then
+    warn "$plugin: $label missing on claude side: $only_codex"
+  fi
+}
+
+for claude_plugin_dir in plugins/*/; do
+  plugin_name="$(basename "$claude_plugin_dir")"
+  claude_plugin_dir="${claude_plugin_dir%/}"
+  codex_plugin_dir="codex/plugins/$plugin_name"
+  [ -d "$codex_plugin_dir" ] || continue
+
+  # Command basenames in commands/ on each side.
+  claude_commands="$(list_basenames "$claude_plugin_dir/commands" '*.md')"
+  codex_commands="$(list_basenames "$codex_plugin_dir/commands" '*.md')"
+  warn_set_diff "$plugin_name" "commands" "$claude_commands" "$codex_commands"
+
+  # Hooks presence: Claude keeps hooks/hooks.json, Codex keeps hooks.json.
+  claude_has_hooks=false
+  codex_has_hooks=false
+  if [ -f "$claude_plugin_dir/hooks/hooks.json" ]; then claude_has_hooks=true; fi
+  if [ -f "$codex_plugin_dir/hooks.json" ]; then codex_has_hooks=true; fi
+  if [ "$claude_has_hooks" != "$codex_has_hooks" ]; then
+    warn "$plugin_name: hooks presence mismatch: claude=$claude_has_hooks codex=$codex_has_hooks"
+  fi
+
+  # Manifest version drift.
+  claude_version="$(manifest_version "$claude_plugin_dir/.claude-plugin/plugin.json")"
+  codex_version="$(manifest_version "$codex_plugin_dir/.codex-plugin/plugin.json")"
+  if [ "$claude_version" != "$codex_version" ]; then
+    newest="$(printf '%s\n%s\n' "$claude_version" "$codex_version" | sort -V | tail -n 1)"
+    if [ "$newest" = "$codex_version" ]; then
+      direction="codex ahead"
+    else
+      direction="claude ahead"
+    fi
+    warn "$plugin_name: claude $claude_version vs codex $codex_version ($direction)"
+  fi
+
+  # Script basenames in scripts/ on each side.
+  claude_scripts="$(list_basenames "$claude_plugin_dir/scripts" '*')"
+  codex_scripts="$(list_basenames "$codex_plugin_dir/scripts" '*')"
+  warn_set_diff "$plugin_name" "scripts" "$claude_scripts" "$codex_scripts"
+done
+
+if [ "$WARN_COUNT" -gt 0 ]; then
+  echo "DONE: validation passed with $WARN_COUNT warning(s); mirror drift is non-fatal"
+else
+  echo "DONE: validation passed with no warnings"
+fi
+exit 0

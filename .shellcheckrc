@@ -1,0 +1,11 @@
+# Repo-wide shellcheck configuration.
+# Keep this minimal: only silence noisy info-level codes so that
+# warning/error findings stay visible. CI gates on --severity=error.
+
+# Sourced files (e.g. scripts/lib.sh) are resolved at runtime via
+# CLAUDE_PLUGIN_ROOT/script dir; shellcheck cannot follow them.
+disable=SC1091
+
+# Single-quoted $-expressions are intentional throughout (awk/jq/tmux
+# format strings that must not expand in the shell).
+disable=SC2016
