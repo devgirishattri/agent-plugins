@@ -109,6 +109,40 @@ iso_now() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
+epoch_now() {
+  date +%s
+}
+
+# Convert ISO-8601 UTC -> epoch seconds. Tries BSD date first, then GNU.
+# Echoes 0 on failure so callers can detect and skip time-based logic.
+iso_to_epoch() {
+  local iso="$1" epoch=""
+  epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$iso" +%s 2>/dev/null) ||
+    epoch=$(date -u -d "$iso" +%s 2>/dev/null) ||
+    epoch=""
+  printf '%s\n' "${epoch:-0}"
+}
+
+# Convert epoch seconds -> ISO-8601 UTC. BSD (date -r) first, GNU (-d @) fallback.
+# Echoes empty string on failure.
+epoch_to_iso() {
+  local epoch="$1" iso=""
+  iso=$(date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) ||
+    iso=$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) ||
+    iso=""
+  printf '%s\n' "$iso"
+}
+
+# Humanize an age in seconds: 45s, 12m, 3h, 2d.
+humanize_age() {
+  local s="$1"
+  [ "$s" -lt 0 ] 2>/dev/null && s=0
+  if [ "$s" -lt 60 ]; then printf '%ds\n' "$s"
+  elif [ "$s" -lt 3600 ]; then printf '%dm\n' $((s / 60))
+  elif [ "$s" -lt 86400 ]; then printf '%dh\n' $((s / 3600))
+  else printf '%dd\n' $((s / 86400)); fi
+}
+
 task_path() {
   printf '%s/%s.json\n' "$TASKS_DIR" "$1"
 }
@@ -166,9 +200,54 @@ task_append_history() {
   task_write "$id" "$updated"
 }
 
+# --- Status transition enforcement ---
+# Legal transitions. assigned->assigned is allowed to support reassignment
+# (documented behavior: re-dispatch a silent executor's task to a new pane).
+transition_allowed() {
+  local from="$1" to="$2"
+  case "${from}:${to}" in
+    created:assigned | created:blocked | \
+    assigned:assigned | assigned:review | assigned:done | assigned:blocked | \
+    review:done | review:blocked | \
+    blocked:assigned)
+      return 0 ;;
+    *)
+      return 1 ;;
+  esac
+}
+
+legal_targets() {
+  case "$1" in
+    created)  echo "assigned, blocked" ;;
+    assigned) echo "assigned (reassign), review, done, blocked" ;;
+    review)   echo "done, blocked" ;;
+    blocked)  echo "assigned" ;;
+    done)     echo "(none — done is terminal)" ;;
+    *)        echo "(unknown current status)" ;;
+  esac
+}
+
+scheduler_force_enabled() {
+  [ "${SESSION_SCHEDULER_FORCE:-0}" = "1" ]
+}
+
 # Update status + history together. Usage: task_set_status <id> <status> <actor> [note]
+# Enforces legal transitions unless SESSION_SCHEDULER_FORCE=1 (then the history
+# note records "forced"). Sets started_at the first time status becomes assigned.
 task_set_status() {
   local id="$1" status="$2" actor="$3" note="${4:-}"
+  local current_status
+  current_status=$(task_get "$id" '.status')
+  if ! transition_allowed "$current_status" "$status"; then
+    if scheduler_force_enabled; then
+      note="${note:+$note }(forced)"
+    else
+      echo "ERROR: illegal status transition '$current_status' -> '$status' for task $id." >&2
+      echo "  current status: $current_status; legal next: $(legal_targets "$current_status")" >&2
+      echo "  Override with --force (or SESSION_SCHEDULER_FORCE=1)." >&2
+      return 1
+    fi
+  fi
   local current
   current=$(cat "$(task_path "$id")")
   local updated
@@ -179,6 +258,8 @@ task_set_status() {
     --arg note "$note" \
     '.status = $status
      | .updated_at = $ts
+     | (if $status == "assigned" and ((.started_at // null) == null)
+        then .started_at = $ts else . end)
      | .history += [{ts: $ts, event: $status, actor: $actor, note: $note}]')
   task_write "$id" "$updated"
 }
@@ -206,4 +287,75 @@ validate_task_id() {
     echo "ERROR: invalid task id '$id' (alphanumeric, _, - only)." >&2
     return 1
   fi
+}
+
+# Stage labels are free-form but validated like task ids.
+# Suggested stages: plan, dispatch, execute, audit, push.
+validate_stage() {
+  local stage="$1"
+  if [ -z "$stage" ] || ! [[ "$stage" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "ERROR: invalid stage '$stage' (alphanumeric, _, - only)." >&2
+    return 1
+  fi
+}
+
+# session-context snapshots live at <project_root>/tmp/contexts (same
+# project-root logic as the scheduler ledger). Override with
+# SESSION_CONTEXT_HOME (used by tests).
+resolve_contexts_dir() {
+  if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
+    printf '%s\n' "$SESSION_CONTEXT_HOME"
+    return 0
+  fi
+  local root
+  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  printf '%s/tmp/contexts\n' "$root"
+}
+
+# Print "dep-id (status)" per dependency of <id> that is not done.
+# Missing dependency files report status "missing". Empty output = all met.
+unmet_deps() {
+  local id="$1" dep dstatus deps
+  deps=$(task_get "$id" '(.depends_on // [])[]')
+  [ -z "$deps" ] && return 0
+  while IFS= read -r dep; do
+    [ -z "$dep" ] && continue
+    if task_exists "$dep"; then
+      dstatus=$(task_get "$dep" '.status')
+    else
+      dstatus="missing"
+    fi
+    [ "$dstatus" = "done" ] || printf '%s (%s)\n' "$dep" "$dstatus"
+  done <<< "$deps"
+}
+
+# Compute attention flags for a task json file: OVERDUE (past eta_at and not
+# done) and/or STALE (assigned/review with no update for
+# SESSION_SCHEDULER_STALE_MINUTES, default 30). Prints "-" if none.
+task_flags() {
+  local file="$1"
+  local status eta updated flags="" now stale_min eta_epoch up_epoch
+  now=$(epoch_now)
+  stale_min="${SESSION_SCHEDULER_STALE_MINUTES:-30}"
+  [[ "$stale_min" =~ ^[0-9]+$ ]] || stale_min=30
+  status=$(jq -r '.status // ""' "$file" 2>/dev/null)
+  eta=$(jq -r '.eta_at // empty' "$file" 2>/dev/null)
+  updated=$(jq -r '.updated_at // empty' "$file" 2>/dev/null)
+  if [ -n "$eta" ] && [ "$status" != "done" ]; then
+    eta_epoch=$(iso_to_epoch "$eta")
+    if [ "$eta_epoch" -gt 0 ] && [ "$now" -gt "$eta_epoch" ]; then
+      flags="OVERDUE"
+    fi
+  fi
+  case "$status" in
+    assigned|review)
+      if [ -n "$updated" ]; then
+        up_epoch=$(iso_to_epoch "$updated")
+        if [ "$up_epoch" -gt 0 ] && [ $((now - up_epoch)) -gt $((stale_min * 60)) ]; then
+          flags="${flags:+$flags,}STALE"
+        fi
+      fi
+      ;;
+  esac
+  printf '%s\n' "${flags:--}"
 }

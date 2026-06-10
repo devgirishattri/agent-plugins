@@ -56,3 +56,17 @@ if command -v tmux >/dev/null 2>&1; then
 else
   echo "tmux:           MISSING."
 fi
+
+# Date arithmetic check: ETA/overdue/stale flags need ISO<->epoch round-trips.
+now_iso=$(iso_now)
+now_epoch=$(iso_to_epoch "$now_iso")
+if [ "$now_epoch" -gt 0 ]; then
+  plus5=$(epoch_to_iso $((now_epoch + 300)))
+  if [ -n "$plus5" ]; then
+    echo "date math:      OK (now=$now_iso, +5m=$plus5)"
+  else
+    echo "date math:      WARN: epoch->ISO failed; --eta and OVERDUE flags will not work."
+  fi
+else
+  echo "date math:      WARN: ISO->epoch failed; OVERDUE/STALE flags and durations will not work."
+fi

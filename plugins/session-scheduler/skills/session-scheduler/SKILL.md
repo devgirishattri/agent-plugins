@@ -22,14 +22,26 @@ Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executo
 ```
 /task-new        → status=created
   ↓
-/task-assign     → status=assigned, dispatched via session-chat
+/task-assign     → status=assigned (stamps started_at), dispatched via session-chat
   ↓ (executor works)
-/task-done       → status=done, /send ack to assigner
+/task-review     → status=review, /send ack to assigner (optional review gate)
+  ↓ (reviewer audits)
+/task-done       → status=done (records duration_seconds), /send ack to assigner
   or
 /task-block      → status=blocked, /send ack to assigner
 ```
 
+Legal status transitions (enforced by every command):
+`created→assigned`, `created→blocked`, `assigned→review`, `assigned→done`, `assigned→blocked`, `assigned→assigned` (reassignment), `review→done` (approve), `review→blocked` (reject), `blocked→assigned`. Anything else is rejected with the current status and legal next steps; override with `--force` (or `SESSION_SCHEDULER_FORCE=1`), which records "forced" in history.
+
 `/tasks-clean` removes old `done`/`blocked` files (dry-run by default).
+
+## Stages, ETAs, and dependencies
+
+- **Stages** are optional free-form labels (`--stage` on `/task-new` or `/task-assign`). Suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`. View grouped output with `/task-status --by-stage` or `/task-board`.
+- **ETAs**: `/task-assign --eta MINUTES` stores `eta_at`; tasks past it are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
+- **Dependencies**: `/task-new --depends-on id1,id2` stores `depends_on`. `/task-assign` refuses to dispatch until every dependency is `done` (the error names the unmet deps) unless `--force`.
+- **Context attach**: `/task-assign --context NAME` resolves the session-context snapshot at `<git-root>/tmp/contexts/NAME.md`, records `meta.context`, and tells the executor to `/session-context:context-load NAME` before starting.
 
 ## Hard prerequisites
 
@@ -43,13 +55,15 @@ Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executo
 
 | Command | Purpose |
 |---|---|
-| `/task-new <name> [--meta k=v]` | Create a ledger entry. Returns the new task id. |
-| `/task-assign <pane> <id> <prompt>` | Dispatch the task to an executor and update the ledger. |
-| `/task-status [<id>\|--all\|--pending\|--mine]` | Read-only view. Default = active (created+assigned). |
-| `/task-done <id> [note]` | Executor calls this; auto-acks the assigner via `/send`. |
-| `/task-block <id> <reason>` | Executor calls this when blocked; reason required. |
+| `/task-new <name> [--meta k=v] [--stage NAME] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id. |
+| `/task-assign <pane> <id> [--eta MIN] [--stage NAME] [--context NAME] [--force] <prompt>` | Dispatch the task to an executor and update the ledger. |
+| `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage]` | Read-only view. Default = active (created+assigned+review). Shows OVERDUE/STALE flags. |
+| `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); acks the assigner. |
+| `/task-done <id> [--force] [note]` | Executor or reviewer calls this; records duration; auto-acks the assigner via `/send`. |
+| `/task-block <id> [--force] <reason>` | Executor or reviewer calls this when blocked/rejecting; reason required. |
+| `/task-board` | Stage-grouped dashboard: id, name, status, assignee, age, flags, unmet deps + totals. |
 | `/tasks-clean [--older-than DAYS] [--status S] [--apply]` | Dry-run by default. |
-| `/scheduler-doctor` | Diagnose dirs, session-chat install, incoming-mode, jq/tmux. |
+| `/scheduler-doctor` | Diagnose dirs, session-chat install, incoming-mode, jq/tmux, date math. |
 
 ## Ledger schema
 
@@ -57,18 +71,25 @@ Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executo
 {
   "id": "abcd1234",
   "name": "task name",
-  "status": "created|assigned|done|blocked",
+  "status": "created|assigned|review|done|blocked",
+  "stage": "plan|dispatch|execute|audit|push|... or null",
   "assigner": "orchestrator-pane-name",
   "assignee": "executor-pane-name|null",
-  "prompt_file": "/Users/.../scheduler/prompts/abcd1234.md|null",
+  "prompt_file": "/path/to/scheduler/prompts/abcd1234.md|null",
+  "depends_on": ["task-id", "..."],
   "created_at": "ISO-8601",
   "updated_at": "ISO-8601",
-  "meta": { "free-form": "key/value" },
+  "started_at": "ISO-8601 (first assignment) | null",
+  "eta_at": "ISO-8601 (from --eta) | null",
+  "duration_seconds": 1234,
+  "meta": { "free-form": "key/value", "context": "context-snapshot-name" },
   "history": [
-    { "ts": "...", "event": "created|assigned|done|blocked", "actor": "...", "note": "..." }
+    { "ts": "...", "event": "created|assigned|review|done|blocked", "actor": "...", "note": "..." }
   ]
 }
 ```
+
+`started_at`, `eta_at`, `duration_seconds`, `stage`, and `depends_on` are optional — older task files without them still work.
 
 Atomic writes (tmp + mv) — concurrent executors updating different tasks won't conflict.
 

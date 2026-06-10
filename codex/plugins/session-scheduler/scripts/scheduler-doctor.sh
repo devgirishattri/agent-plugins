@@ -23,3 +23,17 @@ fi
 
 echo "incoming mode: ${SESSION_CHAT_INCOMING_MODE:-notify}"
 echo "executor panes should use SESSION_CHAT_INCOMING_MODE=auto or assist to act on assigned dispatches."
+
+# Date arithmetic check: ETA/overdue/stale flags need ISO<->epoch round-trips.
+now_iso_val=$(now_iso)
+now_epoch_val=$(iso_to_epoch "$now_iso_val")
+if [ "$now_epoch_val" -gt 0 ]; then
+  plus5=$(epoch_to_iso $((now_epoch_val + 300)))
+  if [ -n "$plus5" ]; then
+    echo "date math: OK (now=$now_iso_val, +5m=$plus5)"
+  else
+    echo "date math: WARN epoch->ISO failed; --eta and OVERDUE flags will not work."
+  fi
+else
+  echo "date math: WARN ISO->epoch failed; OVERDUE/STALE flags and durations will not work."
+fi
