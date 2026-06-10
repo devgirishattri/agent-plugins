@@ -5,12 +5,12 @@ argument-hint: <session-name> <prompt>
 
 ## Instructions
 
-1. Parse `$ARGUMENTS`: the first word is the target session name, and everything after it is the prompt.
+1. Parse `$ARGUMENTS`: optional `--priority high` and `--ttl <minutes>` come first; then the target session name; everything after is the prompt.
 2. If either value is missing, tell the user: `Usage: /dispatch <session-name> <task prompt>`.
 3. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.14.0}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/0.15.0}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
    ```
 
@@ -21,7 +21,7 @@ argument-hint: <session-name> <prompt>
    cat > "$PROMPT_FILE" <<'EOF'
    <prompt>
    EOF
-   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" "<target>" "$PROMPT_FILE"
+   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] "<target>" "$PROMPT_FILE"
    rm -f "$PROMPT_FILE"
    ```
 

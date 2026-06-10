@@ -263,10 +263,15 @@ release_lock() {
 # --- Durable per-recipient inbox (delivery fallback) ---
 # Every message is enqueued BEFORE the live paste. A successful paste delivers
 # it live and the entry is removed; a failed paste (busy recipient) leaves the
-# entry so the recipient's UserPromptSubmit hook recovers it on its next turn.
-# Records are single-line TAB-separated:  <id>\t<type>\t<from>\t<ready_at>\t<payload>
+# entry so the recipient's UserPromptSubmit/Stop hooks recover it later.
+# Records are single-line TAB-separated. Canonical layout:
+#   <id>\t<type>\t<from>\t<ready_at>\tp<prio>:x<expires_ms>\t<payload>
 #   type=send     -> payload = the (single-line) message text
 #   type=dispatch -> payload = the trusted msg file path
+#   prio          -> 0 normal, 1 high; high rows surface first during recovery
+#   expires_ms    -> 0 never; expired rows are dropped without surfacing
+# Legacy rows (no meta column, or no ready_at column) parse as normal-priority,
+# never-expiring, ready-now.
 # Each new record carries a ready-at timestamp so an in-flight live send gets a
 # grace window to win before the recipient hook surfaces the durable fallback.
 # A per-recipient "recent ids" ledger (TTL'd) dedups across turns so a queued
@@ -312,15 +317,56 @@ queue_ready_at_ms() {
   printf '%s\n' "$(( $(now_ms) + $(queue_recovery_delay_ms) ))"
 }
 
-# Re-emit a queue record, tolerating legacy 4-field rows (no ready_at column)
-# by treating them as ready-now (ready_at=0).
-normalize_queue_record() {
-  local qid="$1" qtype="$2" qfrom="$3" qready="$4" qpayload="$5"
-  if is_nonnegative_int "$qready"; then
-    printf '%s\t%s\t%s\t%s\t%s\n' "$qid" "$qtype" "$qfrom" "$qready" "$qpayload"
+# parse_queue_record <line> — fills QR_ID QR_TYPE QR_FROM QR_READY QR_PRIO
+# QR_EXPIRES QR_PAYLOAD from any record vintage. Returns 1 on blank lines.
+# The meta column is identified by its strict p<0|1>:x<digits> shape, so a
+# legacy payload sitting in that position cannot be mistaken for it.
+parse_queue_record() {
+  local line="$1"
+  QR_ID=""; QR_TYPE=""; QR_FROM=""; QR_READY=0; QR_PRIO=0; QR_EXPIRES=0; QR_PAYLOAD=""
+  [ -n "$line" ] || return 1
+  local f5="" rest=""
+  IFS=$'\t' read -r QR_ID QR_TYPE QR_FROM QR_READY f5 rest <<<"$line"
+  [ -n "$QR_ID" ] || return 1
+  if ! is_nonnegative_int "$QR_READY"; then
+    # Legacy 4-field row: no ready_at column; everything after <from> is payload.
+    QR_PAYLOAD="$QR_READY"
+    [ -n "$f5" ] && QR_PAYLOAD="${QR_PAYLOAD}	${f5}"
+    [ -n "$rest" ] && QR_PAYLOAD="${QR_PAYLOAD}	${rest}"
+    QR_READY=0
+    return 0
+  fi
+  if [[ "$f5" =~ ^p[01]:x[0-9]+$ ]]; then
+    QR_PRIO="${f5#p}"; QR_PRIO="${QR_PRIO%%:*}"
+    QR_EXPIRES="${f5#*x}"
+    QR_PAYLOAD="$rest"
   else
-    [ -n "$qpayload" ] && qready="${qready}	${qpayload}"
-    printf '%s\t%s\t%s\t0\t%s\n' "$qid" "$qtype" "$qfrom" "$qready"
+    # Legacy 5-field row: payload starts at column 5.
+    QR_PAYLOAD="$f5"
+    [ -n "$rest" ] && QR_PAYLOAD="${QR_PAYLOAD}	${rest}"
+  fi
+  return 0
+}
+
+emit_queue_record() {
+  # emit_queue_record <id> <type> <from> <ready> <prio> <expires> <payload>
+  printf '%s\t%s\t%s\t%s\tp%s:x%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+}
+
+queue_priority_value() {
+  case "${SESSION_CHAT_PRIORITY:-normal}" in
+    high|1) printf '1' ;;
+    *) printf '0' ;;
+  esac
+}
+
+queue_expires_at_ms() {
+  local ttl
+  ttl=$(normalize_positive_int "${SESSION_CHAT_TTL_MS:-0}" 0)
+  if [ "$ttl" -gt 0 ]; then
+    printf '%s' "$(( $(now_ms) + ttl ))"
+  else
+    printf '0'
   fi
 }
 
@@ -422,7 +468,7 @@ enqueue_message() {
   ready_at=$(queue_ready_at_ms)
   lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_lock "queue:${recipient}" "$lock" || return 1
-  printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$type" "$from" "$ready_at" "$payload" >> "$qf"
+  emit_queue_record "$id" "$type" "$from" "$ready_at" "$(queue_priority_value)" "$(queue_expires_at_ms)" "$payload" >> "$qf"
   release_lock "queue:${recipient}" "$lock"
 }
 
@@ -447,7 +493,7 @@ dequeue_message_id() {
 mark_message_ready() {
   local recipient="$1" id="$2"
   local messages_dir="${3:-$MESSAGES_DIR}"
-  local qf tmp now qid qtype qfrom qready qpayload lock
+  local qf tmp now line lock
   qf=$(queue_file_for "$recipient" "$messages_dir")
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient" "$messages_dir")
@@ -455,16 +501,12 @@ mark_message_ready() {
   tmp="${qf}.tmp.$$"
   now=$(now_ms)
   : > "$tmp"
-  while IFS=$'\t' read -r qid qtype qfrom qready qpayload; do
-    [ -z "$qid" ] && continue
-    if [ "$qid" = "$id" ]; then
-      if ! is_nonnegative_int "$qready"; then
-        [ -n "$qpayload" ] && qready="${qready}	${qpayload}"
-        qpayload="$qready"
-      fi
-      printf '%s\t%s\t%s\t%s\t%s\n' "$qid" "$qtype" "$qfrom" "$now" "$qpayload" >> "$tmp"
+  while IFS= read -r line; do
+    parse_queue_record "$line" || continue
+    if [ "$QR_ID" = "$id" ]; then
+      emit_queue_record "$QR_ID" "$QR_TYPE" "$QR_FROM" "$now" "$QR_PRIO" "$QR_EXPIRES" "$QR_PAYLOAD" >> "$tmp"
     else
-      normalize_queue_record "$qid" "$qtype" "$qfrom" "$qready" "$qpayload" >> "$tmp"
+      emit_queue_record "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_READY" "$QR_PRIO" "$QR_EXPIRES" "$QR_PAYLOAD" >> "$tmp"
     fi
   done < "$qf"
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
@@ -489,45 +531,50 @@ drain_inbox() {
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
   recent_ids=$(recent_ids_unlocked "$recipient" | tr '\n' ' ')
-  local remove_ids="" qid qtype qfrom qready qpayload rest
-  while IFS=$'\t' read -r qid qtype qfrom qready qpayload; do
-    [ -z "$qid" ] && continue
-    if ! is_nonnegative_int "$qready"; then
-      [ -n "$qpayload" ] && qready="${qready}	${qpayload}"
-      qpayload="$qready"
-      qready=0
-    fi
-    # Caller already showed this id live this turn: mark recent, drop, no surface.
-    case " $skip_ids $remove_ids " in
-      *" $qid "*)
-        mark_recent_id_unlocked "$recipient" "$qid" "$now"
-        remove_ids="$remove_ids $qid"
+  local remove_ids="" line pass_prio
+  # High-priority rows surface before normal ones; FIFO within each class.
+  for pass_prio in 1 0; do
+    while IFS= read -r line; do
+      parse_queue_record "$line" || continue
+      [ "$QR_PRIO" = "$pass_prio" ] || continue
+      # Caller already showed this id live this turn: mark recent, drop, no surface.
+      case " $skip_ids $remove_ids " in
+        *" $QR_ID "*)
+          mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"
+          remove_ids="$remove_ids $QR_ID"
+          continue
+          ;;
+      esac
+      # Already surfaced on a prior turn (live or recovery): drop, no re-surface.
+      case " $recent_ids " in
+        *" $QR_ID "*)
+          remove_ids="$remove_ids $QR_ID"
+          continue
+          ;;
+      esac
+      # Past its TTL: the sender's relevance window closed; drop unsurfaced.
+      if [ "$QR_EXPIRES" -gt 0 ] && [ "$QR_EXPIRES" -le "$now" ]; then
+        mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"
+        remove_ids="$remove_ids $QR_ID"
         continue
-        ;;
-    esac
-    # Already surfaced on a prior turn (live or recovery): drop, no re-surface.
-    case " $recent_ids " in
-      *" $qid "*)
-        remove_ids="$remove_ids $qid"
+      fi
+      # Still within its grace window: leave it for a later turn.
+      if [ "$QR_READY" -gt "$now" ]; then
         continue
-        ;;
-    esac
-    # Still within its grace window: leave it for a later turn.
-    if [ "$qready" -gt "$now" ]; then
-      continue
-    fi
-    printf '%s\t%s\t%s\t%s\n' "$qid" "$qtype" "$qfrom" "$qpayload"
-    mark_recent_id_unlocked "$recipient" "$qid" "$now"
-    remove_ids="$remove_ids $qid"
-  done < "$qf"
+      fi
+      printf '%s\t%s\t%s\t%s\n' "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_PAYLOAD"
+      mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"
+      remove_ids="$remove_ids $QR_ID"
+    done < "$qf"
+  done
   # Rewrite the queue, keeping only rows we neither surfaced, skipped, nor
-  # deferred. Deferred (not-ready) rows are re-emitted normalized.
+  # deferred. Deferred (not-ready) rows are re-emitted in canonical form.
   local tmp="${qf}.tmp.$$"
   : > "$tmp"
-  while IFS=$'\t' read -r qid qtype qfrom qready qpayload; do
-    [ -z "$qid" ] && continue
-    case " $skip_ids $remove_ids " in *" $qid "*) continue ;; esac
-    normalize_queue_record "$qid" "$qtype" "$qfrom" "$qready" "$qpayload" >> "$tmp"
+  while IFS= read -r line; do
+    parse_queue_record "$line" || continue
+    case " $skip_ids $remove_ids " in *" $QR_ID "*) continue ;; esac
+    emit_queue_record "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_READY" "$QR_PRIO" "$QR_EXPIRES" "$QR_PAYLOAD" >> "$tmp"
   done < "$qf"
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   release_lock "queue:${recipient}" "$lock"
@@ -569,6 +616,7 @@ log_sent_message() {
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$(sent_log_file)" 2>/dev/null || true
   trim_log_file "$(sent_log_file)"
+  archive_message "out" "$to" "$type" "$id" "$6"
 }
 
 log_reply_ids() {
@@ -586,6 +634,30 @@ log_reply_ids() {
     printf '%s\t%s\t%s\n' "$(now_ms)" "$id" "$from" >> "$rf" 2>/dev/null || true
   done
   trim_log_file "$rf"
+}
+
+# --- Message archive (search) ---
+# Daily TSVs under $MESSAGES_DIR/archive/<YYYY-MM-DD>.tsv:
+#   <ts_ms>\t<direction in|out>\t<peer>\t<type>\t<id>\t<excerpt 200ch>
+# Written best-effort on every send and on every surfaced incoming message;
+# /message-search greps these (plus dispatch file bodies). Files older than
+# the retention window are pruned opportunistically on append.
+
+archive_retention_days() {
+  normalize_positive_int "${SESSION_CHAT_ARCHIVE_RETENTION_DAYS:-30}" 30
+}
+
+archive_message() {
+  # archive_message <direction> <peer> <type> <id> <text>
+  local direction="$1" peer="$2" type="$3" id="$4" text="$5"
+  local dir day f
+  dir="$MESSAGES_DIR/archive"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  day=$(date +%Y-%m-%d 2>/dev/null) || return 0
+  f="$dir/${day}.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(now_ms)" "$direction" "$peer" "$type" "$id" \
+    "$(printf '%s' "$text" | tr '\t\n\r' '   ' | cut -c1-200)" >> "$f" 2>/dev/null || true
+  find "$dir" -name '*.tsv' -type f -mtime +"$(archive_retention_days)" -delete 2>/dev/null || true
 }
 
 # --- Communication ---

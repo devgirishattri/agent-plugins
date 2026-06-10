@@ -24,8 +24,17 @@ while [ $# -gt 0 ]; do
         exit 1
       fi
       ;;
+    --priority)
+      shift
+      export SESSION_CHAT_PRIORITY="${1:-normal}"
+      ;;
+    --ttl)
+      shift
+      _ttl_min=$(normalize_positive_int "${1:-0}" 0)
+      export SESSION_CHAT_TTL_MS=$((_ttl_min * 60000))
+      ;;
     -h|--help)
-      echo "Usage: broadcast-message.sh [--all] [--match GLOB] <message>"
+      echo "Usage: broadcast-message.sh [--all] [--match GLOB] [--priority high|normal] [--ttl MINUTES] <message>"
       exit 0
       ;;
     --) shift; break ;;
