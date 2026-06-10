@@ -59,11 +59,15 @@ This means a failed send **does not leave junk in the recipient's prompt**. If y
 Every `/send` and `/dispatch` is **written to the recipient's durable inbox before the live paste** (`~/.claude/messages/queue/<recipient>.tsv`). So delivery no longer depends on the paste landing while the recipient is busy:
 
 - **Live paste lands** → the message appears in the recipient's prompt now, and the durable copy is removed (no duplicate).
-- **Live paste fails** (recipient mid-generation / in an approval gate) → the wrapper returns **"Queued … will arrive on their next turn"** (exit/return code 3, still success). The recipient's `UserPromptSubmit` hook drains the inbox on its **next** turn and surfaces the message. Nothing is lost. Dedup across the two paths is by the `id:` marker.
+- **Live paste fails** (recipient mid-generation / in an approval gate) → the wrapper returns **"Queued … will arrive on their next turn"** (exit/return code 3, still success). The recipient's `UserPromptSubmit` hook drains the inbox on its **next** turn — and the `Stop` hook drains it when the recipient **finishes its current turn**, so even a pane that never submits another prompt surfaces queued messages as soon as it stops working. Nothing is lost. Dedup across the two paths is by the `id:` marker.
 
 This specifically fixes the **orchestrator-misses-acks** case: when several executors/reviewers ack a busy orchestrator at once, their sends queue on the orchestrator's per-target lock instead of erroring, and any that can't paste live are recovered from the inbox. The send lock now **waits for the full per-send budget and resets whenever the queue moves**, so fan-in to one pane no longer trips "could not acquire send-lock". For an idle recipient the paste still lands immediately; the inbox is the safety net for busy ones.
 
-If a recipient is idle and never submits another prompt, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` so the live paste itself succeeds (the inbox only drains on the recipient's next turn).
+If a recipient pane sits at an idle prompt (no turn in progress, no prompt coming), neither hook fires; raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` so the live paste itself succeeds in that case.
+
+## Reply correlation
+
+Every `/send` and `/dispatch` has a unique `id:HEX8`. When you reply to a message, include the token `[re:<that id>]` in your `/send` — the original sender's `/check-replies` matches replies to sent messages by that token. When you ask a peer a question and expect an answer, tell it to include `[re:<id>]`; then poll `/check-replies --pending` instead of re-pinging panes that already answered.
 
 ## Quoting and shell safety
 
@@ -90,6 +94,9 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 
 ## Helper commands
 
+- `/broadcast [--all] [--match GLOB] <text>` — fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `/send` per pane.
+- `/check-replies [--pending] [--since MIN]` — which sent messages have been answered (via `[re:<id>]` tokens) and which are still awaiting a reply.
+- `/pane-health [name] [--all]` — liveness, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them.
 - `/incoming-mode` — show or set `SESSION_CHAT_INCOMING_MODE` (prints an `export` line to `eval`).
 - `/messages-list` — read-only inventory of dispatch files under `~/.claude/messages/`.
 - `/messages-clean` — delete old dispatch files (dry-run by default; pass `--apply` to actually delete).

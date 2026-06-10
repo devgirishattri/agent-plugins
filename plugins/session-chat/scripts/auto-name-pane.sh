@@ -30,6 +30,15 @@ fi
 # Extract last custom-title from transcript
 SESSION_NAME=$(grep -a '"customTitle":"[^"]*"' "$TRANSCRIPT" 2>/dev/null | tail -1 | grep -oE '"customTitle":"[^"]*"' | cut -d'"' -f4) || true
 
+# Sanitize: session titles are free-form prose, but pane labels must stay in
+# [a-zA-Z0-9_-] or resolve_pane can never reach this pane again (the failure
+# mode is a silently dead outbound channel).
+SESSION_NAME=$(printf '%s' "$SESSION_NAME" \
+  | tr -s '[:space:]' '-' \
+  | tr -cd 'a-zA-Z0-9_-' \
+  | sed 's/--*/-/g; s/^-*//; s/-*$//' \
+  | cut -c1-48)
+
 # Set @name only if we found a session name (pane has no name at this point)
 if [ -n "$SESSION_NAME" ]; then
   tmux set-option -p -t "$TMUX_PANE" @name "$SESSION_NAME" 2>/dev/null || true

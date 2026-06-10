@@ -108,8 +108,10 @@ if printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
   s_name=$(printf '%s' "$s_name" | tr -cd 'a-zA-Z0-9_:-')
   if [ -n "$s_name" ]; then
     [ -n "$s_id" ] && LIVE_ID="$s_id"
+    # Cross-turn dedup, atomically: check whether this id already surfaced
+    # from the inbox on an earlier turn and mark it in the same lock window.
     live_seen=0
-    if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen "$MY_NAME" "$LIVE_ID"; then
+    if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen_or_mark "$MY_NAME" "$LIVE_ID"; then
       live_seen=1
     fi
     if [ "$live_seen" = "0" ]; then
@@ -118,8 +120,10 @@ if printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
       else
         LINES+=("$(describe_record send "$s_name" "" 0)")
       fi
-      if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
-        mark_recent_id "$MY_NAME" "$LIVE_ID" || true
+      # Reply correlation: any [re:<id>] token in the incoming text closes the
+      # loop for a message this pane previously sent (check-replies).
+      if [ "$HAVE_LIB" = "1" ]; then
+        log_reply_ids "$s_name" "$HOOK_INPUT" || true
       fi
     fi
   fi
@@ -131,6 +135,7 @@ if [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
     [ -z "$qid" ] && continue
     if [ "$qtype" = "send" ]; then
       LINES+=("$(describe_record send "$qfrom" "$qpayload" 1)")
+      log_reply_ids "$qfrom" "$qpayload" || true
     else
       LINES+=("$(describe_record dispatch "$qfrom" "$qpayload" 0)")
     fi

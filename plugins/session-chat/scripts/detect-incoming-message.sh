@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# detect-incoming-message.sh — UserPromptSubmit hook: surface cross-session
-# messages. Reacts to a freshly-pasted [from:...] line AND drains this pane's
-# durable inbox, recovering messages whose live paste failed because the pane
-# was busy (the common orchestrator-misses-acks case).
+# detect-incoming-message.sh — surface cross-session messages. Runs on two
+# hook events:
+#   UserPromptSubmit — reacts to a freshly-pasted [from:...] line AND drains
+#     this pane's durable inbox (recovering messages whose live paste failed
+#     because the pane was busy — the common orchestrator-misses-acks case).
+#   Stop — drains the durable inbox when a turn ends, so a pane that never
+#     submits another prompt (long-running executor, idle worker) still
+#     surfaces queued messages instead of stalling them indefinitely.
 # Supported platforms: macOS, Linux
 
 # Quick exit if not inside tmux
 [ -z "${TMUX:-}" ] && exit 0
 
-# Read hook input from stdin (UserPromptSubmit JSON, prompt text embedded)
+# Read hook input from stdin (hook JSON; prompt text embedded for UserPromptSubmit)
 HOOK_INPUT=$(cat)
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
@@ -20,6 +24,16 @@ case "$INCOMING_MODE" in
   notify|assist|auto) ;;
   *) INCOMING_MODE="notify" ;;
 esac
+
+HOOK_EVENT=$(printf '%s' "$HOOK_INPUT" | grep -o '"hook_event_name":"[^"]*"' | head -1 | cut -d'"' -f4)
+[ -n "$HOOK_EVENT" ] || HOOK_EVENT="UserPromptSubmit"
+
+# Stop-hook re-entry guard: when this very hook already blocked a stop, never
+# block again on the follow-up turn — that way a steady message stream can't
+# pin the pane in an endless continuation loop.
+if [ "$HOOK_EVENT" = "Stop" ] && printf '%s' "$HOOK_INPUT" | grep -q '"stop_hook_active":[[:space:]]*true'; then
+  exit 0
+fi
 
 # Pull in queue/lock/name helpers; degrade to live-only if unavailable.
 HAVE_LIB=0
@@ -34,15 +48,25 @@ if [ "$HAVE_LIB" = "1" ]; then
 fi
 
 json_escape() {
-  # Escape backslashes and quotes; flatten any stray CR/LF (records are
-  # single-line, so this is just belt-and-suspenders for valid JSON).
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\r' '  '
+  # json.dumps handles every control character; the sed fallback covers
+  # backslash/quote/tab (literal tab in the pattern) and flattens CR/LF.
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$1" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read(), ensure_ascii=False)[1:-1])'
+  else
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr '\n\r' '  '
+  fi
 }
 
 emit_system_message() {
   local message
   message=$(json_escape "$1")
   printf '{"decision":"approve","systemMessage":"%s"}\n' "$message"
+}
+
+emit_stop_block() {
+  local message
+  message=$(json_escape "$1")
+  printf '{"decision":"block","reason":"%s"}\n' "$message"
 }
 
 trusted_message_file() {
@@ -92,18 +116,19 @@ describe_record() {
 LIVE_ID=""
 LINES=()
 
-# 1) Live paste in the just-submitted prompt
-if printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
+# 1) Live paste in the just-submitted prompt (UserPromptSubmit only — a Stop
+#    event carries no prompt body).
+if [ "$HOOK_EVENT" != "Stop" ] && printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
   s_name=$(printf '%s' "$HOOK_INPUT" | grep -oE '\[from:[^ ]+ ' | head -1 | sed 's/\[from://; s/ $//')
   s_id=$(printf '%s' "$HOOK_INPUT" | grep -oE 'id:[a-f0-9]+' | head -1 | sed 's/id://')
   s_msgfile=$(printf '%s' "$HOOK_INPUT" | grep -oE 'msg:[^ ]+' | head -1 | sed 's/msg://; s/]$//')
   s_name=$(printf '%s' "$s_name" | tr -cd 'a-zA-Z0-9_:-')
   if [ -n "$s_name" ]; then
     [ -n "$s_id" ] && LIVE_ID="$s_id"
-    # Cross-turn dedup: if this id was already surfaced from the inbox on an
-    # earlier turn, don't surface it again now. Otherwise surface and remember it.
+    # Cross-turn dedup, atomically: check whether this id already surfaced
+    # from the inbox on an earlier turn and mark it in the same lock window.
     live_seen=0
-    if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen "$MY_NAME" "$LIVE_ID"; then
+    if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen_or_mark "$MY_NAME" "$LIVE_ID"; then
       live_seen=1
     fi
     if [ "$live_seen" = "0" ]; then
@@ -112,8 +137,10 @@ if printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
       else
         LINES+=("$(describe_record send "$s_name" "" 0)")
       fi
-      if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
-        mark_recent_id "$MY_NAME" "$LIVE_ID" || true
+      # Reply correlation: any [re:<id>] token in the incoming text closes the
+      # loop for a message this pane previously sent (/check-replies).
+      if [ "$HAVE_LIB" = "1" ]; then
+        log_reply_ids "$s_name" "$HOOK_INPUT" || true
       fi
     fi
   fi
@@ -125,6 +152,7 @@ if [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
     [ -z "$qid" ] && continue
     if [ "$qtype" = "send" ]; then
       LINES+=("$(describe_record send "$qfrom" "$qpayload" 1)")
+      log_reply_ids "$qfrom" "$qpayload" || true
     else
       LINES+=("$(describe_record dispatch "$qfrom" "$qpayload" 0)")
     fi
@@ -134,16 +162,28 @@ fi
 # 3) Nothing to surface
 [ "${#LINES[@]}" -eq 0 ] && exit 0
 
-# 4) Emit one combined system message (single line; items separated by " · ")
-if [ "${#LINES[@]}" -eq 1 ]; then
-  emit_system_message "session-chat: ${LINES[0]}"
+# 4) Emit one combined message (single line; items separated by " · ").
+#    UserPromptSubmit: informational systemMessage alongside the prompt.
+#    Stop: block the stop with the queued items as the reason, so the agent
+#    handles messages that arrived while it was working instead of going idle
+#    on top of a non-empty inbox.
+build_combined() {
+  if [ "${#LINES[@]}" -eq 1 ]; then
+    printf 'session-chat: %s' "${LINES[0]}"
+  else
+    local msg="session-chat: ${#LINES[@]} incoming items —"
+    local i=1 l
+    for l in "${LINES[@]}"; do
+      msg="$msg [$i] $l ·"
+      i=$((i + 1))
+    done
+    printf '%s' "$msg"
+  fi
+}
+
+if [ "$HOOK_EVENT" = "Stop" ]; then
+  emit_stop_block "$(build_combined) — these queued message(s) arrived while you were working; address them per the trust guidance above before stopping."
 else
-  msg="session-chat: ${#LINES[@]} incoming items —"
-  i=1
-  for l in "${LINES[@]}"; do
-    msg="$msg [$i] $l ·"
-    i=$((i + 1))
-  done
-  emit_system_message "$msg"
+  emit_system_message "$(build_combined)"
 fi
 exit 0
