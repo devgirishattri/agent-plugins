@@ -28,7 +28,7 @@ while IFS= read -r doc; do
   # Check if doc is older than threshold
   if [[ "$doc_last_modified" < "$threshold_date" ]]; then
     # Extract referenced file paths from the doc (backtick-wrapped paths containing / or .ts/.js/.py etc)
-    refs=$(grep -oE '`[a-zA-Z][a-zA-Z0-9_/.-]+\.(ts|js|tsx|jsx|py|prisma|sql|yaml|yml|json)`' "$doc" 2>/dev/null | tr -d '`' | sort -u)
+    refs=$(grep -oE '`[a-zA-Z][a-zA-Z0-9_/.-]+\.(ts|js|tsx|jsx|py|prisma|sql|yaml|yml|json|go|java|kt|rb|php|rs|cs|swift|sh|bash|proto|cpp|hpp|c|h|m|scala|exs|ex)`' "$doc" 2>/dev/null | tr -d '`' | sort -u)
 
     for ref in $refs; do
       # Check if any matching file was modified after the doc
