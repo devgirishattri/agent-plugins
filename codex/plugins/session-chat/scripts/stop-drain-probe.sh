@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# stop-drain-probe.sh — TEMPORARY Stop-hook instrumentation (round 1 of the
-# Codex Stop-drain port). Answers three questions before any real drain ships:
-#   (a) does Codex fire Stop hooks at turn end?
-#   (b) what is the Stop hook's input schema (loop guards? thread fields?)
-#   (c) does hookSpecificOutput/additionalContext emitted on Stop reach the
-#       agent, or is Stop output discarded?
-# STRICTLY NON-DESTRUCTIVE: peeks at the durable inbox read-only; never
-# dequeues or marks anything, so a discarded envelope cannot lose messages.
+# stop-drain-probe.sh — TEMPORARY Stop-hook instrumentation, round 2.
+# Round 1 proved: Stop fires at turn end with Claude-like input (incl.
+# stop_hook_active), TMUX_PANE available, and hookSpecificOutput is REJECTED
+# ("invalid stop hook JSON output"). Round 2 tests the Claude-style decision
+# envelope: when ready queued messages exist, emit {"decision":"block",...}
+# with a marker reason and observe whether the agent continues and can quote
+# it. STILL NON-DESTRUCTIVE: rows are peeked, never dequeued, so a rejected
+# envelope cannot lose messages.
 # Diagnostics append to: $CODEX_HOME/messages/.stop-hook-capture.log
-# Remove this script and its Stop registration once the real drain ships.
+# Replace with the real drain in detect-incoming-message.sh once proven.
 
 HOOK_INPUT=$(cat)
 
@@ -16,15 +16,18 @@ CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 CAPTURE="$CODEX_DIR/messages/.stop-hook-capture.log"
 mkdir -p "$(dirname "$CAPTURE")" 2>/dev/null || exit 0
 
-{
-  printf -- '--- %s ---\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
-  printf 'ENV: TMUX=%s TMUX_PANE=%s CODEX_PLUGIN_ROOT=%s PWD=%s\n' \
-    "${TMUX:-unset}" "${TMUX_PANE:-unset}" "${CODEX_PLUGIN_ROOT:-unset}" "$PWD"
-  printf 'INPUT: %s\n' "$HOOK_INPUT"
-} >> "$CAPTURE" 2>/dev/null
+log() { printf '%s\n' "$1" >> "$CAPTURE" 2>/dev/null; }
 
-# Read-only peek at this pane's durable inbox (same name/queue layout lib.sh
-# uses; intentionally not sourcing lib.sh so the probe cannot mutate state).
+log "--- $(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) round2 ---"
+log "INPUT: $HOOK_INPUT"
+
+# Re-entry guard: never block a stop that a stop hook already continued.
+if printf '%s' "$HOOK_INPUT" | grep -q '"stop_hook_active":[[:space:]]*true'; then
+  log "RESULT: stop_hook_active=true, allowing stop"
+  exit 0
+fi
+
+# Read-only peek at this pane's durable inbox.
 READY=0
 TOTAL=0
 MY_NAME=""
@@ -40,9 +43,13 @@ if [ -n "$MY_NAME" ]; then
     READY=$(awk -F'\t' -v now="$NOW" '$1 != "" { if ($4 !~ /^[0-9]+$/ || $4 <= now) r++ } END { print r + 0 }' "$QF" 2>/dev/null) || READY=0
   fi
 fi
-printf 'PEEK: name=%s ready=%s total=%s\n' "${MY_NAME:-none}" "$READY" "$TOTAL" >> "$CAPTURE" 2>/dev/null
+log "PEEK: name=${MY_NAME:-none} ready=$READY total=$TOTAL"
 
-# Marked envelope: if the agent can quote STOP-PROBE-MARKER-7Q4 after a turn
-# ends, Stop output is surfaced and the real drain can ship.
-printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"session-chat STOP-PROBE-MARKER-7Q4 — Stop-hook output test; no action needed. Inbox peek: %s ready / %s total queued message(s)."}}\n' "$READY" "$TOTAL"
+if [ "$READY" -eq 0 ] 2>/dev/null; then
+  log "RESULT: inbox empty/not-ready, allowing stop (no output)"
+  exit 0
+fi
+
+log "RESULT: emitting decision:block with marker"
+printf '{"decision":"block","reason":"session-chat STOP-PROBE-ROUND2-9K1: %s queued message(s) are waiting in this pane'\''s inbox (probe only — rows untouched; they will surface on your next prompt). If you can read this marker after ending a turn, the Stop decision envelope works. No reply needed."}\n' "$READY"
 exit 0
