@@ -8,14 +8,14 @@ argument-hint: <task-id> [--force] <note>
 1. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-scheduler/0.2.0}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-scheduler/0.2.1}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
    ```
 
 2. Run (the note is required — typically a commit SHA or a one-line summary of what to audit):
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/task-review.sh" "<task-id>" "<note>"
+   bash "$PLUGIN_ROOT/scripts/task-review.sh" "<task-id>" [--force] "<note>"
    ```
 
 3. The executor (or orchestrator) runs this when work is ready for audit. Legal only from `assigned`; `--force` overrides and records "forced" in history.
