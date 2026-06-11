@@ -670,6 +670,23 @@ archive_message() {
 
 # --- Communication ---
 
+# Refuse to paste into a pane sitting at a shell prompt: the bracketed
+# message line would be EXECUTED by the shell, not read by an agent. Found
+# live when a recipient's agent had exited between resolve and paste.
+ensure_agent_target() {
+  local target_name="$1" target_pane="$2"
+  [ "${SESSION_CHAT_ALLOW_SHELL_TARGET:-0}" = "1" ] && return 0
+  local cmd
+  cmd=$(tmux display-message -p -t "$target_pane" '#{pane_current_command}' 2>/dev/null || true)
+  case "$cmd" in
+    zsh|bash|fish|sh|dash|tcsh|ksh|-zsh|-bash)
+      echo "ERROR: pane '$target_name' is at a shell prompt ($cmd), not an agent TUI — pasting would execute the message in the shell. Start the agent there first, or set SESSION_CHAT_ALLOW_SHELL_TARGET=1 to override." >&2
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 # Single paste→verify→Enter attempt. On verify failure, clear any partial
 # paste and return 1 (no error message — caller decides whether to retry).
 _send_text_attempt() {
@@ -776,6 +793,7 @@ send_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
+  ensure_agent_target "$target_name" "$target_pane" || return 1
   # Durable rows land in the recipient runtime's dir so a Codex target drains
   # them on its next turn (Codex hooks read ~/.codex/messages, not ~/.claude).
   local target_messages_dir
@@ -807,6 +825,7 @@ dispatch_message() {
   fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
+  ensure_agent_target "$target_name" "$target_pane" || return 1
   # Resolve the recipient runtime's trusted dir: the task file must live where
   # that pane's hook will trust + read it (each runtime trusts only its own).
   local target_messages_dir

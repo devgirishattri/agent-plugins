@@ -112,6 +112,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 
 ## Common failure modes
 
+- **"pane 'X' is at a shell prompt"** — the recipient's agent exited; the message would have been executed by their shell. Restart the agent in that pane (set `SESSION_CHAT_ALLOW_SHELL_TARGET=1` only for deliberate shell targets, e.g. tests).
 - **"This pane has no name"** — run `/whoami <name>` in the sending pane first.
 - **"No pane named X"** — run `/panes all` to see registered names across tmux sessions; the recipient may not have run `/whoami`.
 - **"Multiple panes named X"** — duplicate names exist; rename one with `/whoami` in that pane.

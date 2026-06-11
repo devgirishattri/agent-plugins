@@ -71,9 +71,11 @@ run_script() {
 }
 
 # Direct test driver: source lib.sh in subshell, override TMUX_PANE.
+# Test recipients are throwaway shell panes, so allow shell targets here.
 run_lib() {
   local sender="$1"; shift
   TMUX_PANE="$sender" \
+  SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
   SESSION_CHAT_VERIFY_TIMEOUT_MS="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-1000}" \
   SESSION_CHAT_SETTLE_MS=50 \
   TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" \
