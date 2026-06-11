@@ -35,8 +35,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CODEX_PLUGIN_ROOT:-$(ls -td \"$HOME\"/.codex/plugins/cache/girishattri-codex-plugins/session-chat/*/ 2>/dev/null | head -1)}\"/scripts/stop-drain-probe.sh",
-            "timeout": 5
+            "command": "bash \"${CODEX_PLUGIN_ROOT:-$(ls -td \"$HOME\"/.codex/plugins/cache/girishattri-codex-plugins/session-chat/*/ 2>/dev/null | head -1)}\"/scripts/detect-incoming-message.sh",
+            "timeout": 10
           }
         ]
       }
