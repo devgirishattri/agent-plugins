@@ -335,6 +335,14 @@ parse_queue_record() {
     QR_READY=0
     return 0
   fi
+  # Numeric column 4 with nothing after it: enqueue never writes an empty
+  # payload, so this can only be a legacy 4-field row whose payload happens
+  # to be all digits — treat the number as payload, not ready_at.
+  if [ -z "$f5" ] && [ -z "$rest" ]; then
+    QR_PAYLOAD="$QR_READY"
+    QR_READY=0
+    return 0
+  fi
   if [[ "$f5" =~ ^p[01]:x[0-9]+$ ]]; then
     QR_PRIO="${f5#p}"; QR_PRIO="${QR_PRIO%%:*}"
     QR_EXPIRES="${f5#*x}"
