@@ -143,7 +143,12 @@ def validate_codex_interface(codex_dir: pathlib.Path, manifest: dict) -> None:
             require_relative_file(codex_dir, "screenshots", screenshot)
 
 def validate_codex_hooks(codex_dir: pathlib.Path) -> None:
-    hooks_path = codex_dir / "hooks.json"
+    # Documented Codex location is hooks/hooks.json (a root hooks.json is
+    # NOT loaded by the runtime — proven empirically; see peer review).
+    hooks_path = codex_dir / "hooks" / "hooks.json"
+    legacy_path = codex_dir / "hooks.json"
+    if legacy_path.exists():
+        fail(f"{legacy_path}: root hooks.json is not loaded by the Codex runtime; move it to hooks/hooks.json")
     if not hooks_path.exists():
         return
 
@@ -328,11 +333,11 @@ for claude_plugin_dir in plugins/*/; do
   codex_commands="$(list_basenames "$codex_plugin_dir/commands" '*.md')"
   warn_set_diff "$plugin_name" "commands" "$claude_commands" "$codex_commands"
 
-  # Hooks presence: Claude keeps hooks/hooks.json, Codex keeps hooks.json.
+  # Hooks presence: both providers keep hooks/hooks.json.
   claude_has_hooks=false
   codex_has_hooks=false
   if [ -f "$claude_plugin_dir/hooks/hooks.json" ]; then claude_has_hooks=true; fi
-  if [ -f "$codex_plugin_dir/hooks.json" ]; then codex_has_hooks=true; fi
+  if [ -f "$codex_plugin_dir/hooks/hooks.json" ]; then codex_has_hooks=true; fi
   if [ "$claude_has_hooks" != "$codex_has_hooks" ]; then
     warn "$plugin_name: hooks presence mismatch: claude=$claude_has_hooks codex=$codex_has_hooks"
   fi

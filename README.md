@@ -113,6 +113,8 @@ claude plugin marketplace add /path/to/agent-plugins
 
 - Keep provider-specific manifests separate.
 - Keep command behavior aligned across `plugins/<name>/commands/` and `codex/plugins/<name>/commands/`.
+- Codex runtime surfaces (verified live 2026-06-11): **skills** are loaded and invocable (`$plugin:skill`); plugin `commands/*.md` are NOT loaded by the Codex runtime — treat them as reference docs mirroring the Claude commands, and always ship a skill twin for runtime behavior.
+- Codex hooks must live at `codex/plugins/<name>/hooks/hooks.json` (a plugin-root `hooks.json` is silently ignored by the runtime). Hook commands must not assume the session cwd — use `"${CODEX_PLUGIN_ROOT:-.}"/scripts/...` paths.
 - Shared ideas can be documented in `docs/`, but runtime files should remain provider-local.
 - Generated logs such as `firebase-debug.log` are ignored and should not be committed.
 - Run `bash scripts/validate-release.sh` before publishing plugin updates.
