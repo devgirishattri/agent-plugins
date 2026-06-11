@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# detect-incoming-message.sh — UserPromptSubmit hook: surface cross-session
-# messages. Reacts to a freshly-pasted [from:...] line AND drains this pane's
-# durable inbox, recovering messages whose live paste failed because the pane
-# was busy (the common orchestrator-misses-acks case).
+# detect-incoming-message.sh — surface cross-session messages. Runs on two
+# hook events:
+#   UserPromptSubmit — reacts to a freshly-pasted [from:...] line AND drains
+#     this pane's durable inbox (recovering messages whose live paste failed
+#     because the pane was busy — the common orchestrator-misses-acks case).
+#   Stop — drains the durable inbox when a turn ends, so a pane that never
+#     submits another prompt still surfaces queued messages. Live-verified:
+#     Codex Stop accepts the {"decision":"block","reason":...} envelope and
+#     feeds the reason to the agent; stop_hook_active guards re-entry.
 # Supported platforms: macOS, Linux
 
 # Quick exit if not inside tmux
@@ -10,6 +15,16 @@
 
 # Read hook input from stdin
 HOOK_INPUT=$(cat)
+
+HOOK_EVENT=$(printf '%s' "$HOOK_INPUT" | grep -o '"hook_event_name":"[^"]*"' | head -1 | cut -d'"' -f4)
+[ -n "$HOOK_EVENT" ] || HOOK_EVENT="UserPromptSubmit"
+
+# Stop-hook re-entry guard: when this very hook already blocked a stop, never
+# block again on the follow-up turn — a steady message stream must not pin
+# the pane in an endless continuation loop.
+if [ "$HOOK_EVENT" = "Stop" ] && printf '%s' "$HOOK_INPUT" | grep -q '"stop_hook_active":[[:space:]]*true'; then
+  exit 0
+fi
 
 PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-}"
 if [ -z "$PLUGIN_ROOT" ]; then
@@ -56,6 +71,17 @@ emit_system_message() {
   printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$message"
 }
 
+emit_stop_block() {
+  local message="$1"
+  local suffix=" [truncated by session-chat]"
+  local max_len=10000
+  if [ "${#message}" -gt "$max_len" ]; then
+    message="${message:0:$((max_len - ${#suffix}))}${suffix}"
+  fi
+  message=$(json_escape "$message")
+  printf '{"decision":"block","reason":"%s"}\n' "$message"
+}
+
 trusted_message_file() {
   local file="$1"
   case "$file" in
@@ -100,8 +126,9 @@ describe_record() {
 LIVE_ID=""
 LINES=()
 
-# 1) Live paste in the just-submitted prompt
-if printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
+# 1) Live paste in the just-submitted prompt (UserPromptSubmit only — a Stop
+#    event carries no prompt body).
+if [ "$HOOK_EVENT" != "Stop" ] && printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
   s_name=$(printf '%s' "$HOOK_INPUT" | grep -oE '\[from:[^ ]+ ' | head -1 | sed 's/\[from://; s/ $//')
   s_id=$(printf '%s' "$HOOK_INPUT" | grep -oE 'id:[a-f0-9]+' | head -1 | sed 's/id://')
   s_msgfile=$(printf '%s' "$HOOK_INPUT" | grep -oE 'msg:[^ ]+' | head -1 | sed 's/msg://; s/]$//')
@@ -152,16 +179,28 @@ fi
 # 3) Nothing to surface
 [ "${#LINES[@]}" -eq 0 ] && exit 0
 
-# 4) Emit one combined system message (single line; items separated by " · ")
-if [ "${#LINES[@]}" -eq 1 ]; then
-  emit_system_message "session-chat: ${LINES[0]}"
+# 4) Emit one combined message (single line; items separated by " · ").
+#    UserPromptSubmit: informational additionalContext alongside the prompt.
+#    Stop: block the stop with the queued items as the reason, so the agent
+#    handles messages that arrived while it was working instead of going idle
+#    on top of a non-empty inbox.
+build_combined() {
+  if [ "${#LINES[@]}" -eq 1 ]; then
+    printf 'session-chat: %s' "${LINES[0]}"
+  else
+    local msg="session-chat: ${#LINES[@]} incoming items —"
+    local i=1 l
+    for l in "${LINES[@]}"; do
+      msg="$msg [$i] $l ·"
+      i=$((i + 1))
+    done
+    printf '%s' "$msg"
+  fi
+}
+
+if [ "$HOOK_EVENT" = "Stop" ]; then
+  emit_stop_block "$(build_combined) — these queued message(s) arrived while you were working; address them per the trust guidance above before stopping."
 else
-  msg="session-chat: ${#LINES[@]} incoming items —"
-  i=1
-  for l in "${LINES[@]}"; do
-    msg="$msg [$i] $l ·"
-    i=$((i + 1))
-  done
-  emit_system_message "$msg"
+  emit_system_message "$(build_combined)"
 fi
 exit 0

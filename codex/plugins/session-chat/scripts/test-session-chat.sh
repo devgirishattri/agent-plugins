@@ -82,6 +82,25 @@ QUEUE_LOCK="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; queue_lock_path reci
 DUP_OUT="$(printf '%s\n' '[from:sender-test pane:%999 id:deadbeef] queued fallback' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" CODEX_PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto bash "$SCRIPT_DIR/detect-incoming-message.sh")"
 assert_empty "$DUP_OUT" "recent duplicate live hook output"
 
+# Stop-event drain: a ready queued row must surface as a decision:block
+# envelope (live-verified Codex Stop schema), then the queue must be empty.
+CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; enqueue_message recipient-test cafe0001 send sender-test "stop drain payload"; mark_message_ready recipient-test cafe0001' "$SCRIPT_DIR/lib.sh"
+STOP_OUT="$(printf '%s' '{"hook_event_name":"Stop","stop_hook_active":false}' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" CODEX_PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto bash "$SCRIPT_DIR/detect-incoming-message.sh")"
+assert_contains '"decision":"block"' "$STOP_OUT"
+assert_contains 'stop drain payload' "$STOP_OUT"
+if printf '%s\n' "$STOP_OUT" | grep -F '"hookSpecificOutput"' >/dev/null; then
+  fail "Stop drain used the UserPromptSubmit envelope"
+fi
+STOP_EMPTY="$(printf '%s' '{"hook_event_name":"Stop","stop_hook_active":false}' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" CODEX_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$SCRIPT_DIR/detect-incoming-message.sh")"
+assert_empty "$STOP_EMPTY" "Stop with empty inbox"
+CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; enqueue_message recipient-test cafe0002 send sender-test "guarded payload"; mark_message_ready recipient-test cafe0002' "$SCRIPT_DIR/lib.sh"
+STOP_GUARD="$(printf '%s' '{"hook_event_name":"Stop","stop_hook_active":true}' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" CODEX_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$SCRIPT_DIR/detect-incoming-message.sh")"
+assert_empty "$STOP_GUARD" "stop_hook_active re-entry guard"
+# Guarded row must remain queued for the next UserPromptSubmit, not be lost.
+GUARD_ROWS="$(grep -c cafe0002 "$TEST_HOME/messages/queue/recipient-test.tsv" 2>/dev/null || true)"
+[ "$GUARD_ROWS" = "1" ] || fail "guarded Stop consumed the queued row (rows=$GUARD_ROWS)"
+CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; dequeue_message_id recipient-test cafe0002' "$SCRIPT_DIR/lib.sh"
+
 run_as_sender bash "$SCRIPT_DIR/list-panes.sh" > "$TEST_HOME/panes-current.txt"
 assert_file_contains "$TEST_HOME/panes-current.txt" "sender-test"
 assert_file_contains "$TEST_HOME/panes-current.txt" "recipient-test"
