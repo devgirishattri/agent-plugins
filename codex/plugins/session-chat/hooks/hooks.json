@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$TMUX\" ] && tmux source-file ./scripts/dispatch-tmux.conf 2>/dev/null; exit 0",
+            "command": "[ -n \"$TMUX\" ] && tmux source-file \"${CODEX_PLUGIN_ROOT:-.}\"/scripts/dispatch-tmux.conf 2>/dev/null; exit 0",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ./scripts/auto-name-pane.sh",
+            "command": "bash \"${CODEX_PLUGIN_ROOT:-.}\"/scripts/auto-name-pane.sh",
             "timeout": 5
           }
         ]
@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ./scripts/detect-incoming-message.sh",
+            "command": "bash \"${CODEX_PLUGIN_ROOT:-.}\"/scripts/detect-incoming-message.sh",
             "timeout": 5
           }
         ]

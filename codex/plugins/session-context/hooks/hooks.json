@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ./scripts/detect-snapshots.sh",
+            "command": "bash \"${CODEX_PLUGIN_ROOT:-.}\"/scripts/detect-snapshots.sh",
             "timeout": 5
           }
         ]
