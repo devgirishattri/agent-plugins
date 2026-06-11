@@ -66,6 +66,7 @@ For durable fallback, the sender writes the queue row and dispatch file into the
 
 - `did not land within Xms after N attempts`: target was busy through all retries. The message is **not lost** — it's in the recipient's durable inbox (`~/.codex/messages/queue/<name>.tsv` for Codex, `~/.claude/messages/queue/<name>.tsv` for Claude) and surfaces after the failed live attempt or recovery grace (the sender reports "Queued …"). To land more sends live, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
 - `timed out waiting for send lock`: rare now that the unset lock timeout auto-sizes to the send budget and resets on holder change. If `SESSION_CHAT_LOCK_TIMEOUT_MS` is set, that value is treated as an absolute cap.
+- `pane 'X' is at a shell prompt`: the recipient's agent exited; the message would have been executed by their shell. Restart the agent in that pane (set `SESSION_CHAT_ALLOW_SHELL_TARGET=1` only for deliberate shell targets, e.g. tests).
 - `Multiple panes named X`: rename one pane with `$session-chat:whoami <name>` in that pane.
 - `No pane named X`: run `$session-chat:panes all` and confirm the recipient has run `$session-chat:whoami <name>`.
 - `/send only supports single-line messages`: use `$session-chat:dispatch`.

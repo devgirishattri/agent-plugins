@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CODEX_PLUGIN_ROOT:-.}\"/scripts/detect-snapshots.sh",
+            "command": "bash \"${CODEX_PLUGIN_ROOT:-$(ls -td \"$HOME\"/.codex/plugins/cache/girishattri-codex-plugins/session-context/*/ 2>/dev/null | head -1)}\"/scripts/detect-snapshots.sh",
             "timeout": 5
           }
         ]

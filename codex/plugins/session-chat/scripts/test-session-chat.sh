@@ -47,7 +47,7 @@ require_tmux_env() {
 }
 
 run_as_sender() {
-  TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" "$@"
+  TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" SESSION_CHAT_ALLOW_SHELL_TARGET=1 "$@"
 }
 
 capture_recipient() {
