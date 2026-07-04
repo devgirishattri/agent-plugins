@@ -55,11 +55,19 @@ if [ -d "$PROJECTS_DIR" ]; then
     done
 fi
 
+# SESSION_CONTEXT_HOME overrides the current root's snapshot dir directly
+# (used for the loop below); it doesn't affect the other decoded roots since
+# they represent other projects entirely.
 found=0
 while IFS= read -r root; do
     [ -n "$root" ] || continue
-    [ -d "$root/tmp/contexts" ] || continue
-    matches=$(grep -il -- "$PATTERN" "$root"/tmp/contexts/*.md 2>/dev/null) || true
+    if [ "$root" = "$current_root" ] && [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
+        contexts_dir="$SESSION_CONTEXT_HOME"
+    else
+        contexts_dir="$root/tmp/contexts"
+    fi
+    [ -d "$contexts_dir" ] || continue
+    matches=$(grep -il -- "$PATTERN" "$contexts_dir"/*.md 2>/dev/null) || true
     [ -n "$matches" ] || continue
     while IFS= read -r snapshot_file; do
         [ -f "$snapshot_file" ] || continue

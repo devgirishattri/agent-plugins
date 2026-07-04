@@ -45,6 +45,10 @@ ensure_messages_dir() {
 # --- Context snapshots directory (project-local) ---
 
 get_contexts_dir() {
+  if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
+    echo "$SESSION_CONTEXT_HOME"
+    return 0
+  fi
   local root
   root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
   echo "$root/tmp/contexts"

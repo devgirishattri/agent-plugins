@@ -301,7 +301,9 @@ validate_stage() {
 
 # session-context snapshots live at <project_root>/tmp/contexts (same
 # project-root logic as the scheduler ledger). Override with
-# SESSION_CONTEXT_HOME (used by tests).
+# SESSION_CONTEXT_HOME — must match the same override honored by
+# session-context's own get_contexts_dir(), since that's what actually
+# writes/reads snapshots.
 resolve_contexts_dir() {
   if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
     printf '%s\n' "$SESSION_CONTEXT_HOME"

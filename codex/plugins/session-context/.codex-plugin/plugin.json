@@ -1,6 +1,6 @@
 {
   "name": "session-context",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Generate, list, load, share, and remove Codex session context snapshots.",
   "author": {
     "name": "Girish Attri",
