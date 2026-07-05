@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "session-manager",
-      "version": "1.7.0",
+      "version": "1.7.1",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-manager"
@@ -32,7 +32,7 @@
     },
     {
       "name": "session-chat",
-      "version": "0.16.0",
+      "version": "0.16.1",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-chat"

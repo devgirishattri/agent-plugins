@@ -85,6 +85,9 @@ emit_stop_block() {
 trusted_message_file() {
   local file="$1"
   case "$file" in
+    *..*) return 1 ;;
+  esac
+  case "$file" in
     "$MESSAGES_DIR"/*.md) [ -f "$file" ] ;;
     *) return 1 ;;
   esac

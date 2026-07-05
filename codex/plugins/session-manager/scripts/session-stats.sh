@@ -83,6 +83,11 @@ thread_title() {
     local session_id="$1"
     local title=""
 
+    if ! printf '%s\n' "$session_id" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+        printf ''
+        return 0
+    fi
+
     if command -v sqlite3 >/dev/null 2>&1 && [ -f "$STATE_DB" ]; then
         title=$(sqlite3 "$STATE_DB" "select title from threads where id = '$session_id' limit 1;" 2>/dev/null | head -1)
     fi
