@@ -5,7 +5,7 @@ allowed-tools: Bash(bash:*)
 
 ## Context Snapshots (Current Project)
 
-!`bash ${CLAUDE_PLUGIN_ROOT}/scripts/list-contexts.sh`
+!`export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"; bash ${CLAUDE_PLUGIN_ROOT}/scripts/list-contexts.sh`
 
 ## Instructions
 

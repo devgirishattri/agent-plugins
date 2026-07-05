@@ -43,13 +43,16 @@ ensure_messages_dir() {
 # --- Context snapshots directory (project-local) ---
 
 get_contexts_dir() {
-  if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
-    echo "$SESSION_CONTEXT_HOME"
-    return 0
+  # SESSION_CONTEXT_HOME must be provided by the caller. The /context-* commands
+  # (and the SessionStart hook) export it automatically, resolving
+  # <git-root|pwd>/tmp/contexts. Fail closed rather than guessing a location.
+  if [ -z "${SESSION_CONTEXT_HOME:-}" ]; then
+    echo "ERROR: SESSION_CONTEXT_HOME is not set." >&2
+    echo "Run session-context through its /context-* commands (they set it automatically)," >&2
+    echo "or export SESSION_CONTEXT_HOME=<dir> before invoking the scripts directly." >&2
+    return 1
   fi
-  local root
-  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-  echo "$root/tmp/contexts"
+  echo "$SESSION_CONTEXT_HOME"
 }
 
 # --- Pane naming (smux @name pattern) ---

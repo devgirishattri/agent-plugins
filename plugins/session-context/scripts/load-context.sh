@@ -16,7 +16,7 @@ fi
 
 validate_label "$PROJECT_NAME" || exit 1
 
-SNAPSHOTS_DIR="$(get_contexts_dir)"
+SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
 SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 
 if [ ! -f "$SNAPSHOT" ]; then

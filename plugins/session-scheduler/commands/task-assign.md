@@ -9,6 +9,8 @@ allowed-tools: Bash(bash:*)
 Do not narrate. Parse `$ARGUMENTS` as: first word = pane, second = task id, then optional flags, rest = prompt. Flags must come before the prompt text.
 
 ```
+export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
+export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-assign.sh "<pane>" "<id>" [flags] "<prompt>"
 ```
 

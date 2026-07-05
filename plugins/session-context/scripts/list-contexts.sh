@@ -6,7 +6,7 @@ set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
-SNAPSHOTS_DIR="$(get_contexts_dir)"
+SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
 HISTORY_DIR="$SNAPSHOTS_DIR/.history"
 
 if [ ! -d "$SNAPSHOTS_DIR" ] || [ -z "$(ls "$SNAPSHOTS_DIR"/*.md 2>/dev/null)" ]; then

@@ -45,6 +45,7 @@ Generate a concise summary of what THIS session has been working on — for hand
 
 4. **Save the snapshot**: Write it to a temp file, then run:
    ```
+   export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/save-context.sh "<snapshot-name>" "<temp-file>"
    ```
    If a snapshot with the same name already exists, the previous version is archived

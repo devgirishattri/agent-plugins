@@ -11,6 +11,7 @@ allowed-tools: Bash(bash:*)
 
 2. Run the share script:
    ```
+   export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/share-context.sh "<session-name>" "<snapshot-name>"
    ```
 

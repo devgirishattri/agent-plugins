@@ -9,13 +9,14 @@ argument-hint: <snapshot-name>
 2. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.3.2}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.6.0}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
    ```
 
 3. Run:
 
    ```bash
+   export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
    bash "$PLUGIN_ROOT/scripts/load-context.sh" "$ARGUMENTS"
    ```
 

@@ -29,7 +29,7 @@ Legal status transitions (enforced by every command): `created→assigned`, `cre
 - `--eta MINUTES` on assign stores `eta_at`; overdue tasks are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
 - Stages are optional free-form labels (suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`); view grouped output with `task-status --by-stage` or `task-board`.
 - `--depends-on` gates assignment until every dependency is `done`.
-- `--context NAME` on assign attaches the session-context snapshot at `<git-root>/tmp/contexts/NAME.md` and records `meta.context`.
+- `--context NAME` on assign attaches the session-context snapshot under `SESSION_CONTEXT_HOME` and records `meta.context`.
 
 ## Scope
 
@@ -40,4 +40,6 @@ Intentionally includes task ids, assignment, status, review gates, stages, ETAs,
 - `session-chat` 0.13.0 or newer must be available. Its durable inbox means a dispatch or ack to a busy pane is recovered on that pane's next turn rather than lost.
 - Executor panes must have unique session-chat names.
 - Executor panes should use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to act on assigned dispatches.
-- Task files are stored under the current project at `tmp/scheduler/tasks` by default. Override with `SESSION_SCHEDULER_HOME` when a different shared ledger location is needed.
+- Task files are stored under `SESSION_SCHEDULER_HOME`, which the `$session-scheduler:*` commands export automatically to `<git-root>/tmp/scheduler` (or pwd when not in a git repo) unless already set.
+- Scripts require `SESSION_SCHEDULER_HOME` and refuse to run without it rather than guessing a cwd/tmp location. Set it yourself only for direct script use or to point at a shared ledger.
+- `$session-scheduler:task-assign --context` also exports `SESSION_CONTEXT_HOME` to `<git-root>/tmp/contexts` unless already set, so attached context snapshots resolve consistently.

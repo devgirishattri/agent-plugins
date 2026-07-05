@@ -8,13 +8,14 @@ argument-hint: <name> [--meta k=v] [--stage NAME] [--depends-on id1,id2]
 1. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-scheduler/0.2.1}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-scheduler/0.4.0}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
    ```
 
 2. Run:
 
    ```bash
+   export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
    bash "$PLUGIN_ROOT/scripts/task-new.sh" $ARGUMENTS
    ```
 

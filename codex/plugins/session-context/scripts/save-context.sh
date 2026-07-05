@@ -21,7 +21,7 @@ if [ ! -f "$SNAPSHOT_FILE" ]; then
   exit 1
 fi
 
-SNAPSHOTS_DIR="$(get_contexts_dir)"
+SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
 mkdir -p "$SNAPSHOTS_DIR"
 
 DEST="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"

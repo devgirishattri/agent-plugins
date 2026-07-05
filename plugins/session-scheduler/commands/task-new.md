@@ -9,6 +9,7 @@ allowed-tools: Bash(bash:*)
 Do not narrate. Run the script and relay output.
 
 ```
+export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-new.sh $ARGUMENTS
 ```
 

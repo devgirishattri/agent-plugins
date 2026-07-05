@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Tasks
 
-!`bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-status.sh $ARGUMENTS`
+!`export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"; bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-status.sh $ARGUMENTS`
 
 ## Instructions
 

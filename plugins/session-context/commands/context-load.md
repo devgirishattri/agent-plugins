@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*), Read
 
 ## Session Context
 
-!`bash ${CLAUDE_PLUGIN_ROOT}/scripts/load-context.sh $ARGUMENTS`
+!`export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"; bash ${CLAUDE_PLUGIN_ROOT}/scripts/load-context.sh $ARGUMENTS`
 
 ## Instructions
 

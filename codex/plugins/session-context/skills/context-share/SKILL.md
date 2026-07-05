@@ -10,9 +10,11 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.3.2}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-context/0.6.0}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
 ```
+
+`SESSION_CONTEXT_HOME` is required by the scripts and is exported automatically by the command wrapper to `<git-root>/tmp/contexts` (or pwd when not in a git repo) unless already set.
 
 Parse the first argument as the target session and the optional second argument as the snapshot name. If the target is missing, tell the user:
 
@@ -23,6 +25,7 @@ Usage: $session-context:context-share <session-name> [snapshot-name]
 If no snapshot name is provided, derive one from the current directory. Run:
 
 ```bash
+export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
 bash "$PLUGIN_ROOT/scripts/share-context.sh" "<session-name>" "<snapshot-name>"
 ```
 

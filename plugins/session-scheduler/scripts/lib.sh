@@ -7,17 +7,18 @@
 # One JSON file per task. Atomic writes (tmp + mv).
 # Requires: jq, bash 4+. Depends on session-chat lib.sh for /send.
 
-resolve_scheduler_home() {
-  if [ -n "${SESSION_SCHEDULER_HOME:-}" ]; then
-    printf '%s\n' "$SESSION_SCHEDULER_HOME"
-    return 0
-  fi
-  local root
-  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-  printf '%s/tmp/scheduler\n' "$root"
-}
+# SESSION_SCHEDULER_HOME must be provided by the caller. The /task-* commands
+# export it automatically (resolving <git-root|pwd>/tmp/scheduler). Scripts
+# refuse to run without it rather than silently writing a ledger into a guessed
+# cwd/tmp location.
+if [ -z "${SESSION_SCHEDULER_HOME:-}" ]; then
+  echo "ERROR: SESSION_SCHEDULER_HOME is not set." >&2
+  echo "Run session-scheduler through its /task-* commands (they set it automatically)," >&2
+  echo "or export SESSION_SCHEDULER_HOME=<dir> before invoking the scripts directly." >&2
+  exit 1
+fi
 
-SCHEDULER_DIR="$(resolve_scheduler_home)"
+SCHEDULER_DIR="$SESSION_SCHEDULER_HOME"
 TASKS_DIR="$SCHEDULER_DIR/tasks"
 PROMPTS_DIR="$SCHEDULER_DIR/prompts"
 
@@ -299,19 +300,17 @@ validate_stage() {
   fi
 }
 
-# session-context snapshots live at <project_root>/tmp/contexts (same
-# project-root logic as the scheduler ledger). Override with
-# SESSION_CONTEXT_HOME — must match the same override honored by
-# session-context's own get_contexts_dir(), since that's what actually
-# writes/reads snapshots.
+# session-context snapshots live under SESSION_CONTEXT_HOME, which must match
+# the same override honored by session-context's own get_contexts_dir(). The
+# /task-assign command exports it automatically when --context is used. Fail
+# closed if it is not set rather than guessing a snapshot location.
 resolve_contexts_dir() {
-  if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
-    printf '%s\n' "$SESSION_CONTEXT_HOME"
-    return 0
+  if [ -z "${SESSION_CONTEXT_HOME:-}" ]; then
+    echo "ERROR: SESSION_CONTEXT_HOME is not set (required to attach a --context snapshot)." >&2
+    echo "The /task-assign command exports it automatically; export it before direct use." >&2
+    return 1
   fi
-  local root
-  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-  printf '%s/tmp/contexts\n' "$root"
+  printf '%s\n' "$SESSION_CONTEXT_HOME"
 }
 
 # Print "dep-id (status)" per dependency of <id> that is not done.

@@ -5,7 +5,9 @@ description: When and how to track multi-pane orchestrator → executor work wit
 
 # session-scheduler: file-backed task ledger
 
-A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `<project_root>/tmp/scheduler/tasks/<id>.json`; prompts go to `<project_root>/tmp/scheduler/prompts/<id>.md`. Project root resolves via `git rev-parse --show-toplevel` (or pwd). Override via `SESSION_SCHEDULER_HOME=<dir>`.
+A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `<project_root>/tmp/scheduler/tasks/<id>.json`; prompts go to `<project_root>/tmp/scheduler/prompts/<id>.md`.
+
+Storage is keyed on `SESSION_SCHEDULER_HOME`, which the `/task-*` commands export automatically (resolving `<git-root>/tmp/scheduler`, or pwd when not in a git repo). The scripts **require** this variable and refuse to run when it is unset — they never guess a cwd/tmp location. Set `SESSION_SCHEDULER_HOME=<dir>` yourself only when invoking the scripts directly or to point at a shared ledger. `/task-assign --context` additionally exports `SESSION_CONTEXT_HOME` so the session-context snapshot resolves the same way.
 
 Project-local storage means **claude and codex panes working in the same project share the same ledger** — orchestrator and reviewer can both read/write the same task list.
 

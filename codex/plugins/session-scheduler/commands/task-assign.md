@@ -8,7 +8,7 @@ argument-hint: <pane-name> <task-id> [--eta MINUTES] [--stage NAME] [--context N
 1. Resolve the plugin root:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-scheduler/0.2.1}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-scheduler/0.4.0}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
    ```
 
@@ -16,6 +16,8 @@ argument-hint: <pane-name> <task-id> [--eta MINUTES] [--stage NAME] [--context N
 3. Run:
 
    ```bash
+   export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
+   export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
    bash "$PLUGIN_ROOT/scripts/task-assign.sh" "<pane-name>" "<task-id>" [flags] "<prompt>"
    ```
 

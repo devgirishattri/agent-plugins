@@ -9,6 +9,8 @@ A snapshot is a markdown summary of a working session — **what you worked on, 
 decisions you made, and where you left off** — written so a *future* session (or a
 peer session) can resume without re-deriving everything from scratch.
 
+Snapshots are stored under `SESSION_CONTEXT_HOME`, which the `/context-*` commands (and the SessionStart hook) export automatically, resolving `<git-root>/tmp/contexts` (or pwd when not in a git repo). The scripts **require** this variable and refuse to run when it is unset rather than guessing a location; set it yourself only for direct script use or to point at a shared location.
+
 Snapshots are stored **project-local** at `<project_root>/tmp/contexts/<name>.md`,
 where the project root resolves via `git rev-parse --show-toplevel` (falling back to
 the current directory). Because storage is project-local, every Claude/Codex pane

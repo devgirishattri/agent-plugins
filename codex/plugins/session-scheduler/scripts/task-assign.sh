@@ -80,7 +80,8 @@ if [ -n "$CONTEXT" ]; then
     echo "ERROR: Invalid context name: $CONTEXT (alphanumeric, _, - only)." >&2
     exit 1
   fi
-  CONTEXT_FILE="$(resolve_contexts_dir)/$CONTEXT.md"
+  CONTEXT_DIR="$(resolve_contexts_dir)" || exit 1
+  CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
   if [ ! -f "$CONTEXT_FILE" ]; then
     echo "ERROR: Context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2
     echo "Generate it first with \$session-context:context-generate $CONTEXT." >&2

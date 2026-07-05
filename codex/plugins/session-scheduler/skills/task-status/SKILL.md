@@ -8,13 +8,14 @@ description: "Show scheduler task status from the file-backed task ledger, with 
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-scheduler/0.2.1}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-scheduler/0.4.0}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
 ```
 
 Run:
 
 ```bash
+export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
 bash "$PLUGIN_ROOT/scripts/task-status.sh" [task-id|--all|--pending|--mine|--by-stage]
 ```
 
