@@ -1,6 +1,6 @@
 ---
 name: session-delete
-description: "Delete a local Codex session by resolving a title, ID, or project query to exactly one session."
+description: "Delete one local Codex session by resolving a title, ID, or project query, or bulk-delete all sessions for the current project with --all."
 ---
 
 # Session Delete
@@ -10,11 +10,25 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 Resolve the plugin root:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.5.0}"
+PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-manager/1.7.0}"
 [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
 ```
 
-Run the delete-and-resolve helper with the provided target, or with an empty argument if the user did not provide one:
+If the provided target is exactly `--all`, do not resolve or confirm sessions one by one. First run:
+
+```bash
+bash "$PLUGIN_ROOT/scripts/list-sessions.sh"
+```
+
+Count the returned session rows and tell the user exactly how many Codex sessions will be deleted for the current project directory. Ask once for confirmation. Warn that this includes the currently active session, whose data may be rewritten when this session exits. If the user confirms, run:
+
+```bash
+bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh"
+```
+
+Return the summary. If the user cancels, report that deletion was cancelled. Do not run `delete-resolved-session.sh` for `--all`.
+
+Run the delete-and-resolve helper with any other provided target, or with an empty argument if the user did not provide one:
 
 ```bash
 bash "$PLUGIN_ROOT/scripts/delete-resolved-session.sh" "<session-id-or-title>"

@@ -1,6 +1,6 @@
 ---
-description: Delete a session and all its related data files (no args = interactive select)
-argument-hint: [session-id-or-name]
+description: Delete a session and all its related data files (no args = interactive select; --all = wipe current project)
+argument-hint: [session-id-or-name | --all]
 allowed-tools: Bash(bash:*)
 ---
 
@@ -15,6 +15,12 @@ Target: **$ARGUMENTS**
 !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/find-or-skip.sh "$ARGUMENTS"`
 
 ## Instructions
+
+0. **If $ARGUMENTS is `--all` (bulk delete for the current project)**: Do NOT ask about each session individually. Instead, use the "Available Sessions" list above to tell the user exactly how many sessions will be deleted and which project directory they belong to, then ask **once** with AskUserQuestion using options "Yes, delete all" and "No, cancel". Warn that this includes the currently active session (its data may be rewritten when this session exits). If the user confirms, run the bulk script — it deletes every session in the current project without further prompts:
+   ```
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/delete-all-sessions.sh
+   ```
+   Then report the summary. If the user cancels, report that deletion was cancelled. Skip the remaining steps.
 
 1. **If $ARGUMENTS is empty**: Show the available sessions from above as a numbered table and use AskUserQuestion to let the user pick which session to delete. Include session name and ID in each option. After selection, show the session details and ask for final confirmation with AskUserQuestion using options "Yes, delete it" and "No, cancel".
 
