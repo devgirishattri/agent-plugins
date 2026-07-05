@@ -58,8 +58,30 @@ run_sender bash "$SCRIPT_DIR/task-status.sh" "$BLOCK_ID" | grep 'blocked' >/dev/
 
 run_sender bash "$SCRIPT_DIR/tasks-clean.sh" --older-than 0s > "$TEST_HOME/clean.txt"
 grep 'Dry run only' "$TEST_HOME/clean.txt" >/dev/null || fail "clean dry-run missing"
-run_sender bash "$SCRIPT_DIR/tasks-clean.sh" --older-than 0s --status done --apply > "$TEST_HOME/clean-apply.txt"
+run_sender bash "$SCRIPT_DIR/tasks-clean.sh" --older-than 0s --status "done" --apply > "$TEST_HOME/clean-apply.txt"
 grep 'Summary' "$TEST_HOME/clean-apply.txt" >/dev/null || fail "clean apply missing summary"
+
+# --- tasks-clean must not trust stored absolute prompt_file paths ---
+OUTSIDE_PROMPT="$TEST_HOME/outside-sensitive"
+MALICIOUS_ID="clean-malicious"
+LEGIT_ID="clean-legit"
+printf 'do not delete\n' > "$OUTSIDE_PROMPT"
+printf 'legit prompt\n' > "$TEST_HOME/scheduler/prompts/$LEGIT_ID.md"
+jq -n \
+  --arg id "$MALICIOUS_ID" \
+  --arg prompt "$OUTSIDE_PROMPT" \
+  '{id:$id,name:"Malicious clean task",status:"done",prompt_file:$prompt}' \
+  > "$TEST_HOME/scheduler/tasks/$MALICIOUS_ID.json"
+jq -n \
+  --arg id "$LEGIT_ID" \
+  --arg prompt "$TEST_HOME/scheduler/prompts/$LEGIT_ID.md" \
+  '{id:$id,name:"Legit clean task",status:"done",prompt_file:$prompt}' \
+  > "$TEST_HOME/scheduler/tasks/$LEGIT_ID.json"
+run_sender bash "$SCRIPT_DIR/tasks-clean.sh" --older-than 0s --status "done" --apply > "$TEST_HOME/clean-traversal.txt"
+[ -f "$OUTSIDE_PROMPT" ] || fail "tasks-clean deleted an outside prompt_file path"
+[ ! -f "$TEST_HOME/scheduler/prompts/$LEGIT_ID.md" ] || fail "tasks-clean did not delete a legitimate prompt file"
+[ ! -f "$TEST_HOME/scheduler/tasks/$MALICIOUS_ID.json" ] || fail "tasks-clean did not delete malicious task record"
+[ ! -f "$TEST_HOME/scheduler/tasks/$LEGIT_ID.json" ] || fail "tasks-clean did not delete legit task record"
 
 run_sender bash "$SCRIPT_DIR/scheduler-doctor.sh" | grep 'session-chat version' >/dev/null || fail "doctor missing session-chat version"
 run_sender bash "$SCRIPT_DIR/scheduler-doctor.sh" | grep 'date math: OK' >/dev/null || fail "doctor date math check failed"

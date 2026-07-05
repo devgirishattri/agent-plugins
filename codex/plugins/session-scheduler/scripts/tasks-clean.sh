@@ -18,7 +18,7 @@ duration_to_seconds() {
   local value="$1"
   local number unit
   number="${value%[smhd]}"
-  unit="${value#$number}"
+  unit="${value#"$number"}"
   case "$number" in
     ''|*[!0-9]*) return 1 ;;
   esac
@@ -75,12 +75,11 @@ for file in "$TASKS_DIR"/*.json; do
   mtime=$(file_mtime "$file")
   age=$((now - mtime))
   [ "$age" -lt "$threshold" ] && continue
-  id=$(jq -r '.id' "$file")
-  prompt=$(jq -r '.prompt_file // ""' "$file")
+  id=$(jq -r '.id // ""' "$file" 2>/dev/null)
   count=$((count + 1))
   if [ "$APPLY" -eq 1 ]; then
     rm -f "$file"
-    [ -n "$prompt" ] && rm -f "$prompt"
+    prompt=$(prompt_file "$id" 2>/dev/null) && rm -f "$prompt"
     printf 'Deleted\t%s\n' "$id"
   else
     printf 'Would delete\t%s\tstatus=%s\tage=%ss\n' "$id" "$status" "$age"

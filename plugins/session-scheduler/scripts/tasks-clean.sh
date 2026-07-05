@@ -75,8 +75,16 @@ fi
 
 deleted=0
 for f in "${candidates[@]}"; do
-  id=$(jq -r '.id' "$f")
-  rm -f "$f" "$(prompt_path "$id")"
+  # Read the task's own .id before deleting the file.
+  id=$(jq -r '.id' "$f" 2>/dev/null)
+  # "$f" comes from the bounded "$TASKS_DIR"/*.json glob, so deleting it is safe.
+  rm -f "$f"
+  # The prompt path is derived from that .id (file content). Validate it first
+  # so a crafted .id like "../../foo" can never steer rm outside PROMPTS_DIR —
+  # validate_task_id forbids "/" and ".".
+  if validate_task_id "$id" >/dev/null 2>&1; then
+    rm -f "$(prompt_path "$id")"
+  fi
   deleted=$((deleted + 1))
 done
 echo "Deleted ${deleted} task(s) and matching prompt files."
