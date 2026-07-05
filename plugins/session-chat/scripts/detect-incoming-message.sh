@@ -71,6 +71,13 @@ emit_stop_block() {
 
 trusted_message_file() {
   local file="$1"
+  # Reject path traversal FIRST. A bash `case` glob `*` crosses `/`, so the
+  # prefix match below alone would accept e.g. "$MESSAGES_DIR/../../etc/x.md":
+  # the `msg:` field is supplied by the sending peer, so a `..`-laden path must
+  # not be treated as a trusted message file.
+  case "$file" in
+    *..*) return 1 ;;
+  esac
   case "$file" in
     "$MESSAGES_DIR"/*.md) [ -f "$file" ] ;;
     *) return 1 ;;
