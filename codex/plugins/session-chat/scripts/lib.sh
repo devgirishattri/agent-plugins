@@ -94,9 +94,32 @@ _pane_name_err_file() {
   printf '%s/get-pane-name.%s' "$dir" "$$"
 }
 
+# Per-tag stderr capture file inside the private scratch dir — one file per
+# (tag, process) so unrelated tmux calls in the same process (e.g. the
+# self-name query in get_my_name vs. the pane search in resolve_pane) don't
+# clobber each other's captured stderr.
+_tmux_err_file() {
+  local tag="${1:-tmux}"
+  local dir
+  dir="$(_pane_name_scratch_dir)"
+  [ -n "$dir" ] || return 1
+  printf '%s/%s.%s' "$dir" "$tag" "$$"
+}
+
+# Read + clear the tmux stderr captured under <tag> by this process (see
+# _tmux_err_file). Call once, right after the `x=$(...)` that ran the tmux
+# command, to both retrieve and clean up.
+_pop_tmux_err() {
+  local tag="$1" err_file
+  err_file="$(_tmux_err_file "$tag")"
+  [ -f "$err_file" ] || return 0
+  cat "$err_file" 2>/dev/null
+  rm -f "$err_file" 2>/dev/null
+}
+
 get_pane_name() {
   local pane_id="$1" err_file
-  if err_file="$(_pane_name_err_file)"; then
+  if err_file="$(_tmux_err_file get-pane-name)"; then
     tmux display-message -p -t "$pane_id" '#{@name}' 2>"$err_file"
   else
     tmux display-message -p -t "$pane_id" '#{@name}' 2>/dev/null
@@ -115,24 +138,19 @@ get_my_name() {
   get_pane_name "${TMUX_PANE:-}"
 }
 
-# Read + clear the tmux stderr captured by the most recent get_pane_name call
-# in this process (see _pane_name_err_file). Call once, right after
-# `x=$(get_my_name)`, to both retrieve and clean up.
 pop_pane_name_err() {
-  local err_file
-  err_file="$(_pane_name_err_file)"
-  [ -f "$err_file" ] || return 0
-  cat "$err_file" 2>/dev/null
-  rm -f "$err_file" 2>/dev/null
+  _pop_tmux_err get-pane-name
 }
 
-# Format the "(tmux: ...)" suffix for a "no name" error, given the stderr
-# pop_pane_name_err returned. "Operation not permitted" is the signature of a
+# Format the "(tmux: ...)" suffix for a tmux-command error, given the stderr
+# _pop_tmux_err returned. "Operation not permitted" is the signature of a
 # sandboxed exec (e.g. a Codex sandbox profile) denying the tmux socket
-# connect() outright — confirmed live 2026-07-09 (REPRO-0162): the exact same
-# command succeeds on a later, differently-classified invocation, so this is
-# not a fixable state within the current process — the caller needs to
-# re-run the whole command escalated/approved, not just retry the tmux call.
+# connect() outright — confirmed live 2026-07-09 (REPRO-0162, self-name query;
+# and again via orchestrator-pane's fresh-session data hitting resolve_pane
+# instead): the exact same command succeeds on a later, differently-
+# classified invocation, so this is not a fixable state within the current
+# process — the caller needs to re-run the whole command escalated/approved,
+# not just retry the tmux call.
 pane_name_err_detail() {
   local tmux_err="$1"
   [ -n "$tmux_err" ] || return 0
@@ -152,13 +170,25 @@ resolve_pane() {
   local matches
   local count
   local panes
+  local err_file tmux_err
   # Tab delimiter: a legacy/manually-set name containing whitespace must not
   # shift awk fields and silently become unreachable.
-  matches=$(tmux list-panes -a -F $'#{pane_id}\t#{@name}' 2>/dev/null | awk -F'\t' -v label="$label" '$2 == label { print $1 }')
+  if err_file="$(_tmux_err_file resolve-pane)"; then
+    matches=$(tmux list-panes -a -F $'#{pane_id}\t#{@name}' 2>"$err_file" | awk -F'\t' -v label="$label" '$2 == label { print $1 }')
+  else
+    matches=$(tmux list-panes -a -F $'#{pane_id}\t#{@name}' 2>/dev/null | awk -F'\t' -v label="$label" '$2 == label { print $1 }')
+  fi
+  tmux_err=$(_pop_tmux_err resolve-pane)
   count=$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')
 
   if [ "$count" -eq 0 ]; then
-    echo "ERROR: No pane named '$label'. Run /panes all to see all available named panes." >&2
+    # An empty result here is ambiguous by itself: either no pane is named
+    # $label, or `tmux list-panes` itself failed (e.g. a sandboxed exec
+    # denying the socket) and silently returned nothing. Surface the real
+    # cause when we have one instead of always implying the target is
+    # unregistered — confirmed live 2026-07-09 (orchestrator-pane, fresh Codex
+    # sessions): this was the actual, and only, failure point in 4/4 attempts.
+    echo "ERROR: No pane named '$label'. Run /panes all to see all available named panes.$(pane_name_err_detail "$tmux_err")" >&2
     return 1
   fi
   if [ "$count" -gt 1 ]; then
