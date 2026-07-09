@@ -34,7 +34,7 @@ The target is a single doc path (e.g. `docs/AUTH_FLOW.md`) or a directory (e.g. 
 3. **Run the plugin's validation scripts.** Resolve the plugin root with:
 
    ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-codex-plugins/creating-docs/1.1.0}"
+   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/creating-docs/1.1.0}"
    [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/creating-docs"
    ```
 

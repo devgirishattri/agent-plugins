@@ -62,13 +62,13 @@ codex plugin marketplace add https://github.com/devgirishattri/agent-plugins.git
 Upgrade the configured marketplace after new plugin versions are published:
 
 ```bash
-codex plugin marketplace upgrade girishattri-codex-plugins
+codex plugin marketplace upgrade girishattri-plugins
 ```
 
 Reload Codex after upgrading so the running plugin registry uses the new cached version. Use `/reload-plugins` when available, or restart the Codex session. To verify the installed cache, inspect:
 
 ```bash
-ls "$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat"
+ls "$HOME/.codex/plugins/cache/girishattri-plugins/session-chat"
 ```
 
 To upgrade all configured Git marketplaces:

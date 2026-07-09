@@ -96,7 +96,7 @@ Use `$session-chat:messages-list` to inspect trusted dispatch message files in `
 This source tree may be newer than the running Codex plugin cache. To make the running registry pick up this version after publishing or local marketplace refresh, run:
 
 ```bash
-codex plugin marketplace upgrade girishattri-codex-plugins
+codex plugin marketplace upgrade girishattri-plugins
 ```
 
-Then restart Codex or use `/reload-plugins` if the runtime supports it. To verify the cached version, inspect `$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat/`; if the session still shows an older cached path such as `session-chat/0.10.1`, reload before testing new commands.
+Then restart Codex or use `/reload-plugins` if the runtime supports it. To verify the cached version, inspect `$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/`; if the session still shows an older cached path such as `session-chat/0.10.1`, reload before testing new commands.

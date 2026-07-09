@@ -127,7 +127,7 @@ session_chat_root() {
     printf '%s\n' "$SESSION_CHAT_PLUGIN_ROOT"
     return 0
   fi
-  local cache_base="$HOME/.codex/plugins/cache/girishattri-codex-plugins/session-chat"
+  local cache_base="$HOME/.codex/plugins/cache/girishattri-plugins/session-chat"
   if [ -d "$cache_base" ]; then
     local latest_version
     latest_version=$(find "$cache_base" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
