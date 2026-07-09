@@ -155,6 +155,25 @@ pop_pane_name_err() {
   rm -f "$err_file" 2>/dev/null
 }
 
+# Format the "(tmux: ...)" suffix for a "no name" error, given the stderr
+# pop_pane_name_err returned. "Operation not permitted" is the signature of a
+# sandboxed exec (e.g. a Codex sandbox profile) denying the tmux socket
+# connect() outright — confirmed live 2026-07-09 (REPRO-0162): the exact same
+# command succeeds on a later, differently-classified invocation, so this is
+# not a fixable state within the current process — the caller needs to
+# re-run the whole command escalated/approved, not just retry the tmux call.
+pane_name_err_detail() {
+  local tmux_err="$1"
+  [ -n "$tmux_err" ] || return 0
+  local hint=""
+  case "$tmux_err" in
+    *"Operation not permitted"*)
+      hint=" — looks like a sandboxed exec denied the tmux socket; re-run this command escalated/approved, or set SESSION_CHAT_PANE_NAME to skip self-name resolution"
+      ;;
+  esac
+  printf ' (tmux: %s)%s' "$tmux_err" "$hint"
+}
+
 # --- Pane resolution (searches ALL tmux sessions) ---
 
 resolve_pane() {
@@ -830,9 +849,7 @@ send_message() {
   my_name=$(get_my_name)
   tmux_err=$(pop_pane_name_err)
   if [ -z "$my_name" ]; then
-    local detail=""
-    [ -n "$tmux_err" ] && detail=" (tmux: ${tmux_err})"
-    echo "ERROR: This pane has no name. Run /whoami <name> first.${detail}" >&2
+    echo "ERROR: This pane has no name. Run /whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
     return 1
   fi
   # Length / newline guard: tmux send-keys -l truncates large literal pastes
@@ -877,9 +894,7 @@ dispatch_message() {
   my_name=$(get_my_name)
   tmux_err=$(pop_pane_name_err)
   if [ -z "$my_name" ]; then
-    local detail=""
-    [ -n "$tmux_err" ] && detail=" (tmux: ${tmux_err})"
-    echo "ERROR: This pane has no name. Run /whoami <name> first.${detail}" >&2
+    echo "ERROR: This pane has no name. Run /whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
     return 1
   fi
   local target_pane
