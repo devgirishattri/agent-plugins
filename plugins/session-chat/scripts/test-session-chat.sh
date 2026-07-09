@@ -172,6 +172,42 @@ else
   fail "retry_eventual_success" "no marker on recipient"
 fi
 
+# --- Test 8b: Enter (submit) failure queues instead of dropping the durable copy ---
+# Regression guard: a failed `send-keys Enter` must NOT be reported as live
+# delivery (which would dequeue the durable copy and silently lose the message).
+# It must surface as queued (send_message rc 3) with the row still in the inbox.
+enter_fail_out=$(
+  TMUX_PANE="$SENDER_PANE" \
+  SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
+  SESSION_CHAT_VERIFY_TIMEOUT_MS=1000 \
+  SESSION_CHAT_SETTLE_MS=50 \
+  SESSION_CHAT_SEND_RETRIES=1 \
+  TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" \
+  bash -c "
+    set -u
+    source '$HERE/lib.sh'
+    export MESSAGES_DIR='$TEST_MSGS_DIR'
+    # Fail only the submit (Enter) keystroke; paste + capture pass through.
+    tmux() {
+      if [ \"\$1\" = send-keys ]; then
+        local last=\"\${@: -1}\"
+        [ \"\$last\" = Enter ] && return 1
+      fi
+      command tmux -L '$SOCKET' \"\$@\"
+    }
+    export -f tmux
+    send_message beta 'enter-fail-probe'
+    echo \"RC=\$?\"
+  "
+)
+enter_qf="$TEST_MSGS_DIR/queue/beta.tsv"
+if echo "$enter_fail_out" | grep -q "RC=3" \
+   && [ -f "$enter_qf" ] && grep -qF 'enter-fail-probe' "$enter_qf"; then
+  pass "enter_failure_queues"
+else
+  fail "enter_failure_queues" "expected rc=3 + queued row; out=$enter_fail_out; qf=$(cat "$enter_qf" 2>/dev/null)"
+fi
+
 # --- Test 9: mixed-runtime dir resolution + cross-runtime queue threading ---
 # No tmux needed: override short-circuits detection, and the queue helpers are
 # pure file ops. Verifies a Claude->Codex row/file lands in the CODEX dir only.
@@ -199,6 +235,22 @@ if echo "$mr_out" | grep -q OVERRIDE_OK && echo "$mr_out" | grep -q CODEX_HAS_RO
   pass "mixed_runtime_routing"
 else
   fail "mixed_runtime_routing" "out=$mr_out"
+fi
+
+# --- Test 10: node-reporting pane classified as Claude runtime ---
+# A recipient whose foreground command is bare `node` must resolve to the Claude
+# messages dir (MESSAGES_DIR), not fall through to a Codex dir.
+node_route=$(
+  source "$HERE/lib.sh"
+  export MESSAGES_DIR="/tmp/claude-rt-test/messages"
+  tmux() { [ "$1" = display-message ] && { echo node; return 0; }; return 0; }
+  export -f tmux
+  target_messages_dir_for_pane %999
+)
+if [ "$node_route" = "/tmp/claude-rt-test/messages" ]; then
+  pass "node_routes_claude"
+else
+  fail "node_routes_claude" "expected Claude MESSAGES_DIR, got: $node_route"
 fi
 
 # --- Summary ---

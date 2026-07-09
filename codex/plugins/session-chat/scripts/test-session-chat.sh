@@ -196,4 +196,38 @@ if find "$TEST_HOME/messages" -maxdepth 1 -type f -name '*.md' 2>/dev/null | gre
   fail "leftover test message files"
 fi
 
+# A recipient pane whose foreground command is bare `node` is a Claude runtime;
+# its durable fallback MUST route to the Claude messages dir, not Codex's own —
+# otherwise a failed live paste queues where the Claude pane never drains (lost).
+NODE_ROUTE="$(CODEX_HOME="$TEST_HOME" CLAUDE_HOME="$TEST_HOME/claude-rt" bash -c '
+  source "$0"
+  tmux() { if [ "$1" = display-message ]; then echo node; return 0; fi; command tmux "$@"; }
+  export -f tmux
+  target_messages_dir_for_pane %999
+' "$SCRIPT_DIR/lib.sh")"
+[ "$NODE_ROUTE" = "$TEST_HOME/claude-rt/messages" ] || fail "node-reporting pane must route to Claude dir, got: $NODE_ROUTE"
+
+# Enter (submit) failure must queue, not drop: a failed `send-keys Enter` must
+# NOT be reported as live delivery (which would dequeue the durable copy and
+# silently lose the message). Expect send_message rc 3 with the row retained.
+ENTER_FAIL_OUT="$(TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" \
+  SESSION_CHAT_ALLOW_SHELL_TARGET=1 SESSION_CHAT_VERIFY_TIMEOUT_MS=1000 \
+  SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_SEND_RETRIES=1 \
+  bash -c '
+    set -u
+    source "$0"
+    tmux() {
+      if [ "$1" = send-keys ]; then
+        local last="${@: -1}"
+        [ "$last" = Enter ] && return 1
+      fi
+      command tmux "$@"
+    }
+    export -f tmux
+    send_message recipient-test "enter-fail-probe"
+    echo "RC=$?"
+  ' "$SCRIPT_DIR/lib.sh")"
+assert_contains "RC=3" "$ENTER_FAIL_OUT"
+assert_file_contains "$TEST_HOME/messages/queue/recipient-test.tsv" "enter-fail-probe"
+
 echo "session-chat smoke tests passed"

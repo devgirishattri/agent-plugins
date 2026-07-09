@@ -87,13 +87,6 @@ _pane_name_scratch_dir() {
   fi
 }
 
-_pane_name_err_file() {
-  local dir
-  dir="$(_pane_name_scratch_dir)"
-  [ -n "$dir" ] || return 1
-  printf '%s/get-pane-name.%s' "$dir" "$$"
-}
-
 # Per-tag stderr capture file inside the private scratch dir — one file per
 # (tag, process) so unrelated tmux calls in the same process (e.g. the
 # self-name query in get_my_name vs. the pane search in resolve_pane) don't
@@ -213,7 +206,7 @@ target_messages_dir_for_pane() {
     codex|codex-*|*codex*)
       printf '%s\n' "$MESSAGES_DIR"
       ;;
-    claude|claude-*|*claude*|[0-9]*.[0-9]*.[0-9]*)
+    claude|claude-*|*claude*|node|*node*|[0-9]*.[0-9]*.[0-9]*)
       printf '%s/messages\n' "${CLAUDE_HOME:-$HOME/.claude}"
       ;;
     *)
@@ -374,16 +367,21 @@ release_send_lock() {
 }
 
 # --- Durable per-recipient inbox (delivery fallback) ---
-# Every message is enqueued BEFORE the live paste. A successful paste delivers it
-# live and the entry is removed; a failed paste (busy recipient) leaves it so the
-# recipient's UserPromptSubmit hook recovers it on its next turn.
-# Records are single-line TAB-separated:
-#   <id>\t<type>\t<from>\t<ready_at_ms>\t<payload>
+# Every message is enqueued BEFORE the live paste. A successful paste delivers
+# it live and the entry is removed; a failed paste (busy recipient) leaves the
+# entry so the recipient's UserPromptSubmit/Stop hooks recover it later.
+# Records are single-line TAB-separated. Canonical layout:
+#   <id>\t<type>\t<from>\t<ready_at>\tp<prio>:x<expires_ms>\t<payload>
 #   type=send     -> payload = the (single-line) message text
 #   type=dispatch -> payload = the trusted msg file path
-# Dedup across the live paste and the inbox is by <id>. New queue records carry
-# a ready-at timestamp so in-flight live sends get a chance to win before the
-# recipient hook surfaces the durable fallback.
+#   prio          -> 0 normal, 1 high; high rows surface first during recovery
+#   expires_ms    -> 0 never; expired rows are dropped without surfacing
+# Legacy rows (no meta column, or no ready_at column) parse as normal-priority,
+# never-expiring, ready-now.
+# Each new record carries a ready-at timestamp so an in-flight live send gets a
+# grace window to win before the recipient hook surfaces the durable fallback.
+# A per-recipient "recent ids" ledger (TTL'd) dedups across turns so a queued
+# entry and its later live paste never both surface.
 
 queue_file_for() {
   local name="$1"
@@ -764,8 +762,13 @@ send_text_once() {
   if [ "${SESSION_CHAT_SKIP_VERIFY:-}" != "1" ]; then
     paste_placeholders_before=$(capture_paste_placeholder_count "$pane_id")
   fi
-  # Literal mode + split text/Enter for TUI safety (smux pattern)
-  tmux send-keys -t "$pane_id" -l -- "$text" || return 1
+  # Literal mode + split text/Enter for TUI safety (smux pattern).
+  # A failed paste is RETRYABLE (return 2): clear any partial staging first so
+  # the retry starts from a clean composer rather than duplicating text.
+  if ! tmux send-keys -t "$pane_id" -l -- "$text"; then
+    clear_partial_input "$pane_id"
+    return 2
+  fi
 
   if [ "${SESSION_CHAT_SKIP_VERIFY:-}" != "1" ]; then
     local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-4000}"
@@ -801,7 +804,15 @@ send_text_once() {
     fi
   fi
 
-  tmux send-keys -t "$pane_id" Enter || return 1
+  # Enter is the SUBMIT. If it fails, the text is staged but was never sent;
+  # this is NON-retryable (return 1) — retrying the whole paste would duplicate
+  # text in the composer. The caller (send_text -> send_message) must treat this
+  # as a failed live send and leave the durable copy queued, never dequeue it.
+  # Best-effort clear the staged (unsubmitted) text so it doesn't linger.
+  if ! tmux send-keys -t "$pane_id" Enter; then
+    clear_partial_input "$pane_id"
+    return 1
+  fi
 
   case "$settle_ms" in
     ''|*[!0-9]*) settle_ms=300 ;;
@@ -826,23 +837,33 @@ send_text() {
   max_attempts=$((retries + 1))
   lock_dir=$(send_lock_path "$pane_id")
 
+  # Hold the send-lock across the ENTIRE retry sequence, not per-attempt: the
+  # lock exists so concurrent senders don't interleave keystrokes, and that
+  # guarantee must span the clear/backoff/retry gaps too — otherwise another
+  # sender could paste a competing message into this pane between our attempts.
+  acquire_send_lock "$lock_dir" "$pane_id" || return 1
+
   while [ "$attempt" -le "$max_attempts" ]; do
-    acquire_send_lock "$lock_dir" "$pane_id" || return 1
     if [ -n "$marker_supplied" ]; then
       send_text_once "$pane_id" "$text" "$marker"
     else
       send_text_once "$pane_id" "$text"
     fi
     status=$?
-    release_send_lock "$lock_dir"
 
     if [ "$status" -eq 0 ]; then
+      release_send_lock "$lock_dir"
       return 0
     fi
+    # status 1 = non-retryable submit (Enter) failure — bail now, let the
+    # caller keep the durable copy queued. Only status 2 (paste fail / verify
+    # timeout) is retryable.
     if [ "$status" -ne 2 ]; then
+      release_send_lock "$lock_dir"
       return "$status"
     fi
     if [ "$attempt" -ge "$max_attempts" ]; then
+      release_send_lock "$lock_dir"
       local timeout_ms
       timeout_ms=$(normalize_positive_int "${SESSION_CHAT_VERIFY_TIMEOUT_MS:-4000}" 4000)
       echo "ERROR: send to $pane_id did not land within ${timeout_ms}ms after ${max_attempts} attempts — recipient may be busy." >&2
@@ -853,6 +874,7 @@ send_text() {
     attempt=$((attempt + 1))
   done
 
+  release_send_lock "$lock_dir"
   return 1
 }
 

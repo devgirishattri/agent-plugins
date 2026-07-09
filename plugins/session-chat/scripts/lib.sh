@@ -793,7 +793,12 @@ _send_text_attempt() {
   if [ "${SESSION_CHAT_SKIP_VERIFY:-0}" != "1" ]; then
     paste_placeholders_before=$(capture_paste_placeholder_count "$pane_id")
   fi
-  tmux send-keys -t "$pane_id" -l -- "$text"
+  # A failed paste is RETRYABLE (return 2): clear any partial staging first so
+  # the retry starts from a clean composer rather than duplicating text.
+  if ! tmux send-keys -t "$pane_id" -l -- "$text"; then
+    clear_partial_input "$pane_id"
+    return 2
+  fi
   if [ "${SESSION_CHAT_SKIP_VERIFY:-0}" != "1" ]; then
     local timeout_ms="${SESSION_CHAT_VERIFY_TIMEOUT_MS:-4000}"
     if [ -z "$marker" ]; then
@@ -816,11 +821,20 @@ _send_text_attempt() {
       elapsed=$((elapsed + 50))
     done
     if [ "$landed" -ne 1 ]; then
+      # Verify timeout — RETRYABLE (return 2). Clear the partial paste so a
+      # retry (or the caller's give-up) doesn't leave staged text behind.
       clear_partial_input "$pane_id"
-      return 1
+      return 2
     fi
   fi
-  tmux send-keys -t "$pane_id" Enter
+  # Enter is the SUBMIT. If it fails, the text is staged but never sent — this
+  # is NON-retryable (return 1): retrying the whole paste would duplicate text
+  # in the composer. The caller must treat this as a failed live send and leave
+  # the durable copy queued, never dequeue it. Best-effort clear the staged text.
+  if ! tmux send-keys -t "$pane_id" Enter; then
+    clear_partial_input "$pane_id"
+    return 1
+  fi
   local settle_ms="${SESSION_CHAT_SETTLE_MS:-300}"
   if [ "$settle_ms" -gt 0 ] 2>/dev/null; then
     local settle_s
@@ -837,13 +851,24 @@ send_text() {
 
   acquire_lock "$pane_id" || return 1
 
-  local retries="${SESSION_CHAT_SEND_RETRIES:-2}"
-  local backoff_ms="${SESSION_CHAT_RETRY_BACKOFF_MS:-200}"
+  local retries backoff_ms
+  retries=$(normalize_positive_int "${SESSION_CHAT_SEND_RETRIES:-2}" 2)
+  backoff_ms=$(normalize_positive_int "${SESSION_CHAT_RETRY_BACKOFF_MS:-200}" 200)
   local attempt=0
+  local status=0
   while :; do
-    if _send_text_attempt "$pane_id" "$text" "$marker"; then
+    _send_text_attempt "$pane_id" "$text" "$marker"
+    status=$?
+    if [ "$status" -eq 0 ]; then
       release_lock "$pane_id"
       return 0
+    fi
+    # status 1 = non-retryable submit (Enter) failure — bail now so the caller
+    # keeps the durable copy queued. Only status 2 (paste fail / verify timeout)
+    # is retryable.
+    if [ "$status" -ne 2 ]; then
+      release_lock "$pane_id"
+      return "$status"
     fi
     if [ "$attempt" -ge "$retries" ]; then
       release_lock "$pane_id"
@@ -941,7 +966,7 @@ dispatch_message() {
 $message
 EOF
   local line_count
-  line_count=$(printf '%s' "$message" | awk 'END { print NR + 1 }')
+  line_count=$(printf '%s\n' "$message" | wc -l | tr -d ' ')
   # Durable copy first (points at the task file), then the live nudge.
   enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" "$target_messages_dir" || return 1
   # Notification line: no truncated preview. Recipient hook + receiver agent
