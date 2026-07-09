@@ -1,6 +1,6 @@
 {
   "name": "session-chat",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "description": "Peer-to-peer messaging and task dispatch between Claude (and Codex) sessions via tmux. Durable delivery routes fallback/dispatch into the recipient runtime's messages dir.",
   "author": {
     "name": "Girish Attri"

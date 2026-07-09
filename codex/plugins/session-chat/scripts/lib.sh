@@ -64,13 +64,66 @@ set_pane_name() {
   tmux set-option -p -t "$pane_id" @name "$name"
 }
 
+# get_pane_name normally swallows tmux's stderr so callers get a clean
+# empty-string result, but a silent "no name" is indistinguishable from tmux
+# failing to reach the pane at all (wrong/stale socket, dead server). Its
+# stderr is captured to a per-process file instead of a plain variable
+# because callers invoke it as `x=$(get_my_name)` — a command-substitution
+# subshell — so a variable assigned inside get_pane_name never makes it back
+# to the caller's shell. `$$` (unlike `$BASHPID`) stays fixed across that
+# subshell, so the file path below is predictable from either side. That
+# predictability is only safe inside a private (0700), ownership-checked
+# directory — a bare predictable path directly under the world-writable
+# $TMPDIR would let another local user pre-plant a symlink there and have
+# our `2>` redirect follow it into an arbitrary file of theirs.
+_pane_name_scratch_dir() {
+  local dir="${TMPDIR:-/tmp}/session-chat-priv-$(id -u 2>/dev/null || printf '0')"
+  [ -e "$dir" ] || mkdir -m 700 "$dir" 2>/dev/null
+  # Refuse anything that isn't a real, non-symlink directory we own: a
+  # pre-planted symlink or attacker-owned directory at this path must never
+  # be trusted, even if that means falling back to losing the diagnostic.
+  if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ]; then
+    printf '%s' "$dir"
+  fi
+}
+
+_pane_name_err_file() {
+  local dir
+  dir="$(_pane_name_scratch_dir)"
+  [ -n "$dir" ] || return 1
+  printf '%s/get-pane-name.%s' "$dir" "$$"
+}
+
 get_pane_name() {
-  local pane_id="$1"
-  tmux display-message -p -t "$pane_id" '#{@name}' 2>/dev/null
+  local pane_id="$1" err_file
+  if err_file="$(_pane_name_err_file)"; then
+    tmux display-message -p -t "$pane_id" '#{@name}' 2>"$err_file"
+  else
+    tmux display-message -p -t "$pane_id" '#{@name}' 2>/dev/null
+  fi
 }
 
 get_my_name() {
+  # SESSION_CHAT_PANE_NAME lets a caller assert its own identity directly,
+  # bypassing the tmux self-query. Escape hatch for environments (e.g. some
+  # sandboxed exec contexts) where `tmux display-message -t $TMUX_PANE` on
+  # one's own pane can fail even though the pane genuinely has a name.
+  if [ -n "${SESSION_CHAT_PANE_NAME:-}" ]; then
+    printf '%s' "$SESSION_CHAT_PANE_NAME"
+    return 0
+  fi
   get_pane_name "${TMUX_PANE:-}"
+}
+
+# Read + clear the tmux stderr captured by the most recent get_pane_name call
+# in this process (see _pane_name_err_file). Call once, right after
+# `x=$(get_my_name)`, to both retrieve and clean up.
+pop_pane_name_err() {
+  local err_file
+  err_file="$(_pane_name_err_file)"
+  [ -f "$err_file" ] || return 0
+  cat "$err_file" 2>/dev/null
+  rm -f "$err_file" 2>/dev/null
 }
 
 # --- Pane resolution (searches ALL tmux sessions) ---
@@ -774,10 +827,13 @@ ensure_agent_target() {
 send_message() {
   local target_name="$1"
   local message="$2"
-  local my_name
+  local my_name tmux_err
   my_name=$(get_my_name)
+  tmux_err=$(pop_pane_name_err)
   if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
+    local detail=""
+    [ -n "$tmux_err" ] && detail=" (tmux: ${tmux_err})"
+    echo "ERROR: This pane has no name. Run /whoami <name> first.${detail}" >&2
     return 1
   fi
   case "$SEND_MAX_LEN" in
@@ -814,10 +870,13 @@ send_message() {
 dispatch_message() {
   local target_name="$1"
   local message="$2"
-  local my_name
+  local my_name tmux_err
   my_name=$(get_my_name)
+  tmux_err=$(pop_pane_name_err)
   if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
+    local detail=""
+    [ -n "$tmux_err" ] && detail=" (tmux: ${tmux_err})"
+    echo "ERROR: This pane has no name. Run /whoami <name> first.${detail}" >&2
     return 1
   fi
   local target_pane
