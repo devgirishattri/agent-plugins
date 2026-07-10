@@ -1,7 +1,7 @@
 {
   "name": "session-chat",
-  "version": "0.16.5",
-  "description": "Peer-to-peer messaging and task dispatch between Codex sessions via tmux.",
+  "version": "0.17.0",
+  "description": "Private, durable messaging and trusted task dispatch between Codex sessions via tmux.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Session Chat",
     "shortDescription": "Message and coordinate Codex sessions over tmux.",
-    "longDescription": "Slash-command workflows and Codex hooks for naming panes, detecting incoming messages, and dispatching work between local Codex sessions in tmux.",
+    "longDescription": "Codex skills and hooks for naming panes, private durable messaging, trusted bounded task inlining, pane-location health, and multi-session tmux coordination.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
@@ -22,9 +22,7 @@
     "defaultPrompt": [
       "List named Codex panes.",
       "Send a message to another session.",
-      "Dispatch work to another session.",
-      "Use incoming message hooks safely.",
-      "Check incoming message mode."
+      "Dispatch work to another session."
     ],
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/icon.svg",

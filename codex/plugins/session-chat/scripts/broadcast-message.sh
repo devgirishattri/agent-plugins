@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# broadcast-message.sh — Fan-out /send: one message to every named pane.
+# broadcast-message.sh — Fan out one session-chat send to named panes.
 # Usage: broadcast-message.sh [--all] [--match GLOB] <message>
 # Default scope: named panes in the CURRENT tmux session, excluding this pane.
 #   --all          target named panes across ALL tmux sessions
 #   --match GLOB   only target pane names matching the shell glob (e.g. 'worker-*')
 # Per-target results are printed as TSV (<result>\t<name>); summary line last.
-# Delivery semantics per target are identical to /send (durable enqueue first,
+# Delivery semantics per target are identical to session-chat send (durable enqueue first,
 # live paste, queued fallback on busy recipients).
 set -uo pipefail
 
@@ -58,7 +58,7 @@ ensure_tmux
 
 MY_NAME=$(get_my_name)
 if [ -z "$MY_NAME" ]; then
-  echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
+  echo "ERROR: This pane has no name. Run \$session-chat:whoami <name> first." >&2
   exit 1
 fi
 
@@ -88,7 +88,7 @@ while IFS=$'\t' read -r name pane_id; do
 done < <(tmux list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}' 2>/dev/null)
 
 if [ "${#TARGETS[@]}" -eq 0 ]; then
-  echo "No named panes matched (scope: ${SCOPE}, pattern: ${PATTERN}). Run /panes to see targets." >&2
+  echo "No named panes matched (scope: ${SCOPE}, pattern: ${PATTERN}). Run \$session-chat:panes to see targets." >&2
   exit 1
 fi
 

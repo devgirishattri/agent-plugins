@@ -1,16 +1,13 @@
 ---
 name: scheduler-doctor
-description: "Inspect session-scheduler directories, pane name, and session-chat dependency."
+description: "Inspect scheduler dependencies and detect child-vs-workspace ledger/context home drift."
 ---
 
 # Scheduler Doctor
 
-Resolve the plugin root:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-scheduler/0.4.1}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
-```
+Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
+the directory two levels above this `SKILL.md`. Use that absolute path; never
+infer it from the working directory or hardcode a marketplace cache version.
 
 Run:
 
@@ -19,4 +16,6 @@ export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-
 bash "$PLUGIN_ROOT/scripts/scheduler-doctor.sh"
 ```
 
-Report scheduler directories, current pane name, session-chat root/version, and incoming-mode guidance.
+Report scheduler/context directories, pane name, enforced session-chat version,
+date math, workspace-root consistency, and ledger provenance. Treat any
+workspace-home warning as a routing defect to fix before assigning work.

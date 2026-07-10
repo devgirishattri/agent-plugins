@@ -6,12 +6,8 @@ argument-hint: <pattern> [--days N] [--peer NAME]
 ## Instructions
 
 1. Parse `$ARGUMENTS`: the search pattern, optional `--days <n>` (look-back window, default 7), optional `--peer <name>` (limit to one pane).
-2. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
-   ```
+2. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
+   command reference. Do not infer it from cwd or hardcode a cache version.
 
 3. Run:
 

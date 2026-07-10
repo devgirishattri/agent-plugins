@@ -15,26 +15,31 @@ if [ -z "$PROJECT_NAME" ] || [ -z "$TARGET_SESSION" ]; then
 fi
 
 validate_label "$PROJECT_NAME" || exit 1
+validate_label "$TARGET_SESSION" || exit 1
 
 ensure_tmux
 
 SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
+SNAPSHOTS_DIR="$(cd "$SNAPSHOTS_DIR" 2>/dev/null && pwd -P)" || {
+  echo "ERROR: Context snapshot store does not exist or cannot be resolved." >&2
+  exit 1
+}
+STORE_SHELL=$(printf '%q' "$SNAPSHOTS_DIR")
 SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 
-if [ ! -f "$SNAPSHOT" ]; then
-  echo "ERROR: No context snapshot found for '$PROJECT_NAME' in this project. Run /context-generate first."
+if ! _context_path_exists "$SNAPSHOT"; then
+  echo "ERROR: No context snapshot found for '$PROJECT_NAME' in this project. Run \$session-context:context-generate first."
   exit 1
 fi
+ensure_context_regular_file "$SNAPSHOT" || exit 1
 
-# Copy snapshot to target session's snapshots dir (file-based sharing)
-# This way the target session can /context-load it directly
-TARGET_PANE=$(resolve_pane "$TARGET_SESSION") || exit 1
-
-# Notify the target session about the shared context
-MY_NAME=$(get_my_name)
-[ -z "$MY_NAME" ] && MY_NAME="unknown"
-
-send_message "$TARGET_SESSION" "[context:${PROJECT_NAME}] Context snapshot shared. Load it with: /context-load ${PROJECT_NAME}"
+# Sharing is notification-only. The recipient must already resolve the same
+# canonical SESSION_CONTEXT_HOME; no snapshot bytes are copied by this operation.
+MESSAGE="[context:${PROJECT_NAME}] Context snapshot available. Shared store: ${SNAPSHOTS_DIR}. The file was not copied; export SESSION_CONTEXT_HOME=${STORE_SHELL}. Load with Claude: /session-context:context-load ${PROJECT_NAME}. Load with Codex: \$session-context:context-load ${PROJECT_NAME}."
+TRANSPORT=$(send_context_notification "$TARGET_SESSION" "$MESSAGE") || exit 1
 
 echo "Shared '$PROJECT_NAME' context with $TARGET_SESSION."
-echo "They can load it with: /context-load $PROJECT_NAME"
+echo "Transport: $TRANSPORT"
+echo "The snapshot was not copied. Both panes must use SESSION_CONTEXT_HOME=$SNAPSHOTS_DIR"
+echo "Claude: /session-context:context-load $PROJECT_NAME"
+echo "Codex: \$session-context:context-load $PROJECT_NAME"

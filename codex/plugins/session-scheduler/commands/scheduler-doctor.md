@@ -5,12 +5,8 @@ argument-hint: ""
 
 ## Instructions
 
-1. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-scheduler/0.4.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
-   ```
+1. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
+   command reference. Do not infer it from cwd or hardcode a cache version.
 
 2. Run:
 
@@ -19,4 +15,4 @@ argument-hint: ""
    bash "$PLUGIN_ROOT/scripts/scheduler-doctor.sh"
    ```
 
-3. Report scheduler directories, current pane name, session-chat root/version, incoming-mode guidance, and the date-math check (a WARN there means `--eta`, OVERDUE/STALE flags, and durations will silently no-op on this platform).
+3. Report scheduler/context directories, current pane, enforced session-chat version, date math, workspace-root consistency, and ledger provenance. A workspace-home warning means a child checkout may be writing to a private ledger and must be fixed before dispatch.

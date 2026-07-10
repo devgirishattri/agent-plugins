@@ -7,7 +7,7 @@
 [ -z "${TMUX:-}" ] && exit 0
 
 # Quick exit if pane already has a name (don't overwrite manual /whoami)
-CURRENT_NAME=$(tmux display-message -p -t "$TMUX_PANE" '#{@name}' 2>/dev/null) || true
+CURRENT_NAME=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@name}' 2>/dev/null) || true
 [ -n "$CURRENT_NAME" ] && exit 0
 
 # Read hook input from stdin
@@ -41,7 +41,7 @@ SESSION_NAME=$(printf '%s' "$SESSION_NAME" \
 
 # Set @name only if we found a session name (pane has no name at this point)
 if [ -n "$SESSION_NAME" ]; then
-  tmux set-option -p -t "$TMUX_PANE" @name "$SESSION_NAME" 2>/dev/null || true
+  tmux set-option -p -t "${TMUX_PANE:-}" @name "$SESSION_NAME" 2>/dev/null || true
 fi
 
 exit 0

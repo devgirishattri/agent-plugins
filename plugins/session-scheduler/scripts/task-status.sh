@@ -7,6 +7,8 @@
 #   task-status.sh --pending       # status=created
 #   task-status.sh --mine          # tasks where assigner=current pane
 #   task-status.sh --by-stage      # non-done tasks grouped by stage
+#   task-status.sh --by-workflow   # tasks grouped by meta.workflow_id
+#   task-status.sh --workflow ID   # tasks in one workflow
 # Flags column: OVERDUE (past eta_at), STALE (assigned/review with no update
 # for SESSION_SCHEDULER_STALE_MINUTES, default 30).
 set -uo pipefail
@@ -14,18 +16,26 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
-ensure_dirs
+ensure_dirs || exit 1
 
 FILTER="active"
 SINGLE_ID=""
+WORKFLOW=""
 case "${1:-}" in
   ""|--active) FILTER="active" ;;
   --all)       FILTER="all" ;;
   --pending)   FILTER="pending" ;;
   --mine)      FILTER="mine" ;;
   --by-stage)  FILTER="by-stage" ;;
+  --by-workflow) FILTER="by-workflow" ;;
+  --workflow)
+    FILTER="workflow"
+    WORKFLOW="${2:-}"
+    [ -n "$WORKFLOW" ] || { echo "ERROR: --workflow requires an id." >&2; exit 1; }
+    validate_workflow_id "$WORKFLOW" || exit 1
+    ;;
   -h|--help)
-    echo "Usage: task-status.sh [<id>|--active|--all|--pending|--mine|--by-stage]"
+    echo "Usage: task-status.sh [<id>|--active|--all|--pending|--mine|--by-stage|--by-workflow|--workflow ID]"
     exit 0
     ;;
   *)
@@ -104,6 +114,39 @@ if [ "$FILTER" = "by-stage" ]; then
   exit 0
 fi
 
+if [ "$FILTER" = "by-workflow" ]; then
+  # Group every task carrying a workflow_id by that id (whole arc, including
+  # done steps). Tasks with no workflow_id are omitted.
+  rows=""
+  shown=0
+  for f in "${files[@]}"; do
+    wf=$(jq -r '.meta.workflow_id // ""' "$f" 2>/dev/null) || continue
+    [ -z "$wf" ] && continue
+    row=$(jq -r --arg wf "$wf" '[$wf, .id, .status, (.stage // "-"), .assigner, (.assignee // "-"), .name, .updated_at] | @tsv' "$f" 2>/dev/null) || continue
+    flags=$(task_flags "$f")
+    rows="${rows}${row}	${flags}
+"
+    shown=$((shown + 1))
+  done
+  if [ "$shown" -eq 0 ]; then
+    echo "No tasks with a workflow_id. Set one via /task-new --workflow ID or /task-assign --workflow ID."
+    exit 0
+  fi
+  printf '%s' "$rows" | sort -t '	' -k1,1 | awk -F'\t' '
+    $1 != prev {
+      if (prev != "") print ""
+      print "Workflow: " $1
+      print "  ID\tSTATUS\tSTAGE\tASSIGNER\tASSIGNEE\tNAME\tUPDATED\tFLAGS"
+      prev = $1
+    }
+    {
+      printf "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", $2, $3, $4, $5, $6, $7, $8, $9
+    }'
+  echo
+  printf '%d task(s) shown (filter: by-workflow).\n' "$shown"
+  exit 0
+fi
+
 printf 'ID\tSTATUS\tSTAGE\tASSIGNER\tASSIGNEE\tNAME\tUPDATED\tFLAGS\n'
 shown=0
 for f in "${files[@]}"; do
@@ -119,6 +162,10 @@ for f in "${files[@]}"; do
       ;;
     mine)
       [[ "$assigner" == "$ME" ]] || continue
+      ;;
+    workflow)
+      wf=$(jq -r '.meta.workflow_id // ""' "$f" 2>/dev/null)
+      [[ "$wf" == "$WORKFLOW" ]] || continue
       ;;
   esac
   flags=$(task_flags "$f")

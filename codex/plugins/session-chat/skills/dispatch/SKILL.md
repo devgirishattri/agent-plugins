@@ -7,12 +7,9 @@ description: "Dispatch a task prompt to another named tmux pane through session-
 
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
-Resolve the plugin root:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
-```
+Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
+the directory two levels above this `SKILL.md`. Use that absolute path; never
+infer it from cwd or hardcode a marketplace cache version.
 
 Parse the first argument as the target pane name and the rest as the task prompt. If either is missing, tell the user:
 
@@ -20,16 +17,25 @@ Parse the first argument as the target pane name and the rest as the task prompt
 Usage: $session-chat:dispatch <pane-name> <task prompt>
 ```
 
-Run:
+Stage the prompt as data, never as shell source:
 
-```bash
-PROMPT_FILE=$(mktemp)
-cat > "$PROMPT_FILE" <<'EOF'
-<prompt>
-EOF
-bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] "<target>" "$PROMPT_FILE"
-rm -f "$PROMPT_FILE"
-```
+1. Run `mktemp -d "${TMPDIR:-/tmp}/session-chat-dispatch.XXXXXX"` in a
+   separate shell call and capture the returned directory. This command contains
+   no task text.
+2. Use the `apply_patch` tool to add `<returned-directory>/prompt.md` with the
+   verbatim prompt body. Never embed prompt text in a shell heredoc, `echo`,
+   `printf`, command substitution, or an interpreter `-c` string: a delimiter
+   line or shell metacharacters must remain inert task content.
+3. Run:
+
+   ```bash
+   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] "<target>" "<returned-directory>/prompt.md"
+   ```
+
+4. Use `apply_patch` to delete the temporary prompt file, then remove its empty
+   temporary directory. If no data-safe file-writing tool is available, stop
+   and ask the user for an existing prompt-file path; never fall back to shell
+   interpolation.
 
 If tmux is not active, explain that dispatch requires running Codex inside tmux.
 If the target is not found, suggest `$session-chat:panes`. If this pane has no name, suggest `$session-chat:whoami <name>`.

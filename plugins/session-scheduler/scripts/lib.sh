@@ -22,8 +22,83 @@ SCHEDULER_DIR="$SESSION_SCHEDULER_HOME"
 TASKS_DIR="$SCHEDULER_DIR/tasks"
 PROMPTS_DIR="$SCHEDULER_DIR/prompts"
 
+# The ledger holds task JSON, executor prompts, and review packets — all of
+# which can carry sensitive task content — so keep everything owner-only. umask
+# 077 makes new files 0600 / new dirs 0700 (process-local: the /task-* commands
+# invoke these scripts as subprocesses, so it never tightens the user's shell).
+# Auto-context handoffs are additionally chmod 0400 (immutable) by task-assign.
+umask 077
+
+# A real, owner-owned, non-symlink directory.
+_sched_dir_is_safe() {
+  local d="$1"
+  [ -L "$d" ] && return 1
+  [ -d "$d" ] || return 1
+  [ -O "$d" ] || return 1
+  return 0
+}
+
+# Owner-only, symlink-safe ledger — FAILS CLOSED. Every /task-* entrypoint calls
+# `ensure_dirs || exit 1`, so a non-zero return here aborts the operation rather
+# than writing into a tampered tree. Guarantees, re-checked on EVERY call (a
+# symlink can be planted after the first run):
+#   - scheduler root / tasks / prompts are real, owner-owned, non-symlink dirs
+#   - NO nested symlink, unowned entry, or special (non dir/regular) file exists
+#   - legacy tree is migrated in place: dirs -> 0700, files -> 0600
+# umask 077 keeps NEW files 0600 / dirs 0700; this migrates pre-existing ones.
 ensure_dirs() {
-  mkdir -p "$TASKS_DIR" "$PROMPTS_DIR"
+  local d entry
+  # Never create or write THROUGH a symlink planted at the root/tasks/prompts.
+  for d in "$SCHEDULER_DIR" "$TASKS_DIR" "$PROMPTS_DIR"; do
+    if [ -L "$d" ]; then
+      echo "ERROR: refusing to use scheduler path '$d' — it is a symlink." >&2
+      return 1
+    fi
+  done
+  if ! mkdir -p "$TASKS_DIR" "$PROMPTS_DIR" 2>/dev/null; then
+    echo "ERROR: could not create scheduler dirs under '$SCHEDULER_DIR'." >&2
+    return 1
+  fi
+  for d in "$SCHEDULER_DIR" "$TASKS_DIR" "$PROMPTS_DIR"; do
+    if ! _sched_dir_is_safe "$d"; then
+      echo "ERROR: scheduler path '$d' is unsafe (symlink, not a directory, or not owned by you)." >&2
+      return 1
+    fi
+    chmod 700 "$d" 2>/dev/null || { echo "ERROR: could not lock '$d' to 0700." >&2; return 1; }
+  done
+  # Vet + migrate every entry under tasks/ and prompts/. NUL-safe traversal with
+  # an OBSERVED find status: a `< <(find ...)` process substitution hides a
+  # traversal failure (e.g. an unreadable subdir) so the loop could vet a partial
+  # tree and still succeed, and a pre-planted owner file MAY contain a newline in
+  # its name. Capture `find -print0` to a temp file, check find's status, then
+  # read NUL-delimited entries. Fail closed on any unsafe condition.
+  local entry tmp_list find_rc
+  tmp_list=$(mktemp 2>/dev/null) || { echo "ERROR: could not allocate a temp file for ledger traversal." >&2; return 1; }
+  find "$TASKS_DIR" "$PROMPTS_DIR" -mindepth 1 -print0 > "$tmp_list" 2>/dev/null
+  find_rc=$?
+  if [ "$find_rc" -ne 0 ]; then
+    rm -f "$tmp_list"
+    echo "ERROR: could not fully traverse the ledger (find rc=$find_rc); refusing to operate on a partially-vetted tree." >&2
+    return 1
+  fi
+  while IFS= read -r -d '' entry; do
+    [ -n "$entry" ] || continue
+    if [ -L "$entry" ]; then
+      rm -f "$tmp_list"; echo "ERROR: refusing to operate — nested symlink in ledger: '$entry'." >&2; return 1
+    fi
+    if [ ! -O "$entry" ]; then
+      rm -f "$tmp_list"; echo "ERROR: refusing to operate — entry not owned by you: '$entry'." >&2; return 1
+    fi
+    if [ -d "$entry" ]; then
+      chmod 700 "$entry" 2>/dev/null || { rm -f "$tmp_list"; echo "ERROR: could not lock dir '$entry' to 0700." >&2; return 1; }
+    elif [ -f "$entry" ]; then
+      chmod 600 "$entry" 2>/dev/null || { rm -f "$tmp_list"; echo "ERROR: could not lock file '$entry' to 0600." >&2; return 1; }
+    else
+      rm -f "$tmp_list"; echo "ERROR: refusing to operate — special (non dir/regular) file in ledger: '$entry'." >&2; return 1
+    fi
+  done < "$tmp_list"
+  rm -f "$tmp_list"
+  return 0
 }
 
 require_jq() {
@@ -31,6 +106,43 @@ require_jq() {
     echo "ERROR: jq is required but not installed. Install with: brew install jq" >&2
     return 1
   fi
+}
+
+# The scheduler's correctness contract depends on session-chat's durable inbox
+# (a dispatch/ack to a busy pane is recovered next turn, not lost) plus the
+# owner-only privacy/trust hardening that dispatched task + handoff files rely
+# on. Coordinated floor with the Codex side is 0.13.0. Keep this constant, the
+# plugin.json description, the SKILL prerequisites, and the doctor in sync.
+SESSION_CHAT_MIN_VERSION="0.13.0"
+
+# version_ge <a> <b> — true when semver <a> >= <b>. Plain x.y.z only (the
+# marketplace versions have no pre-release suffixes); sort -V handles ordering.
+version_ge() {
+  [ "$1" = "$2" ] && return 0
+  local lowest
+  lowest=$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)
+  [ "$lowest" = "$2" ]
+}
+
+# session_chat_version <root> — best-effort installed session-chat version.
+# A cached install dir is named by its version; a source checkout carries it in
+# the plugin manifest (claude or codex flavored). Empty output => undetectable.
+session_chat_version() {
+  local root="$1" base ver mf
+  base=$(basename "$root")
+  if [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf '%s\n' "$base"
+    return 0
+  fi
+  for mf in "$root/.claude-plugin/plugin.json" "$root/.codex-plugin/plugin.json"; do
+    [ -f "$mf" ] || continue
+    # Extract the "version": "x.y.z" value precisely — robust to single-line
+    # JSON (where a naive grep|tr|cut would also swallow the "name" field).
+    ver=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$mf" 2>/dev/null \
+      | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    [ -n "$ver" ] && { printf '%s\n' "$ver"; return 0; }
+  done
+  return 1
 }
 
 # Locate session-chat scripts. Prefer the test override env var, then the
@@ -75,8 +187,22 @@ session_chat_dispatch() {
   local prompt_file="$2"
   local root
   if ! root=$(session_chat_root); then
-    echo "ERROR: session-chat not installed; cannot dispatch task. Install session-chat>=0.11.0." >&2
+    echo "ERROR: session-chat not installed; cannot dispatch task. Install session-chat>=${SESSION_CHAT_MIN_VERSION}." >&2
     return 1
+  fi
+  # Enforce the durable-inbox floor: below it, a busy-pane dispatch is silently
+  # lost rather than recovered, which breaks the ledger's assigned-means-queued
+  # guarantee. Refuse rather than dispatch into a lossy transport. An explicit
+  # SESSION_SCHEDULER_SKIP_VERSION_CHECK=1 escape hatch stays for odd installs
+  # where the version can't be read but the operator knows it's current.
+  local ver
+  if [ "${SESSION_SCHEDULER_SKIP_VERSION_CHECK:-0}" != "1" ] && ver=$(session_chat_version "$root"); then
+    if ! version_ge "$ver" "$SESSION_CHAT_MIN_VERSION"; then
+      echo "ERROR: session-chat $ver is below the required >= ${SESSION_CHAT_MIN_VERSION}." >&2
+      echo "  The scheduler needs 0.13.0+ so a dispatch/ack to a busy pane is recovered from the durable inbox, not lost." >&2
+      echo "  Update session-chat, or set SESSION_SCHEDULER_SKIP_VERSION_CHECK=1 to override at your own risk." >&2
+      return 1
+    fi
   fi
   bash "$root/scripts/dispatch-to-session.sh" "$target" "$prompt_file"
 }
@@ -288,6 +414,35 @@ validate_task_id() {
     echo "ERROR: invalid task id '$id' (alphanumeric, _, - only)." >&2
     return 1
   fi
+}
+
+# Pane names (assignee, reviewer) share the session-chat @name charset.
+validate_pane_name() {
+  local name="$1" what="${2:-pane}"
+  if [ -z "$name" ] || ! [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "ERROR: invalid $what name '$name' (alphanumeric, _, - only)." >&2
+    return 1
+  fi
+}
+
+# Workflow ids group related tasks (a plan→execute→review→push arc). Same
+# charset so they slot into filenames/JSON without escaping.
+validate_workflow_id() {
+  local wf="$1"
+  if [ -z "$wf" ] || ! [[ "$wf" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "ERROR: invalid workflow id '$wf' (alphanumeric, _, - only)." >&2
+    return 1
+  fi
+}
+
+# Canonical absolute path of an existing directory (resolves symlinked/worktree
+# components) so the value embedded in a dispatched prompt is the same physical
+# ledger regardless of which checkout the executor resolves by default. Falls
+# back to the input if the dir can't be entered.
+abs_dir() {
+  local d="$1" real
+  real=$(cd "$d" 2>/dev/null && pwd -P) || real="$d"
+  printf '%s\n' "$real"
 }
 
 # Stage labels are free-form but validated like task ids.

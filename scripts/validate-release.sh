@@ -19,14 +19,6 @@ info() {
   echo "OK: $*"
 }
 
-# Warnings are non-fatal: they are counted and summarized at the end, but the
-# script still exits 0 when only warnings were emitted.
-WARN_COUNT=0
-warn() {
-  echo "WARN: $*" >&2
-  WARN_COUNT=$((WARN_COUNT + 1))
-}
-
 [ -f ".claude-plugin/marketplace.json" ] || fail "missing .claude-plugin/marketplace.json"
 [ -f ".agents/plugins/marketplace.json" ] || fail "missing .agents/plugins/marketplace.json"
 [ ! -e "docs/TODO.md" ] || fail "docs/TODO.md should not be published; use GitHub Issues instead"
@@ -44,6 +36,29 @@ done < <(
 )
 info "JSON manifests are valid"
 
+command -v ruby >/dev/null 2>&1 || fail "ruby is required to validate command YAML frontmatter"
+ruby <<'RUBY'
+require "yaml"
+
+files = Dir.glob("{plugins,codex/plugins}/*/commands/*.md").sort
+files.each do |path|
+  content = File.read(path, encoding: "UTF-8")
+  match = content.match(/\A---\s*\n(.*?)\n---\s*\n/m)
+  abort("ERROR: #{path}: missing or unclosed YAML frontmatter") unless match
+  begin
+    data = YAML.safe_load(match[1], permitted_classes: [], aliases: false)
+  rescue Psych::Exception => e
+    abort("ERROR: #{path}: invalid YAML frontmatter: #{e.message}")
+  end
+  abort("ERROR: #{path}: frontmatter must be a mapping") unless data.is_a?(Hash)
+  abort("ERROR: #{path}: description must be a non-empty string") unless data["description"].is_a?(String) && !data["description"].strip.empty?
+  if data.key?("argument-hint") && !data["argument-hint"].is_a?(String)
+    abort("ERROR: #{path}: argument-hint must be a quoted/string scalar")
+  end
+end
+puts "OK: command YAML frontmatter is valid"
+RUBY
+
 while IFS= read -r shell_file; do
   bash -n "$shell_file"
 done < <(find plugins codex/plugins scripts -type f -name '*.sh' | sort)
@@ -52,13 +67,16 @@ info "shell scripts parse"
 python3 <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 root = pathlib.Path.cwd()
 
+
 def fail(message: str) -> None:
     print(f"ERROR: {message}", file=sys.stderr)
     sys.exit(1)
+
 
 def load_json(path: pathlib.Path):
     try:
@@ -66,17 +84,92 @@ def load_json(path: pathlib.Path):
     except Exception as exc:
         fail(f"{path}: {exc}")
 
+
+def require_tokens(path: pathlib.Path, *tokens: str) -> None:
+    if not path.is_file():
+        fail(f"missing parity contract file: {path}")
+    text = path.read_text()
+    missing = [token for token in tokens if token not in text]
+    if missing:
+        fail(f"{path}: missing semantic parity contract token(s): {missing}")
+
+
+def require_order(path: pathlib.Path, first: str, second: str) -> None:
+    if not path.is_file():
+        fail(f"missing parity contract file: {path}")
+    text = path.read_text()
+    first_index = text.find(first)
+    second_index = text.find(second)
+    if first_index == -1 or second_index == -1 or first_index >= second_index:
+        fail(f"{path}: expected {first!r} before {second!r}")
+
+legacy_plugin_root = re.compile(r"\bCODEX_PLUGIN_ROOT\b")
+
+# A cache base is a legitimate discovery location. A literal version-like
+# segment below <marketplace>/<plugin>, however, makes an installed path stale
+# as soon as a new release is selected. Keep marketplace and plugin names
+# generic so renamed and third-party marketplaces receive the same protection.
+fixed_cache_version = re.compile(
+    r"(?:^|/)plugins/cache/"
+    r"[^/\s`\"']+/[^/\s`\"']+/"
+    r"[vV]?\d+(?:\.(?:\d+|[xX]|\*)){1,2}"
+    r"(?:[-+][0-9A-Za-z.*_-]+(?:\.[0-9A-Za-z.*_-]+)*)?"
+    r"(?=$|[/\s`\"'])"
+)
+
+slash_guidance = re.compile(
+    r"\b(?:run|use|with|via|rename(?: one)?(?: pane)? with)\s+`?/"
+    r"(?:whoami|dispatch|send|context-[a-z-]+|session-[a-z-]+|task-[a-z-]+)",
+    re.IGNORECASE,
+)
+
+
+def has_fixed_codex_root(text: str) -> bool:
+    return bool(legacy_plugin_root.search(text) or fixed_cache_version.search(text))
+
+
+# Executable evidence for the detector's boundary: reject provider-independent
+# literal pins (including partial/wildcard/prerelease forms), but allow cache
+# base discovery, variable-selected versions, and the Codex reload command.
+fixed_root_positive_fixtures = (
+    "CODEX_PLUGIN_ROOT=/tmp/plugin",
+    "$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.17.0/scripts/send-message.sh",
+    "/tmp/plugins/cache/renamed-market/renamed-plugin/v2.4-beta.1/scripts/run.sh",
+    "plugins/cache/market/plugin/3.7/commands",
+    "plugins/cache/market/plugin/1.2.x/skills",
+    "plugins/cache/market/plugin/4.*/scripts",
+)
+fixed_root_negative_fixtures = (
+    "$HOME/.codex/plugins/cache/girishattri-plugins/session-chat",
+    'for cache_base in "$CODEX_DIR"/plugins/cache/*/session-chat; do',
+    'candidate="$cache_base/$latest_version"',
+    "Use /reload-plugins after inspecting the unversioned plugin cache directory.",
+    "The current manifest version is 0.17.0.",
+)
+for fixture in fixed_root_positive_fixtures:
+    if not has_fixed_codex_root(fixture):
+        fail(f"internal fixed-cache detector missed positive fixture: {fixture}")
+for fixture in fixed_root_negative_fixtures:
+    if has_fixed_codex_root(fixture):
+        fail(f"internal fixed-cache detector rejected dynamic guidance: {fixture}")
+if slash_guidance.search("Use /reload-plugins after publishing."):
+    fail("internal slash-guidance detector rejected Codex /reload-plugins guidance")
+print("OK: fixed Codex cache-root detector fixtures are valid")
+
+
 def command_names(path: pathlib.Path) -> set[str]:
     commands_dir = path / "commands"
     if not commands_dir.is_dir():
         fail(f"missing commands directory: {commands_dir}")
     return {item.stem for item in commands_dir.glob("*.md")}
 
+
 def skill_names(path: pathlib.Path) -> set[str]:
     skills_dir = path / "skills"
     if not skills_dir.is_dir():
         return set()
     return {item.parent.name for item in skills_dir.glob("*/SKILL.md")}
+
 
 def require_codex_companion(
     manifest: dict,
@@ -126,10 +219,20 @@ def validate_codex_interface(codex_dir: pathlib.Path, manifest: dict) -> None:
         if not isinstance(interface.get(field), str) or not interface[field].strip():
             fail(f"{codex_dir}: interface missing non-empty {field}")
 
-    for field in ("capabilities", "defaultPrompt"):
-        value = interface.get(field)
-        if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
-            fail(f"{codex_dir}: interface {field} must be a non-empty string array")
+    capabilities = interface.get("capabilities")
+    if not isinstance(capabilities, list) or not capabilities or not all(
+        isinstance(item, str) and item for item in capabilities
+    ):
+        fail(f"{codex_dir}: interface capabilities must be a non-empty string array")
+
+    default_prompt = interface.get("defaultPrompt")
+    if not isinstance(default_prompt, list) or not 1 <= len(default_prompt) <= 3:
+        fail(f"{codex_dir}: interface defaultPrompt must contain 1 to 3 entries")
+    if not all(
+        isinstance(item, str) and item.strip() and len(item) <= 128
+        for item in default_prompt
+    ):
+        fail(f"{codex_dir}: each interface defaultPrompt entry must be a non-empty string of at most 128 characters")
 
     for field in ("composerIcon", "logo"):
         if field in interface:
@@ -177,6 +280,11 @@ def validate_codex_hooks(codex_dir: pathlib.Path) -> None:
                     fail(f"{hooks_path}: only command hooks are supported")
                 if not isinstance(command_hook.get("command"), str) or not command_hook["command"].strip():
                     fail(f"{hooks_path}: command hook missing command string")
+                command = command_hook["command"]
+                if "CODEX_PLUGIN_ROOT" in command or "/plugins/cache/" in command:
+                    fail(f"{hooks_path}: hook command uses a legacy or cache-derived plugin root")
+                if "$PLUGIN_ROOT" not in command and "${PLUGIN_ROOT}" not in command:
+                    fail(f"{hooks_path}: hook command must use the runtime-provided PLUGIN_ROOT")
                 timeout = command_hook.get("timeout")
                 if timeout is not None and not isinstance(timeout, (int, float)):
                     fail(f"{hooks_path}: command hook timeout must be numeric")
@@ -216,6 +324,11 @@ for name in sorted(claude_plugins):
         fail(f"Claude marketplace version does not match manifest for {name}")
     if codex_entry.get("version") != codex_manifest.get("version"):
         fail(f"Codex marketplace version does not match manifest for {name}")
+    if claude_manifest.get("version") != codex_manifest.get("version"):
+        fail(
+            f"provider manifest version mismatch for {name}: "
+            f"claude={claude_manifest.get('version')} codex={codex_manifest.get('version')}"
+        )
 
     policy = codex_entry.get("policy")
     if not isinstance(policy, dict):
@@ -232,6 +345,13 @@ for name in sorted(claude_plugins):
     require_codex_companion(codex_manifest, codex_dir, "apps", ".app.json", "file")
     validate_codex_interface(codex_dir, codex_manifest)
     validate_codex_hooks(codex_dir)
+    claude_has_hooks = (claude_dir / "hooks" / "hooks.json").is_file()
+    codex_has_hooks = (codex_dir / "hooks" / "hooks.json").is_file()
+    if claude_has_hooks != codex_has_hooks:
+        fail(
+            f"hook presence mismatch for {name}: "
+            f"claude={claude_has_hooks} codex={codex_has_hooks}"
+        )
 
     claude_commands = command_names(claude_dir)
     codex_commands = command_names(codex_dir)
@@ -285,15 +405,127 @@ for name in sorted(claude_plugins):
         if skill_name != skill_file.parent.name:
             fail(f"skill name does not match directory for {skill_file}")
 
-print("OK: marketplace entries, manifests, command parity, Codex skills, and Codex hooks are valid")
+    for doc_file in sorted([*codex_dir.rglob("*.md"), *codex_dir.rglob("*.json")]):
+        doc_text = doc_file.read_text()
+        if has_fixed_codex_root(doc_text):
+            fail(f"{doc_file}: fixed or legacy Codex plugin root is forbidden")
+        if slash_guidance.search(doc_text):
+            fail(f"{doc_file}: Claude-style slash-command guidance is invalid for Codex")
+    for script_file in sorted(codex_dir.rglob("*.sh")):
+        if script_file.name.startswith("test-"):
+            continue
+        script_text = script_file.read_text()
+        if has_fixed_codex_root(script_text):
+            fail(f"{script_file}: fixed or legacy Codex plugin root is forbidden")
+        runtime_script_text = "\n".join(
+            line for line in script_text.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        if slash_guidance.search(runtime_script_text):
+            fail(f"{script_file}: runtime guidance uses a Claude-style slash command")
+
+# High-risk semantic contracts that basename parity cannot prove.
+require_tokens(root / "plugins/session-manager/commands/session-delete.md", "AskUserQuestion", "final confirmation")
+require_tokens(root / "codex/plugins/session-manager/skills/session-delete/SKILL.md", "request_user_input", "--confirmed", "codex delete --force")
+require_tokens(root / "plugins/session-manager/scripts/delete-session.sh", "--confirmed", "REFUSED")
+require_tokens(root / "plugins/session-manager/scripts/delete-all-sessions.sh", "--confirmed", "REFUSED")
+require_order(root / "plugins/session-manager/commands/session-delete.md", "No, cancel (Recommended)", "Yes, delete all")
+require_order(root / "codex/plugins/session-manager/skills/session-delete/SKILL.md", "No, cancel (Recommended)", "Yes, delete it")
+require_tokens(root / "plugins/creating-docs/commands/doc-review.md", "doc-reviewer")
+require_tokens(root / "codex/plugins/creating-docs/skills/doc-review/SKILL.md", "fresh subagent", "do not edit files")
+require_tokens(root / "plugins/creating-docs/commands/creating-docs.md", "after ANY docs write/edit")
+require_tokens(root / "plugins/creating-docs/skills/creating-docs/SKILL.md", "MANDATORY independent review", "Repeat after fixes")
+require_tokens(root / "codex/plugins/creating-docs/skills/creating-docs/SKILL.md", "Run an independent accuracy review", "actual parent directory")
+require_tokens(root / "plugins/session-context/skills/session-context/SKILL.md", "SESSION_CONTEXT_HOME")
+require_tokens(root / "codex/plugins/session-context/skills/session-context/SKILL.md", "SESSION_CONTEXT_HOME")
+require_tokens(root / "codex/plugins/session-context/skills/context-remove/SKILL.md", "request_user_input", "explicit confirmation")
+require_tokens(root / "plugins/session-context/commands/context-remove.md", "AskUserQuestion", "No, cancel (Recommended)", "--confirmed")
+require_tokens(root / "plugins/session-context/scripts/remove-context.sh", "--confirmed", "archived history")
+require_tokens(root / "codex/plugins/session-context/scripts/remove-context.sh", "--confirmed", "history file(s)")
+require_tokens(
+    root / "plugins/session-context/scripts/lib.sh",
+    "unexpected nested directory", "unexpected file", "before changing any permissions",
+)
+require_tokens(
+    root / "plugins/session-context/scripts/remove-context.sh",
+    "No current or archived context snapshot", "history file(s)",
+)
+require_tokens(root / "plugins/session-chat/commands/messages-clean.md", "AskUserQuestion", "If (and only if) `--apply` was in")
+require_tokens(root / "codex/plugins/session-chat/skills/messages-clean/SKILL.md", "request_user_input", "If (and only if) `--apply` was in")
+require_tokens(root / "codex/plugins/session-chat/skills/dispatch/SKILL.md", "apply_patch", "Never embed prompt text in a shell heredoc")
+require_tokens(root / "plugins/session-scheduler/commands/tasks-clean.md", "AskUserQuestion", "If (and only if) `--apply` was in")
+require_tokens(root / "codex/plugins/session-scheduler/skills/tasks-clean/SKILL.md", "request_user_input", "If (and only if) `--apply` was in")
+require_tokens(root / "plugins/session-chat/commands/dispatch.md", "Write tool", "Do NOT embed the task text in a shell heredoc")
+require_tokens(root / "codex/plugins/session-chat/skills/dispatch/SKILL.md", "apply_patch", "Never embed prompt text in a shell heredoc")
+require_tokens(root / ".github/workflows/validate.yml", "actions/checkout@v7")
+require_tokens(
+    root / ".github/workflows/validate.yml",
+    "plugins/session-manager/scripts/test-session-manager.sh",
+    "plugins/creating-docs/scripts/test-creating-docs.sh",
+    "plugins/session-context/scripts/test-session-context.sh",
+    "scripts/test-provider-parity.sh",
+)
+
+require_tokens(
+    root / "plugins/session-context/scripts/share-context.sh",
+    "printf '%q'", "/session-context:context-load", "$session-context:context-load",
+    '[ -f "$root/scripts/send-message.sh" ]', '[ -r "$root/scripts/send-message.sh" ]', "Queued",
+)
+require_tokens(
+    root / "codex/plugins/session-context/scripts/share-context.sh",
+    "printf '%q'", "/session-context:context-load", "$session-context:context-load",
+)
+require_tokens(root / "plugins/session-context/scripts/test-session-context.sh", "chmod 644", "share_export_quoted_special_path")
+require_tokens(root / "plugins/session-scheduler/scripts/scheduler-doctor.sh", '[ -f "$root/scripts/dispatch-to-session.sh" ]', '[ -r "$root/scripts/dispatch-to-session.sh" ]')
+require_tokens(root / "plugins/session-scheduler/scripts/test-session-scheduler.sh", "chmod 644", "dispatch script: OK")
+
+for provider_root in (root / "plugins", root / "codex/plugins"):
+    chat = provider_root / "session-chat" / "scripts"
+    require_tokens(chat / "lib.sh", "umask 077", "chmod 700", "chmod 600", "[ -L")
+    require_tokens(chat / "lib.sh", 'validate_label "$label"', 'validate_label "$my_name"')
+    require_tokens(chat / "detect-incoming-message.sh", "ensure_messages_dir", "[ -O", "stat -f", "pwd -P", "SESSION_CHAT_DISPATCH_INLINE_MAX")
+    require_tokens(chat / "pane-health.sh", "pane_current_path")
+
+    context = provider_root / "session-context" / "scripts"
+    require_tokens(context / "lib.sh", "umask 077", "chmod 700", "chmod 600", "[ -L")
+
+    scheduler = provider_root / "session-scheduler" / "scripts"
+    require_tokens(scheduler / "lib.sh", 'SESSION_CHAT_MIN_VERSION="0.13.0"')
+    require_tokens(scheduler / "task-new.sh", "--reviewer", "workflow_id")
+    require_tokens(scheduler / "task-assign.sh", "--context auto", ".meta.workflow_id", ".meta.scheduler_home")
+    require_tokens(scheduler / "task-assign.sh", "printf '%q'", "export SESSION_SCHEDULER_HOME", "$session-scheduler:task-done", "/session-scheduler:task-done")
+    require_tokens(scheduler / "task-assign.sh", ".meta.review_dispatched_at", ".meta.review_dispatch_error")
+    require_tokens(scheduler / "task-review.sh", "printf '%q'", "reviewer", "dispatch", "RETRY_REVIEW_DISPATCH", ".meta.review_dispatched_at")
+
+require_tokens(
+    root / "plugins/session-chat/scripts/detect-incoming-message.sh",
+    "Now that the surfaced rows have been EMITTED", "recent_id_seen ",
+    "|| exit 1", "claim_inbox_ids",
+)
+require_order(
+    root / "plugins/session-chat/scripts/detect-incoming-message.sh",
+    "emit_system_message", "claim_inbox_ids",
+)
+require_tokens(
+    root / "codex/plugins/session-chat/scripts/detect-incoming-message.sh",
+    "Output is the commit point", "claim_inbox_ids",
+)
+require_tokens(
+    root / "plugins/session-scheduler/scripts/task-assign.sh",
+    ".meta.review_prompt_file", ".meta.review_dispatch_attempts",
+    ".review_prompt_file", ".review_dispatch_attempts",
+)
+
+print("OK: provider versions, manifests, command parity, Codex roots/skills, and hooks are valid")
 PY
 
 # ---------------------------------------------------------------------------
-# Mirror drift (Claude plugins/<name>/ vs Codex codex/plugins/<name>/)
-# All findings in this section are WARN-level and never change the exit code.
+# Normalized mirror parity (Claude plugins/<name>/ vs Codex codex/plugins/<name>/).
+# Provider-specific aliases/helpers are normalized below; any remaining drift
+# is a release blocker.
 # ---------------------------------------------------------------------------
 
-echo "-- mirror drift checks (warnings only) --"
+echo "-- normalized mirror parity checks (blocking) --"
 
 # Print sorted basenames of files directly inside a directory matching a glob.
 # Empty output when the directory does not exist.
@@ -304,21 +536,34 @@ list_basenames() {
   fi
 }
 
+list_runtime_scripts() {
+  local plugin="$1" provider="$2" dir="$3"
+  local names
+  names="$(list_basenames "$dir" '*' | grep -v '^test-' || true)"
+  if [ "$plugin" = "session-chat" ] && [ "$provider" = "claude" ]; then
+    names="$(printf '%s\n' "$names" | sed 's/^messages-clean\.sh$/clean-messages.sh/; s/^messages-list\.sh$/list-messages.sh/')"
+  fi
+  if [ "$plugin" = "session-manager" ] && [ "$provider" = "codex" ]; then
+    names="$(printf '%s\n' "$names" | grep -vE '^(delete-resolved-session|prepare-delete)\.sh$' || true)"
+  fi
+  printf '%s\n' "$names" | sed '/^$/d' | sort -u
+}
+
 manifest_version() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version", "unknown"))' "$1"
 }
 
-# Warn about basenames present on one side but not the other.
-warn_set_diff() {
+# Fail on basenames present on only one provider side after normalization.
+require_set_equal() {
   local plugin="$1" label="$2" claude_list="$3" codex_list="$4"
   local only_claude only_codex
   only_claude="$(comm -23 <(printf '%s\n' "$claude_list") <(printf '%s\n' "$codex_list") | xargs || true)"
   only_codex="$(comm -13 <(printf '%s\n' "$claude_list") <(printf '%s\n' "$codex_list") | xargs || true)"
   if [ -n "$only_claude" ]; then
-    warn "$plugin: $label missing on codex side: $only_claude"
+    fail "$plugin: $label missing on codex side: $only_claude"
   fi
   if [ -n "$only_codex" ]; then
-    warn "$plugin: $label missing on claude side: $only_codex"
+    fail "$plugin: $label missing on claude side: $only_codex"
   fi
 }
 
@@ -331,7 +576,7 @@ for claude_plugin_dir in plugins/*/; do
   # Command basenames in commands/ on each side.
   claude_commands="$(list_basenames "$claude_plugin_dir/commands" '*.md')"
   codex_commands="$(list_basenames "$codex_plugin_dir/commands" '*.md')"
-  warn_set_diff "$plugin_name" "commands" "$claude_commands" "$codex_commands"
+  require_set_equal "$plugin_name" "commands" "$claude_commands" "$codex_commands"
 
   # Hooks presence: both providers keep hooks/hooks.json.
   claude_has_hooks=false
@@ -339,7 +584,7 @@ for claude_plugin_dir in plugins/*/; do
   if [ -f "$claude_plugin_dir/hooks/hooks.json" ]; then claude_has_hooks=true; fi
   if [ -f "$codex_plugin_dir/hooks/hooks.json" ]; then codex_has_hooks=true; fi
   if [ "$claude_has_hooks" != "$codex_has_hooks" ]; then
-    warn "$plugin_name: hooks presence mismatch: claude=$claude_has_hooks codex=$codex_has_hooks"
+    fail "$plugin_name: hooks presence mismatch: claude=$claude_has_hooks codex=$codex_has_hooks"
   fi
 
   # Manifest version drift.
@@ -352,18 +597,14 @@ for claude_plugin_dir in plugins/*/; do
     else
       direction="claude ahead"
     fi
-    warn "$plugin_name: claude $claude_version vs codex $codex_version ($direction)"
+    fail "$plugin_name: claude $claude_version vs codex $codex_version ($direction)"
   fi
 
   # Script basenames in scripts/ on each side.
-  claude_scripts="$(list_basenames "$claude_plugin_dir/scripts" '*')"
-  codex_scripts="$(list_basenames "$codex_plugin_dir/scripts" '*')"
-  warn_set_diff "$plugin_name" "scripts" "$claude_scripts" "$codex_scripts"
+  claude_scripts="$(list_runtime_scripts "$plugin_name" claude "$claude_plugin_dir/scripts")"
+  codex_scripts="$(list_runtime_scripts "$plugin_name" codex "$codex_plugin_dir/scripts")"
+  require_set_equal "$plugin_name" "scripts" "$claude_scripts" "$codex_scripts"
 done
 
-if [ "$WARN_COUNT" -gt 0 ]; then
-  echo "DONE: validation passed with $WARN_COUNT warning(s); mirror drift is non-fatal"
-else
-  echo "DONE: validation passed with no warnings"
-fi
+echo "DONE: validation passed with provider structural parity intact"
 exit 0

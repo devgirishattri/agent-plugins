@@ -34,7 +34,7 @@ done
 
 SENT_LOG=$(sent_log_file)
 if [ ! -f "$SENT_LOG" ]; then
-  echo "No sent messages recorded yet (the ledger starts with your next /send or /dispatch)."
+  echo "No sent messages recorded yet (the ledger starts with your next \$session-chat:send or \$session-chat:dispatch)."
   exit 0
 fi
 REPLIES_LOG=$(replies_log_file)
@@ -55,7 +55,7 @@ age_human() {
 ROWS=0
 PENDING=0
 HEADER_PRINTED=0
-while IFS=$'\t' read -r ts id from to type delivery excerpt; do
+while IFS=$'\t' read -r ts id _from to type delivery excerpt; do
   [ -n "$id" ] || continue
   is_nonnegative_int "$ts" || continue
   [ "$ts" -ge "$CUTOFF" ] || continue

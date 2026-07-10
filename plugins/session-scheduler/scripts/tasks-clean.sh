@@ -6,7 +6,7 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
-ensure_dirs
+ensure_dirs || exit 1
 
 DAYS=7
 STATUS_FILTER=""

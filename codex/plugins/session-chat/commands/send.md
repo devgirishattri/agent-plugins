@@ -5,16 +5,12 @@ argument-hint: <pane-name> <message>
 
 ## Instructions
 
-`/send` is for single-line messages up to 1024 characters by default. For multi-line prompts, long tasks, code, logs, or quoting-sensitive content, use `/dispatch` and refer to the `session-chat` skill decision table.
+`$session-chat:send` is for single-line messages up to 1024 characters by default. Use `$session-chat:dispatch` for multi-line or quoting-sensitive content.
 
 1. Parse `$ARGUMENTS`: optional `--priority high` (surfaces before normal messages if queued) and `--ttl <minutes>` (drop instead of surfacing if still queued after the window) come first; then the target pane name; everything after is the message.
-2. If either value is missing, tell the user: `Usage: /send <pane-name> <message>`.
-3. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
-   ```
+2. If either value is missing, tell the user: `Usage: $session-chat:send <pane-name> <message>`.
+3. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
+   command reference. Do not infer it from cwd or hardcode a cache version.
 
 4. Run:
 
@@ -23,8 +19,8 @@ argument-hint: <pane-name> <message>
    ```
 
 5. If the output says `Sent to ...`, confirm to the user.
-6. If there is an error about no name, tell the user to run `/whoami <name>` first.
-7. If the target is not found, suggest `/panes` to show available targets.
-8. If there is an error about single-line or length limits, tell the user to use `/dispatch <pane-name> <task prompt>`.
-9. If there is an error about multiple panes with the same name, tell the user to rename one of those panes with `/whoami <name>`.
+6. If there is an error about no name, suggest `$session-chat:whoami <name>`.
+7. If the target is not found, suggest `$session-chat:panes`.
+8. For single-line or length limits, suggest `$session-chat:dispatch <pane-name> <task prompt>`.
+9. For duplicate names, suggest `$session-chat:whoami <name>` in one pane.
 10. If there is an error that the send did not land within the timeout, tell the user the target may be busy; retry when idle or raise `SESSION_CHAT_VERIFY_TIMEOUT_MS`.

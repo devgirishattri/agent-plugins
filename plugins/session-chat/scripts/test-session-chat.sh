@@ -21,7 +21,7 @@ TEST_MSGS_DIR="$(mktemp -d -t session-chat-test-msgs-XXXXXX)"
 cleanup() {
   tmux -L "$SOCKET" kill-server 2>/dev/null || true
   rm -rf "$TEST_MSGS_DIR" 2>/dev/null || true
-  rm -rf "${TMPDIR:-/tmp}/session-chat-locks" 2>/dev/null || true
+  rm -rf "${TMPDIR:-/tmp}"/session-chat-locks* 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -252,6 +252,402 @@ if [ "$node_route" = "/tmp/claude-rt-test/messages" ]; then
 else
   fail "node_routes_claude" "expected Claude MESSAGES_DIR, got: $node_route"
 fi
+
+# --- Test 11: privacy hardening — messages dir 0700, files migrated to 0600 ---
+# portable octal-perms reader (BSD stat vs GNU stat)
+perms() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+harden_out=$(
+  source "$HERE/lib.sh"
+  HB=$(mktemp -d)
+  md="$HB/messages"
+  mkdir -p "$md/queue"
+  # Pre-existing loose data (world-readable) that migration must tighten.
+  umask 022
+  printf 'secret\n' > "$md/old.md"
+  printf 'q\n' > "$md/queue/old.tsv"
+  chmod 644 "$md/old.md" "$md/queue/old.tsv"
+  chmod 755 "$md"
+  harden_messages_dir "$md"
+  echo "DIR=$(stat -f '%Lp' "$md" 2>/dev/null || stat -c '%a' "$md" 2>/dev/null)"
+  echo "FILE=$(stat -f '%Lp' "$md/old.md" 2>/dev/null || stat -c '%a' "$md/old.md" 2>/dev/null)"
+  echo "SUBFILE=$(stat -f '%Lp' "$md/queue/old.tsv" 2>/dev/null || stat -c '%a' "$md/queue/old.tsv" 2>/dev/null)"
+  [ -e "$md/.perms-hardened-v1" ] && echo MARKER_OK
+  rm -rf "$HB"
+)
+if echo "$harden_out" | grep -q 'DIR=700' && echo "$harden_out" | grep -q 'FILE=600' \
+   && echo "$harden_out" | grep -q 'SUBFILE=600' && echo "$harden_out" | grep -q MARKER_OK; then
+  pass "perms_harden"
+else
+  fail "perms_harden" "expected 700 dir + 600 files + marker, got: $harden_out"
+fi
+
+# --- Test 12: dispatch task file is written owner-only (0600) ---
+disp_file=$(ls -t "$TEST_MSGS_DIR"/*.md 2>/dev/null | head -1)
+if [ -n "$disp_file" ] && [ "$(perms "$disp_file")" = "600" ]; then
+  pass "dispatch_file_perms"
+else
+  fail "dispatch_file_perms" "expected 600 on $disp_file, got: $(perms "${disp_file:-none}")"
+fi
+
+# --- Trust-gate / inline harness: drive detect-incoming-message.sh end-to-end ---
+# No tmux needed: with CLAUDE_PLUGIN_ROOT unset the lib is not sourced, so the
+# live-dispatch path exercises trusted_message_file + inline_dispatch_body + the
+# emit cap directly. HOME is faked so MESSAGES_DIR points at a throwaway tree.
+DHOME=$(mktemp -d)
+mkdir -p "$DHOME/.claude/messages"
+DMSGS="$DHOME/.claude/messages"
+detect_run() {
+  # detect_run <mode> <msgfile> [env=val ...]
+  local mode="$1" msgfile="$2"; shift 2
+  printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:abcd1234] dispatch (2 lines) — read msg file"}' "$msgfile" \
+    | env HOME="$DHOME" TMUX="fake-socket,0,0" CLAUDE_PLUGIN_ROOT="" SESSION_CHAT_INCOMING_MODE="$mode" "$@" \
+      bash "$HERE/detect-incoming-message.sh"
+}
+
+# 13: trusted file in auto mode is accepted AND its body inlined
+printf 'PLEASE-BUILD-THE-WIDGET\nsecond line\n' > "$DMSGS/task-ok.md"
+chmod 600 "$DMSGS/task-ok.md"
+out=$(detect_run auto "$DMSGS/task-ok.md")
+if echo "$out" | grep -q 'Task content follows' && echo "$out" | grep -q 'PLEASE-BUILD-THE-WIDGET'; then
+  pass "trust_inline_auto"
+else
+  fail "trust_inline_auto" "expected inlined body, got: $out"
+fi
+
+# 13b: notify mode must NOT inline the body (untrusted-by-default)
+out=$(detect_run notify "$DMSGS/task-ok.md")
+if echo "$out" | grep -q 'untrusted' && ! echo "$out" | grep -q 'PLEASE-BUILD-THE-WIDGET'; then
+  pass "trust_no_inline_notify"
+else
+  fail "trust_no_inline_notify" "notify should not inline body, got: $out"
+fi
+
+# 14: a symlink planted inside the messages dir is rejected (not followed)
+printf 'off-limits\n' > "$DHOME/outside-secret.txt"
+ln -s "$DHOME/outside-secret.txt" "$DMSGS/evil.md"
+out=$(detect_run auto "$DMSGS/evil.md")
+if echo "$out" | grep -q 'OUTSIDE the trusted message dir' && ! echo "$out" | grep -q 'off-limits'; then
+  pass "trust_reject_symlink"
+else
+  fail "trust_reject_symlink" "symlink should be rejected, got: $out"
+fi
+
+# 15: a path outside the messages dir is rejected
+out=$(detect_run auto "$DHOME/outside-secret.txt")
+if echo "$out" | grep -q 'OUTSIDE the trusted message dir'; then
+  pass "trust_reject_outside"
+else
+  fail "trust_reject_outside" "outside path should be rejected, got: $out"
+fi
+
+# 16: oversized inlined body is truncated at the inline cap
+{ printf 'HEAD-MARKER\n'; head -c 8000 /dev/zero | tr '\0' 'x'; printf '\n'; } > "$DMSGS/big.md"
+chmod 600 "$DMSGS/big.md"
+out=$(detect_run auto "$DMSGS/big.md")
+if echo "$out" | grep -q 'dispatch body truncated at 6000'; then
+  pass "inline_body_truncated"
+else
+  fail "inline_body_truncated" "expected inline truncation notice, got: ${out:0:200}"
+fi
+
+# 17: total emitted context is capped (~10k) — raise inline cap past it to force
+out=$({ printf 'BIGHEAD\n'; head -c 12000 /dev/zero | tr '\0' 'y'; } > "$DMSGS/huge.md"; chmod 600 "$DMSGS/huge.md"; \
+      detect_run auto "$DMSGS/huge.md" SESSION_CHAT_DISPATCH_INLINE_MAX=12000)
+if echo "$out" | grep -q 'truncated by session-chat'; then
+  pass "emit_cap_10k"
+else
+  fail "emit_cap_10k" "expected emit cap truncation, got len=${#out}"
+fi
+# 18: a loose-mode (group/other-readable) file is rejected even if owner-owned
+printf 'GROUP-READABLE-SECRET\n' > "$DMSGS/loose.md"
+chmod 644 "$DMSGS/loose.md"
+out=$(detect_run auto "$DMSGS/loose.md")
+if echo "$out" | grep -q 'OUTSIDE the trusted message dir' && ! echo "$out" | grep -q 'GROUP-READABLE-SECRET'; then
+  pass "trust_reject_loose_mode"
+else
+  fail "trust_reject_loose_mode" "loose-mode file should be rejected, got: $out"
+fi
+rm -rf "$DHOME" 2>/dev/null || true
+
+# --- Test 19: fail closed on unsafe (symlink) messages dir ---
+# harden/ensure must refuse (non-zero) and enqueue must NOT write through a
+# symlinked messages root planted where our private dir should be.
+failclosed_out=$(
+  source "$HERE/lib.sh"
+  FC=$(mktemp -d)
+  real="$FC/real"; mkdir -p "$real"          # attacker-controlled target
+  link="$FC/messages"; ln -s "$real" "$link"  # symlink where our dir belongs
+  export MESSAGES_DIR="$link"
+  harden_messages_dir "$link"; echo "HARDEN_RC=$?"
+  ensure_messages_dir "$link"; echo "ENSURE_RC=$?"
+  enqueue_message peer id1 send me hello "$link"; echo "ENQUEUE_RC=$?"
+  # nothing should have been written through the symlink
+  [ -z "$(ls -A "$real" 2>/dev/null)" ] && echo "TARGET_CLEAN"
+  rm -rf "$FC"
+)
+if echo "$failclosed_out" | grep -q 'HARDEN_RC=1' \
+   && echo "$failclosed_out" | grep -q 'ENSURE_RC=1' \
+   && echo "$failclosed_out" | grep -q 'ENQUEUE_RC=1' \
+   && echo "$failclosed_out" | grep -q 'TARGET_CLEAN'; then
+  pass "fail_closed_symlink_dir"
+else
+  fail "fail_closed_symlink_dir" "out=$failclosed_out"
+fi
+
+# --- Test 20: migration failure blocks the write (fail closed on chmod/find) ---
+# A subdir we can't traverse (000) makes the recursive migration chmod fail;
+# the FIRST enqueue (its first harden) must refuse rather than proceed on a tree
+# it couldn't fully tighten. enqueue is called before any other harden so the
+# failure is observed on the first pass.
+migfail_out=$(
+  source "$HERE/lib.sh"
+  MF=$(mktemp -d)
+  md="$MF/messages"
+  mkdir -p "$md/sub"
+  echo secret > "$md/sub/f"
+  chmod 000 "$md/sub"          # untraversable -> migration chmod fails
+  export MESSAGES_DIR="$md"
+  enqueue_message peer id1 send me hi "$md"; echo "ENQUEUE_RC=$?"
+  chmod 755 "$md/sub" 2>/dev/null   # restore so cleanup can remove it
+  rm -rf "$MF"
+)
+if echo "$migfail_out" | grep -q 'ENQUEUE_RC=1'; then
+  pass "fail_closed_migration_failure"
+else
+  fail "fail_closed_migration_failure" "out=$migfail_out"
+fi
+
+# --- Test 21: true CHARACTER cap — boundary glyph preserved, no U+FFFD ---
+# 5999 ASCII + an emoji at char 6000 (+ a tail) with an inline cap of 6000 chars:
+# the emoji must be kept WHOLE, the tail truncated, no U+FFFD introduced, valid JSON.
+UHOME=$(mktemp -d); UMSGS="$UHOME/.claude/messages"; mkdir -p "$UMSGS"
+{ head -c 5999 /dev/zero | tr '\0' 'a'; printf '\xf0\x9f\x98\x80'; head -c 40 /dev/zero | tr '\0' 'Z'; } > "$UMSGS/emoji.md"
+chmod 600 "$UMSGS/emoji.md"
+uout=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:abcd9999] dispatch (1 lines)"}' "$UMSGS/emoji.md" \
+  | env HOME="$UHOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="" SESSION_CHAT_INCOMING_MODE=auto SESSION_CHAT_DISPATCH_INLINE_MAX=6000 \
+    bash "$HERE/detect-incoming-message.sh")
+uassert=$(printf '%s' "$uout" | python3 -c '
+import sys,json
+try: d=json.loads(sys.stdin.read())
+except Exception: print("BADJSON"); sys.exit()
+s=d.get("systemMessage","")
+print(("EMOJI" if "\U0001F600" in s else "NOEMOJI"),
+      ("NOFFFD" if "�" not in s else "HASFFFD"),
+      ("NOTAIL" if "ZZZZ" not in s else "HASTAIL"))
+' 2>/dev/null)
+if [ "$uassert" = "EMOJI NOFFFD NOTAIL" ]; then
+  pass "utf8_char_boundary_preserved"
+else
+  fail "utf8_char_boundary_preserved" "assert=[$uassert]"
+fi
+rm -rf "$UHOME"
+
+# --- Test 22: fan-in atomic claim — select-before-mutate, overflow never removed ---
+# Three ~3.3k dispatch bodies: hook 1 shows/removes the first two (third overflows
+# the ~9k surface budget and STAYS queued); hook 2 shows/removes the third.
+FHOME=$(mktemp -d); FMSGS="$FHOME/.claude/messages"; mkdir -p "$FMSGS/queue"
+PLUGROOT="$(cd "$HERE/.." && pwd)"
+for n in 1 2 3; do
+  { printf 'BODY%s-' "$n"; head -c 3300 /dev/zero | tr '\0' "$n"; printf '\n'; } > "$FMSGS/ftask$n.md"
+  chmod 600 "$FMSGS/ftask$n.md"
+done
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$FMSGS"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+  for n in 1 2 3; do enqueue_message me "fid$n" dispatch peer "$FMSGS/ftask$n.md" "$FMSGS"; mark_message_ready me "fid$n" "$FMSGS"; done
+)
+run_detect_fanin() {
+  printf '{"hook_event_name":"Stop"}' | env HOME="$FHOME" TMUX="fake,0,0" \
+    CLAUDE_PLUGIN_ROOT="$PLUGROOT" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto \
+    bash "$HERE/detect-incoming-message.sh"
+}
+qf="$FMSGS/queue/me.tsv"
+rows_in() { awk 'END{print NR+0}' "$1" 2>/dev/null || echo 0; }
+out1=$(run_detect_fanin); rem1=$(rows_in "$qf")
+out2=$(run_detect_fanin); rem2=$(rows_in "$qf")
+j1=$(printf '%s' "$out1" | python3 -c 'import sys,json;json.loads(sys.stdin.read());print("OK")' 2>/dev/null)
+j2=$(printf '%s' "$out2" | python3 -c 'import sys,json;json.loads(sys.stdin.read());print("OK")' 2>/dev/null)
+if [ "$j1" = OK ] && [ "$j2" = OK ] \
+   && echo "$out1" | grep -q BODY1 && echo "$out1" | grep -q BODY2 && ! echo "$out1" | grep -q BODY3 \
+   && [ "$rem1" = "1" ] \
+   && echo "$out2" | grep -q BODY3 && [ "$rem2" = "0" ]; then
+  pass "fanin_atomic_claim"
+else
+  fail "fanin_atomic_claim" "rem1=$rem1 rem2=$rem2 h1=$(echo "$out1"|grep -o 'BODY[0-9]'|tr '\n' ',') h2=$(echo "$out2"|grep -o 'BODY[0-9]'|tr '\n' ',')"
+fi
+rm -rf "$FHOME"
+
+# --- Test 23: live prompt id whose durable copy is queued is dequeued once ---
+# A live [from:… id:X] paste whose durable row X still sits in this pane's queue
+# must surface once (from the prompt) and leave ZERO rows for X afterward.
+LHOME=$(mktemp -d); LMSGS="$LHOME/.claude/messages"; mkdir -p "$LMSGS/queue"
+PLUGROOT="$(cd "$HERE/.." && pwd)"
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$LMSGS"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+  enqueue_message me deadbeef send peer "queued copy of the live message" "$LMSGS"
+  mark_message_ready me deadbeef "$LMSGS"
+)
+lout=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 id:deadbeef] hello live"}' \
+  | env HOME="$LHOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$PLUGROOT" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto \
+    bash "$HERE/detect-incoming-message.sh")
+lqf="$LMSGS/queue/me.tsv"
+live_rows=$(awk -F'\t' '$1=="deadbeef"{c++} END{print c+0}' "$lqf" 2>/dev/null)
+if [ "$live_rows" = "0" ] && echo "$lout" | grep -q 'from \[peer\]'; then
+  pass "live_id_dequeued"
+else
+  fail "live_id_dequeued" "live_rows=$live_rows out=$lout"
+fi
+rm -rf "$LHOME"
+
+# --- Test 24: malicious sender @name (path metachars) rejected pre-write ---
+# An externally/raw-set @name with slashes/.. must be refused before any dispatch
+# file is written, so nothing can escape the messages dir via the filename.
+tmux -L "$SOCKET" split-window -t "$SESSION" -h >/dev/null 2>&1
+EVIL_PANE=$(tmux -L "$SOCKET" list-panes -t "$SESSION" -F '#{pane_id}' | tail -1)
+tmux -L "$SOCKET" set-option -p -t "$EVIL_PANE" @name "../../evil"
+mfiles_before=$(find "$TEST_MSGS_DIR" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+out=$(run_lib "$EVIL_PANE" "dispatch_message alpha 'payload'" 2>&1)
+mfiles_after=$(find "$TEST_MSGS_DIR" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+escaped=$(find "$(cd "$TEST_MSGS_DIR"/.. && pwd)" -maxdepth 2 -name '*evil*to*' 2>/dev/null | wc -l | tr -d ' ')
+if echo "$out" | grep -q "unsafe characters" && [ "$mfiles_before" = "$mfiles_after" ] && [ "$escaped" = "0" ]; then
+  pass "malicious_sender_name_rejected"
+else
+  fail "malicious_sender_name_rejected" "out=$out before=$mfiles_before after=$mfiles_after escaped=$escaped"
+fi
+tmux -L "$SOCKET" set-option -p -t "$EVIL_PANE" @name "gamma-cleaned"
+
+# --- Test 25: malicious TARGET name rejected at resolve_pane (no file, no send) ---
+out=$(run_lib "$SENDER_PANE" "dispatch_message '../../evil' 'payload'" 2>&1)
+out2=$(run_lib "$SENDER_PANE" "send_message '../etc/passwd' 'payload'" 2>&1)
+if echo "$out" | grep -q "invalid pane name" && echo "$out2" | grep -q "invalid pane name"; then
+  pass "malicious_target_name_rejected"
+else
+  fail "malicious_target_name_rejected" "out=$out out2=$out2"
+fi
+
+# --- Test 26: dispatch staging is content-safe (body never shell-evaluated) ---
+# The file-based dispatch path must carry a body containing a heredoc-delimiter
+# line and shell-looking substitutions verbatim, executing none of it.
+SAFE_TMP=$(mktemp -d)
+PF="$SAFE_TMP/prompt.txt"
+printf 'line one\nPROMPT_EOF\n$(touch %s/PWNED)\n`touch %s/PWNED2`\nlast line\n' "$SAFE_TMP" "$SAFE_TMP" > "$PF"
+dsafe_out=$(
+  TMUX_PANE="$SENDER_PANE" SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
+  SESSION_CHAT_VERIFY_TIMEOUT_MS=1000 SESSION_CHAT_SETTLE_MS=50 \
+  SESSION_CHAT_TARGET_MESSAGES_DIR="$SAFE_TMP/messages" \
+  TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" \
+  bash -c "
+    tmux() { command tmux -L '$SOCKET' \"\$@\"; }
+    export -f tmux
+    bash '$HERE/dispatch-to-session.sh' alpha '$PF'
+  " 2>&1
+)
+delivered=$(find "$SAFE_TMP/messages" -name '*.md' 2>/dev/null | head -1)
+if [ -n "$delivered" ] && grep -qF 'PROMPT_EOF' "$delivered" && grep -qF '$(touch' "$delivered" \
+   && [ ! -e "$SAFE_TMP/PWNED" ] && [ ! -e "$SAFE_TMP/PWNED2" ]; then
+  pass "dispatch_body_content_safe"
+else
+  fail "dispatch_body_content_safe" "delivered=$delivered pwned=$([ -e "$SAFE_TMP/PWNED" ] && echo yes || echo no) out=$dsafe_out"
+fi
+rm -rf "$SAFE_TMP"
+
+# --- Test 27: msg: path containing a space is parsed fully (not truncated) ---
+# A dispatch file under a HOME with a space must be recognized as trusted — the
+# msg: field is parsed to its ` id:<hex>]` delimiter, not the first space.
+SP_ROOT=$(mktemp -d)
+SP_HOME="$SP_ROOT/home with space"
+SP_MSGS="$SP_HOME/.claude/messages"
+mkdir -p "$SP_MSGS"
+printf 'SPACE-PATH-BODY-OK\n' > "$SP_MSGS/task.md"
+chmod 600 "$SP_MSGS/task.md"
+sp_out=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:abc12345] dispatch (1 lines) — read msg file for full task id:abc12345"}' "$SP_MSGS/task.md" \
+  | env HOME="$SP_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="" SESSION_CHAT_INCOMING_MODE=auto \
+    bash "$HERE/detect-incoming-message.sh")
+if echo "$sp_out" | grep -q 'SPACE-PATH-BODY-OK' && echo "$sp_out" | grep -q 'trusted task file'; then
+  pass "msg_path_with_space"
+else
+  fail "msg_path_with_space" "out=$sp_out"
+fi
+rm -rf "$SP_ROOT"
+
+# --- Test 28: send-lock root is UID-scoped 0700 and fails closed on a symlink ---
+lockroot_out=$(
+  source "$HERE/lib.sh"
+  T=$(mktemp -d); export TMPDIR="$T"
+  r=$(_session_chat_lock_root)
+  myuid=$(id -u)
+  mode=$(stat -f '%Lp' "$r" 2>/dev/null || stat -c '%a' "$r" 2>/dev/null)
+  echo "MODE=$mode"
+  if [ "$r" = "$T/session-chat-locks-$myuid" ]; then echo "UID_SCOPED"; fi
+  # Poison the root: replace it with a symlink to an attacker-controlled dir.
+  rm -rf "$r"; mkdir -p "$T/elsewhere"; ln -s "$T/elsewhere" "$r"
+  if _session_chat_lock_root >/dev/null 2>&1; then echo "SYMLINK_ACCEPTED"; else echo "SYMLINK_REJECTED"; fi
+  lp=$(session_chat_lock_path somepane)
+  if [ -z "$lp" ]; then echo "LOCKPATH_EMPTY"; fi
+  if acquire_lock somepane >/dev/null 2>&1; then echo "ACQUIRE_OK"; else echo "ACQUIRE_FAILCLOSED"; fi
+  rm -rf "$T"
+)
+if echo "$lockroot_out" | grep -q "MODE=700" && echo "$lockroot_out" | grep -q UID_SCOPED \
+   && echo "$lockroot_out" | grep -q SYMLINK_REJECTED && echo "$lockroot_out" | grep -q LOCKPATH_EMPTY \
+   && echo "$lockroot_out" | grep -q ACQUIRE_FAILCLOSED; then
+  pass "lock_root_uid_scoped_failclosed"
+else
+  fail "lock_root_uid_scoped_failclosed" "out=$lockroot_out"
+fi
+
+# --- Test 29: failed emit (closed stdout) retains the row AND leaves recent,
+#     reply-correlation, and archive state untouched; a normal retry then
+#     surfaces the exact body, drains the row, and records all three. Fixture is
+#     a queued SEND carrying a [re:<id>] marker so reply-correlation is real. ---
+CS_HOME=$(mktemp -d); CS_MSGS="$CS_HOME/.claude/messages"; mkdir -p "$CS_MSGS/queue"
+PLUGROOT="$(cd "$HERE/.." && pwd)"
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$CS_MSGS"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+  enqueue_message me cs1 send peer "ACK-BODY [re:deadbeef01]" "$CS_MSGS"
+  mark_message_ready me cs1 "$CS_MSGS"
+)
+run_detect_cs() {
+  printf '{"hook_event_name":"Stop"}' | env HOME="$CS_HOME" TMUX="fake,0,0" \
+    CLAUDE_PLUGIN_ROOT="$PLUGROOT" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto \
+    bash "$HERE/detect-incoming-message.sh"
+}
+qcnt() { awk "/cs1/{c++} END{print c+0}" "$1" 2>/dev/null || echo 0; }
+reply_cnt() { awk "/deadbeef01/{c++} END{print c+0}" "$CS_MSGS/replies-log.tsv" 2>/dev/null || echo 0; }
+arch_cnt() { find "$CS_MSGS/archive" -type f -exec grep -l 'cs1' {} + 2>/dev/null | wc -l | tr -d ' '; }
+# (1) failed emit — closed stdout: row retained; recent/reply/archive all untouched.
+run_detect_cs >&- 2>/dev/null || true
+cs_rows=$(qcnt "$CS_MSGS/queue/me.tsv")
+recent_fail=$(qcnt "$CS_MSGS/queue/.recent-me.tsv")
+reply_fail=$(reply_cnt)
+arch_fail=$(arch_cnt)
+# (2) normal retry — stdout open: exact body surfaces; row drains; recent + reply
+#     + archive now recorded.
+retry_out=$(run_detect_cs)
+cs_rows_after=$(qcnt "$CS_MSGS/queue/me.tsv")
+recent_ok=$(qcnt "$CS_MSGS/queue/.recent-me.tsv")
+reply_ok=$(reply_cnt)
+arch_ok=$(arch_cnt)
+if [ "$cs_rows" = "1" ] && [ "$recent_fail" = "0" ] && [ "$reply_fail" = "0" ] && [ "$arch_fail" = "0" ] \
+   && echo "$retry_out" | grep -q "ACK-BODY" && [ "$cs_rows_after" = "0" ] \
+   && [ "$recent_ok" -ge 1 ] && [ "$reply_ok" -ge 1 ] && [ "$arch_ok" -ge 1 ]; then
+  pass "closed_stdout_retains_then_retry_drains"
+else
+  fail "closed_stdout_retains_then_retry_drains" "rows=$cs_rows recent_fail=$recent_fail reply_fail=$reply_fail arch_fail=$arch_fail rows_after=$cs_rows_after recent_ok=$recent_ok reply_ok=$reply_ok arch_ok=$arch_ok body=$(echo "$retry_out" | grep -c ACK-BODY)"
+fi
+rm -rf "$CS_HOME"
+
+# --- Test 30: a symlinked messages ROOT makes dispatch files untrusted ---
+SL_HOME=$(mktemp -d); mkdir -p "$SL_HOME/.claude" "$SL_HOME/real-msgs"
+ln -s "$SL_HOME/real-msgs" "$SL_HOME/.claude/messages"
+printf 'SECRETBODY\n' > "$SL_HOME/real-msgs/t.md"; chmod 600 "$SL_HOME/real-msgs/t.md"
+sl_out=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:abcd1234] dispatch (1 lines)"}' "$SL_HOME/.claude/messages/t.md" \
+  | env HOME="$SL_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$PLUGROOT" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto \
+    bash "$HERE/detect-incoming-message.sh")
+if echo "$sl_out" | grep -q "OUTSIDE the trusted message dir" && ! echo "$sl_out" | grep -q "SECRETBODY"; then
+  pass "symlinked_msgroot_untrusted"
+else
+  fail "symlinked_msgroot_untrusted" "out=$sl_out"
+fi
+rm -rf "$SL_HOME"
 
 # --- Summary ---
 echo

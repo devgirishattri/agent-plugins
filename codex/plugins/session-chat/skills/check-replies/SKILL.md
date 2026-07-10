@@ -7,12 +7,9 @@ description: "Show which session-chat messages this pane sent have been answered
 
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
-Resolve the plugin root:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
-```
+Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
+the directory two levels above this `SKILL.md`. Use that absolute path; never
+infer it from cwd or hardcode a marketplace cache version.
 
 Parse optional `--pending` (only unanswered messages) and optional `--since <minutes>` (look-back window, default 1440 = 24h).
 

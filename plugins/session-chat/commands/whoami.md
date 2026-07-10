@@ -1,6 +1,6 @@
 ---
 description: Show or set this session's tmux pane name for messaging
-argument-hint: [name]
+argument-hint: "[name]"
 allowed-tools: Bash(bash:*)
 ---
 

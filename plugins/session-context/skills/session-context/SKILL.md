@@ -75,11 +75,17 @@ Snapshot names must contain only letters, numbers, hyphens, and underscores.
 1. **You must be inside tmux** — sharing is a tmux-only operation.
 2. **The recipient pane must be named** (it ran `/whoami <name>`); names are how
    panes are addressed, and the search spans all tmux sessions.
-3. **The recipient should be working in the same repo.** Sharing does *not* copy
-   the snapshot file — it relies on the project-local `tmp/contexts/` dir being
-   shared, then sends the peer a one-line message telling them to run
-   `/context-load <name>`. A peer in a different repo won't have the snapshot to
-   load.
+3. **The recipient should be working in the same repo / context store.** Sharing
+   does *not* copy the snapshot file — it relies on the project-local
+   `tmp/contexts/` dir being shared, then sends the peer a one-line message
+   (carrying the canonical store path) telling them to run `/context-load
+   <name>`, which resolves against the *peer's own* store. A peer in a different
+   repo/store won't have the snapshot to load.
+
+Sharing prefers session-chat's hardened transport when it's installed (durable
+inbox — a busy recipient still gets the notice on its next turn); if session-chat
+is absent it falls back to this plugin's basic tmux send. Either way the
+same-store prerequisite above is unchanged.
 
 Listing, generating, loading, and removing snapshots work outside tmux — only
 sharing requires it.

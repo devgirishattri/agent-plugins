@@ -15,5 +15,5 @@ allowed-tools: Bash(bash:*)
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/share-context.sh "<session-name>" "<snapshot-name>"
    ```
 
-3. Report: "Shared session context '<snapshot-name>' with <session>. They can load it with `/context-load <snapshot-name>`."
+3. Relay the script's output as-is — it reports the store path and which transport was used (session-chat's durable inbox when installed, otherwise the builtin fallback). The recipient can load it with `/context-load <snapshot-name>` **only if they share the same store / repo** (sharing notifies; it does not copy the file).
 4. If the snapshot doesn't exist, suggest running `/context-generate` first.

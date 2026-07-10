@@ -84,7 +84,7 @@ if [ -n "$OLDER_THAN" ]; then
   }
 fi
 
-ensure_messages_dir
+ensure_messages_dir || exit 1
 now=$(date +%s)
 count=0
 total_size=0

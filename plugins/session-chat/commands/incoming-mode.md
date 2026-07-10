@@ -1,6 +1,6 @@
 ---
 description: Show or set the recipient-side SESSION_CHAT_INCOMING_MODE
-argument-hint: [auto|assist|notify|off]
+argument-hint: "[auto|assist|notify|off]"
 allowed-tools: Bash(bash:*)
 ---
 

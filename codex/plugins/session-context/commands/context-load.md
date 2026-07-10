@@ -5,13 +5,8 @@ argument-hint: <snapshot-name>
 
 ## Instructions
 
-1. If `$ARGUMENTS` is empty, tell the user: `Usage: /context-load <snapshot-name>`.
-2. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-context/0.6.0}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
-   ```
+1. If `$ARGUMENTS` is empty, tell the user: `Usage: $session-context:context-load <snapshot-name>`.
+2. Resolve `PLUGIN_ROOT` from this command resource's absolute source path by going up one directory from `<plugin-root>/commands`. Never derive it from the project working directory or embed a cache version.
 
 3. Run:
 
@@ -27,5 +22,5 @@ argument-hint: <snapshot-name>
 - Notes and gotchas.
 
 5. Summarize: `Loaded context from '<name>'. They were working on X and left off at Y.`
-6. If a staleness WARNING appears at the end of the output, surface it to the user and suggest regenerating with `/context-generate <name>` — treat the loaded content as potentially out of date.
-7. If no snapshot is found, suggest `/context-list`.
+6. If a staleness WARNING appears at the end of the output, surface it to the user and suggest regenerating with `$session-context:context-generate <name>` — treat the loaded content as potentially out of date.
+7. If no snapshot is found, suggest `$session-context:context-list`.

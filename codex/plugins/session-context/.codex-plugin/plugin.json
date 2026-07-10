@@ -1,7 +1,7 @@
 {
   "name": "session-context",
-  "version": "0.6.0",
-  "description": "Generate, list, load, share, and remove Codex session context snapshots.",
+  "version": "0.7.0",
+  "description": "Generate, list, load, notify peers about, and safely remove shared Codex context snapshots.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Session Context",
     "shortDescription": "Manage Codex context snapshots for session handoff.",
-    "longDescription": "Context snapshot workflows for generating concise handoff notes, listing saved snapshots, loading previous context, sharing snapshots with another named tmux pane, and removing snapshots.",
+    "longDescription": "Context snapshot workflows for concise handoffs, history and diffing, shared-store notifications over hardened session-chat, and confirmed removal.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
@@ -22,8 +22,7 @@
     "defaultPrompt": [
       "Generate a context snapshot.",
       "List saved context snapshots.",
-      "Load a context snapshot.",
-      "Remove a context snapshot."
+      "Load a context snapshot."
     ],
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/icon.svg",

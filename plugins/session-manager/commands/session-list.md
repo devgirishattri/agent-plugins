@@ -1,6 +1,6 @@
 ---
 description: List Claude Code sessions (current project by default, or "all")
-argument-hint: [all]
+argument-hint: "[all]"
 allowed-tools: Bash(bash:*)
 ---
 

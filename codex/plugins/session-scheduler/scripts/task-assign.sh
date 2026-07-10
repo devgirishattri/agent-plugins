@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # task-assign.sh — Assign a scheduler task to a named pane through session-chat
-# Usage: task-assign.sh <pane> <task-id> [--eta MINUTES] [--stage NAME] [--context NAME] [--force] <prompt>
+# Usage: task-assign.sh <pane> <task-id> [--eta MINUTES] [--stage NAME] [--context NAME|auto] [--reviewer PANE] [--workflow ID] [--force] <prompt>
 # Flags must come before the prompt text.
 # Supported platforms: macOS, Linux
 set -uo pipefail
@@ -8,12 +8,12 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 if [ "$#" -lt 3 ]; then
-  echo "ERROR: Usage: task-assign.sh <pane> <task-id> [--eta MINUTES] [--stage NAME] [--context NAME] [--force] <prompt>" >&2
+  echo "ERROR: Usage: task-assign.sh <pane> <task-id> [--eta MINUTES] [--stage NAME] [--context NAME|auto] [--reviewer PANE] [--workflow ID] [--force] <prompt>" >&2
   exit 1
 fi
 
 require_jq || exit 1
-ensure_dirs
+ensure_dirs || exit 1
 
 ASSIGNEE="$1"
 ID="$2"
@@ -22,11 +22,15 @@ shift 2
 ETA_MIN=""
 STAGE=""
 CONTEXT=""
+REVIEWER_OVERRIDE=""
+WORKFLOW_ID_OVERRIDE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --eta)     ETA_MIN="${2:-}"; shift 2 ;;
     --stage)   STAGE="${2:-}"; shift 2 ;;
     --context) CONTEXT="${2:-}"; shift 2 ;;
+    --reviewer) REVIEWER_OVERRIDE="${2:-}"; shift 2 ;;
+    --workflow|--workflow-id) WORKFLOW_ID_OVERRIDE="${2:-}"; shift 2 ;;
     --force)   SESSION_SCHEDULER_FORCE=1; export SESSION_SCHEDULER_FORCE; shift ;;
     *)         break ;;
   esac
@@ -51,6 +55,12 @@ fi
 if [ -n "$STAGE" ]; then
   validate_stage "$STAGE" || exit 1
 fi
+if [ -n "$REVIEWER_OVERRIDE" ]; then
+  validate_route_name "reviewer pane" "$REVIEWER_OVERRIDE" || exit 1
+fi
+if [ -n "$WORKFLOW_ID_OVERRIDE" ]; then
+  validate_route_name "workflow id" "$WORKFLOW_ID_OVERRIDE" || exit 1
+fi
 
 # Pre-flight: status transition must be legal (or forced) BEFORE we touch the
 # prompt file or dispatch anything.
@@ -73,27 +83,81 @@ if [ -n "$UNMET" ] && ! scheduler_force_enabled; then
   exit 1
 fi
 
-# Pre-flight: resolve the session-context snapshot before any side effects.
+# Pre-flight: resolve session-chat and the session-context snapshot before
+# assignment side effects. `--context auto` creates a task-scoped immutable handoff only
+# after all other pre-flight checks pass.
+CHAT_ROOT=$(session_chat_root) || exit 1
+TASK_NAME=$(jq -r '.name' "$FILE")
 CONTEXT_FILE=""
+AUTO_CONTEXT_FILE=""
 if [ -n "$CONTEXT" ]; then
-  if ! [[ "$CONTEXT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  if [ "$CONTEXT" != "auto" ] && ! [[ "$CONTEXT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "ERROR: Invalid context name: $CONTEXT (alphanumeric, _, - only)." >&2
     exit 1
   fi
   CONTEXT_DIR="$(resolve_contexts_dir)" || exit 1
-  CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
-  if [ ! -f "$CONTEXT_FILE" ]; then
-    echo "ERROR: Context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2
-    echo "Generate it first with \$session-context:context-generate $CONTEXT." >&2
-    exit 1
+  if [ "$CONTEXT" = "auto" ]; then
+    mkdir -p "$CONTEXT_DIR" || exit 1
+    umask 077
+    # Mint and atomically reserve a new handoff for every assignment. The
+    # random suffix avoids same-second reassignment collisions; noclobber makes
+    # an unlikely collision retry instead of overwriting an immutable snapshot.
+    AUTO_CONTEXT_ATTEMPTS=0
+    while [ "$AUTO_CONTEXT_ATTEMPTS" -lt 100 ]; do
+      AUTO_CONTEXT_SUFFIX=$(generate_id)
+      AUTO_CONTEXT_SUFFIX=${AUTO_CONTEXT_SUFFIX#task-}
+      CONTEXT="task-${ID}-${AUTO_CONTEXT_SUFFIX}"
+      CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
+      if (set -o noclobber; : > "$CONTEXT_FILE") 2>/dev/null; then
+        break
+      fi
+      CONTEXT_FILE=""
+      AUTO_CONTEXT_ATTEMPTS=$((AUTO_CONTEXT_ATTEMPTS + 1))
+    done
+    if [ -z "$CONTEXT_FILE" ]; then
+      echo "ERROR: Could not reserve a unique immutable auto context after 100 attempts." >&2
+      exit 1
+    fi
+    {
+      printf '# Task handoff: %s\n\n' "$TASK_NAME"
+      printf -- '- Task ID: `%s`\n' "$ID"
+      printf -- '- Created: `%s`\n' "$(now_iso)"
+      printf -- '- Assignee: `%s`\n\n' "$ASSIGNEE"
+      printf '## Approved assignment\n\n%s\n' "$PROMPT"
+      printf '\n## Ledger state at handoff\n\n```json\n'
+      jq '{id,name,status,stage,depends_on,meta}' "$FILE"
+      printf '```\n'
+    } > "$CONTEXT_FILE" || { rm -f "$CONTEXT_FILE"; exit 1; }
+    chmod 400 "$CONTEXT_FILE" 2>/dev/null || { rm -f "$CONTEXT_FILE"; exit 1; }
+    AUTO_CONTEXT_FILE="$CONTEXT_FILE"
+  else
+    CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
+    if [ ! -f "$CONTEXT_FILE" ]; then
+      echo "ERROR: Context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2
+      echo "Generate it first with \$session-context:context-generate $CONTEXT." >&2
+      exit 1
+    fi
   fi
 fi
 
-CHAT_ROOT=$(session_chat_root) || exit 1
-TASK_NAME=$(jq -r '.name' "$FILE")
 ASSIGNER=$(current_pane_name)
 [ -z "$ASSIGNER" ] && ASSIGNER=$(jq -r '.assigner // ""' "$FILE")
 PROMPT_FILE=$(prompt_file "$ID") || exit 1
+REVIEWER=$(jq -r '.reviewer // empty' "$FILE")
+WORKFLOW_ID=$(jq -r '.meta.workflow_id // .workflow_id // empty' "$FILE")
+[ -n "$REVIEWER_OVERRIDE" ] && REVIEWER="$REVIEWER_OVERRIDE"
+[ -n "$WORKFLOW_ID_OVERRIDE" ] && WORKFLOW_ID="$WORKFLOW_ID_OVERRIDE"
+SCHEDULER_HOME_ABS=$(absolute_existing_dir "$SCHEDULER_DIR") || exit 1
+CONTEXT_HOME_ABS=""
+if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
+  mkdir -p "$SESSION_CONTEXT_HOME" || exit 1
+  CONTEXT_HOME_ABS=$(absolute_existing_dir "$SESSION_CONTEXT_HOME") || exit 1
+fi
+SCHEDULER_HOME_EXPORT=$(printf '%q' "$SCHEDULER_HOME_ABS")
+CONTEXT_HOME_EXPORT=""
+if [ -n "$CONTEXT_HOME_ABS" ]; then
+  CONTEXT_HOME_EXPORT=$(printf '%q' "$CONTEXT_HOME_ABS")
+fi
 
 # If the prompt file already exists (reassignment), back it up so we can
 # restore it on dispatch failure; if it is new, delete it on dispatch failure.
@@ -103,6 +167,7 @@ if [ -f "$PROMPT_FILE" ]; then
   HAD_PROMPT=1
   PROMPT_BACKUP="${PROMPT_FILE}.bak.$$"
   cp "$PROMPT_FILE" "$PROMPT_BACKUP" || {
+    [ -n "$AUTO_CONTEXT_FILE" ] && rm -f "$AUTO_CONTEXT_FILE"
     echo "ERROR: Could not back up existing prompt file $PROMPT_FILE; aborting." >&2
     exit 1
   }
@@ -114,30 +179,56 @@ restore_prompt_on_failure() {
   else
     rm -f "$PROMPT_FILE"
   fi
+  [ -n "$AUTO_CONTEXT_FILE" ] && rm -f "$AUTO_CONTEXT_FILE"
 }
 
 cat > "$PROMPT_FILE" <<EOF
 Task ID: $ID
 Task Name: $TASK_NAME
 Assigned To: $ASSIGNEE
+Reviewer: ${REVIEWER:-(none)}
+Workflow: ${WORKFLOW_ID:-(none)}
+Shared Scheduler Home: $SCHEDULER_HOME_ABS
+Shared Context Home: ${CONTEXT_HOME_ABS:-(not set)}
 
 $PROMPT
 
-When complete, report with:
-\$session-scheduler:task-done $ID <summary>
+For every scheduler command for this task, use the shared home above instead
+of deriving a ledger from the child checkout. Preserve SESSION_CONTEXT_HOME as
+well when loading the attached context.
 
-To request review (e.g. with a commit SHA), report with:
-\$session-scheduler:task-review $ID <note>
+Before using scheduler commands in the child pane, run exactly:
+export SESSION_SCHEDULER_HOME=$SCHEDULER_HOME_EXPORT
+EOF
 
-If blocked, report with:
-\$session-scheduler:task-block $ID <reason>
+if [ -n "$CONTEXT_HOME_EXPORT" ]; then
+  cat >> "$PROMPT_FILE" <<EOF
+export SESSION_CONTEXT_HOME=$CONTEXT_HOME_EXPORT
+EOF
+fi
+
+cat >> "$PROMPT_FILE" <<EOF
+
+When complete, report with either provider form:
+Codex:  \$session-scheduler:task-done $ID <summary>
+Claude: /session-scheduler:task-done $ID <summary>
+
+To request review (e.g. with a commit SHA), use either provider form:
+Codex:  \$session-scheduler:task-review $ID <note>
+Claude: /session-scheduler:task-review $ID <note>
+
+If blocked, use either provider form:
+Codex:  \$session-scheduler:task-block $ID <reason>
+Claude: /session-scheduler:task-block $ID <reason>
 EOF
 
 if [ -n "$CONTEXT" ]; then
   cat >> "$PROMPT_FILE" <<EOF
 
 ## Context
-Load the shared context first: \$session-context:context-load $CONTEXT
+Load the shared context first with either provider form:
+Codex:  \$session-context:context-load $CONTEXT
+Claude: /session-context:context-load $CONTEXT
 EOF
 fi
 
@@ -147,7 +238,6 @@ if ! bash "$CHAT_ROOT/scripts/dispatch-to-session.sh" "$ASSIGNEE" "$PROMPT_FILE"
   exit 1
 fi
 [ -n "$PROMPT_BACKUP" ] && rm -f "$PROMPT_BACKUP"
-bash "$CHAT_ROOT/scripts/send-message.sh" "$ASSIGNEE" "Task $ID assigned: $TASK_NAME" >&2 || true
 
 # Compute eta_at (now + N minutes) via epoch math; portable across BSD/GNU date.
 ETA_AT=""
@@ -156,6 +246,9 @@ if [ -n "$ETA_MIN" ]; then
   [ -z "$ETA_AT" ] && echo "WARN: Could not compute eta_at (date arithmetic failed); proceeding without ETA." >&2
 fi
 
+# Every successful assignment starts a fresh review-dispatch cycle. Clear the
+# prior cycle's transport metadata so a later failed review can be retried even
+# after an earlier review was successfully dispatched and then rejected.
 jq \
   --arg assignee "$ASSIGNEE" \
   --arg assigner "$ASSIGNER" \
@@ -163,12 +256,30 @@ jq \
   --arg eta "$ETA_AT" \
   --arg stage "$STAGE" \
   --arg ctx "$CONTEXT" \
+  --arg reviewer "$REVIEWER" \
+  --arg workflow "$WORKFLOW_ID" \
+  --arg scheduler_home "$SCHEDULER_HOME_ABS" \
+  --arg context_home "$CONTEXT_HOME_ABS" \
   '.assignee=$assignee
    | .assigner=(if (.assigner // "") == "" then $assigner else .assigner end)
    | .prompt_file=$prompt_file
    | (if $eta != "" then .eta_at=$eta else . end)
    | (if $stage != "" then .stage=$stage else . end)
-   | (if $ctx != "" then .meta.context=$ctx else . end)' \
+   | (.meta //= {})
+   | (if $ctx != "" then .meta.context=$ctx else . end)
+   | .reviewer=(if $reviewer == "" then null else $reviewer end)
+   | .meta.workflow_id=(if $workflow == "" then null else $workflow end)
+   | .meta.scheduler_home=$scheduler_home
+   | .meta.context_home=(if $context_home == "" then null else $context_home end)
+   | del(.workflow_id, .scheduler_home, .context_home,
+         .meta.review_prompt_file, .meta.review_dispatched_at,
+         .meta.review_dispatch_status, .meta.review_dispatch_attempt_at,
+         .meta.review_last_dispatch_attempt_at, .meta.review_dispatch_attempts,
+         .meta.review_dispatch_error,
+         .review_prompt_file, .review_dispatched_at,
+         .review_dispatch_status, .review_dispatch_attempt_at,
+         .review_last_dispatch_attempt_at, .review_dispatch_attempts,
+         .review_dispatch_error)' \
   "$FILE" | write_json_atomic "$FILE" || exit 1
 
 append_history_update "$FILE" "assigned" "assigned" "$ASSIGNER" "$PROMPT" || exit 1
@@ -177,4 +288,7 @@ echo "Assigned task $ID to $ASSIGNEE"
 [ -n "$STAGE" ]   && echo "Stage: $STAGE"
 [ -n "$ETA_AT" ]  && echo "ETA: $ETA_AT (${ETA_MIN}m)"
 [ -n "$CONTEXT" ] && echo "Context: $CONTEXT"
+[ -n "$REVIEWER" ] && echo "Reviewer: $REVIEWER"
+[ -n "$WORKFLOW_ID" ] && echo "Workflow: $WORKFLOW_ID"
+echo "Scheduler home: $SCHEDULER_HOME_ABS"
 exit 0

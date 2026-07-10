@@ -55,7 +55,7 @@ age_human() {
 ROWS=0
 PENDING=0
 HEADER_PRINTED=0
-while IFS=$'\t' read -r ts id from to type delivery excerpt; do
+while IFS=$'\t' read -r ts id _ to type delivery excerpt; do
   [ -n "$id" ] || continue
   is_nonnegative_int "$ts" || continue
   [ "$ts" -ge "$CUTOFF" ] || continue

@@ -3,6 +3,16 @@
 # Source this file: source "$(dirname "$0")/lib.sh"
 # Supported platforms: macOS, Linux
 
+# Inter-session messages, durable queues, dispatch task files and reply/archive
+# ledgers all hold peer-supplied content that must stay private to this user —
+# a co-tenant on a shared host must not be able to read another user's dispatched
+# task bodies or plant files the trust gate would honor. Force owner-only perms
+# on everything this library creates. This is process-local (each session-chat
+# script runs in its own subprocess and callers invoke our scripts as
+# subprocesses, not by sourcing lib.sh into their own shell), so it never
+# tightens the user's interactive umask.
+umask 077
+
 # --- tmux checks ---
 
 ensure_tmux() {
@@ -11,7 +21,7 @@ ensure_tmux() {
     echo "Install with: brew install tmux (macOS) or apt install tmux (Ubuntu)" >&2
     exit 1
   fi
-  if [ -z "$TMUX" ]; then
+  if [ -z "${TMUX:-}" ]; then
     echo "ERROR: Not inside a tmux session." >&2
     echo "Start one with: tmux new -s <name>" >&2
     exit 1
@@ -48,9 +58,43 @@ sanitize_label() {
 
 MESSAGES_DIR="${CLAUDE_HOME:-$HOME/.claude}/messages"
 
+# Lock the private messages tree to owner-only, and FAIL CLOSED on any unsafe
+# root. umask 077 already keeps *new* files/dirs private (0600/0700); this
+# additionally (a) re-asserts 0700 on the top dir every call in case it predates
+# the hardening or was created loosely, and (b) migrates an existing tree's
+# contents to 0600/0700 exactly once, guarded by a marker so the recursive chmod
+# never runs on the hot path. Returns NON-ZERO (so the caller refuses to write)
+# whenever the path is a symlink, not a real directory, or not owned by us — we
+# must never operate through an attacker-planted symlink or into a dir owned by
+# another local user.
+harden_messages_dir() {
+  local dir="${1:-$MESSAGES_DIR}"
+  # -L before -d: a symlink-to-dir passes -d, so reject the symlink first.
+  [ -L "$dir" ] && return 1
+  [ -d "$dir" ] || return 1
+  [ -O "$dir" ] || return 1
+  # Fail closed if tightening itself fails: a dir we couldn't lock to 0700, a
+  # migration chmod that didn't take, or a marker we couldn't write all mean we
+  # cannot vouch for the tree's privacy — the caller must then refuse to write.
+  chmod 700 "$dir" 2>/dev/null || return 1
+  local marker="$dir/.perms-hardened-v1"
+  [ -e "$marker" ] && return 0
+  find "$dir" -type d ! -type l -exec chmod 700 {} + 2>/dev/null || return 1
+  find "$dir" -type f ! -type l -exec chmod 600 {} + 2>/dev/null || return 1
+  : > "$marker" 2>/dev/null || return 1
+  return 0
+}
+
+# Ensure the messages dir exists AND is safe (owner-only, real, non-symlink).
+# Fails closed (returns non-zero) rather than creating or writing through an
+# unsafe path — callers that write MUST check this return. Silent: user-facing
+# callers (send/dispatch) print their own actionable error on failure.
 ensure_messages_dir() {
   local messages_dir="${1:-$MESSAGES_DIR}"
-  mkdir -p "$messages_dir"
+  # Never let `mkdir -p` materialize an attacker-planted symlink's target.
+  [ -L "$messages_dir" ] && return 1
+  mkdir -p "$messages_dir" 2>/dev/null || true
+  harden_messages_dir "$messages_dir"
 }
 
 # Resolve the trusted messages dir for the *recipient* pane's runtime so a
@@ -106,7 +150,8 @@ set_pane_name() {
 # $TMPDIR would let another local user pre-plant a symlink there and have
 # our `2>` redirect follow it into an arbitrary file of theirs.
 _pane_name_scratch_dir() {
-  local dir="${TMPDIR:-/tmp}/session-chat-priv-$(id -u 2>/dev/null || printf '0')"
+  local dir
+  dir="${TMPDIR:-/tmp}/session-chat-priv-$(id -u 2>/dev/null || printf '0')"
   [ -e "$dir" ] || mkdir -m 700 "$dir" 2>/dev/null
   # Refuse anything that isn't a real, non-symlink directory we own: a
   # pre-planted symlink or attacker-owned directory at this path must never
@@ -189,6 +234,15 @@ pane_name_err_detail() {
 
 resolve_pane() {
   local label="$1"
+  # A pane name flows raw into dispatch filenames/records downstream, so reject
+  # any label carrying path metacharacters (slashes, dots) up front — nothing
+  # unsafe must ever reach a filesystem path. Use the shared validate_label
+  # contract (same charset gate set_pane_name enforces); surface a pane-specific
+  # message instead of the generic one.
+  if ! validate_label "$label" 2>/dev/null; then
+    echo "ERROR: invalid pane name '$label' (letters, digits, _, - only)." >&2
+    return 1
+  fi
   local matches err_file
   # Tab delimiter: a legacy/manually-set name containing whitespace must not
   # shift awk fields and silently become unreachable.
@@ -303,10 +357,28 @@ per_send_budget_ms() {
 # sets SESSION_CHAT_LOCK_TIMEOUT_MS explicitly, it is treated as a hard cap
 # (no holder-change reset), so the total wait can never exceed it.
 
+# Private per-user root for send-lock dirs. Must be a real, owner-owned,
+# non-symlink 0700 directory: a predictable path directly under a world-writable
+# $TMPDIR would let another local user pre-plant a symlink (redirecting our lock
+# mkdir) or an attacker-owned dir and interfere with delivery serialization.
+# Fails closed (empty output, non-zero) if it cannot be secured.
+_session_chat_lock_root() {
+  local dir
+  dir="${TMPDIR:-/tmp}/session-chat-locks-$(id -u 2>/dev/null || printf '0')"
+  [ -e "$dir" ] || mkdir -m 700 "$dir" 2>/dev/null
+  if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ]; then
+    chmod 700 "$dir" 2>/dev/null || return 1
+    printf '%s' "$dir"
+    return 0
+  fi
+  return 1
+}
+
 session_chat_lock_path() {
-  local safe
+  local safe root
   safe=$(printf '%s' "$1" | tr -c 'a-zA-Z0-9._-' '_')
-  printf '%s/session-chat-locks/%s.lock' "${TMPDIR:-/tmp}" "$safe"
+  root=$(_session_chat_lock_root) || return 1
+  printf '%s/%s.lock' "$root" "$safe"
 }
 
 acquire_lock() {
@@ -314,6 +386,11 @@ acquire_lock() {
   local lock
   lock="${2:-}"
   [ -n "$lock" ] || lock=$(session_chat_lock_path "$pane")
+  # Fail closed: no safe lock path means we cannot serialize sends safely.
+  if [ -z "$lock" ]; then
+    echo "ERROR: could not secure a private send-lock directory for ${pane} (unsafe or unavailable ${TMPDIR:-/tmp})." >&2
+    return 1
+  fi
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
   local default_ms
   default_ms=$(( $(per_send_budget_ms) * 4 ))
@@ -508,7 +585,7 @@ mark_recent_id_unlocked() {
 recent_id_seen() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 1
-  ensure_messages_dir
+  ensure_messages_dir || return 1
   local now found=1
   local lock
   lock=$(queue_lock_path "$recipient")
@@ -525,7 +602,7 @@ recent_id_seen() {
 mark_recent_id() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 0
-  ensure_messages_dir
+  ensure_messages_dir || return 1
   local now
   local lock
   lock=$(queue_lock_path "$recipient")
@@ -533,6 +610,73 @@ mark_recent_id() {
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
   mark_recent_id_unlocked "$recipient" "$id" "$now"
+  release_lock "queue:${recipient}" "$lock"
+}
+
+# --- Peek / atomic-claim (crash-safe fan-in surfacing) ---
+# drain_inbox removes every ready row up front, which is unsafe when the caller
+# can only surface a budget-limited prefix: rows past the cut would be removed
+# but never shown. Instead the hook PEEKs (read-only), renders/selects a prefix
+# that fits, then atomically CLAIMs exactly those ids. Overflow rows are never
+# touched, so a mid-turn crash can never drop an unsurfaced message.
+
+# peek_inbox <skip_ids> <recipient> — READ-ONLY. Print ready, non-skipped,
+# non-recent, non-expired rows (id\ttype\tfrom\tpayload) in priority then FIFO
+# order. Mutates nothing (no removal, no recent-mark).
+peek_inbox() {
+  local skip_ids="$1" recipient="$2"
+  [ -n "$recipient" ] || return 0
+  local qf lock
+  qf=$(queue_file_for "$recipient")
+  [ -f "$qf" ] || return 0
+  lock=$(queue_lock_path "$recipient")
+  acquire_lock "queue:${recipient}" "$lock" || return 0
+  local now recent_ids line pass_prio
+  now=$(now_ms)
+  recent_ids=$(recent_ids_unlocked "$recipient" | tr '\n' ' ')
+  for pass_prio in 1 0; do
+    while IFS= read -r line; do
+      parse_queue_record "$line" || continue
+      [ "$QR_PRIO" = "$pass_prio" ] || continue
+      case " $skip_ids " in *" $QR_ID "*) continue ;; esac
+      case " $recent_ids " in *" $QR_ID "*) continue ;; esac
+      if [ "$QR_EXPIRES" -gt 0 ] && [ "$QR_EXPIRES" -le "$now" ]; then continue; fi
+      if [ "$QR_READY" -gt "$now" ]; then continue; fi
+      printf '%s\t%s\t%s\t%s\n' "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_PAYLOAD"
+    done < "$qf"
+  done
+  release_lock "queue:${recipient}" "$lock"
+}
+
+# claim_inbox_ids <recipient> <space-separated ids> — atomically remove exactly
+# these ids (plus any now-expired rows) from the queue and mark them recent,
+# under one lock. Rows not listed are re-emitted untouched, so overflow rows
+# never leave the queue. Call AFTER the surfaced rows have been emitted, so a
+# crash before the claim re-surfaces (dup) rather than loses.
+claim_inbox_ids() {
+  local recipient="$1" ids="$2"
+  [ -n "$recipient" ] || return 0
+  local qf lock
+  qf=$(queue_file_for "$recipient")
+  [ -f "$qf" ] || return 0
+  lock=$(queue_lock_path "$recipient")
+  acquire_lock "queue:${recipient}" "$lock" || return 1
+  local now tmp line
+  now=$(now_ms)
+  prune_recent_ids_unlocked "$recipient" "$now"
+  tmp="${qf}.tmp.$$"
+  : > "$tmp"
+  while IFS= read -r line; do
+    parse_queue_record "$line" || continue
+    case " $ids " in
+      *" $QR_ID "*) mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"; continue ;;
+    esac
+    if [ "$QR_EXPIRES" -gt 0 ] && [ "$QR_EXPIRES" -le "$now" ]; then
+      mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"; continue
+    fi
+    emit_queue_record "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_READY" "$QR_PRIO" "$QR_EXPIRES" "$QR_PAYLOAD" >> "$tmp"
+  done < "$qf"
+  mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   release_lock "queue:${recipient}" "$lock"
 }
 
@@ -545,7 +689,7 @@ mark_recent_id() {
 recent_id_seen_or_mark() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 1
-  ensure_messages_dir
+  ensure_messages_dir || return 1
   local now seen=1
   local lock
   lock=$(queue_lock_path "$recipient")
@@ -565,7 +709,7 @@ enqueue_message() {
   # enqueue_message <recipient_name> <id> <type> <from> <payload> [messages_dir]
   local recipient="$1" id="$2" type="$3" from="$4" payload="$5"
   local messages_dir="${6:-$MESSAGES_DIR}"
-  ensure_messages_dir "$messages_dir"
+  ensure_messages_dir "$messages_dir" || return 1
   local qf ready_at lock
   qf=$(queue_file_for "$recipient" "$messages_dir")
   mkdir -p "$(dirname "$qf")" 2>/dev/null || true
@@ -716,7 +860,7 @@ log_sent_message() {
   local id="$1" from="$2" to="$3" type="$4" delivery="$5"
   local excerpt
   excerpt=$(log_excerpt "$6")
-  ensure_messages_dir
+  ensure_messages_dir || return 0
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$(sent_log_file)" 2>/dev/null || true
   trim_log_file "$(sent_log_file)"
@@ -731,7 +875,7 @@ log_reply_ids() {
   [ -n "$from" ] || return 0
   local rf id
   rf=$(replies_log_file)
-  ensure_messages_dir
+  ensure_messages_dir || return 0
   printf '%s' "$text" | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null | sed 's/^\[re://; s/\]$//' | sort -u | \
   while IFS= read -r id; do
     [ -n "$id" ] || continue
@@ -755,6 +899,9 @@ archive_message() {
   # archive_message <direction> <peer> <type> <id> <text>
   local direction="$1" peer="$2" type="$3" id="$4" text="$5"
   local dir day f
+  # Fail closed: never create the archive under an unsafe (symlink/unowned)
+  # messages root. Archiving is best-effort, so just skip on refusal.
+  ensure_messages_dir || return 0
   dir="$MESSAGES_DIR/archive"
   mkdir -p "$dir" 2>/dev/null || return 0
   day=$(date +%Y-%m-%d 2>/dev/null) || return 0
@@ -901,6 +1048,13 @@ send_message() {
     echo "ERROR: This pane has no name. Run /whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
     return 1
   fi
+  # The sender name is written raw into the dispatch file name and durable
+  # records; refuse an externally/manually-set @name with path metacharacters
+  # before any write, so a hostile @name (slashes, ..) can't steer a file path.
+  if ! validate_label "$my_name" 2>/dev/null; then
+    echo "ERROR: this pane's name ('$my_name') has unsafe characters; rename it with /whoami <name> (letters, digits, _, - only) before sending." >&2
+    return 1
+  fi
   # Length / newline guard: tmux send-keys -l truncates large literal pastes
   # and the first \n submits a partial prompt. Refuse and steer to /dispatch.
   case "$message" in
@@ -923,7 +1077,10 @@ send_message() {
   local uid
   uid=$(generate_id)
   # Durable copy first so a busy/failed paste is never a lost message.
-  enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" "$target_messages_dir" || return 1
+  if ! enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" "$target_messages_dir"; then
+    echo "ERROR: cannot queue message — recipient messages dir is unsafe (symlink/unowned) or unavailable: $target_messages_dir" >&2
+    return 1
+  fi
   local formatted="[from:${my_name} pane:${TMUX_PANE} id:${uid}] ${message} [id:${uid}]"
   if send_text "$target_pane" "$formatted" "id:${uid}"; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
@@ -946,6 +1103,13 @@ dispatch_message() {
     echo "ERROR: This pane has no name. Run /whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
     return 1
   fi
+  # The sender name is written raw into the dispatch file name and durable
+  # records; refuse an externally/manually-set @name with path metacharacters
+  # before any write, so a hostile @name (slashes, ..) can't steer a file path.
+  if ! validate_label "$my_name" 2>/dev/null; then
+    echo "ERROR: this pane's name ('$my_name') has unsafe characters; rename it with /whoami <name> (letters, digits, _, - only) before sending." >&2
+    return 1
+  fi
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
   ensure_agent_target "$target_name" "$target_pane" || return 1
@@ -955,7 +1119,11 @@ dispatch_message() {
   target_messages_dir=$(target_messages_dir_for_pane "$target_pane")
 
   # Write full message to file (handles multi-line + special chars)
-  ensure_messages_dir "$target_messages_dir"
+  # Fail closed: refuse to write the task file into an unsafe recipient dir.
+  if ! ensure_messages_dir "$target_messages_dir"; then
+    echo "ERROR: recipient messages dir is unsafe (symlink/unowned) or unavailable: $target_messages_dir" >&2
+    return 1
+  fi
   local uid
   uid=$(generate_id)
   # PID + uid prevents same-second / same-target collisions overwriting files.
@@ -965,6 +1133,9 @@ dispatch_message() {
   cat > "$msg_file" <<EOF
 $message
 EOF
+  # umask 077 already yields 0600, but assert it explicitly: this file holds the
+  # full task body and the recipient's trust gate rejects anything not owner-only.
+  chmod 600 "$msg_file" 2>/dev/null || true
   local line_count
   line_count=$(printf '%s\n' "$message" | wc -l | tr -d ' ')
   # Durable copy first (points at the task file), then the live nudge.

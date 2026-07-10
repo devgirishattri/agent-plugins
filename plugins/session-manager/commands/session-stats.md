@@ -1,6 +1,6 @@
 ---
 description: Show read-only analytics for local Claude Code session data (per-project counts, sizes, last activity)
-argument-hint: [project-filter]
+argument-hint: "[project-filter]"
 allowed-tools: Bash(bash:*)
 ---
 

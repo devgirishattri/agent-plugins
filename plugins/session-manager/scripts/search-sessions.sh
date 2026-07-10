@@ -45,8 +45,6 @@ human_size() {
     fi
 }
 
-found=0
-
 find "$PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -type f 2>/dev/null | while read -r jsonl_file; do
     filename=$(basename "$jsonl_file" .jsonl)
     session_id="$filename"

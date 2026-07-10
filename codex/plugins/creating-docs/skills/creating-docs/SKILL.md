@@ -1,7 +1,6 @@
 ---
 name: creating-docs
 description: This skill should be used when creating new documentation files or updating existing ones, especially when documenting system architecture, features, integrations, workflows, or technical decisions. Also use when asked to "document", "write docs for", or "create a doc about" any system component. Trigger this skill whenever the user wants to capture knowledge about how something works, even if they don't explicitly say "documentation" — phrases like "explain how X works and save it", "write up the auth flow", or "I need a reference for the API" all qualify.
-user-invocable: true
 ---
 
 # Creating Documentation
@@ -19,6 +18,7 @@ A structured process for creating and updating project documentation. Documents 
 7. **Check size and split if needed** — After writing, check if the doc should be split (see `references/SPLITTING_GUIDE.md`). Proactively suggest splitting to the user if the doc covers 3+ distinct subsystems at 80+ lines each.
 8. **Add diagrams** — Include Mermaid diagrams where relationships are hard to follow in prose. See `references/DIAGRAMS_GUIDE.md` for types and examples.
 9. **Cross-reference** — Link to related docs and update them if the new doc changes the picture.
+10. **Run an independent accuracy review** — After the edits and local validation scripts finish, delegate the changed document(s) to a fresh, read-only subagent using the `doc-review` worker procedure. Use isolated/no inherited conversation context when the delegation capability supports it; provide only the target, plugin root, and worker instructions, not the intended verdict or prior conclusions. Wait for its report and relay its ACCURATE / ISSUES FOUND verdict. The reviewer must not edit files. If and only if the runtime has no subagent/delegation capability, perform the same report-only procedure directly and disclose that the fallback was not independent.
 
 ## Naming Convention
 
@@ -103,19 +103,14 @@ Group entries by file for scannability. For large docs (20+ references), include
 
 ## Validation Tools
 
-This skill bundles three scripts in the plugin's `scripts/` directory for verifying doc health. Resolve the plugin root with:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/creating-docs/1.1.0}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/creating-docs"
-```
+This skill bundles three scripts in the plugin's `scripts/` directory for verifying doc health. Resolve `PLUGIN_ROOT` from the absolute source path Codex supplied for this selected `SKILL.md`: go up two directories from `<plugin-root>/skills/creating-docs/SKILL.md` to `<plugin-root>`. Use that absolute path regardless of the project working directory. Never embed a plugin cache version or assume the repository checkout is the current directory. Set `DOCS_DIR` to the actual parent directory of each changed doc (or each unique parent for multiple docs); do not hard-code `docs/` when the document lives at the project root or beside a module.
 
 ### check-todos.sh
 
 Scans doc files for embedded TODO/FIXME/HACK markers that should be in the dedicated tracker files instead. Run this after every doc creation or update.
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/check-todos.sh" docs/
+bash "$PLUGIN_ROOT/scripts/check-todos.sh" "$DOCS_DIR"
 ```
 
 ### validate-links.sh
@@ -123,7 +118,7 @@ bash "$PLUGIN_ROOT/scripts/check-todos.sh" docs/
 Checks that all cross-references in docs actually point to existing files. Catches stale links after renames or deletions.
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/validate-links.sh" docs/
+bash "$PLUGIN_ROOT/scripts/validate-links.sh" "$DOCS_DIR"
 ```
 
 ### check-freshness.sh
@@ -131,12 +126,14 @@ bash "$PLUGIN_ROOT/scripts/validate-links.sh" docs/
 Compares doc modification dates against the code files they reference using git history. Flags docs not updated since their referenced code changed.
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/check-freshness.sh" docs/ 30
+bash "$PLUGIN_ROOT/scripts/check-freshness.sh" "$DOCS_DIR" 30
 ```
 
 Arguments: `[docs-directory]` and `[days-threshold]` (default: 30 days).
 
 Run the link validator after every doc creation/update. Run the freshness checker periodically or when the user asks to audit documentation health.
+
+After the scripts pass, complete step 10 with a fresh subagent. Give the reviewer only the target path, the resolved absolute `PLUGIN_ROOT`, and the independent worker procedure from `skills/doc-review/SKILL.md`; explicitly tell it not to delegate again. Apply no fixes during that review pass. If it reports issues, present them to the user or make fixes in a separate editing pass and then request another fresh review.
 
 ## Additional Resources
 

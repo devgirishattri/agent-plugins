@@ -12,7 +12,7 @@ if [ "$#" -lt 1 ]; then
 fi
 
 require_jq || exit 1
-ensure_dirs
+ensure_dirs || exit 1
 
 ID="$1"
 shift || true

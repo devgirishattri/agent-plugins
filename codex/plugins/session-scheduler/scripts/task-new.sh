@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
 # task-new.sh — Create a scheduler task
-# Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--depends-on id1,id2]
+# Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--depends-on id1,id2] [--reviewer PANE] [--workflow ID]
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
 if [ "$#" -lt 1 ]; then
-  echo "ERROR: Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--depends-on id1,id2]" >&2
+  echo "ERROR: Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--depends-on id1,id2] [--reviewer PANE] [--workflow ID]" >&2
   exit 1
 fi
 
 require_jq || exit 1
-ensure_dirs
+ensure_dirs || exit 1
 
 NAME="$1"
 shift
 meta_json='{}'
 STAGE=""
 DEPENDS_RAW=""
+REVIEWER=""
+WORKFLOW_ID=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --meta)
@@ -46,6 +48,18 @@ while [ "$#" -gt 0 ]; do
     --depends-on)
       [ "$#" -ge 2 ] || { echo "ERROR: --depends-on requires a comma-separated id list." >&2; exit 1; }
       DEPENDS_RAW="$2"
+      shift 2
+      ;;
+    --reviewer)
+      [ "$#" -ge 2 ] || { echo "ERROR: --reviewer requires a pane name." >&2; exit 1; }
+      REVIEWER="$2"
+      validate_route_name "reviewer pane" "$REVIEWER" || exit 1
+      shift 2
+      ;;
+    --workflow|--workflow-id)
+      [ "$#" -ge 2 ] || { echo "ERROR: --workflow requires an id." >&2; exit 1; }
+      WORKFLOW_ID="$2"
+      validate_route_name "workflow id" "$WORKFLOW_ID" || exit 1
       shift 2
       ;;
     *)
@@ -83,6 +97,8 @@ jq -n \
   --arg assigner "$ASSIGNER" \
   --arg created "$NOW" \
   --arg stage "$STAGE" \
+  --arg reviewer "$REVIEWER" \
+  --arg workflow "$WORKFLOW_ID" \
   --argjson meta "$meta_json" \
   --argjson depends "$depends_json" \
   '{
@@ -92,18 +108,21 @@ jq -n \
     stage:(if $stage == "" then null else $stage end),
     assigner:$assigner,
     assignee:"",
+    reviewer:(if $reviewer == "" then null else $reviewer end),
     prompt_file:"",
     depends_on:$depends,
     created_at:$created,
     updated_at:$created,
     started_at:null,
     eta_at:null,
-    meta:$meta,
+    meta:($meta + (if $workflow == "" then {} else {workflow_id:$workflow} end)),
     history:[{ts:$created,event:"created",actor:$assigner,note:$name}]
   }' > "$FILE"
 
 echo "Created task $ID: $NAME"
 [ -n "$STAGE" ] && echo "Stage: $STAGE"
+[ -n "$REVIEWER" ] && echo "Reviewer: $REVIEWER"
+[ -n "$WORKFLOW_ID" ] && echo "Workflow: $WORKFLOW_ID"
 if [ "$depends_json" != "[]" ]; then
   echo "Depends on: $(printf '%s\n' "$depends_json" | jq -r 'join(", ")')"
 fi

@@ -1,6 +1,6 @@
 ---
 description: Independently verify documentation accuracy against the codebase (report-only, no edits)
-argument-hint: [doc file or directory to review]
+argument-hint: "[doc file or directory to review]"
 allowed-tools: Read, Glob, Grep, Bash(bash:*), Agent
 ---
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # auto-name-pane.sh — Auto-set tmux pane @name from Codex session metadata
-# Called from SessionStart hook ONLY (not UserPromptSubmit, to avoid overwriting /whoami)
+# Called from SessionStart only (not UserPromptSubmit, to preserve a manual name).
 # Supported platforms: macOS, Linux
 
 # Quick exit if not inside tmux
 [ -z "${TMUX:-}" ] && exit 0
 
-# Quick exit if pane already has a name (don't overwrite manual /whoami)
+# Quick exit if pane already has a name.
 CURRENT_NAME=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{@name}' 2>/dev/null) || true
 [ -n "$CURRENT_NAME" ] && exit 0
 
@@ -20,7 +20,13 @@ TRANSCRIPT=$(echo "$HOOK_INPUT" | grep -oE '"transcript_path":"[^"]*"' | head -1
 if [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ]; then
   SESSIONS_DIR="${CODEX_HOME:-$HOME/.codex}/sessions"
   if [ -d "$SESSIONS_DIR" ]; then
-    TRANSCRIPT=$(find "$SESSIONS_DIR" -type f -name '*.jsonl' 2>/dev/null | xargs ls -t 2>/dev/null | head -1) || true
+    transcripts=()
+    while IFS= read -r -d '' transcript; do
+      transcripts+=("$transcript")
+    done < <(find "$SESSIONS_DIR" -type f -name '*.jsonl' -print0 2>/dev/null)
+    if [ "${#transcripts[@]}" -gt 0 ]; then
+      TRANSCRIPT=$(ls -t "${transcripts[@]}" 2>/dev/null | head -1) || true
+    fi
   fi
 fi
 

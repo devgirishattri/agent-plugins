@@ -1,16 +1,12 @@
 ---
 description: Show scheduler task status
-argument-hint: [task-id|--all|--pending|--mine|--by-stage]
+argument-hint: "[task-id|--all|--pending|--mine|--by-stage|--by-workflow|--workflow ID]"
 ---
 
 ## Instructions
 
-1. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-scheduler/0.4.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
-   ```
+1. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
+   command reference. Do not infer it from cwd or hardcode a cache version.
 
 2. Run:
 
@@ -19,7 +15,7 @@ argument-hint: [task-id|--all|--pending|--mine|--by-stage]
    bash "$PLUGIN_ROOT/scripts/task-status.sh" $ARGUMENTS
    ```
 
-3. Present the tab-separated output as id, status, stage, assignee, assigner, updated time, flags, and name.
+3. Present the tab-separated output as id, status, workflow, stage, assignee, reviewer, assigner, updated time, flags, and name.
 4. Flags: `OVERDUE` = past `eta_at`; `STALE` = assigned/review with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) minutes; `-` = none.
-5. Default output is active tasks; `--all` includes done and blocked tasks; `--by-stage` groups non-done tasks under `Stage: <name>` headers (`(none)` for unstaged).
-6. The single-task view also lists dependencies with their statuses and any flags.
+5. Default output is active tasks; `--all` includes done and blocked tasks; `--by-stage` groups non-done tasks; `--by-workflow` shows every task carrying a workflow id, including completed steps, and omits ungrouped tasks; `--workflow ID` filters one workflow.
+6. The single-task view also lists the recorded shared scheduler home, dependencies, and flags.

@@ -13,7 +13,16 @@ set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CLAUDE_DIR="$HOME/.claude"
 PROJECTS_DIR="$CLAUDE_DIR/projects"
-FILTER="${1:-$(pwd)}"
+
+FILTER=""
+CONFIRMED=0
+for arg in "$@"; do
+    case "$arg" in
+        --confirmed) CONFIRMED=1 ;;
+        *) [ -z "$FILTER" ] && FILTER="$arg" ;;
+    esac
+done
+[ -z "$FILTER" ] && FILTER="$(pwd)"
 
 if [ "$FILTER" = "all" ]; then
     echo "ERROR: Refusing a global wipe. Pass a single project path (defaults to the current dir)."
@@ -58,6 +67,16 @@ fi
 
 total=$(printf '%s\n' "$session_ids" | grep -c .)
 
+# Destructive capability gate — refuse the bulk wipe without explicit
+# confirmation (the /session-delete command passes --confirmed only after an
+# AskUserQuestion default-cancel confirmation).
+if [ "$CONFIRMED" != "1" ]; then
+    echo "REFUSED: this would permanently delete all $total session(s) for project: $FILTER" >&2
+    echo "  Project dir: $resolved" >&2
+    echo "  Re-run through /session-delete --all (which confirms first), or pass --confirmed explicitly." >&2
+    exit 2
+fi
+
 echo "Bulk-deleting $total session(s) for project: $FILTER"
 echo "Project dir: $resolved"
 echo "===================================="
@@ -67,7 +86,7 @@ fail=0
 while IFS= read -r sid; do
     [ -z "$sid" ] && continue
     echo ""
-    if bash "$SCRIPT_DIR/delete-session.sh" "$sid"; then
+    if bash "$SCRIPT_DIR/delete-session.sh" "$sid" --confirmed; then
         ok=$(( ok + 1 ))
     else
         fail=$(( fail + 1 ))

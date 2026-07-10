@@ -8,9 +8,9 @@
 # Supported platforms: macOS, Linux
 
 # Drain hook input from stdin (unused, but keeps the writer side happy)
-HOOK_INPUT=$(cat 2>/dev/null) || true
+cat >/dev/null 2>&1 || true
 
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-}"
+PLUGIN_ROOT="${PLUGIN_ROOT:-}"
 if [ -z "$PLUGIN_ROOT" ]; then
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
   PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -29,6 +29,7 @@ count=${#snaps[@]}
 
 names=""
 for f in "${snaps[@]}"; do
+  ensure_context_regular_file "$f" >/dev/null 2>&1 || exit 0
   names+="$(basename "$f" .md) "
 done
 names="${names% }"
@@ -52,5 +53,5 @@ emit_system_message() {
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$message"
 }
 
-emit_system_message "session-context: ${count} context snapshot(s) available for this project: ${names}. Run /context-load <name> (or \$session-context:context-load <name>) to resume prior work, or /context-list (\$session-context:context-list) for details."
+emit_system_message "session-context: ${count} context snapshot(s) available for this project: ${names}. Run \$session-context:context-load <name> to resume prior work, or \$session-context:context-list for details."
 exit 0

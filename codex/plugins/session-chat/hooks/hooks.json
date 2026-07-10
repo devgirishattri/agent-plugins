@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$TMUX\" ] && tmux source-file \"${CODEX_PLUGIN_ROOT:-$(ls -td \"$HOME\"/.codex/plugins/cache/girishattri-plugins/session-chat/*/ 2>/dev/null | head -1)}\"/scripts/dispatch-tmux.conf 2>/dev/null; exit 0",
+            "command": "[ -n \"$TMUX\" ] && tmux source-file \"$PLUGIN_ROOT/scripts/dispatch-tmux.conf\" 2>/dev/null; exit 0",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash \"${CODEX_PLUGIN_ROOT:-$(ls -td \"$HOME\"/.codex/plugins/cache/girishattri-plugins/session-chat/*/ 2>/dev/null | head -1)}\"/scripts/auto-name-pane.sh",
+            "command": "bash \"$PLUGIN_ROOT/scripts/auto-name-pane.sh\"",
             "timeout": 5
           }
         ]
@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CODEX_PLUGIN_ROOT:-$(ls -td \"$HOME\"/.codex/plugins/cache/girishattri-plugins/session-chat/*/ 2>/dev/null | head -1)}\"/scripts/detect-incoming-message.sh",
+            "command": "bash \"$PLUGIN_ROOT/scripts/detect-incoming-message.sh\"",
             "timeout": 5
           }
         ]
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CODEX_PLUGIN_ROOT:-$(ls -td \"$HOME\"/.codex/plugins/cache/girishattri-plugins/session-chat/*/ 2>/dev/null | head -1)}\"/scripts/detect-incoming-message.sh",
+            "command": "bash \"$PLUGIN_ROOT/scripts/detect-incoming-message.sh\"",
             "timeout": 10
           }
         ]

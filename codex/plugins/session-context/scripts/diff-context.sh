@@ -14,7 +14,7 @@ MODE="${2:-}"
 
 if [ -z "$PROJECT_NAME" ]; then
   echo "ERROR: Usage: diff-context.sh <project-name> [--versions | <timestamp>]"
-  echo "Run /context-list to see available snapshots."
+  echo "Run \$session-context:context-list to see available snapshots."
   exit 1
 fi
 
@@ -24,17 +24,18 @@ SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
 SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 HISTORY_DIR="$SNAPSHOTS_DIR/.history"
 
-if [ ! -f "$SNAPSHOT" ]; then
+if ! _context_path_exists "$SNAPSHOT"; then
   echo "ERROR: No context snapshot found for '$PROJECT_NAME' in this project."
-  echo "Run /context-list to see available snapshots."
+  echo "Run \$session-context:context-list to see available snapshots."
   exit 1
 fi
+ensure_context_regular_file "$SNAPSHOT" || exit 1
 
 versions=$(ls -1 "$HISTORY_DIR/${PROJECT_NAME}."*.md 2>/dev/null | sort -r || true)
 
 if [ -z "$versions" ]; then
   echo "No history versions exist for '$PROJECT_NAME' yet."
-  echo "History is created the first time /context-generate overwrites an existing snapshot."
+  echo "History is created the first time \$session-context:context-generate overwrites an existing snapshot."
   exit 0
 fi
 
@@ -63,6 +64,7 @@ else
   OLD=$(echo "$versions" | head -1)
 fi
 
+ensure_context_regular_file "$OLD" || exit 1
 echo "Diff: $(basename "$OLD") -> ${PROJECT_NAME}.md (current)"
 if diff -u "$OLD" "$SNAPSHOT"; then
   echo "(no differences)"

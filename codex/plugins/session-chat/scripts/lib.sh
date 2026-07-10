@@ -3,6 +3,10 @@
 # Source this file: source "$(dirname "$0")/lib.sh"
 # Supported platforms: macOS, Linux
 
+# Queue rows, dispatch bodies, archives, and reply ledgers can contain private
+# task content. Every file created by session-chat must be owner-only.
+umask 077
+
 # --- tmux checks ---
 
 ensure_tmux() {
@@ -49,9 +53,28 @@ sanitize_label() {
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 MESSAGES_DIR="$CODEX_DIR/messages"
 
+harden_messages_dir() {
+  local messages_dir="${1:-$MESSAGES_DIR}"
+  if [ ! -d "$messages_dir" ] || [ -L "$messages_dir" ] || [ ! -O "$messages_dir" ]; then
+    echo "ERROR: Refusing unsafe messages directory: $messages_dir" >&2
+    return 1
+  fi
+  chmod 700 "$messages_dir" 2>/dev/null || return 1
+  local marker="$messages_dir/.perms-hardened-v1"
+  if [ ! -e "$marker" ]; then
+    find "$messages_dir" -type d -exec chmod 700 {} + 2>/dev/null || return 1
+    find "$messages_dir" -type f -exec chmod 600 {} + 2>/dev/null || return 1
+    : > "$marker" || return 1
+    chmod 600 "$marker" 2>/dev/null || return 1
+  fi
+}
+
 ensure_messages_dir() {
   local messages_dir="${1:-$MESSAGES_DIR}"
-  mkdir -p "$messages_dir"
+  if [ ! -e "$messages_dir" ]; then
+    mkdir -p "$messages_dir" || return 1
+  fi
+  harden_messages_dir "$messages_dir"
 }
 
 # --- Pane naming (smux @name pattern) ---
@@ -62,6 +85,87 @@ set_pane_name() {
   # Invalid names (spaces etc.) would be unreachable via resolve_pane forever.
   validate_label "$name" || return 1
   tmux set-option -p -t "$pane_id" @name "$name"
+}
+
+# Build private runtime state under a physical, UID-scoped temp root. The
+# root is intentionally predictable so every sender for this Unix account
+# shares the same pane locks, but it is only trusted when it is a real 0700
+# directory owned by this process's effective user. Canonicalizing TMPDIR
+# before appending the root name avoids returning a path through a symlinked
+# alias (notably /var -> /private/var on macOS).
+_private_tmp_root() {
+  local tmp_parent uid root canonical mode
+  tmp_parent=$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P) || {
+    echo "ERROR: Refusing unusable session-chat temp parent: ${TMPDIR:-/tmp}" >&2
+    return 1
+  }
+  uid="${EUID:-}"
+  case "$uid" in
+    ''|*[!0-9]*) uid=$(id -u 2>/dev/null) || return 1 ;;
+  esac
+  case "$uid" in
+    ''|*[!0-9]*)
+      echo "ERROR: Could not determine the current UID for session-chat temp state." >&2
+      return 1
+      ;;
+  esac
+
+  root="$tmp_parent/session-chat-$uid"
+  if [ ! -e "$root" ]; then
+    # Another sender may win this mkdir between the existence check and this
+    # call. Accept that race only when the winner left a path for the strict
+    # validation immediately below.
+    if ! mkdir -m 700 "$root" 2>/dev/null && [ ! -e "$root" ]; then
+      echo "ERROR: Could not create private session-chat temp root: $root" >&2
+      return 1
+    fi
+  fi
+  if [ ! -d "$root" ] || [ -L "$root" ] || [ ! -O "$root" ]; then
+    echo "ERROR: Refusing unsafe session-chat temp root: $root" >&2
+    return 1
+  fi
+  mode=$(stat -f '%Lp' "$root" 2>/dev/null || stat -c '%a' "$root" 2>/dev/null) || {
+    echo "ERROR: Could not inspect session-chat temp root permissions: $root" >&2
+    return 1
+  }
+  if [ "$mode" != "700" ]; then
+    echo "ERROR: Refusing non-private session-chat temp root (mode $mode): $root" >&2
+    return 1
+  fi
+  canonical=$(cd "$root" 2>/dev/null && pwd -P) || return 1
+  if [ "$canonical" != "$root" ]; then
+    echo "ERROR: Refusing non-canonical session-chat temp root: $root" >&2
+    return 1
+  fi
+  printf '%s\n' "$root"
+}
+
+_private_tmp_subdir() {
+  local name="$1" root dir mode canonical
+  validate_label "$name" >/dev/null 2>&1 || return 1
+  root=$(_private_tmp_root) || return 1
+  dir="$root/$name"
+  if [ ! -e "$dir" ]; then
+    if ! mkdir -m 700 "$dir" 2>/dev/null && [ ! -e "$dir" ]; then
+      echo "ERROR: Could not create private session-chat temp directory: $dir" >&2
+      return 1
+    fi
+  fi
+  if [ ! -d "$dir" ] || [ -L "$dir" ] || [ ! -O "$dir" ]; then
+    echo "ERROR: Refusing unsafe session-chat temp directory: $dir" >&2
+    return 1
+  fi
+  mode=$(stat -f '%Lp' "$dir" 2>/dev/null || stat -c '%a' "$dir" 2>/dev/null) || return 1
+  if [ "$mode" != "700" ]; then
+    echo "ERROR: Refusing non-private session-chat temp directory (mode $mode): $dir" >&2
+    return 1
+  fi
+  canonical=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
+  if [ "$canonical" != "$dir" ]; then
+    echo "ERROR: Refusing non-canonical session-chat temp directory: $dir" >&2
+    return 1
+  fi
+  printf '%s\n' "$dir"
 }
 
 # get_pane_name normally swallows tmux's stderr so callers get a clean
@@ -77,14 +181,7 @@ set_pane_name() {
 # $TMPDIR would let another local user pre-plant a symlink there and have
 # our `2>` redirect follow it into an arbitrary file of theirs.
 _pane_name_scratch_dir() {
-  local dir="${TMPDIR:-/tmp}/session-chat-priv-$(id -u 2>/dev/null || printf '0')"
-  [ -e "$dir" ] || mkdir -m 700 "$dir" 2>/dev/null
-  # Refuse anything that isn't a real, non-symlink directory we own: a
-  # pre-planted symlink or attacker-owned directory at this path must never
-  # be trusted, even if that means falling back to losing the diagnostic.
-  if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ]; then
-    printf '%s' "$dir"
-  fi
+  _private_tmp_subdir scratch
 }
 
 # Per-tag stderr capture file inside the private scratch dir — one file per
@@ -160,6 +257,7 @@ pane_name_err_detail() {
 
 resolve_pane() {
   local label="$1"
+  validate_label "$label" || return 1
   local matches
   local count
   local panes
@@ -181,12 +279,12 @@ resolve_pane() {
     # cause when we have one instead of always implying the target is
     # unregistered — confirmed live 2026-07-09 (orchestrator-pane, fresh Codex
     # sessions): this was the actual, and only, failure point in 4/4 attempts.
-    echo "ERROR: No pane named '$label'. Run /panes all to see all available named panes.$(pane_name_err_detail "$tmux_err")" >&2
+    echo "ERROR: No pane named '$label'. Run \$session-chat:panes all to see all available named panes.$(pane_name_err_detail "$tmux_err")" >&2
     return 1
   fi
   if [ "$count" -gt 1 ]; then
     panes=$(printf '%s\n' "$matches" | sed '/^$/d' | awk 'BEGIN { out="" } { out = out (out ? ", " : "") $0 } END { print out }')
-    echo "ERROR: Multiple panes named '$label' ($panes). Rename one with /whoami in that pane." >&2
+    echo "ERROR: Multiple panes named '$label' ($panes). Rename one with \$session-chat:whoami in that pane." >&2
     return 1
   fi
 
@@ -269,9 +367,10 @@ generate_id() {
 
 send_lock_path() {
   local pane_id="$1"
-  local safe_id
+  local safe_id lock_root
   safe_id=$(printf '%s' "$pane_id" | tr -c 'a-zA-Z0-9_.-' '_')
-  printf '%s/session-chat-locks/%s.lock\n' "${TMPDIR:-/tmp}" "${safe_id:-pane}"
+  lock_root=$(_private_tmp_subdir send-locks) || return 1
+  printf '%s/%s.lock\n' "$lock_root" "${safe_id:-pane}"
 }
 
 queue_lock_path() {
@@ -513,7 +612,7 @@ mark_recent_id_unlocked() {
 recent_id_seen() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 1
-  ensure_messages_dir
+  ensure_messages_dir || return 1
   local lock now found=1
   lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
@@ -529,7 +628,7 @@ recent_id_seen() {
 mark_recent_id() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 0
-  ensure_messages_dir
+  ensure_messages_dir || return 1
   local lock now
   lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
@@ -548,7 +647,7 @@ mark_recent_id() {
 recent_id_seen_or_mark() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 1
-  ensure_messages_dir
+  ensure_messages_dir || return 1
   local lock now seen=1
   lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
@@ -566,7 +665,7 @@ recent_id_seen_or_mark() {
 enqueue_message() {
   local recipient="$1" id="$2" type="$3" from="$4" payload="$5"
   local messages_dir="${6:-$MESSAGES_DIR}"
-  ensure_messages_dir "$messages_dir"
+  ensure_messages_dir "$messages_dir" || return 1
   local qf lock ready_at
   qf=$(queue_file_for "$recipient" "$messages_dir")
   mkdir -p "$(dirname "$qf")" 2>/dev/null || true
@@ -611,6 +710,58 @@ mark_message_ready() {
     fi
   done < "$qf"
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  release_send_lock "$lock"
+}
+
+# claim_inbox_ids <recipient_name> <space-separated ids>: atomically remove
+# exactly the rows whose ids were already emitted by the incoming hook, and
+# mark every listed id recent even when its durable row was concurrently
+# removed (or never existed, as with a live-only paste). Expired rows are also
+# pruned under the same lock as normal TTL maintenance. Call this only AFTER a
+# successful hook emit: a crash before the claim can then duplicate a message
+# on the next hook, but can never lose one.
+claim_inbox_ids() {
+  local recipient="$1"
+  local claim_ids="$2"
+  [ -n "$recipient" ] || return 0
+  [ -n "${claim_ids// /}" ] || return 0
+  ensure_messages_dir || return 1
+
+  local qf lock now tmp line claim_id
+  qf=$(queue_file_for "$recipient")
+  lock=$(queue_lock_path "$recipient")
+  acquire_send_lock "$lock" "queue:${recipient}" || return 1
+  now=$(now_ms)
+  prune_recent_ids_unlocked "$recipient" "$now"
+
+  # Mark the full emitted set, including a LIVE_ID whose queue copy is absent.
+  # IDs are generated as lowercase hex; ignore malformed legacy values rather
+  # than letting whitespace or glob characters affect this loop.
+  while IFS= read -r claim_id; do
+    case "$claim_id" in
+      ''|*[!a-f0-9]*) continue ;;
+    esac
+    mark_recent_id_unlocked "$recipient" "$claim_id" "$now"
+  done < <(printf '%s\n' "$claim_ids" | tr ' ' '\n')
+
+  if [ -f "$qf" ]; then
+    tmp="${qf}.tmp.$$"
+    : > "$tmp"
+    while IFS= read -r line; do
+      parse_queue_record "$line" || continue
+      case " $claim_ids " in *" $QR_ID "*) continue ;; esac
+      if [ "$QR_EXPIRES" -gt 0 ] && [ "$QR_EXPIRES" -le "$now" ]; then
+        mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"
+        continue
+      fi
+      emit_queue_record "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_READY" "$QR_PRIO" "$QR_EXPIRES" "$QR_PAYLOAD" >> "$tmp"
+    done < "$qf"
+    mv -f "$tmp" "$qf" 2>/dev/null || {
+      rm -f "$tmp" 2>/dev/null
+      release_send_lock "$lock"
+      return 1
+    }
+  fi
   release_send_lock "$lock"
 }
 
@@ -672,6 +823,101 @@ drain_inbox() {
   release_send_lock "$lock"
 }
 
+# inbox_candidates <skip_ids> <recipient_name>: print a read-only, priority-
+# ordered snapshot of rows that are currently eligible to surface. The caller
+# may render these rows and choose a context-sized subset before claiming them
+# with claim_inbox_ids after a successful emit. Keeping selection separate from
+# mutation prevents a hook from deleting fan-in rows that would only be hidden
+# by output truncation, or selected rows when output itself fails.
+inbox_candidates() {
+  local skip_ids="$1"
+  local recipient="$2"
+  [ -n "$recipient" ] || return 0
+  local qf lock now recent_ids recent_file line pass_prio
+  qf=$(queue_file_for "$recipient")
+  [ -f "$qf" ] || return 0
+  lock=$(queue_lock_path "$recipient")
+  acquire_send_lock "$lock" "queue:${recipient}" || return 0
+  now=$(now_ms)
+  recent_file=$(recent_file_for "$recipient")
+  recent_ids=""
+  if [ -f "$recent_file" ]; then
+    recent_ids=$(awk -F'\t' -v now="$now" '$1 != "" && $2 ~ /^[0-9]+$/ && $2 > now { print $1 }' "$recent_file" 2>/dev/null | tr '\n' ' ')
+  fi
+  for pass_prio in 1 0; do
+    while IFS= read -r line; do
+      parse_queue_record "$line" || continue
+      [ "$QR_PRIO" = "$pass_prio" ] || continue
+      case " $skip_ids " in *" $QR_ID "*) continue ;; esac
+      case " $recent_ids " in *" $QR_ID "*) continue ;; esac
+      if [ "$QR_EXPIRES" -gt 0 ] && [ "$QR_EXPIRES" -le "$now" ]; then
+        continue
+      fi
+      [ "$QR_READY" -le "$now" ] || continue
+      printf '%s\t%s\t%s\t%s\n' "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_PAYLOAD"
+    done < "$qf"
+  done
+  release_send_lock "$lock"
+}
+
+# drain_inbox_ids <claim_ids> <skip_ids> <recipient_name>: atomically claim
+# only the eligible IDs selected from inbox_candidates. Rows claimed by a
+# concurrent hook are not emitted twice; unclaimed ready rows remain queued.
+# Skipped, recently surfaced, and expired rows retain drain_inbox semantics.
+drain_inbox_ids() {
+  local claim_ids="$1"
+  local skip_ids="$2"
+  local recipient="$3"
+  [ -n "$recipient" ] || return 0
+  local qf lock now recent_ids remove_ids line pass_prio tmp
+  qf=$(queue_file_for "$recipient")
+  [ -f "$qf" ] || return 0
+  lock=$(queue_lock_path "$recipient")
+  acquire_send_lock "$lock" "queue:${recipient}" || return 0
+  now=$(now_ms)
+  prune_recent_ids_unlocked "$recipient" "$now"
+  recent_ids=$(recent_ids_unlocked "$recipient" | tr '\n' ' ')
+  remove_ids=""
+  for pass_prio in 1 0; do
+    while IFS= read -r line; do
+      parse_queue_record "$line" || continue
+      [ "$QR_PRIO" = "$pass_prio" ] || continue
+      case " $skip_ids $remove_ids " in
+        *" $QR_ID "*)
+          mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"
+          remove_ids="$remove_ids $QR_ID"
+          continue
+          ;;
+      esac
+      case " $recent_ids " in
+        *" $QR_ID "*)
+          remove_ids="$remove_ids $QR_ID"
+          continue
+          ;;
+      esac
+      if [ "$QR_EXPIRES" -gt 0 ] && [ "$QR_EXPIRES" -le "$now" ]; then
+        mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"
+        remove_ids="$remove_ids $QR_ID"
+        continue
+      fi
+      [ "$QR_READY" -le "$now" ] || continue
+      case " $claim_ids " in *" $QR_ID "*) ;; *) continue ;; esac
+      printf '%s\t%s\t%s\t%s\n' "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_PAYLOAD"
+      mark_recent_id_unlocked "$recipient" "$QR_ID" "$now"
+      remove_ids="$remove_ids $QR_ID"
+    done < "$qf"
+  done
+  tmp="${qf}.tmp.$$"
+  : > "$tmp"
+  while IFS= read -r line; do
+    parse_queue_record "$line" || continue
+    case " $skip_ids $remove_ids " in *" $QR_ID "*) continue ;; esac
+    emit_queue_record "$QR_ID" "$QR_TYPE" "$QR_FROM" "$QR_READY" "$QR_PRIO" "$QR_EXPIRES" "$QR_PAYLOAD" >> "$tmp"
+  done < "$qf"
+  mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  release_send_lock "$lock"
+}
+
 # --- Outbound ledger (reply correlation) ---
 # Append-only TSVs in *this* runtime's messages dir, written with single
 # O_APPEND printf calls (atomic for short lines). Readers tolerate a partial
@@ -704,7 +950,7 @@ log_sent_message() {
   local id="$1" from="$2" to="$3" type="$4" delivery="$5"
   local excerpt
   excerpt=$(log_excerpt "$6")
-  ensure_messages_dir
+  ensure_messages_dir || return 0
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$(sent_log_file)" 2>/dev/null || true
   trim_log_file "$(sent_log_file)"
@@ -719,7 +965,7 @@ log_reply_ids() {
   [ -n "$from" ] || return 0
   local rf id
   rf=$(replies_log_file)
-  ensure_messages_dir
+  ensure_messages_dir || return 0
   printf '%s' "$text" | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null | sed 's/^\[re://; s/\]$//' | sort -u | \
   while IFS= read -r id; do
     [ -n "$id" ] || continue
@@ -743,6 +989,7 @@ archive_message() {
   # archive_message <direction> <peer> <type> <id> <text>
   local direction="$1" peer="$2" type="$3" id="$4" text="$5"
   local dir day f
+  ensure_messages_dir || return 0
   dir="$MESSAGES_DIR/archive"
   mkdir -p "$dir" 2>/dev/null || return 0
   day=$(date +%Y-%m-%d 2>/dev/null) || return 0
@@ -835,7 +1082,7 @@ send_text() {
   retries=$(normalize_positive_int "${SESSION_CHAT_SEND_RETRIES:-2}" 2)
   backoff_ms=$(normalize_positive_int "${SESSION_CHAT_RETRY_BACKOFF_MS:-200}" 200)
   max_attempts=$((retries + 1))
-  lock_dir=$(send_lock_path "$pane_id")
+  lock_dir=$(send_lock_path "$pane_id") || return 1
 
   # Hold the send-lock across the ENTIRE retry sequence, not per-attempt: the
   # lock exists so concurrent senders don't interleave keystrokes, and that
@@ -902,18 +1149,22 @@ send_message() {
   my_name=$(get_my_name)
   tmux_err=$(pop_pane_name_err)
   if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run /whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
+    echo "ERROR: This pane has no name. Run \$session-chat:whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
+    return 1
+  fi
+  if ! validate_label "$my_name"; then
+    echo "ERROR: This pane has an unsafe externally assigned name. Rename it with \$session-chat:whoami <name>." >&2
     return 1
   fi
   case "$SEND_MAX_LEN" in
     ''|*[!0-9]*) SEND_MAX_LEN=1024 ;;
   esac
   if [[ "$message" == *$'\n'* ]]; then
-    echo "ERROR: /send only supports single-line messages. Use /dispatch <target> <task> for multi-line content." >&2
+    echo "ERROR: \$session-chat:send only supports single-line messages. Use \$session-chat:dispatch <target> <task> for multi-line content." >&2
     return 1
   fi
   if [ "${#message}" -gt "$SEND_MAX_LEN" ]; then
-    echo "ERROR: /send payload exceeds ${SEND_MAX_LEN} characters. Use /dispatch <target> <task> for long content." >&2
+    echo "ERROR: \$session-chat:send payload exceeds ${SEND_MAX_LEN} characters. Use \$session-chat:dispatch <target> <task> for long content." >&2
     return 1
   fi
   local target_pane
@@ -943,7 +1194,11 @@ dispatch_message() {
   my_name=$(get_my_name)
   tmux_err=$(pop_pane_name_err)
   if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run /whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
+    echo "ERROR: This pane has no name. Run \$session-chat:whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
+    return 1
+  fi
+  if ! validate_label "$my_name"; then
+    echo "ERROR: This pane has an unsafe externally assigned name. Rename it with \$session-chat:whoami <name>." >&2
     return 1
   fi
   local target_pane
@@ -953,13 +1208,14 @@ dispatch_message() {
   target_messages_dir=$(target_messages_dir_for_pane "$target_pane")
 
   # Write full message to file (handles multi-line + special chars)
-  ensure_messages_dir "$target_messages_dir"
+  ensure_messages_dir "$target_messages_dir" || return 1
   local uid
   uid=$(generate_id)
   local msg_id
   msg_id="$(date +%s)-$$-${uid}-${my_name}-to-${target_name}"
   local msg_file="$target_messages_dir/${msg_id}.md"
   printf '%s\n' "$message" > "$msg_file"
+  chmod 600 "$msg_file" 2>/dev/null || { rm -f "$msg_file"; return 1; }
 
   # Send single-line notification with file reference
   local line_count

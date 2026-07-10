@@ -19,6 +19,10 @@ A structured process for creating and updating project documentation. Documents 
 7. **Check size and split if needed** — After writing, check if the doc should be split (see `references/SPLITTING_GUIDE.md`). Proactively suggest splitting to the user if the doc covers 3+ distinct subsystems at 80+ lines each.
 8. **Add diagrams** — Include Mermaid diagrams where relationships are hard to follow in prose. See `references/DIAGRAMS_GUIDE.md` for types and examples.
 9. **Cross-reference** — Link to related docs and update them if the new doc changes the picture.
+10. **MANDATORY independent review — never skip, even for a single-file change.** After *every* docs write or edit, run a fresh, read-only accuracy review before reporting the work done:
+    - **Preferred:** delegate to the **doc-reviewer** subagent via the Agent tool (`subagent_type: creating-docs:doc-reviewer`). It independently verifies that every referenced path, function, table, endpoint, env var, and cross-link actually exists in the codebase, and re-runs the validation scripts (once per unique parent directory of the docs you touched — see Validation Tools).
+    - **Fallback (only when the Agent tool is unavailable):** perform the review inline yourself — re-read each doc you changed, verify every reference against the codebase, and re-run the validators.
+    - **Repeat after fixes:** if the review surfaces issues and you edit the docs to fix them, run the independent review again on the changed docs. Do not report the documentation as complete until an independent review has passed.
 
 ## Naming Convention
 
@@ -104,6 +108,8 @@ Group entries by file for scannability. For large docs (20+ references), include
 ## Validation Tools
 
 This skill bundles three scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/` for verifying doc health. Run them after writing or updating docs.
+
+**Target the docs' actual location.** Docs may live at the project root, under `docs/`, or module-adjacent (e.g. `src/api/README.md`). Derive the parent directory of each doc you created or edited and run each validator **once per unique parent directory** — the `docs/` shown below is only an example, not a fixed path. Every script accepts any directory argument (default `.`).
 
 ### check-todos.sh
 

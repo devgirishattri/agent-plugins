@@ -5,12 +5,9 @@ description: "Mark a scheduler task blocked (or reject a review) and notify the 
 
 # Task Block
 
-Resolve the plugin root:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-scheduler/0.4.1}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
-```
+Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
+the directory two levels above this `SKILL.md`. Use that absolute path; never
+infer it from the working directory or hardcode a marketplace cache version.
 
 Run:
 

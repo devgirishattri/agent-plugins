@@ -7,17 +7,28 @@ description: "Dry-run or delete trusted session-chat dispatch message files by a
 
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
-Resolve the plugin root:
+Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
+the directory two levels above this `SKILL.md`. Use that absolute path; never
+infer it from cwd or hardcode a marketplace cache version.
+
+Always preview first, stripping `--apply` from the script invocation and showing
+the exact candidates. If the preview has no candidates, report that and stop.
+
+If (and only if) `--apply` was in the user's original arguments, ask for
+explicit confirmation. Use structured `request_user_input` when available;
+otherwise ask a direct blocking Yes/No question. Put cancellation first and
+mark it recommended. Missing or ambiguous answers cancel.
+
+When the original arguments did not contain `--apply`, stop after the preview
+and tell the user to invoke the skill again with `--apply` if they want to
+delete. Do not prompt and never add `--apply` yourself.
+
+Only after explicit confirmation, run:
 
 ```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
+bash "$PLUGIN_ROOT/scripts/clean-messages.sh" <confirmed filters including --apply>
 ```
 
-Run:
-
-```bash
-bash "$PLUGIN_ROOT/scripts/clean-messages.sh" <args>
-```
-
-Supported args: `--older-than 7d`, `--sender <name>`, `--recipient <name>`, and `--apply`. Without `--apply`, this is a dry run and must not delete files. With `--apply`, report the deleted count and total bytes.
+Supported filters are `--older-than`, `--sender`, and `--recipient`. Never honor
+`--apply` without the separate confirmation. Report cancellation or the
+deleted count and bytes.

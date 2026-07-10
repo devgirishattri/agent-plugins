@@ -7,12 +7,7 @@ description: "Show read-only analytics over local Codex session data: per-projec
 
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
-Resolve the plugin root:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-manager/1.7.1}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
-```
+Resolve `PLUGIN_ROOT` from the selected skill's absolute path: it is the session-manager directory containing `skills/` and `scripts/`. Never hard-code a marketplace cache version.
 
 Run one of (the optional argument is a substring filter limiting output to matching projects, e.g. `ProjectA`):
 

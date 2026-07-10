@@ -60,7 +60,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 require_jq || exit 1
-ensure_dirs
+ensure_dirs || exit 1
 threshold=$(duration_to_seconds "$OLDER_THAN") || {
   echo "ERROR: Invalid duration: $OLDER_THAN. Use values like 7d, 12h, 30m, or 60s." >&2
   exit 1

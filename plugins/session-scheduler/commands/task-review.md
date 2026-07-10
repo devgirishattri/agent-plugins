@@ -16,3 +16,4 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-review.sh $ARGUMENTS
 - The executor (or orchestrator) runs this when work is ready for audit. Legal only from `assigned`; `--force` overrides and records "forced" in history.
 - The reviewer then approves with `/task-done <id> [note]` or rejects with `/task-block <id> <reason>`.
 - The assigner gets a one-line "ready for REVIEW" ack via session-chat (best-effort).
+- If the task was assigned with `--reviewer PANE`, the audit request is auto-dispatched to that reviewer pane (a durable dispatch carrying the note + absolute ledger home, falling back to a one-line `/send`). The command output reports `routed to reviewer: …` when this happens.

@@ -1,6 +1,6 @@
 ---
 description: Send one short message to every named tmux pane (current session or all)
-argument-hint: [--all] [--match GLOB] <message>
+argument-hint: "[--all] [--match GLOB] <message>"
 allowed-tools: Bash(bash:*)
 ---
 

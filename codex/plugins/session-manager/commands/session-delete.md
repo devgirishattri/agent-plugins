@@ -1,47 +1,41 @@
 ---
-description: Delete a Codex session and related local data files (no args = interactive select; --all = wipe current project)
-argument-hint: [session-id-or-title | --all]
+description: Permanently delete a Codex session through native Codex state management (no args = interactive select; --all = current project)
+argument-hint: "[session-id-or-title | --all]"
 ---
 
 ## Instructions
 
-1. Resolve the plugin root:
+Resolve `PLUGIN_ROOT` from this command resource's absolute path: it is the parent directory of `commands/`. Never hard-code a marketplace cache version.
 
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-manager/1.7.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-manager"
-   ```
+The initial delete request, a session selection, and a message such as `delete <full-uuid>` are not final confirmation. Never run a destructive script until a separate final confirmation question has been answered affirmatively.
 
-2. If `$ARGUMENTS` is exactly `--all`, do not ask about each session individually. First run:
+Use `request_user_input` for selections and confirmations when it is available in the current mode and can represent the choices. Otherwise ask one direct blocking question and wait for a later user response. Make `No, cancel (Recommended)` the first confirmation option and treat every response except an explicit affirmative as cancellation.
 
-   ```bash
-   bash "$PLUGIN_ROOT/scripts/list-sessions.sh"
-   ```
+If `$ARGUMENTS` is exactly `--all`:
 
-   Count the returned session rows and tell the user exactly how many Codex sessions will be deleted for the current project directory. Ask once for confirmation, with options equivalent to "Yes, delete all" and "No, cancel". Warn that this includes the currently active session, whose data may be rewritten when this session exits. If the user confirms, run:
+1. Run `bash "$PLUGIN_ROOT/scripts/list-sessions.sh"`.
+2. If there are no session rows, report that and stop.
+3. Show the rows and exact count. Warn that the active session is included and may be rewritten when it exits.
+4. Ask a separate final confirmation with `No, cancel (Recommended)` and `Yes, delete all`.
+5. Only after an explicit affirmative response, run `bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh" --confirmed` and report the native results.
 
-   ```bash
-   bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh"
-   ```
+For every other target, including empty input, run:
 
-   Then report the summary. If the user cancels, report that deletion was cancelled. Skip the remaining steps.
+```bash
+bash "$PLUGIN_ROOT/scripts/prepare-delete.sh" "$ARGUMENTS"
+```
 
-3. Run the delete-and-resolve helper:
+Handle the status:
 
-   ```bash
-   bash "$PLUGIN_ROOT/scripts/delete-resolved-session.sh" "$ARGUMENTS"
-   ```
+- `SELECT`: show a numbered table and ask the user to choose a session. Resolve the selected full UUID again; selection is not confirmation.
+- `NONE`: report the message and suggest `$session-manager:session-search` or `$session-manager:session-list`.
+- `MULTIPLE`: show matches and ask for a more specific title or the full UUID.
+- `ONE`: show title, full UUID, project, and size, then ask the separate final confirmation question.
 
-4. If the status is `SELECT`, show the available sessions as a numbered table and ask the user which session to delete. Include thread title and full ID in each option.
-5. If the status is `NONE`, report the message and suggest `/session-search` or `/session-list`.
-6. If the status is `MULTIPLE`, show the matching sessions as a table and ask the user to provide a more specific title or the full UUID.
-7. If the status is `DELETING`, report the deletion output.
-8. If the latest user message is exactly `delete <full-uuid>`, keep backwards compatibility by running:
+Only after explicit affirmation of the final question for that displayed UUID, run:
 
-   ```bash
-   bash "$PLUGIN_ROOT/scripts/delete-session.sh" "<full-uuid>"
-   ```
+```bash
+bash "$PLUGIN_ROOT/scripts/delete-session.sh" "<full-uuid>" --confirmed
+```
 
-9. Report what was deleted. If the user cancels, report that deletion was cancelled.
-
-Important: only pass a full UUID to `delete-session.sh`. Send titles, partial IDs, and project queries through `delete-resolved-session.sh`.
+Never pass a title or partial ID to the destructive helper. On any non-affirmative answer, report `Deletion cancelled.`

@@ -1,16 +1,13 @@
 ---
 name: task-review
-description: "Move an assigned scheduler task to review with a note (e.g. a commit SHA) and notify the assigner."
+description: "Move an assigned task to review and auto-dispatch its audit packet to the configured reviewer."
 ---
 
 # Task Review
 
-Resolve the plugin root:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-scheduler/0.4.1}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
-```
+Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
+the directory two levels above this `SKILL.md`. Use that absolute path; never
+infer it from the working directory or hardcode a marketplace cache version.
 
 Run (the note is required — typically a commit SHA or a one-line summary of what to audit):
 
@@ -19,4 +16,4 @@ export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-
 bash "$PLUGIN_ROOT/scripts/task-review.sh" "<task-id>" [--force] "<note>"
 ```
 
-The executor (or orchestrator) runs this when work is ready for audit. Legal only from `assigned`. The reviewer then approves with `$session-scheduler:task-done` or rejects with `$session-scheduler:task-block`. Report that the task was moved to review.
+The executor (or orchestrator) runs this when work is ready for audit. Legal only from `assigned`. If the task has a `reviewer`, the script builds a private review packet containing the shared ledger homes and original assignment, then dispatches it automatically. Review state is retained if delivery fails so it can be retried. The reviewer approves with `$session-scheduler:task-done` or rejects with `$session-scheduler:task-block`.

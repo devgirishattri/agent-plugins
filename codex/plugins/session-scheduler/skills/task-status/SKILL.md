@@ -5,18 +5,15 @@ description: "Show scheduler task status from the file-backed task ledger, with 
 
 # Task Status
 
-Resolve the plugin root:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-scheduler/0.4.1}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-scheduler"
-```
+Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
+the directory two levels above this `SKILL.md`. Use that absolute path; never
+infer it from the working directory or hardcode a marketplace cache version.
 
 Run:
 
 ```bash
 export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
-bash "$PLUGIN_ROOT/scripts/task-status.sh" [task-id|--all|--pending|--mine|--by-stage]
+bash "$PLUGIN_ROOT/scripts/task-status.sh" [task-id|--all|--pending|--mine|--by-stage|--by-workflow|--workflow ID]
 ```
 
-Present tab-separated output as id, status, stage, assignee, assigner, updated time, flags, and name. Flags: `OVERDUE` = past `eta_at`; `STALE` = assigned/review with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) minutes. `--by-stage` groups non-done tasks by stage. The single-task view also lists dependencies with their statuses.
+Present tab-separated output as id, status, workflow, stage, assignee, reviewer, assigner, updated time, flags, and name. `--by-stage` groups active tasks. `--by-workflow` groups the full lifecycle of tasks carrying a workflow id, including completed steps, and omits ungrouped tasks. `--workflow ID` filters one workflow. The single-task view also reports the recorded shared scheduler home and dependency states.

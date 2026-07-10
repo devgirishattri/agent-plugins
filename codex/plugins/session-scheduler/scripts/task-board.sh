@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # task-board.sh — At-a-glance dashboard of active (non-done) scheduler tasks
 # Groups tasks by stage (or "(none)"), one aligned row per task:
-#   id, name, status, assignee, age (since created_at), flags, unmet deps.
+#   id, name, status, assignee, reviewer, workflow, age, flags, unmet deps.
 # Ends with a one-line totals summary. Plain text, no color codes.
 # Usage: task-board.sh
 # Supported platforms: macOS, Linux
@@ -10,7 +10,7 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
-ensure_dirs
+ensure_dirs || exit 1
 
 NOW=$(now_epoch)
 rows=""
@@ -29,12 +29,14 @@ for file in "$TASKS_DIR"/*.json; do
   esac
   total=$((total + 1))
 
-  base=$(jq -r '[(.stage // "(none)"), .id, .name, .status, (if (.assignee // "") == "" then "-" else .assignee end), .created_at] | @tsv' "$file" 2>/dev/null) || continue
+  base=$(jq -r '[(.stage // "(none)"), .id, .name, .status, (if (.assignee // "") == "" then "-" else .assignee end), (.reviewer // "-"), (.meta.workflow_id // .workflow_id // "-"), .created_at] | @tsv' "$file" 2>/dev/null) || continue
   stage=$(printf '%s' "$base" | cut -f1)
   id=$(printf '%s' "$base" | cut -f2)
   name=$(printf '%s' "$base" | cut -f3)
   assignee=$(printf '%s' "$base" | cut -f5)
-  created_at=$(printf '%s' "$base" | cut -f6)
+  reviewer=$(printf '%s' "$base" | cut -f6)
+  workflow=$(printf '%s' "$base" | cut -f7)
+  created_at=$(printf '%s' "$base" | cut -f8)
 
   age="-"
   created_epoch=$(iso_to_epoch "$created_at")
@@ -50,7 +52,7 @@ for file in "$TASKS_DIR"/*.json; do
   deps_col="-"
   [ "$unmet_count" -gt 0 ] && deps_col="${unmet_count} unmet"
 
-  rows="${rows}${stage}	${id}	${name}	${status}	${assignee}	${age}	${flags}	${deps_col}
+  rows="${rows}${stage}	${id}	${name}	${status}	${assignee}	${reviewer}	${workflow}	${age}	${flags}	${deps_col}
 "
 done
 
@@ -65,8 +67,9 @@ echo
 printf '%s' "$rows" | sort -t '	' -k1,1 -k2,2 | awk -F'\t' '
   BEGIN {
     h[2] = "ID"; h[3] = "NAME"; h[4] = "STATUS"; h[5] = "ASSIGNEE"
-    h[6] = "AGE"; h[7] = "FLAGS"; h[8] = "DEPS"
-    for (i = 2; i <= 8; i++) w[i] = length(h[i])
+    h[6] = "REVIEWER"; h[7] = "WORKFLOW"; h[8] = "AGE"
+    h[9] = "FLAGS"; h[10] = "DEPS"
+    for (i = 2; i <= 10; i++) w[i] = length(h[i])
   }
   {
     nrows++
@@ -81,7 +84,7 @@ printf '%s' "$rows" | sort -t '	' -k1,1 -k2,2 | awk -F'\t' '
         if (prev != "") print ""
         print "Stage: " f[1]
         line = "  "
-        for (i = 2; i <= 8; i++) line = line sprintf("%-" w[i] "s  ", h[i])
+        for (i = 2; i <= 10; i++) line = line sprintf("%-" w[i] "s  ", h[i])
         sub(/ +$/, "", line); print line
         prev = f[1]
       }

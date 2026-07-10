@@ -1,16 +1,12 @@
 ---
 description: List named tmux panes in the current tmux session, or all sessions
-argument-hint: [all]
+argument-hint: "[all]"
 ---
 
 ## Instructions
 
-1. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
-   ```
+1. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
+   command reference. Do not infer it from cwd or hardcode a cache version.
 
 2. Run:
 
@@ -28,6 +24,6 @@ argument-hint: [all]
 
 Rules:
 - If no panes are listed, tell the user no named panes were found.
-- Suggest `/whoami <name>` to name the current pane.
-- Suggest `/send <name> <message>` to message a pane.
-- Mention `/panes all` only when the user needs panes from every tmux session.
+- Suggest `$session-chat:whoami <name>` to name the current pane.
+- Suggest `$session-chat:send <name> <message>` to message a pane.
+- Mention `$session-chat:panes all` only when the user needs every tmux session.

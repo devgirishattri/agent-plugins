@@ -1,6 +1,6 @@
 ---
 description: List named tmux panes in the current tmux session, or all sessions
-argument-hint: [all]
+argument-hint: "[all]"
 allowed-tools: Bash(bash:*)
 ---
 

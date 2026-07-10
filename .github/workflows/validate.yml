@@ -10,25 +10,62 @@ jobs:
     name: validate-release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq tmux ripgrep ruby
 
       - name: Run release validation
         run: bash scripts/validate-release.sh
+
+      - name: Run Codex plugin smoke tests
+        run: |
+          bash codex/plugins/session-manager/scripts/test-session-manager.sh
+          bash codex/plugins/creating-docs/scripts/test-creating-docs.sh
+          bash codex/plugins/session-context/scripts/test-session-context.sh
+          mkdir -p "$RUNNER_TEMP/codex-session-chat"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/codex-session-chat" \
+            bash codex/plugins/session-chat/scripts/test-session-chat.sh
+          mkdir -p "$RUNNER_TEMP/codex-session-scheduler"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/codex-session-scheduler" \
+            bash codex/plugins/session-scheduler/scripts/test-session-scheduler.sh
+
+      - name: Run Claude parity smoke tests
+        run: |
+          bash plugins/session-manager/scripts/test-session-manager.sh
+          bash plugins/creating-docs/scripts/test-creating-docs.sh
+          mkdir -p "$RUNNER_TEMP/claude-session-chat"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-chat" \
+            bash plugins/session-chat/scripts/test-session-chat.sh
+          mkdir -p "$RUNNER_TEMP/claude-session-context"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-context" \
+            bash plugins/session-context/scripts/test-session-context.sh
+          mkdir -p "$RUNNER_TEMP/claude-session-scheduler"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-scheduler" \
+            bash plugins/session-scheduler/scripts/test-session-scheduler.sh
+
+      - name: Run cross-provider scheduler/context parity test
+        run: |
+          mkdir -p "$RUNNER_TEMP/provider-parity"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/provider-parity" \
+            bash scripts/test-provider-parity.sh
 
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # Ubuntu runners ship with shellcheck preinstalled. It picks up the
-      # repo-root .shellcheckrc automatically. Gate only on error-severity
-      # findings; warnings/info are reported locally but do not block CI.
-      - name: Run shellcheck (error severity)
+      # Ubuntu runners ship with shellcheck preinstalled. Gate warnings and
+      # errors; informational/style findings remain advisory.
+      - name: Run shellcheck (warning severity)
         run: |
           shellcheck --version
           find . -path ./.git -prune -o -type f -name '*.sh' -print0 \
-            | xargs -0 shellcheck --severity=error
+            | xargs -0 shellcheck --severity=warning

@@ -1,16 +1,12 @@
 ---
 description: List trusted session-chat dispatch message files
-argument-hint: [--older-than 7d] [--sender name] [--recipient name]
+argument-hint: "[--older-than 7d] [--sender name] [--recipient name]"
 ---
 
 ## Instructions
 
-1. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
-   ```
+1. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
+   command reference. Do not infer it from cwd or hardcode a cache version.
 
 2. Run:
 

@@ -1,7 +1,7 @@
 {
   "name": "session-scheduler",
-  "version": "0.4.1",
-  "description": "File-backed task scheduling and status tracking for multi-pane Codex orchestration over session-chat (>=0.13.0) durable transport.",
+  "version": "0.5.0",
+  "description": "File-backed workflows, reviewer routing, and task tracking for multi-pane Codex orchestration over session-chat (>=0.13.0).",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"

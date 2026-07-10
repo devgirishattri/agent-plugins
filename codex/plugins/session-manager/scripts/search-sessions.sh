@@ -6,7 +6,7 @@ set -uo pipefail
 QUERY="${1:-}"
 if [ -z "$QUERY" ]; then
     echo "ERROR: No search query provided"
-    echo "Usage: /session-search <name-or-id-or-project>"
+    echo "Usage: \$session-manager:session-search <name-or-id-or-project>"
     exit 1
 fi
 

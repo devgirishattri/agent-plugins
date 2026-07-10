@@ -1,6 +1,6 @@
 ---
 description: Create a new task in the scheduler ledger
-argument-hint: <name> [--meta key=value ...] [--stage NAME] [--depends-on id1,id2]
+argument-hint: <name> [--meta key=value ...] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]
 allowed-tools: Bash(bash:*)
 ---
 
@@ -16,6 +16,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-new.sh $ARGUMENTS
 Options:
 - `--meta key=value` — free-form metadata (repeatable).
 - `--stage NAME` — optional pipeline stage label (suggested: `plan`, `dispatch`, `execute`, `audit`, `push`; any alphanumeric/`_`/`-` label works).
+- `--workflow ID` — group related tasks under a workflow id (stored as `meta.workflow_id`); list them together with `/task-status --workflow ID`.
 - `--depends-on id1,id2` — comma-separated existing task ids this task depends on. Each id must already exist; `/task-assign` refuses to dispatch until every dependency is `done` (unless `--force`).
 
 After creation, suggest `/task-assign <pane> <id> <prompt>` to dispatch.

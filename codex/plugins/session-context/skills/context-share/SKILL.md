@@ -7,12 +7,7 @@ description: "Share a saved session context snapshot with another named tmux pan
 
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
-Resolve the plugin root:
-
-```bash
-PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-context/0.6.0}"
-[ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
-```
+Resolve `PLUGIN_ROOT` from this selected skill's absolute source path by going up two directories from `<plugin-root>/skills/context-share/SKILL.md`. Never derive it from the project working directory or embed a cache version.
 
 `SESSION_CONTEXT_HOME` is required by the scripts and is exported automatically by the command wrapper to `<git-root>/tmp/contexts` (or pwd when not in a git repo) unless already set.
 
@@ -31,3 +26,5 @@ bash "$PLUGIN_ROOT/scripts/share-context.sh" "<session-name>" "<snapshot-name>"
 
 If tmux is not active, explain that sharing requires running Codex inside tmux.
 If the snapshot does not exist, suggest `$session-context:context-generate <snapshot-name>`. If the target session is not found, suggest `$session-chat:panes`.
+
+Sharing sends only a notification; it does not copy the snapshot. State that the recipient can load it only when both panes resolve the same absolute `SESSION_CONTEXT_HOME` (normally the same repo, or an intentionally shared workspace context directory). The script prefers session-chat's hardened delivery path when installed and uses the local tmux fallback only when necessary.

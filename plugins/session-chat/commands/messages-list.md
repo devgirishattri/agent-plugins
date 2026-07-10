@@ -1,6 +1,6 @@
 ---
 description: List dispatched message files (read-only)
-argument-hint: [--from NAME] [--to NAME]
+argument-hint: "[--from NAME] [--to NAME]"
 allowed-tools: Bash(bash:*)
 ---
 

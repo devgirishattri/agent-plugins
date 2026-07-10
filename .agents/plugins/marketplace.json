@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "session-manager",
-      "version": "1.7.1",
+      "version": "1.7.2",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-manager"
@@ -19,7 +19,7 @@
     },
     {
       "name": "creating-docs",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "source": {
         "source": "local",
         "path": "./codex/plugins/creating-docs"
@@ -32,7 +32,7 @@
     },
     {
       "name": "session-chat",
-      "version": "0.16.5",
+      "version": "0.17.0",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-chat"
@@ -45,7 +45,7 @@
     },
     {
       "name": "session-scheduler",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-scheduler"
@@ -58,7 +58,7 @@
     },
     {
       "name": "session-context",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-context"

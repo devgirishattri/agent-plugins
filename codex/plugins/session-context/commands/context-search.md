@@ -5,13 +5,8 @@ argument-hint: <pattern> [--list]
 
 ## Instructions
 
-1. If `$ARGUMENTS` is empty, tell the user: `Usage: /context-search <pattern> [--list]`.
-2. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-context/0.6.0}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
-   ```
+1. If `$ARGUMENTS` is empty, tell the user: `Usage: $session-context:context-search <pattern> [--list]`.
+2. Resolve `PLUGIN_ROOT` from this command resource's absolute source path by going up one directory from `<plugin-root>/commands`. Never derive it from the project working directory or embed a cache version.
 
 3. Run (pass `--list` through if the user asked for names only):
 
@@ -37,5 +32,5 @@ argument-hint: <pattern> [--list]
 Rules:
 - This command is read-only.
 - The script searches `tmp/contexts/*.md` in candidate project roots: the current git toplevel (always included) plus the `cwd` recorded in local Codex session files. Roots that no longer exist or have no `tmp/contexts/` are skipped, so coverage of other projects is best-effort.
-- If no matches were found, report that and suggest `/context-list` to see snapshots for the current project.
-- Suggest `/context-load <snapshot>` to load a matching snapshot (only works when run from inside that snapshot's project).
+- If no matches were found, report that and suggest `$session-context:context-list` to see snapshots for the current project.
+- Suggest `$session-context:context-load <snapshot>` to load a matching snapshot (only works when run from inside that snapshot's project).

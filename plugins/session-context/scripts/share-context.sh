@@ -15,6 +15,12 @@ if [ -z "$TARGET_SESSION" ] || [ -z "$PROJECT_NAME" ]; then
 fi
 
 validate_label "$PROJECT_NAME" || exit 1
+# The target session name enters the notification and is used to resolve the
+# recipient pane; reject an unsafe label up front (both transports validate too).
+if ! validate_label "$TARGET_SESSION" 2>/dev/null; then
+  echo "ERROR: invalid target session name '$TARGET_SESSION' (letters, digits, _, - only)." >&2
+  exit 1
+fi
 
 ensure_tmux
 
@@ -26,15 +32,53 @@ if [ ! -f "$SNAPSHOT" ]; then
   exit 1
 fi
 
-# Copy snapshot to target session's snapshots dir (file-based sharing)
-# This way the target session can /context-load it directly
-TARGET_PANE=$(resolve_pane "$TARGET_SESSION") || exit 1
+# Sharing does NOT copy the snapshot file — it notifies the peer to run
+# /context-load, which resolves the name against the PEER's own contexts store.
+# So this only works when the recipient shares the same store (same repo /
+# SESSION_CONTEXT_HOME). Embed the canonical store path so a peer can confirm
+# it's the same one before loading.
+STORE_ABS=$(cd "$SNAPSHOTS_DIR" 2>/dev/null && pwd -P) || STORE_ABS="$SNAPSHOTS_DIR"
+# List BOTH provider invocations so a Claude or Codex recipient can act, and the
+# exact export in case their project root resolves a different store. Quote the
+# path with printf %q so a store dir containing spaces or apostrophes stays a
+# single, copy-paste-safe shell token (single-quote wrapping breaks on a "'").
+STORE_Q=$(printf '%q' "$STORE_ABS")
+SHARE_MSG="[context:${PROJECT_NAME}] Context snapshot shared from store ${STORE_ABS} (if your project root differs: export SESSION_CONTEXT_HOME=${STORE_Q}). Load it — Claude: /session-context:context-load ${PROJECT_NAME} | Codex: \$session-context:context-load ${PROJECT_NAME}"
 
-# Notify the target session about the shared context
-MY_NAME=$(get_my_name)
-[ -z "$MY_NAME" ] && MY_NAME="unknown"
-
-send_message "$TARGET_SESSION" "[context:${PROJECT_NAME}] Context snapshot shared. Load it with: /context-load ${PROJECT_NAME}"
+# Prefer session-chat's hardened transport (durable inbox: a busy recipient
+# still gets the notice next turn). Fall back to this plugin's basic send only
+# when session-chat isn't installed.
+TRANSPORT=""
+# Packaged plugin scripts ship mode 0644 (not +x) and are invoked via `bash`,
+# so require a READABLE regular file, not an executable one.
+if root=$(session_chat_root) && [ -f "$root/scripts/send-message.sh" ] && [ -r "$root/scripts/send-message.sh" ]; then
+  # The send-message.sh wrapper exits 0 for BOTH a live delivery AND a queued
+  # (busy-recipient) send — the distinction lives only in its printed output,
+  # not the exit status — so parse the output, not the rc. A non-zero rc is a
+  # genuine hard failure (no name / unknown or ambiguous target); the wrapper
+  # already printed the specific error.
+  sc_out=$(bash "$root/scripts/send-message.sh" "$TARGET_SESSION" "$SHARE_MSG" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "ERROR: session-chat could not notify '$TARGET_SESSION'; snapshot not shared." >&2
+    [ -n "$sc_out" ] && printf '  %s\n' "$sc_out" >&2
+    exit 1
+  fi
+  case "$sc_out" in
+    *Queued*) TRANSPORT="session-chat (queued to recipient's durable inbox)" ;;
+    *Sent*)   TRANSPORT="session-chat (delivered live)" ;;
+    *)        TRANSPORT="session-chat" ;;
+  esac
+else
+  # Fallback transport: session-context's own basic send (no durable inbox).
+  if ! send_message "$TARGET_SESSION" "$SHARE_MSG"; then
+    echo "ERROR: failed to notify '$TARGET_SESSION' (fallback transport)." >&2
+    exit 1
+  fi
+  TRANSPORT="session-context builtin (session-chat not installed)"
+fi
 
 echo "Shared '$PROJECT_NAME' context with $TARGET_SESSION."
-echo "They can load it with: /context-load $PROJECT_NAME"
+echo "  store:     $STORE_ABS"
+echo "  transport: $TRANSPORT"
+echo "  They can load it with: /session-context:context-load $PROJECT_NAME (Codex: \$session-context:context-load $PROJECT_NAME) — only if they share this store / repo."

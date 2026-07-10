@@ -10,12 +10,13 @@ SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
 HISTORY_DIR="$SNAPSHOTS_DIR/.history"
 
 if [ ! -d "$SNAPSHOTS_DIR" ] || [ -z "$(ls "$SNAPSHOTS_DIR"/*.md 2>/dev/null)" ]; then
-  echo "No context snapshots found for this project. Use /context-generate to create one."
+  echo "No context snapshots found for this project. Use \$session-context:context-generate to create one."
   exit 0
 fi
 
 for snapshot in "$SNAPSHOTS_DIR"/*.md; do
-  [ -f "$snapshot" ] || continue
+  _context_path_exists "$snapshot" || continue
+  ensure_context_regular_file "$snapshot" || exit 1
   name=$(basename "$snapshot" .md)
   size=$(wc -l < "$snapshot" | tr -d ' ')
   if [ "$(uname)" = "Darwin" ]; then

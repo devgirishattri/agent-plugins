@@ -13,6 +13,8 @@
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
+source "$(dirname "$0")/lib.sh"
+
 LIST_MODE=0
 PATTERN=""
 for arg in "$@"; do
@@ -30,7 +32,7 @@ done
 
 if [ -z "$PATTERN" ]; then
     echo "ERROR: No search pattern provided"
-    echo "Usage: /context-search <pattern> [--list]"
+    echo "Usage: \$session-context:context-search <pattern> [--list]"
     exit 1
 fi
 
@@ -52,6 +54,7 @@ json_field() {
 
 # Candidate roots: current git toplevel (always) + cwd of each Codex session
 current_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+current_contexts_dir=$(get_contexts_dir) || exit 1
 roots="$current_root"$'\n'
 if [ -d "$SESSIONS_DIR" ]; then
     while IFS= read -r jsonl_file; do
@@ -69,15 +72,18 @@ found=0
 while IFS= read -r root; do
     [ -n "$root" ] || continue
     if [ "$root" = "$current_root" ] && [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
-        contexts_dir="$SESSION_CONTEXT_HOME"
+        contexts_dir="$current_contexts_dir"
     else
         contexts_dir="$root/tmp/contexts"
     fi
-    [ -d "$contexts_dir" ] || continue
-    matches=$(grep -il -- "$PATTERN" "$contexts_dir"/*.md 2>/dev/null) || true
-    [ -n "$matches" ] || continue
-    while IFS= read -r snapshot_file; do
-        [ -f "$snapshot_file" ] || continue
+    _context_path_exists "$contexts_dir" || continue
+    if [ "$contexts_dir" != "$current_contexts_dir" ]; then
+        contexts_dir=$(harden_existing_contexts_dir "$contexts_dir") || exit 1
+    fi
+    for snapshot_file in "$contexts_dir"/*.md; do
+        _context_path_exists "$snapshot_file" || continue
+        ensure_context_regular_file "$snapshot_file" || exit 1
+        grep -qi -- "$PATTERN" "$snapshot_file" 2>/dev/null || continue
         name=$(basename "$snapshot_file" .md)
         found=1
         if [ "$LIST_MODE" -eq 1 ]; then
@@ -87,7 +93,7 @@ while IFS= read -r root; do
                 printf '%s\t%s\t%s\t%s\n' "$root" "$name" "$lineno" "$text"
             done
         fi
-    done <<< "$matches"
+    done
 done < <(printf '%s' "$roots" | sort -u)
 
 if [ "$found" -eq 0 ]; then

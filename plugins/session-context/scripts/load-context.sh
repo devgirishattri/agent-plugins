@@ -22,7 +22,13 @@ SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 if [ ! -f "$SNAPSHOT" ]; then
   echo "ERROR: No context snapshot found for '$PROJECT_NAME' in this project."
   echo "Available snapshots:"
-  ls "$SNAPSHOTS_DIR/"*.md 2>/dev/null | xargs -I{} basename {} .md || echo "  (none)"
+  found_any=0
+  for s in "$SNAPSHOTS_DIR"/*.md; do
+    [ -e "$s" ] || continue
+    basename "$s" .md
+    found_any=1
+  done
+  [ "$found_any" -eq 1 ] || echo "  (none)"
   exit 1
 fi
 

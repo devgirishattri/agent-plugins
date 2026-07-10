@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # task-new.sh — create a new task in the ledger.
-# Usage: task-new.sh <name> [--meta key=value ...] [--stage NAME] [--depends-on id1,id2]
+# Usage: task-new.sh <name> [--meta key=value ...] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]
 set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
-ensure_dirs
+ensure_dirs || exit 1
 
 NAME="${1:-}"
 if [ -z "$NAME" ]; then
-  echo "ERROR: task name required. Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--depends-on id1,id2]" >&2
+  echo "ERROR: task name required. Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]" >&2
   exit 1
 fi
 shift
@@ -18,8 +18,14 @@ shift
 META_JSON='{}'
 STAGE=""
 DEPENDS_RAW=""
+REVIEWER=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --reviewer)
+      REVIEWER="${2:-}"
+      shift 2
+      validate_pane_name "$REVIEWER" "reviewer pane" || exit 1
+      ;;
     --meta)
       pair="${2:-}"
       shift 2
@@ -35,6 +41,12 @@ while [ $# -gt 0 ]; do
       STAGE="${2:-}"
       shift 2
       validate_stage "$STAGE" || exit 1
+      ;;
+    --workflow|--workflow-id)
+      wf="${2:-}"
+      shift 2
+      validate_workflow_id "$wf" || exit 1
+      META_JSON=$(printf '%s' "$META_JSON" | jq --arg v "$wf" '. + {workflow_id: $v}')
       ;;
     --depends-on)
       DEPENDS_RAW="${2:-}"
@@ -78,11 +90,13 @@ JSON=$(jq -n \
   --arg assigner "$ASSIGNER" \
   --arg now "$NOW" \
   --arg stage "$STAGE" \
+  --arg reviewer "$REVIEWER" \
   --argjson meta "$META_JSON" \
   --argjson depends "$DEPENDS_JSON" \
   '{id: $id, name: $name, status: $status,
     stage: (if $stage == "" then null else $stage end),
     assigner: $assigner, assignee: null, prompt_file: null,
+    reviewer: (if $reviewer == "" then null else $reviewer end),
     depends_on: $depends,
     created_at: $now, updated_at: $now,
     started_at: null, eta_at: null,
@@ -95,7 +109,8 @@ echo "Created task: $ID"
 echo "  name:     $NAME"
 echo "  status:   created"
 echo "  assigner: $ASSIGNER"
-[ -n "$STAGE" ] && echo "  stage:    $STAGE"
+[ -n "$STAGE" ]    && echo "  stage:    $STAGE"
+[ -n "$REVIEWER" ] && echo "  reviewer: $REVIEWER"
 if [ "$DEPENDS_JSON" != "[]" ]; then
   echo "  depends:  $(printf '%s' "$DEPENDS_JSON" | jq -r 'join(", ")')"
 fi

@@ -1,6 +1,6 @@
 ---
 description: Generate a session context summary — what you worked on, decisions made, where you left off
-argument-hint: [snapshot-name]
+argument-hint: "[snapshot-name]"
 allowed-tools: Read, Glob, Grep, Bash(bash:*)
 ---
 

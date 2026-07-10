@@ -1,16 +1,12 @@
 ---
 description: Show or set this session's tmux pane name for messaging
-argument-hint: [name]
+argument-hint: "[name]"
 ---
 
 ## Instructions
 
-1. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
-   ```
+1. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
+   command reference. Do not infer it from cwd or hardcode a cache version.
 
 2. Run this to read the current pane name:
 
@@ -18,7 +14,7 @@ argument-hint: [name]
    bash "$PLUGIN_ROOT/scripts/get-my-name.sh"
    ```
 
-3. If a current name is shown and `$ARGUMENTS` is empty, report: `This pane is named **<name>**. Other sessions can reach you via /send <name> <message>.`
+3. If a current name is shown and `$ARGUMENTS` is empty, report: `This pane is named **<name>**. Other sessions can reach you via $session-chat:send <name> <message>.`
 4. If `$ARGUMENTS` is provided, validate that it only contains letters, numbers, hyphens, and underscores, then run:
 
    ```bash
@@ -26,4 +22,4 @@ argument-hint: [name]
    ```
 
 5. Report: `Pane renamed to **<name>**.`
-6. If both current name and `$ARGUMENTS` are empty, report: `No name set. Use /whoami <name> to set one.`
+6. If both current name and `$ARGUMENTS` are empty, report: `No name set. Use $session-chat:whoami <name> to set one.`

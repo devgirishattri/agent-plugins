@@ -3,17 +3,21 @@
 # Source this file: source "$(dirname "$0")/lib.sh"
 # Supported platforms: macOS, Linux
 
+# Ledger records and assignment/review prompts contain private workflow data.
+# Make every subsequently created file owner-only by default; immutable auto
+# contexts are explicitly tightened further to 0400 by task-assign.sh.
+umask 077
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
-
-# SESSION_SCHEDULER_HOME must be provided by the caller. The /task-* commands
-# export it automatically (resolving <git-root|pwd>/tmp/scheduler). Scripts
+# SESSION_SCHEDULER_HOME must be provided by the caller. The
+# $session-scheduler:task-* skills export it automatically (resolving
+# <git-root|pwd>/tmp/scheduler). Scripts
 # refuse to run without it rather than silently writing a ledger into a guessed
 # cwd/tmp location.
 if [ -z "${SESSION_SCHEDULER_HOME:-}" ]; then
   echo "ERROR: SESSION_SCHEDULER_HOME is not set." >&2
-  echo "Run session-scheduler through its /task-* commands (they set it automatically)," >&2
+  echo "Run session-scheduler through a \$session-scheduler:task-* skill (it sets the home automatically)," >&2
   echo "or export SESSION_SCHEDULER_HOME=<dir> before invoking the scripts directly." >&2
   exit 1
 fi
@@ -21,10 +25,94 @@ fi
 SCHEDULER_DIR="$SESSION_SCHEDULER_HOME"
 TASKS_DIR="$SCHEDULER_DIR/tasks"
 PROMPTS_DIR="$SCHEDULER_DIR/prompts"
-SESSION_CHAT_MIN_VERSION="0.11.0"
+SESSION_CHAT_MIN_VERSION="0.13.0"
+
+_scheduler_uid() {
+  local uid="${EUID:-}"
+  case "$uid" in
+    ''|*[!0-9]*) uid=$(id -u 2>/dev/null) || return 1 ;;
+  esac
+  case "$uid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$uid"
+}
+
+_scheduler_safe_dir() {
+  local dir="$1"
+  if [ ! -d "$dir" ] || [ -L "$dir" ] || [ ! -O "$dir" ]; then
+    echo "ERROR: Refusing unsafe scheduler directory: $dir" >&2
+    return 1
+  fi
+  # Close an overly broad legacy directory before inspecting or creating
+  # anything beneath it. This changes only an owner-owned directory.
+  chmod 700 "$dir" 2>/dev/null || return 1
+}
 
 ensure_dirs() {
-  mkdir -p "$TASKS_DIR" "$PROMPTS_DIR"
+  local dir uid unsafe
+
+  # Test -L before -e so a dangling pre-planted link is rejected instead of
+  # being followed by mkdir -p.
+  if [ -L "$SCHEDULER_DIR" ]; then
+    echo "ERROR: Refusing unsafe scheduler root: $SCHEDULER_DIR" >&2
+    return 1
+  fi
+  if [ ! -e "$SCHEDULER_DIR" ]; then
+    mkdir -p "$SCHEDULER_DIR" || return 1
+  fi
+  _scheduler_safe_dir "$SCHEDULER_DIR" || return 1
+
+  for dir in "$TASKS_DIR" "$PROMPTS_DIR"; do
+    if [ -L "$dir" ]; then
+      echo "ERROR: Refusing unsafe scheduler directory: $dir" >&2
+      return 1
+    fi
+    if [ ! -e "$dir" ]; then
+      # Initial callers can race while creating the shared ledger. A competing
+      # mkdir is acceptable only if the winner's path passes the safety checks.
+      if ! mkdir -m 700 "$dir" 2>/dev/null && [ ! -e "$dir" ]; then
+        return 1
+      fi
+    fi
+    _scheduler_safe_dir "$dir" || return 1
+  done
+
+  # Existing ledgers may pre-date private defaults. Migrate files only after
+  # proving the complete tree is owner-owned and contains no symlinks or
+  # special files; otherwise fail closed before any task/prompt read. This
+  # protects every consumer, including commands that load task JSON directly.
+  uid=$(_scheduler_uid) || {
+    echo "ERROR: Could not determine the current UID for scheduler ownership checks." >&2
+    return 1
+  }
+  unsafe=$(find "$SCHEDULER_DIR" -type l -print -quit 2>/dev/null) || {
+    echo "ERROR: Could not inspect scheduler tree: $SCHEDULER_DIR" >&2
+    return 1
+  }
+  if [ -n "$unsafe" ]; then
+    echo "ERROR: Refusing scheduler tree containing a symlink: $unsafe" >&2
+    return 1
+  fi
+  unsafe=$(find "$SCHEDULER_DIR" ! -user "$uid" -print -quit 2>/dev/null) || {
+    echo "ERROR: Could not inspect scheduler tree ownership: $SCHEDULER_DIR" >&2
+    return 1
+  }
+  if [ -n "$unsafe" ]; then
+    echo "ERROR: Refusing scheduler tree containing an unowned path: $unsafe" >&2
+    return 1
+  fi
+  unsafe=$(find "$SCHEDULER_DIR" ! -type d ! -type f -print -quit 2>/dev/null) || {
+    echo "ERROR: Could not inspect scheduler tree types: $SCHEDULER_DIR" >&2
+    return 1
+  }
+  if [ -n "$unsafe" ]; then
+    echo "ERROR: Refusing scheduler tree containing a special file: $unsafe" >&2
+    return 1
+  fi
+
+  find "$SCHEDULER_DIR" -type d -exec chmod 700 {} + 2>/dev/null || return 1
+  find "$SCHEDULER_DIR" -type f -exec chmod 600 {} + 2>/dev/null || return 1
 }
 
 require_jq() {
@@ -100,6 +188,14 @@ validate_stage() {
   fi
 }
 
+validate_route_name() {
+  local label="$1" value="$2"
+  if [ -z "$value" ] || ! [[ "$value" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+    echo "ERROR: Invalid $label: $value (alphanumeric, _, ., - only)." >&2
+    return 1
+  fi
+}
+
 task_file() {
   local id="$1"
   validate_task_id "$id" || return 1
@@ -112,6 +208,34 @@ prompt_file() {
   printf '%s/%s.md\n' "$PROMPTS_DIR" "$id"
 }
 
+# Validate a prompt_file path read from a task record before task-review reads
+# it into a review packet. The stored path is untrusted: require the exact
+# generated path for this task, reject lexical traversal and file symlinks, and
+# verify that its canonical parent is the scheduler prompts directory.
+trusted_recorded_prompt_file() {
+  local id="$1" candidate="$2"
+  local expected canonical_prompts canonical_parent
+
+  [ -n "$candidate" ] || return 1
+  case "$candidate" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "/$candidate/" in
+    */../*|*/./*) return 1 ;;
+  esac
+
+  expected=$(prompt_file "$id") || return 1
+  [ "$candidate" = "$expected" ] || return 1
+  [ -f "$candidate" ] && [ ! -L "$candidate" ] || return 1
+
+  canonical_prompts=$(absolute_existing_dir "$PROMPTS_DIR") || return 1
+  canonical_parent=$(absolute_existing_dir "$(dirname "$candidate")") || return 1
+  [ "$canonical_parent" = "$canonical_prompts" ] || return 1
+
+  printf '%s\n' "$candidate"
+}
+
 current_pane_name() {
   if command -v tmux >/dev/null 2>&1 && [ -n "${TMUX_PANE:-}" ]; then
     tmux display-message -p -t "$TMUX_PANE" '#{@name}' 2>/dev/null || true
@@ -119,35 +243,73 @@ current_pane_name() {
 }
 
 session_chat_root() {
+  local candidate=""
   if [ -n "${SESSION_CHAT_ROOT_OVERRIDE:-}" ] && [ -d "$SESSION_CHAT_ROOT_OVERRIDE" ]; then
-    printf '%s\n' "$SESSION_CHAT_ROOT_OVERRIDE"
-    return 0
-  fi
-  if [ -n "${SESSION_CHAT_PLUGIN_ROOT:-}" ] && [ -d "$SESSION_CHAT_PLUGIN_ROOT" ]; then
-    printf '%s\n' "$SESSION_CHAT_PLUGIN_ROOT"
-    return 0
-  fi
-  local cache_base="$HOME/.codex/plugins/cache/girishattri-plugins/session-chat"
-  if [ -d "$cache_base" ]; then
+    candidate="$SESSION_CHAT_ROOT_OVERRIDE"
+  elif [ -n "${SESSION_CHAT_PLUGIN_ROOT:-}" ] && [ -d "$SESSION_CHAT_PLUGIN_ROOT" ]; then
+    candidate="$SESSION_CHAT_PLUGIN_ROOT"
+  else
+    local cache_base="${CODEX_HOME:-$HOME/.codex}/plugins/cache/girishattri-plugins/session-chat"
+    if [ -d "$cache_base" ]; then
     local latest_version
     latest_version=$(find "$cache_base" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
     if [ -n "$latest_version" ] && [ -d "$cache_base/$latest_version" ]; then
-      printf '%s\n' "$cache_base/$latest_version"
-      return 0
+        candidate="$cache_base/$latest_version"
+      fi
     fi
   fi
-  local sibling="$PLUGIN_ROOT/../session-chat"
-  if [ -d "$sibling" ]; then
-    printf '%s\n' "$sibling"
-    return 0
+  if [ -z "$candidate" ]; then
+    local sibling="$PLUGIN_ROOT/../session-chat"
+    [ -d "$sibling" ] && candidate="$sibling"
   fi
-  echo "ERROR: session-chat >= $SESSION_CHAT_MIN_VERSION is required but was not found." >&2
-  return 1
+  if [ -z "$candidate" ]; then
+    echo "ERROR: session-chat >= $SESSION_CHAT_MIN_VERSION is required but was not found." >&2
+    return 1
+  fi
+  local actual
+  actual=$(session_chat_version "$candidate")
+  if ! semver_gte "$actual" "$SESSION_CHAT_MIN_VERSION"; then
+    echo "ERROR: session-chat >= $SESSION_CHAT_MIN_VERSION is required; found $actual at $candidate." >&2
+    return 1
+  fi
+  printf '%s\n' "$candidate"
 }
 
 session_chat_version() {
   local root="$1"
   jq -r '.version // "unknown"' "$root/.codex-plugin/plugin.json" 2>/dev/null || echo "unknown"
+}
+
+semver_gte() {
+  local actual="${1%%+*}" minimum="${2%%+*}"
+  actual="${actual%%-*}"
+  minimum="${minimum%%-*}"
+  local a1=0 a2=0 a3=0 m1=0 m2=0 m3=0
+  IFS=. read -r a1 a2 a3 <<< "$actual"
+  IFS=. read -r m1 m2 m3 <<< "$minimum"
+  [[ "$a1" =~ ^[0-9]+$ && "$a2" =~ ^[0-9]+$ && "$a3" =~ ^[0-9]+$ ]] || return 1
+  [[ "$m1" =~ ^[0-9]+$ && "$m2" =~ ^[0-9]+$ && "$m3" =~ ^[0-9]+$ ]] || return 1
+  [ "$a1" -gt "$m1" ] ||
+    { [ "$a1" -eq "$m1" ] && [ "$a2" -gt "$m2" ]; } ||
+    { [ "$a1" -eq "$m1" ] && [ "$a2" -eq "$m2" ] && [ "$a3" -ge "$m3" ]; }
+}
+
+absolute_existing_dir() {
+  local dir="$1"
+  (cd "$dir" 2>/dev/null && pwd -P)
+}
+
+workspace_root() {
+  local dir
+  dir=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/workspace.sh" ] && grep -q 'SESSION_SCHEDULER_HOME' "$dir/workspace.sh" 2>/dev/null; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    dir=$(dirname "$dir")
+  done
+  return 1
 }
 
 write_json_atomic() {
@@ -193,12 +355,12 @@ scheduler_force_enabled() {
 
 # session-context snapshots live under SESSION_CONTEXT_HOME, which must match
 # the same override honored by session-context's own get_contexts_dir(). The
-# /task-assign command exports it automatically when --context is used. Fail
+# $session-scheduler:task-assign exports it automatically when --context is used. Fail
 # closed if it is not set rather than guessing a snapshot location.
 resolve_contexts_dir() {
   if [ -z "${SESSION_CONTEXT_HOME:-}" ]; then
     echo "ERROR: SESSION_CONTEXT_HOME is not set (required to attach a --context snapshot)." >&2
-    echo "The /task-assign command exports it automatically; export it before direct use." >&2
+    echo "\$session-scheduler:task-assign exports it automatically; export it before direct use." >&2
     return 1
   fi
   printf '%s\n' "$SESSION_CONTEXT_HOME"

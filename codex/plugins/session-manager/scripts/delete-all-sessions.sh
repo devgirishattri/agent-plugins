@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
 # delete-all-sessions.sh - Bulk-delete every Codex session for ONE project path.
-# Usage: delete-all-sessions.sh [project-path]
-#   No arg: uses the current working directory's project.
+# Usage: delete-all-sessions.sh --confirmed [project-path]
+#   No project-path arg: uses the current working directory's project.
 # SAFETY:
 #   - Scoped to one project path; refuses "all"/global wipes.
 #   - Enumerates session UUIDs through list-sessions.sh, then delegates each
-#     removal to delete-session.sh, which re-validates the UUID format.
+#     removal to native Codex through delete-session.sh.
+#   - Requires an explicit confirmation token supplied only after user consent.
 set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 SESSIONS_DIR="$CODEX_DIR/sessions"
-FILTER="${1:-$(pwd)}"
+CONFIRMATION="${1:-}"
+FILTER="${2:-$(pwd)}"
+
+if [ "$#" -gt 2 ] || [ "$CONFIRMATION" != "--confirmed" ]; then
+    echo "CANCELLED: Explicit final confirmation is required before bulk deletion."
+    echo "Only run this helper with --confirmed after the user answers the final confirmation question affirmatively."
+    exit 2
+fi
 
 if [ "$FILTER" = "all" ]; then
     echo "ERROR: Refusing a global wipe. Pass a single project path (defaults to the current dir)."
@@ -52,7 +60,7 @@ fail=0
 while IFS= read -r sid; do
     [ -z "$sid" ] && continue
     echo ""
-    if bash "$SCRIPT_DIR/delete-session.sh" "$sid"; then
+    if bash "$SCRIPT_DIR/delete-session.sh" "$sid" --confirmed; then
         ok=$(( ok + 1 ))
     else
         fail=$(( fail + 1 ))

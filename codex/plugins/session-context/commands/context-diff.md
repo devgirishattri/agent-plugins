@@ -5,13 +5,8 @@ argument-hint: <snapshot-name> [--versions | <timestamp>]
 
 ## Instructions
 
-1. If `$ARGUMENTS` is empty, tell the user: `Usage: /context-diff <snapshot-name> [--versions | <timestamp>]`.
-2. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-context/0.6.0}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-context"
-   ```
+1. If `$ARGUMENTS` is empty, tell the user: `Usage: $session-context:context-diff <snapshot-name> [--versions | <timestamp>]`.
+2. Resolve `PLUGIN_ROOT` from this command resource's absolute source path by going up one directory from `<plugin-root>/commands`. Never derive it from the project working directory or embed a cache version.
 
 3. Run (passing the arguments through):
 
@@ -27,5 +22,5 @@ argument-hint: <snapshot-name> [--versions | <timestamp>]
 
 4. Show the unified diff in a fenced ```diff code block and briefly summarize what changed.
 5. If the output says "(no differences)", state the snapshot is unchanged since that version.
-6. If no history versions exist, explain that history is only created when `/context-generate` overwrites an existing snapshot.
-7. If the snapshot does not exist, suggest `/context-list`.
+6. If no history versions exist, explain that history is only created when `$session-context:context-generate` overwrites an existing snapshot.
+7. If the snapshot does not exist, suggest `$session-context:context-list`.

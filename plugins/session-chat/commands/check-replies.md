@@ -1,6 +1,6 @@
 ---
 description: Show which sent messages have been answered and which are still awaiting a reply
-argument-hint: [--pending] [--since MINUTES]
+argument-hint: "[--pending] [--since MINUTES]"
 allowed-tools: Bash(bash:*)
 ---
 

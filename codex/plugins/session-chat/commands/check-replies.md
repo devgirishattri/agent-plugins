@@ -1,17 +1,13 @@
 ---
 description: Show which sent messages have been answered and which are still awaiting a reply
-argument-hint: [--pending] [--since MINUTES]
+argument-hint: "[--pending] [--since MINUTES]"
 ---
 
 ## Instructions
 
 1. Parse `$ARGUMENTS`: optional `--pending` (only unanswered messages) and optional `--since <minutes>` (look-back window, default 1440 = 24h).
-2. Resolve the plugin root:
-
-   ```bash
-   PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/0.16.1}"
-   [ -d "$PLUGIN_ROOT" ] || PLUGIN_ROOT="codex/plugins/session-chat"
-   ```
+2. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
+   command reference. Do not infer it from cwd or hardcode a cache version.
 
 3. Run:
 
@@ -22,4 +18,4 @@ argument-hint: [--pending] [--since MINUTES]
 4. Present the tab-separated output as a markdown table: | ID | To | Type | Delivery | Age | Reply | Excerpt |
 5. `awaiting` rows are messages nobody has answered yet — list them first if the user asked what is pending.
 6. Replies are matched by `[re:<id>]` tokens in incoming messages; when asking a pane to respond, tell it to include `[re:<id>]` in its reply.
-7. If a message has been `awaiting` for a long time, suggest `/pane-health <name>` to check the recipient.
+7. If a message has been `awaiting` for a long time, suggest `$session-chat:pane-health <name>`.

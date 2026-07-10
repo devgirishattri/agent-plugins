@@ -4,8 +4,10 @@
 # Usage: pane-health.sh [name] [--all]
 #   name    check a single pane name (searched across all sessions)
 #   --all   check named panes in ALL sessions (default: current session)
-# Output: TSV rows  <name> <pane> <status> <command> <backlog> <send-lock>
+# Output: TSV rows  <name> <pane> <status> <command> <location> <backlog> <send-lock>
 #   status:   ok | DEAD (pane_dead) | DUPLICATE (name resolves to >1 pane)
+#   location: pane's current working directory (so a worker in the wrong repo /
+#             worktree is caught before a dispatch lands it in the wrong tree)
 #   backlog:  ready/total rows waiting in that pane's durable inbox
 #   send-lock: - | held(pid) | STALE(pid) (stale = holder process is gone)
 set -uo pipefail
@@ -37,7 +39,7 @@ else
   LIST_ARGS=(-s -t "$CURRENT_SESSION")
 fi
 
-PANE_ROWS=$(tmux list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}' 2>/dev/null \
+PANE_ROWS=$(tmux list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}\t#{pane_current_path}' 2>/dev/null \
   | awk -F'\t' '$1 != ""')
 
 if [ -n "$TARGET" ]; then
@@ -94,8 +96,8 @@ lock_state() {
 
 OK=0
 PROBLEMS=0
-printf 'NAME\tPANE\tSTATUS\tCOMMAND\tBACKLOG\tSEND-LOCK\n'
-while IFS=$'\t' read -r name pane_id dead cmd; do
+printf 'NAME\tPANE\tSTATUS\tCOMMAND\tLOCATION\tBACKLOG\tSEND-LOCK\n'
+while IFS=$'\t' read -r name pane_id dead cmd path; do
   [ -n "$name" ] || continue
   status="ok"
   if [ "$dead" = "1" ]; then
@@ -114,7 +116,7 @@ while IFS=$'\t' read -r name pane_id dead cmd; do
   else
     PROBLEMS=$((PROBLEMS + 1))
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$pane_id" "$status" "$cmd" "$backlog" "$lock"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$pane_id" "$status" "$cmd" "${path:--}" "$backlog" "$lock"
 done <<EOF_ROWS
 $PANE_ROWS
 EOF_ROWS

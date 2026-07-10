@@ -4,7 +4,7 @@ set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
-ensure_dirs
+ensure_dirs || exit 1
 
 echo "=== session-scheduler doctor ==="
 echo "scheduler dir:  $SCHEDULER_DIR"
@@ -33,15 +33,44 @@ esac
 echo
 
 if root=$(session_chat_root); then
-  ver=$(basename "$root")
-  echo "session-chat:   $root (version $ver)"
-  if [ -x "$root/scripts/dispatch-to-session.sh" ]; then
+  if ver=$(session_chat_version "$root"); then
+    echo "session-chat:   $root (version $ver)"
+    if version_ge "$ver" "$SESSION_CHAT_MIN_VERSION"; then
+      echo "  version floor: OK (>= $SESSION_CHAT_MIN_VERSION)"
+    else
+      echo "  ERROR: session-chat $ver is BELOW the required >= $SESSION_CHAT_MIN_VERSION."
+      echo "  Dispatch will be REFUSED (a busy-pane dispatch/ack would be lost without the durable inbox). Update session-chat."
+    fi
+  else
+    echo "session-chat:   $root (version undetectable)"
+    echo "  WARN: could not read session-chat version; dispatch proceeds only if SESSION_SCHEDULER_SKIP_VERSION_CHECK=1."
+  fi
+  # Packaged plugin scripts ship 0644 and are invoked via `bash`, so a readable
+  # regular file — not an executable bit — is the correct contract.
+  if [ -f "$root/scripts/dispatch-to-session.sh" ] && [ -r "$root/scripts/dispatch-to-session.sh" ]; then
     echo "  dispatch script: OK"
   else
-    echo "  WARN: dispatch script missing or not executable"
+    echo "  WARN: dispatch script missing or not readable"
   fi
 else
-  echo "session-chat:   NOT FOUND. Install session-chat>=0.11.0 from girishattri-plugins marketplace."
+  echo "session-chat:   NOT FOUND. Install session-chat>=$SESSION_CHAT_MIN_VERSION from girishattri-plugins marketplace."
+fi
+echo
+
+# Ledger-home mismatch: an executor that relies on the git-root default resolves
+# a DIFFERENT ledger than SESSION_SCHEDULER_HOME whenever this pane sits in a
+# worktree/child checkout. task-assign now embeds the absolute home in the
+# prompt, but flag the divergence so a direct/manual invocation isn't surprised.
+gitroot=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+default_home="$(abs_dir "$gitroot")/tmp/scheduler"
+active_home="$(abs_dir "$SCHEDULER_DIR")"
+echo "ledger home:    $active_home"
+if [ "$active_home" = "$default_home" ]; then
+  echo "  OK: matches this pane's git-root default."
+else
+  echo "  WARN: differs from this pane's git-root default ($default_home)."
+  echo "  An executor here relying on the default would use a different ledger; rely on the"
+  echo "  absolute home task-assign embeds, or export SESSION_SCHEDULER_HOME explicitly."
 fi
 echo
 

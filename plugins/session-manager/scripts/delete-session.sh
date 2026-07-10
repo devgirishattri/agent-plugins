@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # delete-session.sh - Delete all data for a session UUID
-# Usage: delete-session.sh <full-session-uuid>
-# SAFETY: Only accepts full UUIDs (36 chars, standard format)
+# Usage: delete-session.sh <full-session-uuid> --confirmed
+# SAFETY: Only accepts full UUIDs (36 chars, standard format), and requires an
+#   explicit --confirmed capability flag (the /session-delete command passes it
+#   only AFTER an AskUserQuestion default-cancel confirmation).
 # Supported platforms: macOS, Linux, Windows (WSL only)
 set -euo pipefail
 
-SESSION_ID="${1:-}"
+SESSION_ID=""
+CONFIRMED=0
+for arg in "$@"; do
+    case "$arg" in
+        --confirmed) CONFIRMED=1 ;;
+        *) [ -z "$SESSION_ID" ] && SESSION_ID="$arg" ;;
+    esac
+done
 
 # Strict UUID validation
 if ! echo "$SESSION_ID" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
@@ -13,6 +22,13 @@ if ! echo "$SESSION_ID" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
     echo "Must be a full UUID (e.g., b3591ff4-9c80-4119-b0a2-ea47524297d4)"
     echo "Use /session-search or /session-list to find the full UUID."
     exit 1
+fi
+
+# Destructive capability gate — refuse without explicit confirmation.
+if [ "$CONFIRMED" != "1" ]; then
+    echo "REFUSED: deleting session $SESSION_ID removes all of its data and cannot be undone." >&2
+    echo "  Re-run through /session-delete (which confirms first), or pass --confirmed to the script explicitly." >&2
+    exit 2
 fi
 
 CLAUDE_DIR="$HOME/.claude"
