@@ -213,8 +213,8 @@ pop_pane_name_err() {
 # _pop_tmux_err returned. "Operation not permitted" is the signature of a
 # sandboxed exec (e.g. a Codex sandbox profile) denying the tmux socket
 # connect() outright — confirmed live 2026-07-09 (REPRO-0162, self-name query;
-# and again via orchestrator-pane's fresh-session data hitting resolve_pane
-# instead): the exact same command succeeds on a later, differently-
+# and again via fresh-session data hitting resolve_pane instead): the exact
+# same command succeeds on a later, differently-
 # classified invocation, so this is not a fixable state within the current
 # process — the caller needs to re-run the whole command escalated/approved,
 # not just retry the tmux call.
@@ -262,8 +262,8 @@ resolve_pane() {
     # $label, or `tmux list-panes` itself failed (e.g. a sandboxed exec
     # denying the socket) and silently returned nothing. Surface the real
     # cause when we have one instead of always implying the target is
-    # unregistered — confirmed live 2026-07-09 (orchestrator-pane, fresh Codex
-    # sessions): this was the actual, and only, failure point in 4/4 attempts.
+    # unregistered — confirmed live 2026-07-09 in fresh Codex sessions: this
+    # was the actual, and only, failure point in 4/4 attempts.
     echo "ERROR: No pane named '$label'. Run /panes all to see all available named panes.$(pane_name_err_detail "$tmux_err")" >&2
     return 1
   fi

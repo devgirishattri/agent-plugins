@@ -121,7 +121,3 @@ claude plugin marketplace add /path/to/agent-plugins
 - Generated logs such as `firebase-debug.log` are ignored and should not be committed.
 - Run `bash scripts/validate-release.sh` before publishing plugin updates.
 - `session-scheduler` is intentionally a file-backed ledger layered on `session-chat`; keep scheduling state out of the transport plugin.
-
-## Documentation
-
-
