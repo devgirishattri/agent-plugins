@@ -18,7 +18,7 @@ assert_contains() {
 }
 
 path_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
 }
 
 assert_mode() {
@@ -26,6 +26,45 @@ assert_mode() {
   actual=$(path_mode "$path")
   [ "$actual" = "$expected" ] || fail "$path mode was $actual, expected $expected"
 }
+
+# GNU stat's -f flag reports filesystem details rather than selecting a format.
+# Assert that successful GNU formatting wins and that BSD formatting remains a
+# clean fallback, independent of the host that runs this suite.
+if ! bash -c '
+  stat() {
+    case "$1:$2" in
+      -c:%u) printf "501\n" ;;
+      -c:%a) printf "600\n" ;;
+      -c:%d:%i) printf "7:11\n" ;;
+      -f:*) printf "wrong-format\n" ;;
+      *) return 1 ;;
+    esac
+  }
+  source "$1"
+  [ "$(_context_path_uid ignored)" = "501" ]
+  [ "$(_context_path_mode ignored)" = "600" ]
+  [ "$(_context_path_identity ignored)" = "7:11" ]
+' _ "$SCRIPT_DIR/lib.sh"; then
+  fail "context metadata helpers did not prefer GNU stat formatting"
+fi
+
+if ! bash -c '
+  stat() {
+    case "$1:$2" in
+      -c:*) return 1 ;;
+      -f:%u) printf "501\n" ;;
+      -f:%Lp) printf "600\n" ;;
+      -f:%d:%i) printf "7:11\n" ;;
+      *) return 1 ;;
+    esac
+  }
+  source "$1"
+  [ "$(_context_path_uid ignored)" = "501" ]
+  [ "$(_context_path_mode ignored)" = "600" ]
+  [ "$(_context_path_identity ignored)" = "7:11" ]
+' _ "$SCRIPT_DIR/lib.sh"; then
+  fail "context metadata helpers did not fall back to BSD stat formatting"
+fi
 
 export SESSION_CONTEXT_HOME="$TMP/contexts"
 export CODEX_HOME="$TMP/codex"

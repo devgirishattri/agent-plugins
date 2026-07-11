@@ -32,7 +32,7 @@ cat "$SNAPSHOT"
 # Staleness warning: flag snapshots older than the threshold (days).
 # Override with SESSION_CONTEXT_STALE_DAYS.
 STALE_DAYS="${SESSION_CONTEXT_STALE_DAYS:-7}"
-mtime=$(stat -f %m "$SNAPSHOT" 2>/dev/null || stat -c %Y "$SNAPSHOT" 2>/dev/null || echo "")
+mtime=$(stat -c %Y "$SNAPSHOT" 2>/dev/null || stat -f %m "$SNAPSHOT" 2>/dev/null || echo "")
 if [ -n "$mtime" ]; then
   now=$(date +%s)
   age_days=$(( (now - mtime) / 86400 ))

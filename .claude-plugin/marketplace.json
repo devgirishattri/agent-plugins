@@ -66,7 +66,7 @@
     {
       "name": "session-context",
       "description": "Generate, list, load, share, and remove Claude session context snapshots for the current project. Surfaces available snapshots on session start.",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "author": {
         "name": "Girish Attri"
       },

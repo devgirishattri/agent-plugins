@@ -121,15 +121,18 @@ _context_path_exists() {
 }
 
 _context_path_uid() {
-  stat -f '%u' "$1" 2>/dev/null || stat -c '%u' "$1" 2>/dev/null
+  # GNU stat accepts -f with different filesystem-report semantics and can
+  # emit stdout before rejecting BSD-style operands. Try GNU formatting first;
+  # BSD stat rejects -c cleanly and then uses the macOS fallback.
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null
 }
 
 _context_path_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
 }
 
 _context_path_identity() {
-  stat -f '%d:%i' "$1" 2>/dev/null || stat -c '%d:%i' "$1" 2>/dev/null
+  stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null
 }
 
 _context_store_error() {
