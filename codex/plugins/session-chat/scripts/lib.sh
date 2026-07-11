@@ -154,7 +154,7 @@ _private_tmp_root() {
     echo "ERROR: Refusing unsafe session-chat temp root: $root" >&2
     return 1
   fi
-  mode=$(stat -f '%Lp' "$root" 2>/dev/null || stat -c '%a' "$root" 2>/dev/null) || {
+  mode=$(stat -c '%a' "$root" 2>/dev/null || stat -f '%Lp' "$root" 2>/dev/null) || {
     echo "ERROR: Could not inspect session-chat temp root permissions: $root" >&2
     return 1
   }
@@ -185,7 +185,7 @@ _private_tmp_subdir() {
     echo "ERROR: Refusing unsafe session-chat temp directory: $dir" >&2
     return 1
   fi
-  mode=$(stat -f '%Lp' "$dir" 2>/dev/null || stat -c '%a' "$dir" 2>/dev/null) || return 1
+  mode=$(stat -c '%a' "$dir" 2>/dev/null || stat -f '%Lp' "$dir" 2>/dev/null) || return 1
   if [ "$mode" != "700" ]; then
     echo "ERROR: Refusing non-private session-chat temp directory (mode $mode): $dir" >&2
     return 1

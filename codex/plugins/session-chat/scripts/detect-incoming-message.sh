@@ -160,7 +160,7 @@ trusted_message_file() {
   [ -f "$file" ] || return 1
   [ -O "$file" ] || return 1
   local mode
-  mode=$(stat -f '%Lp' "$file" 2>/dev/null || stat -c '%a' "$file" 2>/dev/null) || return 1
+  mode=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null) || return 1
   case "$mode" in
     ?00) ;;
     *) return 1 ;;

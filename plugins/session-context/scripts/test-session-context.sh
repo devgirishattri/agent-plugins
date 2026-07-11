@@ -68,7 +68,7 @@ run_share() {
 
 # --- Test 1: hardened transport preferred + 0644 entrypoint selected (delivered) ---
 STUB0=$(make_stub delivered)
-stub_mode=$(stat -f '%Lp' "$STUB0/scripts/send-message.sh" 2>/dev/null || stat -c '%a' "$STUB0/scripts/send-message.sh" 2>/dev/null)
+stub_mode=$(stat -c '%a' "$STUB0/scripts/send-message.sh" 2>/dev/null || stat -f '%Lp' "$STUB0/scripts/send-message.sh" 2>/dev/null)
 out=$(run_share "$STUB0" some-peer proj-1)
 rc=$?
 if [ "$rc" -eq 0 ] && [ "$stub_mode" = "644" ] && echo "$out" | grep -q "transport: session-chat (delivered live)"; then
@@ -201,7 +201,7 @@ harden_out=$(
   printf x > "$S/.history/a.20200101T000000Z.md"; chmod 640 "$S/.history/a.20200101T000000Z.md"
   printf x > "$S/auto.md"; chmod 400 "$S/auto.md"
   chmod 755 "$S" "$S/.history"
-  m() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+  m() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
   if harden_contexts_dir "$S"; then
     echo "RC0 STORE=$(m "$S") HIST=$(m "$S/.history") FILE=$(m "$S/a.md") HFILE=$(m "$S/.history/a.20200101T000000Z.md") AUTO=$(m "$S/auto.md")"
   fi
@@ -262,9 +262,9 @@ shape_out=$(
   printf 'code' > "$S/src/main.c"
   printf '# snap' > "$S/proj.md"
   chmod 755 "$S" "$S/src"
-  before=$(stat -f '%Lp' "$S" 2>/dev/null || stat -c '%a' "$S" 2>/dev/null)
+  before=$(stat -c '%a' "$S" 2>/dev/null || stat -f '%Lp' "$S" 2>/dev/null)
   harden_contexts_dir "$S" >/dev/null 2>&1 && echo ACCEPT || echo REJECT
-  after=$(stat -f '%Lp' "$S" 2>/dev/null || stat -c '%a' "$S" 2>/dev/null)
+  after=$(stat -c '%a' "$S" 2>/dev/null || stat -f '%Lp' "$S" 2>/dev/null)
   echo "UNCHANGED=$([ "$before" = "$after" ] && echo yes || echo no)"
   rm -rf "$B"
 )

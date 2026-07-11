@@ -19,7 +19,7 @@ fail() {
 }
 
 path_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
 }
 
 run_sender() {
@@ -278,7 +278,7 @@ ROUTED_FILE="$TEST_HOME/scheduler/tasks/$ROUTED_ID.json"
 [ "$(jq -r '.meta.workflow_id' "$ROUTED_FILE")" = "release-42" ] || fail "workflow id not recorded"
 AUTO_CONTEXT=$(jq -r '.meta.context' "$ROUTED_FILE")
 [ -f "$TEST_HOME/contexts/$AUTO_CONTEXT.md" ] || fail "automatic context snapshot missing"
-AUTO_CONTEXT_MODE=$(stat -f '%Lp' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null || stat -c '%a' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null)
+AUTO_CONTEXT_MODE=$(stat -c '%a' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null || stat -f '%Lp' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null)
 [ "$AUTO_CONTEXT_MODE" = "400" ] || fail "automatic context is not owner read-only: $AUTO_CONTEXT_MODE"
 grep 'Shared Scheduler Home:' "$TEST_HOME/scheduler/prompts/$ROUTED_ID.md" >/dev/null || fail "assignment prompt missing shared scheduler home"
 run_sender bash "$SCRIPT_DIR/task-status.sh" --by-workflow | grep 'Workflow: release-42' >/dev/null || fail "workflow grouping missing"

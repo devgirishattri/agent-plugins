@@ -255,7 +255,7 @@ fi
 
 # --- Test 11: privacy hardening — messages dir 0700, files migrated to 0600 ---
 # portable octal-perms reader (BSD stat vs GNU stat)
-perms() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+perms() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
 harden_out=$(
   source "$HERE/lib.sh"
   HB=$(mktemp -d)
@@ -268,9 +268,9 @@ harden_out=$(
   chmod 644 "$md/old.md" "$md/queue/old.tsv"
   chmod 755 "$md"
   harden_messages_dir "$md"
-  echo "DIR=$(stat -f '%Lp' "$md" 2>/dev/null || stat -c '%a' "$md" 2>/dev/null)"
-  echo "FILE=$(stat -f '%Lp' "$md/old.md" 2>/dev/null || stat -c '%a' "$md/old.md" 2>/dev/null)"
-  echo "SUBFILE=$(stat -f '%Lp' "$md/queue/old.tsv" 2>/dev/null || stat -c '%a' "$md/queue/old.tsv" 2>/dev/null)"
+  echo "DIR=$(stat -c '%a' "$md" 2>/dev/null || stat -f '%Lp' "$md" 2>/dev/null)"
+  echo "FILE=$(stat -c '%a' "$md/old.md" 2>/dev/null || stat -f '%Lp' "$md/old.md" 2>/dev/null)"
+  echo "SUBFILE=$(stat -c '%a' "$md/queue/old.tsv" 2>/dev/null || stat -f '%Lp' "$md/queue/old.tsv" 2>/dev/null)"
   [ -e "$md/.perms-hardened-v1" ] && echo MARKER_OK
   rm -rf "$HB"
 )
@@ -575,7 +575,7 @@ lockroot_out=$(
   T=$(mktemp -d); export TMPDIR="$T"
   r=$(_session_chat_lock_root)
   myuid=$(id -u)
-  mode=$(stat -f '%Lp' "$r" 2>/dev/null || stat -c '%a' "$r" 2>/dev/null)
+  mode=$(stat -c '%a' "$r" 2>/dev/null || stat -f '%Lp' "$r" 2>/dev/null)
   echo "MODE=$mode"
   if [ "$r" = "$T/session-chat-locks-$myuid" ]; then echo "UID_SCOPED"; fi
   # Poison the root: replace it with a symlink to an attacker-controlled dir.

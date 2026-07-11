@@ -139,7 +139,7 @@ harden_contexts_dir() {
     if [ -d "$entry" ]; then
       chmod 700 "$entry" 2>/dev/null || { rm -f "$tmp_list"; echo "ERROR: could not lock dir '$entry' to 0700." >&2; return 1; }
     elif [ -f "$entry" ]; then
-      mode=$(stat -f '%Lp' "$entry" 2>/dev/null || stat -c '%a' "$entry" 2>/dev/null)
+      mode=$(stat -c '%a' "$entry" 2>/dev/null || stat -f '%Lp' "$entry" 2>/dev/null)
       # Preserve EXACTLY 0400 (immutable auto handoff) or 0600 (private); chmod
       # every other mode down to 0600.
       case "$mode" in

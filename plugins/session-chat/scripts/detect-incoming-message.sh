@@ -150,7 +150,7 @@ trusted_message_file() {
   # set (must be 0600 or stricter). A loose-mode file in the shared dir could
   # have been readable or writable by another local user before we saw it.
   local mode
-  mode=$(stat -f '%Lp' "$file" 2>/dev/null || stat -c '%a' "$file" 2>/dev/null)
+  mode=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null)
   [ -n "$mode" ] || return 1
   case "$mode" in
     *00) ;;      # group+other bits both zero (e.g. 600, 400, 100600)

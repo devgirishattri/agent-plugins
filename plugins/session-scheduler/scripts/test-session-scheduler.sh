@@ -407,7 +407,7 @@ SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX
 meta_ctx=$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$AC_ID.json")
 auto_file="$AUTO_CTX_DIR/$meta_ctx.md"
 perms_ok=""
-[ -f "$auto_file" ] && perms_ok=$(stat -f '%Lp' "$auto_file" 2>/dev/null || stat -c '%a' "$auto_file" 2>/dev/null)
+[ -f "$auto_file" ] && perms_ok=$(stat -c '%a' "$auto_file" 2>/dev/null || stat -f '%Lp' "$auto_file" 2>/dev/null)
 name_ok=$(printf '%s' "$meta_ctx" | grep -qE "^auto-$AC_ID-[0-9a-f]+$" && echo yes || echo no)
 # rollback: a dispatch failure must remove the auto handoff (none left for AC_RB)
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "auto-ctx-rb" 2>&1)
@@ -497,7 +497,7 @@ else
 fi
 
 # --- Test 34: ledger dirs are 0700 and task/prompt files 0600 (umask 077) ---
-mode_of() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+mode_of() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "perm-task" 2>&1)
 PM_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
 SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$PM_ID" "perm work" >/dev/null 2>&1
@@ -522,8 +522,8 @@ mig_out=$(
   source "$HERE/lib.sh"
   if ensure_dirs; then
     echo "RC0"
-    echo "DIR=$(stat -f '%Lp' "$H/tasks" 2>/dev/null || stat -c '%a' "$H/tasks" 2>/dev/null)"
-    echo "FILE=$(stat -f '%Lp' "$H/tasks/legacy.json" 2>/dev/null || stat -c '%a' "$H/tasks/legacy.json" 2>/dev/null)"
+    echo "DIR=$(stat -c '%a' "$H/tasks" 2>/dev/null || stat -f '%Lp' "$H/tasks" 2>/dev/null)"
+    echo "FILE=$(stat -c '%a' "$H/tasks/legacy.json" 2>/dev/null || stat -f '%Lp' "$H/tasks/legacy.json" 2>/dev/null)"
   fi
 )
 if echo "$mig_out" | grep -q RC0 && echo "$mig_out" | grep -q "DIR=700" && echo "$mig_out" | grep -q "FILE=600"; then
@@ -581,7 +581,7 @@ RACE="$TMP/race"
 ( SESSION_SCHEDULER_HOME="$RACE" bash "$HERE/task-new.sh" "r1" >/dev/null 2>&1 ) &
 ( SESSION_SCHEDULER_HOME="$RACE" bash "$HERE/task-new.sh" "r2" >/dev/null 2>&1 ) &
 wait
-d_mode=$(stat -f '%Lp' "$RACE/tasks" 2>/dev/null || stat -c '%a' "$RACE/tasks" 2>/dev/null)
+d_mode=$(stat -c '%a' "$RACE/tasks" 2>/dev/null || stat -f '%Lp' "$RACE/tasks" 2>/dev/null)
 n_tasks=$(find "$RACE/tasks" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
 if [ "$d_mode" = "700" ] && [ "$n_tasks" = "2" ]; then
   pass "ensure_dirs_init_race"

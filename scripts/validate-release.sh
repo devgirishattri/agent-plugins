@@ -119,6 +119,19 @@ def require_order(path: pathlib.Path, first: str, second: str) -> None:
     if first_index == -1 or second_index == -1 or first_index >= second_index:
         fail(f"{path}: expected {first!r} before {second!r}")
 
+
+# GNU stat uses -f for filesystem reports, not BSD-style formatting. A failed
+# BSD-first probe can therefore emit report text before the GNU fallback runs,
+# corrupting command-substitution results. Keep every portable fallback GNU-
+# first; BSD stat rejects -c cleanly on macOS.
+bsd_first_stat = re.compile(r"\bstat\s+-f[^\n]*\|\|\s*stat\s+-c\b")
+for shell_root in (root / "plugins", root / "codex/plugins", root / "scripts"):
+    for shell_path in sorted(shell_root.rglob("*.sh")):
+        match = bsd_first_stat.search(shell_path.read_text())
+        if match:
+            fail(f"{shell_path}: BSD-first stat fallback is not Linux-safe: {match.group(0)!r}")
+
+
 legacy_plugin_root = re.compile(r"\bCODEX_PLUGIN_ROOT\b")
 
 # A cache base is a legitimate discovery location. A literal version-like

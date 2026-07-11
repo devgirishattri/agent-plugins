@@ -334,11 +334,11 @@ for provider in claude codex; do
     > "$TMP/${provider}-wrong-store.out" 2>&1; then
     fail "$provider context accepted a project-like store with unexpected nested content"
   fi
-  [ "$(stat -f '%Lp' "$wrong_store" 2>/dev/null || stat -c '%a' "$wrong_store")" = "755" ] \
+  [ "$(stat -c '%a' "$wrong_store" 2>/dev/null || stat -f '%Lp' "$wrong_store")" = "755" ] \
     || fail "$provider context changed the misconfigured root mode before rejecting it"
-  [ "$(stat -f '%Lp' "$wrong_store/src" 2>/dev/null || stat -c '%a' "$wrong_store/src")" = "755" ] \
+  [ "$(stat -c '%a' "$wrong_store/src" 2>/dev/null || stat -f '%Lp' "$wrong_store/src")" = "755" ] \
     || fail "$provider context recursively changed an unexpected directory"
-  [ "$(stat -f '%Lp' "$wrong_store/src/app.txt" 2>/dev/null || stat -c '%a' "$wrong_store/src/app.txt")" = "644" ] \
+  [ "$(stat -c '%a' "$wrong_store/src/app.txt" 2>/dev/null || stat -f '%Lp' "$wrong_store/src/app.txt")" = "644" ] \
     || fail "$provider context changed an unexpected project file"
 
   orphan_store="$TMP/${provider}-orphan-contexts"

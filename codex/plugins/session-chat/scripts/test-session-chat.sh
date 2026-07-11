@@ -25,7 +25,7 @@ fail() {
 }
 
 path_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
 }
 
 assert_contains() {
@@ -165,8 +165,8 @@ LIVE_LOCK_MODES=$(TMPDIR="$LOCK_TMP" bash -c '
   source "$0"
   lock=$(send_lock_path "%43") || exit 1
   acquire_send_lock "$lock" "%43" || exit 1
-  lock_mode=$(stat -f "%Lp" "$lock" 2>/dev/null || stat -c "%a" "$lock" 2>/dev/null) || exit 1
-  pid_mode=$(stat -f "%Lp" "$lock/pid" 2>/dev/null || stat -c "%a" "$lock/pid" 2>/dev/null) || exit 1
+  lock_mode=$(stat -c "%a" "$lock" 2>/dev/null || stat -f "%Lp" "$lock" 2>/dev/null) || exit 1
+  pid_mode=$(stat -c "%a" "$lock/pid" 2>/dev/null || stat -f "%Lp" "$lock/pid" 2>/dev/null) || exit 1
   printf "%s %s\n" "$lock_mode" "$pid_mode"
   release_send_lock "$lock"
 ' "$SCRIPT_DIR/lib.sh")
@@ -343,7 +343,7 @@ MSG_FILE="$(printf '%s\n' "$CAPTURED" | grep -o 'msg:[^ ]*' | tail -1 | sed 's/^
 [ -f "$MSG_FILE" ] || fail "dispatch message file not found"
 assert_file_contains "$MSG_FILE" "dispatch one"
 assert_file_contains "$MSG_FILE" "dispatch two with special chars"
-file_mode=$(stat -f '%Lp' "$MSG_FILE" 2>/dev/null || stat -c '%a' "$MSG_FILE" 2>/dev/null)
+file_mode=$(stat -c '%a' "$MSG_FILE" 2>/dev/null || stat -f '%Lp' "$MSG_FILE" 2>/dev/null)
 [ "$file_mode" = "600" ] || fail "dispatch message file is not owner-only: $file_mode"
 
 printf '%s\n' "dispatch reply" "second line" > "$PROMPT_FILE"
@@ -391,8 +391,8 @@ printf 'old queue\n' > "$LOOSE_HOME/messages/queue/old.tsv"
 chmod 755 "$LOOSE_HOME/messages" "$LOOSE_HOME/messages/queue"
 chmod 644 "$LOOSE_HOME/messages/old.md" "$LOOSE_HOME/messages/queue/old.tsv"
 CODEX_HOME="$LOOSE_HOME" bash -c 'source "$0"; ensure_messages_dir' "$SCRIPT_DIR/lib.sh"
-dir_mode=$(stat -f '%Lp' "$LOOSE_HOME/messages" 2>/dev/null || stat -c '%a' "$LOOSE_HOME/messages" 2>/dev/null)
-old_mode=$(stat -f '%Lp' "$LOOSE_HOME/messages/old.md" 2>/dev/null || stat -c '%a' "$LOOSE_HOME/messages/old.md" 2>/dev/null)
+dir_mode=$(stat -c '%a' "$LOOSE_HOME/messages" 2>/dev/null || stat -f '%Lp' "$LOOSE_HOME/messages" 2>/dev/null)
+old_mode=$(stat -c '%a' "$LOOSE_HOME/messages/old.md" 2>/dev/null || stat -f '%Lp' "$LOOSE_HOME/messages/old.md" 2>/dev/null)
 [ "$dir_mode" = "700" ] || fail "messages directory migration left mode $dir_mode"
 [ "$old_mode" = "600" ] || fail "message migration left file mode $old_mode"
 [ -f "$LOOSE_HOME/messages/.perms-hardened-v1" ] || fail "permissions migration marker missing"

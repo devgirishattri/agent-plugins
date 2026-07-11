@@ -456,5 +456,5 @@ append_history_update() {
 
 file_mtime() {
   local file="$1"
-  stat -f %m "$file" 2>/dev/null || stat -c %Y "$file" 2>/dev/null
+  stat -c %Y "$file" 2>/dev/null || stat -f %m "$file" 2>/dev/null
 }
