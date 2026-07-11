@@ -45,6 +45,24 @@ cap() {
   tmux -L "$SOCKET" capture-pane -t "$1" -p -S -200 2>/dev/null
 }
 
+# Poll capture-pane until NEEDLE renders in the pane, or TIMEOUT_MS elapses.
+# On a loaded CI runner there is a lag between send-keys landing and the pasted
+# text showing up in capture-pane, so a single immediate cap races the render.
+# Prints the final capture; returns 0 on match, 1 on timeout.
+#   cap_wait PANE NEEDLE [TIMEOUT_MS]
+cap_wait() {
+  local pane="$1" needle="$2" timeout_ms="${3:-3000}"
+  local waited=0 out
+  while :; do
+    out=$(cap "$pane")
+    if printf '%s' "$out" | grep -qF "$needle"; then
+      printf '%s\n' "$out"; return 0
+    fi
+    [ "$waited" -ge "$timeout_ms" ] && { printf '%s\n' "$out"; return 1; }
+    sleep 0.05; waited=$((waited + 50))
+  done
+}
+
 # --- Setup ---
 echo "=== session-chat tests (socket: $SOCKET) ==="
 tmux -L "$SOCKET" new-session -d -s "$SESSION" -x 200 -y 50
@@ -108,7 +126,7 @@ fi
 out=$(SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "send_message alpha 'hello-from-test'" 2>&1)
 if echo "$out" | grep -q ERROR; then
   fail "send_happy" "got error: $out"
-elif cap "$RECIPIENT_PANE" | grep -qF 'hello-from-test'; then
+elif cap_wait "$RECIPIENT_PANE" 'hello-from-test' >/dev/null; then
   pass "send_happy"
 else
   fail "send_happy" "marker not found in recipient pane; out=$out"
@@ -132,7 +150,7 @@ else fail "send_unknown_pane" "expected unknown-pane error, got: $out"; fi
 # --- Test 5: /dispatch happy path + file written ---
 out=$(SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "dispatch_message alpha \$'multi\nline\npayload with \$dollars and \`backticks\`'" 2>&1)
 files=("$TEST_MSGS_DIR"/*.md)
-if [ ${#files[@]} -ge 1 ] && grep -qF '$dollars' "${files[0]}" && cap "$RECIPIENT_PANE" | grep -q 'dispatch ('; then
+if [ ${#files[@]} -ge 1 ] && grep -qF '$dollars' "${files[0]}" && cap_wait "$RECIPIENT_PANE" 'dispatch (' >/dev/null; then
   pass "dispatch_happy"
 else
   fail "dispatch_happy" "file or marker missing; out=$out files=${files[*]}"
@@ -153,8 +171,15 @@ tmux -L "$SOCKET" set-option -p -t "$DUP_PANE" @name "gamma"
 (SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "send_message alpha 'parallel-A'" >/dev/null 2>&1) &
 (SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "send_message alpha 'parallel-B'" >/dev/null 2>&1) &
 wait
-sleep 0.3
-recipient_log=$(cap "$RECIPIENT_PANE")
+# Poll until BOTH parallel sends render (adaptive; replaces a fixed sleep that
+# raced the pane render on slower CI runners).
+lc_waited=0
+while :; do
+  recipient_log=$(cap "$RECIPIENT_PANE")
+  { echo "$recipient_log" | grep -qF 'parallel-A' && echo "$recipient_log" | grep -qF 'parallel-B'; } && break
+  [ "$lc_waited" -ge 3000 ] && break
+  sleep 0.05; lc_waited=$((lc_waited + 50))
+done
 if echo "$recipient_log" | grep -qF 'parallel-A' && echo "$recipient_log" | grep -qF 'parallel-B'; then
   pass "lock_contention"
 else
@@ -166,7 +191,7 @@ fi
 out=$(SESSION_CHAT_VERIFY_TIMEOUT_MS=200 SESSION_CHAT_SEND_RETRIES=3 run_lib "$SENDER_PANE" "send_message alpha 'retry-probe'" 2>&1)
 if echo "$out" | grep -q ERROR; then
   fail "retry_eventual_success" "retries exhausted: $out"
-elif cap "$RECIPIENT_PANE" | grep -qF 'retry-probe'; then
+elif cap_wait "$RECIPIENT_PANE" 'retry-probe' >/dev/null; then
   pass "retry_eventual_success"
 else
   fail "retry_eventual_success" "no marker on recipient"
