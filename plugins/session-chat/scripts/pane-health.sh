@@ -35,12 +35,27 @@ done
 if [ -n "$TARGET" ] || [ "$SCOPE" = "all" ]; then
   LIST_ARGS=(-a)
 else
-  CURRENT_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
+  # Resolve the current session with stderr preserved: a sandbox denial here
+  # yields an empty session name and is the ROOT failure, to be classified at
+  # its source rather than only inferred from the follow-on list-panes probe.
+  if ! tmux_capture_checked pane-health-session CURRENT_SESSION TMUX_ERR \
+      display-message -p -t "${TMUX_PANE:-}" '#{session_name}'; then
+    echo "ERROR: could not resolve the current tmux session.$(tmux_err_detail "$TMUX_ERR")" >&2
+    exit 1
+  fi
   LIST_ARGS=(-s -t "$CURRENT_SESSION")
 fi
 
-PANE_ROWS=$(tmux list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}\t#{pane_current_path}' 2>/dev/null \
-  | awk -F'\t' '$1 != ""')
+# Enumerate with stderr preserved and fail-checked: under a sandboxed exec the
+# tmux socket connect() is denied ("Operation not permitted") and the command
+# returns no rows — without this we would fall through to "No named panes found"
+# and exit 0, turning a denial into a false all-clear. Surface it as a loud error.
+if ! tmux_capture_checked pane-health-enum RAW_ROWS TMUX_ERR \
+    list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}\t#{pane_current_path}'; then
+  echo "ERROR: could not list tmux panes.$(tmux_err_detail "$TMUX_ERR")" >&2
+  exit 1
+fi
+PANE_ROWS=$(printf '%s\n' "$RAW_ROWS" | awk -F'\t' '$1 != ""')
 
 if [ -n "$TARGET" ]; then
   PANE_ROWS=$(printf '%s\n' "$PANE_ROWS" | awk -F'\t' -v want="$TARGET" '$1 == want')

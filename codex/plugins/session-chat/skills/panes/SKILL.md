@@ -26,4 +26,12 @@ Present tab-separated output as:
 | Name | Pane | Command | Location |
 ```
 
-If the command says tmux is required or not active, explain that this action must run inside tmux. If no panes are listed, say no named panes were found and suggest `$session-chat:whoami <name>`. If panes are listed, mention that `$session-chat:send <name> <message>` can message a pane. Mention `$session-chat:panes all` only when the user needs panes from every tmux session.
+If the script returns non-zero, relay its error and do not interpret blank
+output as an empty pane list. If it reports that a sandbox denied the tmux
+socket, rerun the whole script escalated/approved. If the command says tmux is
+required or not active, explain that this action must run inside tmux. Only a
+successful empty result means no named panes were found; then suggest
+`$session-chat:whoami <name>`. If panes are listed, mention that
+`$session-chat:send <name> <message>` can message a pane. Mention
+`$session-chat:panes all` only when the user needs panes from every tmux
+session.

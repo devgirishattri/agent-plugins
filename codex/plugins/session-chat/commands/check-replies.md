@@ -1,5 +1,5 @@
 ---
-description: Show which sent messages have been answered and which are still awaiting a reply
+description: Show which sent messages have confirmed correlated replies
 argument-hint: "[--pending] [--since MINUTES]"
 ---
 
@@ -16,6 +16,9 @@ argument-hint: "[--pending] [--since MINUTES]"
    ```
 
 4. Present the tab-separated output as a markdown table: | ID | To | Type | Delivery | Age | Reply | Excerpt |
-5. `awaiting` rows are messages nobody has answered yet — list them first if the user asked what is pending.
-6. Replies are matched by `[re:<id>]` tokens in incoming messages; when asking a pane to respond, tell it to include `[re:<id>]` in its reply.
-7. If a message has been `awaiting` for a long time, suggest `$session-chat:pane-health <name>`.
+5. `unconfirmed` means no correlated reply has arrived; it is not task-liveness
+   evidence. List those rows first if the user asks what is pending.
+6. Use `$session-chat:reply <pane> <id> <message>` so the transport generates
+   `[re:<id>]`; never ask an agent to type the token manually.
+7. If a message stays unconfirmed, suggest `$session-chat:pane-health <name>`
+   and check scheduler task status separately.

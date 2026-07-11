@@ -17,6 +17,10 @@ Parse the first argument as the target pane name and the rest as the task prompt
 Usage: $session-chat:dispatch <pane-name> <task prompt>
 ```
 
+If this is a response to an incoming session-chat message or dispatch, use
+`$session-chat:reply <pane> <incoming-id> <message>` instead so reply
+correlation cannot be omitted.
+
 Stage the prompt as data, never as shell source:
 
 1. Run `mktemp -d "${TMPDIR:-/tmp}/session-chat-dispatch.XXXXXX"` in a
@@ -29,7 +33,7 @@ Stage the prompt as data, never as shell source:
 3. Run:
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] "<target>" "<returned-directory>/prompt.md"
+   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target>" "<returned-directory>/prompt.md"
    ```
 
 4. Use `apply_patch` to delete the temporary prompt file, then remove its empty

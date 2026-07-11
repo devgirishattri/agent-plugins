@@ -20,5 +20,7 @@ argument-hint: "[--all] [--match GLOB] <message>"
 
 5. Present the per-target TSV results (`sent`/`queued`/`failed` per pane) as a short markdown table, then the summary line.
 6. If a target failed, suggest `$session-chat:pane-health <name>`.
-7. If there is an error about no name, suggest `$session-chat:whoami <name>`.
-8. If no panes matched, suggest `$session-chat:panes`.
+7. If a sandbox denied the tmux socket, relay that error and rerun the whole
+   script escalated/approved; do not reinterpret it as no name or no panes.
+8. If there is a genuine error about no name, suggest `$session-chat:whoami <name>`.
+9. If no panes matched after a successful query, suggest `$session-chat:panes`.

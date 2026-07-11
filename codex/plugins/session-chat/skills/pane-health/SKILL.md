@@ -20,6 +20,9 @@ bash "$PLUGIN_ROOT/scripts/pane-health.sh" [name] [--all]
 ```
 
 Present the tab-separated output as a table: Name, Pane, Status, Command, Location, Backlog, Send-Lock.
+If the script returns non-zero, relay its error rather than reporting an empty
+or healthy fleet. If it reports that a sandbox denied the tmux socket, rerun
+the whole script escalated/approved.
 Flag `Location` when a worker is in an unexpected repo or worktree for the task it is about to receive.
 `DEAD` means the pane's process exited — sends to it will queue forever.
 `DUPLICATE` means two panes share a name — rename one with `$session-chat:whoami <name>` in that pane.

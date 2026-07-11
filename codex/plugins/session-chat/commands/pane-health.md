@@ -16,8 +16,11 @@ argument-hint: "[name] [--all]"
    ```
 
 4. Present the tab-separated output as a markdown table: | Name | Pane | Status | Command | Location | Backlog | Send-Lock |
-5. Flag a Location that does not match the intended repo/worktree before dispatch.
-6. `DEAD` means the pane's process exited — sends to it will queue forever; the user should restart it or remove the pane.
-7. `DUPLICATE` means two panes share a name; rename one with `$session-chat:whoami` in that pane.
-8. Backlog `ready/total` > 0 means messages are waiting for that pane's next turn; if it stays non-zero the pane may be stuck.
-9. `STALE(pid)` send-lock means a crashed sender left a lock behind; it is reclaimed automatically on the next send.
+5. If the script returns non-zero, relay its error. If a sandbox denied the tmux
+   socket, rerun the whole script escalated/approved rather than reporting an
+   empty or healthy fleet.
+6. Flag a Location that does not match the intended repo/worktree before dispatch.
+7. `DEAD` means the pane's process exited — sends to it will queue forever; the user should restart it or remove the pane.
+8. `DUPLICATE` means two panes share a name; rename one with `$session-chat:whoami` in that pane.
+9. Backlog `ready/total` > 0 means messages are waiting for that pane's next turn; if it stays non-zero the pane may be stuck.
+10. `STALE(pid)` send-lock means a crashed sender left a lock behind; it is reclaimed automatically on the next send.

@@ -19,3 +19,4 @@ Do not narrate or add a preamble. Run the script directly and report only the re
 4. If a target failed, suggest `/pane-health <name>` to diagnose it
 5. If the error is about no name, tell the user to run `/whoami <name>` first
 6. If no panes matched, run `/panes` to show what is available
+7. If the error mentions the tmux socket was denied (`Operation not permitted`), do NOT treat it as "no panes" or "no name" — surface the error verbatim, including its escalated/approved retry hint, so the user re-runs the broadcast with the exec approved rather than assuming there were no targets

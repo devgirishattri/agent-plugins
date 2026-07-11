@@ -23,7 +23,10 @@ argument-hint: "[all]"
    ```
 
 Rules:
-- If no panes are listed, tell the user no named panes were found.
+- If the script returns non-zero, relay its error; never interpret blank output
+  as an empty pane list. If a sandbox denied the tmux socket, rerun the whole
+  script escalated/approved.
+- Only a successful empty result means no named panes were found.
 - Suggest `$session-chat:whoami <name>` to name the current pane.
 - Suggest `$session-chat:send <name> <message>` to message a pane.
 - Mention `$session-chat:panes all` only when the user needs every tmux session.

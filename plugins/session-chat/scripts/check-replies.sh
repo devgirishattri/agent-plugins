@@ -4,7 +4,7 @@
 # <id> is a message id this pane previously sent (/send and /dispatch print
 # the id; recipients are asked to include [re:<id>] in their acks).
 # Usage: check-replies.sh [--pending] [--since MINUTES]
-#   --pending        only show sent messages still awaiting a reply
+#   --pending        only show sent messages still unconfirmed (no reply token correlated)
 #   --since MINUTES  look-back window for sent messages (default 1440 = 24h)
 # Output: TSV rows  <id> <to> <type> <delivery> <age> <reply> <excerpt>
 set -uo pipefail
@@ -67,7 +67,7 @@ while IFS=$'\t' read -r ts id _ to type delivery excerpt; do
     [ "$PENDING_ONLY" = "1" ] && continue
     reply="replied:${reply_from}"
   else
-    reply="awaiting"
+    reply="unconfirmed"
     PENDING=$((PENDING + 1))
   fi
   if [ "$HEADER_PRINTED" = "0" ]; then
@@ -86,6 +86,6 @@ if [ "$ROWS" -eq 0 ]; then
   fi
 else
   echo "—"
-  echo "${ROWS} message(s) shown, ${PENDING} awaiting a reply. Replies are matched by [re:<id>] tokens in incoming messages."
+  echo "${ROWS} message(s) shown, ${PENDING} unconfirmed. 'unconfirmed' means no [re:<id>] reply token has been correlated back yet — this tracks reply CORRELATION, not the recipient's task progress or liveness (use /pane-health for that)."
 fi
 exit 0

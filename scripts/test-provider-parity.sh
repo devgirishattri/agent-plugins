@@ -352,4 +352,43 @@ for provider in claude codex; do
   [ ! -e "$orphan_history" ] || fail "$provider context left orphan-only history behind"
 done
 
-echo "cross-provider scheduler and context parity tests passed"
+# Reply correlation is transport-owned on both providers: valid ids receive one
+# leading marker, repeated exact markers normalize to one, and conflicting or
+# malformed ids fail closed instead of falsely resolving another message.
+for provider in claude codex; do
+  if [ "$provider" = "claude" ]; then
+    chat_lib="$ROOT/plugins/session-chat/scripts/lib.sh"
+    reply_fn="apply_reply_to"
+  else
+    chat_lib="$ROOT/codex/plugins/session-chat/scripts/lib.sh"
+    reply_fn="correlate_reply"
+  fi
+
+  reply_out=$(bash -c 'source "$1"; "$2" "$3" "$4"' _ \
+    "$chat_lib" "$reply_fn" deadbeef "reply body") \
+    || fail "$provider reply helper rejected a valid id"
+  [ "$reply_out" = "[re:deadbeef] reply body" ] \
+    || fail "$provider reply helper produced the wrong marker: $reply_out"
+
+  reply_out=$(bash -c 'source "$1"; "$2" "$3" "$4"' _ \
+    "$chat_lib" "$reply_fn" deadbeef "[re:deadbeef] [re:deadbeef] reply once") \
+    || fail "$provider reply helper rejected repeated exact markers"
+  [ "$reply_out" = "[re:deadbeef] reply once" ] \
+    || fail "$provider reply helper did not normalize exactly once: $reply_out"
+
+  if bash -c 'source "$1"; "$2" "$3" "$4"' _ \
+    "$chat_lib" "$reply_fn" deadbeef "[re:cafebabe] conflict" \
+    > "$TMP/${provider}-reply-conflict.out" 2>&1; then
+    fail "$provider reply helper accepted a conflicting marker"
+  fi
+  grep -F "conflicting correlation token" "$TMP/${provider}-reply-conflict.out" >/dev/null \
+    || fail "$provider reply helper did not explain the conflicting marker"
+
+  if bash -c 'source "$1"; "$2" "$3" "$4"' _ \
+    "$chat_lib" "$reply_fn" NOT_HEX "invalid" \
+    > "$TMP/${provider}-reply-invalid.out" 2>&1; then
+    fail "$provider reply helper accepted a malformed id"
+  fi
+done
+
+echo "cross-provider scheduler, context, and reply-correlation parity tests passed"

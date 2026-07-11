@@ -67,7 +67,7 @@ If a recipient pane sits at an idle prompt (no turn in progress, no prompt comin
 
 ## Reply correlation
 
-Every `/send` and `/dispatch` has a unique `id:HEX8`. When you reply to a message, include the token `[re:<that id>]` in your `/send` — the original sender's `/check-replies` matches replies to sent messages by that token. When you ask a peer a question and expect an answer, tell it to include `[re:<id>]`; then poll `/check-replies --pending` instead of re-pinging panes that already answered.
+Every `/send` and `/dispatch` has a unique `id:HEX8`. To reply, use **`/reply <pane> <message-id> <message>`** — it prepends the `[re:<id>]` correlation token for you (exactly once) and auto-picks `/send` for a short reply or `/dispatch` for a long/multiline one, so the original sender's `/check-replies` matches it. Do **not** hand-type `[re:<id>]` tokens; pass the `id:<hex>` from the message you're answering and let `/reply` add it. (The raw transports also accept `--reply-to <id>` if you script them directly.) When you ask a peer a question and expect an answer, tell it to `/reply` with your message id; then poll `/check-replies --pending` instead of re-pinging panes that already answered.
 
 ## Priorities and TTL
 
@@ -103,7 +103,8 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 ## Helper commands
 
 - `/broadcast [--all] [--match GLOB] <text>` — fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `/send` per pane.
-- `/check-replies [--pending] [--since MIN]` — which sent messages have been answered (via `[re:<id>]` tokens) and which are still awaiting a reply.
+- `/reply <pane> <message-id> <message>` — reply to a received message, auto-correlated: prepends the `[re:<id>]` token and picks `/send` (short) or `/dispatch` (long/multiline) for you. Use this instead of hand-typing `[re:<id>]`.
+- `/check-replies [--pending] [--since MIN]` — which sent messages have a correlated reply (via `[re:<id>]` tokens) and which are still `unconfirmed`. This reflects reply **correlation only**, not the recipient's task progress or liveness — an `unconfirmed` row does not mean the pane is stuck; use `/pane-health` to check liveness.
 - `/pane-health [name] [--all]` — liveness, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them.
 - `/message-search <pattern> [--days N] [--peer NAME]` — search the message archive (every sent + surfaced incoming message, 200-char excerpts, 30-day retention via `SESSION_CHAT_ARCHIVE_RETENTION_DAYS`) plus full dispatch bodies.
 - `/incoming-mode` — show or set `SESSION_CHAT_INCOMING_MODE` (prints an `export` line to `eval`).

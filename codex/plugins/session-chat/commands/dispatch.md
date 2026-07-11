@@ -7,6 +7,8 @@ argument-hint: <session-name> <prompt>
 
 1. Parse `$ARGUMENTS`: optional `--priority high` and `--ttl <minutes>` come first; then the target session name; everything after is the prompt.
 2. If either value is missing, tell the user: `Usage: $session-chat:dispatch <session-name> <task prompt>`.
+   If this is a response to an incoming message, use `$session-chat:reply`
+   instead so the transport records its message id automatically.
 3. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
    command reference. Do not infer it from cwd or hardcode a cache version.
 
@@ -20,7 +22,7 @@ argument-hint: <session-name> <prompt>
    - Run:
 
      ```bash
-     bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] "<target>" "<returned-directory>/prompt.md"
+     bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target>" "<returned-directory>/prompt.md"
      ```
 
    - Delete the prompt with `apply_patch` and remove the empty temp directory.

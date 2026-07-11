@@ -57,16 +57,41 @@ fi
 ensure_tmux
 
 MY_NAME=$(get_my_name)
+MY_NAME_ERR=$(pop_pane_name_err)
 if [ -z "$MY_NAME" ]; then
-  echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
+  # Distinguish a genuinely-unnamed pane from a sandbox denial of the self-name
+  # query: the former is a user error (run /whoami), the latter is an escalation
+  # problem. Misreporting a denial as "no name" sends the user down the wrong path.
+  if [ -n "$MY_NAME_ERR" ]; then
+    echo "ERROR: could not resolve this pane's name.$(pane_name_err_detail "$MY_NAME_ERR")" >&2
+  else
+    echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
+  fi
   exit 1
 fi
 
 if [ "$SCOPE" = "all" ]; then
   LIST_ARGS=(-a)
 else
-  CURRENT_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
+  # Resolve the current session with stderr preserved: a sandbox denial here
+  # yields an empty session name and is the ROOT failure, to be classified at
+  # its source rather than only inferred from the follow-on list-panes probe.
+  if ! tmux_capture_checked broadcast-session CURRENT_SESSION TMUX_ERR \
+      display-message -p -t "${TMUX_PANE:-}" '#{session_name}'; then
+    echo "ERROR: could not resolve the current tmux session.$(tmux_err_detail "$TMUX_ERR")" >&2
+    exit 1
+  fi
   LIST_ARGS=(-s -t "$CURRENT_SESSION")
+fi
+
+# Enumerate panes with stderr preserved and fail-checked: a sandbox denial
+# returns no rows, and without this we would report "No named panes matched" (a
+# benign, misleading message) instead of the real denial. Feed the loop from a
+# variable via heredoc so it runs in this shell and the TARGETS array survives.
+if ! tmux_capture_checked broadcast-enum PANE_LINES TMUX_ERR \
+    list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}'; then
+  echo "ERROR: could not list tmux panes.$(tmux_err_detail "$TMUX_ERR")" >&2
+  exit 1
 fi
 
 # Collect unique target names: named panes only, never self (by pane id or by
@@ -85,7 +110,9 @@ while IFS=$'\t' read -r name pane_id; do
   case " $SEEN " in *" $name "*) continue ;; esac
   SEEN="$SEEN $name"
   TARGETS+=("$name")
-done < <(tmux list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}' 2>/dev/null)
+done <<EOF_PANES
+$PANE_LINES
+EOF_PANES
 
 if [ "${#TARGETS[@]}" -eq 0 ]; then
   echo "No named panes matched (scope: ${SCOPE}, pattern: ${PATTERN}). Run /panes to see targets." >&2

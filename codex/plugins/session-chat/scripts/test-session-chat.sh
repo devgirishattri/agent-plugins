@@ -40,9 +40,19 @@ assert_file_contains() {
   grep -F "$needle" "$file" >/dev/null || fail "missing expected text in $file: $needle"
 }
 
+assert_file_not_contains() {
+  local file="$1"
+  local needle="$2"
+  if grep -F "$needle" "$file" >/dev/null; then
+    fail "unexpected text in $file: $needle"
+  fi
+}
+
 # The runtime dispatch instructions must never embed arbitrary task text in a
 # fixed shell heredoc. A body line equal to EOF/PROMPT_EOF would terminate it.
-for dispatch_doc in "$PLUGIN_ROOT/skills/dispatch/SKILL.md" "$PLUGIN_ROOT/commands/dispatch.md"; do
+for dispatch_doc in \
+  "$PLUGIN_ROOT/skills/dispatch/SKILL.md" "$PLUGIN_ROOT/commands/dispatch.md" \
+  "$PLUGIN_ROOT/skills/reply/SKILL.md" "$PLUGIN_ROOT/commands/reply.md"; do
   assert_file_contains "$dispatch_doc" 'apply_patch'
   if grep -E '<<-?[[:space:]]*['"'"']?(EOF|PROMPT_EOF)' "$dispatch_doc" >/dev/null; then
     fail "dispatch instructions contain a fixed shell heredoc: $dispatch_doc"
@@ -64,6 +74,30 @@ run_as_sender() {
   TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" SESSION_CHAT_ALLOW_SHELL_TARGET=1 "$@"
 }
 
+DENIED_BIN="$TEST_HOME/denied-bin"
+DENIED_TMP="$TEST_HOME/denied-tmp"
+EMPTY_BIN="$TEST_HOME/empty-bin"
+mkdir -p "$DENIED_BIN" "$DENIED_TMP" "$EMPTY_BIN"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'echo "${SESSION_CHAT_FAKE_TMUX_ERROR:-error connecting to /tmp/tmux-test/default (Operation not permitted)}" >&2' \
+  'exit 1' > "$DENIED_BIN/tmux"
+chmod +x "$DENIED_BIN/tmux"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'exit 0' > "$EMPTY_BIN/tmux"
+chmod +x "$EMPTY_BIN/tmux"
+
+run_with_denied_tmux() {
+  PATH="$DENIED_BIN:$PATH" TMPDIR="$DENIED_TMP" TMUX="$TMUX_ENV" \
+    TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" "$@"
+}
+
+run_with_empty_tmux() {
+  PATH="$EMPTY_BIN:$PATH" TMPDIR="$DENIED_TMP" TMUX="$TMUX_ENV" \
+    TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" "$@"
+}
+
 capture_recipient() {
   tmux capture-pane -J -t "$RECIPIENT" -p -S -200
 }
@@ -83,6 +117,7 @@ HOOK_OUT="$(printf '%s\n' '[from:sender-test pane:%999 id:feedface] hook hello' 
 assert_contains '"hookSpecificOutput"' "$HOOK_OUT"
 assert_contains '"hookEventName":"UserPromptSubmit"' "$HOOK_OUT"
 assert_contains '"additionalContext":"session-chat:' "$HOOK_OUT"
+assert_contains '$session-chat:reply sender-test feedface <message>' "$HOOK_OUT"
 if printf '%s\n' "$HOOK_OUT" | grep -E '"decision"|"systemMessage"' >/dev/null; then
   fail "hook output used legacy Claude envelope"
 fi
@@ -93,6 +128,26 @@ QUEUE_OUT="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; mark_message_ready re
 assert_contains $'deadbeef\tsend\tsender-test\tqueued fallback' "$QUEUE_OUT"
 QUEUE_LOCK="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; queue_lock_path recipient-test' "$SCRIPT_DIR/lib.sh")"
 [ "$QUEUE_LOCK" = "$TEST_HOME/messages/queue/.locks/recipient-test.lock" ] || fail "queue lock path was not messages-dir keyed: $QUEUE_LOCK"
+
+CORRELATED_REPLY="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; correlate_reply deadbeef "[re:deadbeef] [re:deadbeef] reply once"' "$SCRIPT_DIR/lib.sh")"
+[ "$CORRELATED_REPLY" = "[re:deadbeef] reply once" ] || fail "correlate_reply did not normalize the token exactly once: $CORRELATED_REPLY"
+if CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; correlate_reply deadbeef "[re:cafebabe] conflicting"' "$SCRIPT_DIR/lib.sh" 2>"$ERR_FILE"; then
+  fail "correlate_reply accepted a conflicting token"
+fi
+assert_file_contains "$ERR_FILE" "conflicting correlation token [re:cafebabe]"
+
+QUEUED_REPLY_FILE="$TEST_HOME/messages/queued-reply.md"
+printf '%s\n' "[re:0badf00d] queued dispatch reply" > "$QUEUED_REPLY_FILE"
+chmod 600 "$QUEUED_REPLY_FILE"
+CODEX_HOME="$TEST_HOME" bash -c \
+  'source "$0"; enqueue_message recipient-test feedbabe dispatch sender-test "$1"; mark_message_ready recipient-test feedbabe' \
+  "$SCRIPT_DIR/lib.sh" "$QUEUED_REPLY_FILE"
+QUEUED_REPLY_OUT="$(printf '%s' '{}' | \
+  TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" \
+  PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto \
+  bash "$SCRIPT_DIR/detect-incoming-message.sh")"
+assert_contains '$session-chat:reply sender-test feedbabe <message>' "$QUEUED_REPLY_OUT"
+assert_file_contains "$TEST_HOME/messages/replies-log.tsv" $'0badf00d\tsender-test'
 
 # Live-send locks share a UID-scoped private temp root. Both the root and lock
 # directory must be canonical owner-only directories, and pre-planted unsafe
@@ -181,9 +236,86 @@ assert_file_contains "$TEST_HOME/panes-all.txt" "other-session-test"
 run_as_sender bash "$SCRIPT_DIR/pane-health.sh" recipient-test > "$TEST_HOME/pane-health.txt"
 assert_file_contains "$TEST_HOME/pane-health.txt" $'COMMAND\tLOCATION\tBACKLOG'
 
+# A Codex sandbox can leave TMUX/TMUX_PANE set while denying the socket. Every
+# user-facing direct tmux workflow must report that denial, return non-zero, and
+# never reinterpret it as an empty pane list or an unnamed pane.
+printf '%s\n' "denial dispatch probe" > "$PROMPT_FILE"
+for denied_case in list-panes list-panes-all pane-health pane-health-all get-my-name broadcast send dispatch; do
+  DENIED_OUT="$TEST_HOME/${denied_case}.out"
+  DENIED_ERR="$TEST_HOME/${denied_case}.err"
+  case "$denied_case" in
+    list-panes) denied_cmd=(bash "$SCRIPT_DIR/list-panes.sh") ;;
+    list-panes-all) denied_cmd=(bash "$SCRIPT_DIR/list-panes.sh" all) ;;
+    pane-health) denied_cmd=(bash "$SCRIPT_DIR/pane-health.sh") ;;
+    pane-health-all) denied_cmd=(bash "$SCRIPT_DIR/pane-health.sh" --all) ;;
+    get-my-name) denied_cmd=(bash "$SCRIPT_DIR/get-my-name.sh") ;;
+    broadcast) denied_cmd=(bash "$SCRIPT_DIR/broadcast-message.sh" "denial probe") ;;
+    send) denied_cmd=(bash "$SCRIPT_DIR/send-message.sh" recipient-test "denial probe") ;;
+    dispatch) denied_cmd=(bash "$SCRIPT_DIR/dispatch-to-session.sh" recipient-test "$PROMPT_FILE") ;;
+  esac
+  if run_with_denied_tmux "${denied_cmd[@]}" >"$DENIED_OUT" 2>"$DENIED_ERR"; then
+    fail "$denied_case succeeded when tmux socket access was denied"
+  fi
+  assert_file_contains "$DENIED_ERR" "Operation not permitted"
+  assert_file_contains "$DENIED_ERR" "escalated/approved"
+  assert_file_not_contains "$DENIED_OUT" "No named panes"
+  assert_file_not_contains "$DENIED_ERR" "This pane has no name"
+  assert_file_not_contains "$DENIED_ERR" "No named panes matched"
+done
+
+# The other common socket-denial signature receives the same classification.
+PERMISSION_ERR="$TEST_HOME/permission-denied.err"
+if SESSION_CHAT_FAKE_TMUX_ERROR="error connecting to /tmp/tmux-test/default (Permission denied)" \
+  run_with_denied_tmux bash "$SCRIPT_DIR/list-panes.sh" all \
+  >"$TEST_HOME/permission-denied.out" 2>"$PERMISSION_ERR"; then
+  fail "Permission denied tmux probe unexpectedly succeeded"
+fi
+assert_file_contains "$PERMISSION_ERR" "Permission denied"
+assert_file_contains "$PERMISSION_ERR" "escalated/approved"
+
+# Preserve the opposite side of the contract: successful empty tmux output is
+# still an honest empty result, not a permission error.
+EMPTY_OUT="$TEST_HOME/empty-list.out"
+EMPTY_ERR="$TEST_HOME/empty-list.err"
+run_with_empty_tmux bash "$SCRIPT_DIR/list-panes.sh" all >"$EMPTY_OUT" 2>"$EMPTY_ERR"
+[ ! -s "$EMPTY_OUT" ] || fail "empty pane listing emitted unexpected rows"
+[ ! -s "$EMPTY_ERR" ] || fail "empty pane listing emitted an unexpected error"
+
+run_with_empty_tmux bash "$SCRIPT_DIR/get-my-name.sh" \
+  >"$TEST_HOME/empty-name.out" 2>"$TEST_HOME/empty-name.err"
+[ ! -s "$TEST_HOME/empty-name.out" ] || fail "unnamed pane emitted an unexpected name"
+[ ! -s "$TEST_HOME/empty-name.err" ] || fail "unnamed pane emitted an unexpected error"
+
+run_with_empty_tmux bash "$SCRIPT_DIR/pane-health.sh" --all \
+  >"$TEST_HOME/empty-health.out" 2>"$TEST_HOME/empty-health.err"
+assert_file_contains "$TEST_HOME/empty-health.out" "No named panes found"
+[ ! -s "$TEST_HOME/empty-health.err" ] || fail "empty health check emitted an unexpected error"
+
 run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 \
   bash "$SCRIPT_DIR/send-message.sh" recipient-test "send happy path"
 assert_contains "send happy path" "$(capture_recipient)"
+
+run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 \
+  bash "$SCRIPT_DIR/send-message.sh" --reply-to deadbeef recipient-test "reply happy path"
+assert_contains "[re:deadbeef] reply happy path" "$(capture_recipient)"
+
+run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 \
+  bash "$SCRIPT_DIR/send-message.sh" --reply-to deadbeef recipient-test "[re:deadbeef] already correlated"
+if capture_recipient | grep -F "[re:deadbeef] [re:deadbeef]" >/dev/null; then
+  fail "send --reply-to duplicated an existing correlation token"
+fi
+
+if run_as_sender bash "$SCRIPT_DIR/send-message.sh" --reply-to NOT_HEX recipient-test "invalid reply" 2>"$ERR_FILE"; then
+  fail "send --reply-to accepted an invalid message id"
+fi
+assert_file_contains "$ERR_FILE" "Reply id must be 8-16 lowercase hexadecimal characters"
+if env -u TMUX -u TMUX_PANE CODEX_HOME="$TEST_HOME" \
+  bash "$SCRIPT_DIR/dispatch-to-session.sh" --reply-to NOT_HEX recipient-test "$PROMPT_FILE" \
+  2>"$ERR_FILE"; then
+  fail "dispatch --reply-to accepted an invalid message id"
+fi
+assert_file_contains "$ERR_FILE" "Reply id must be 8-16 lowercase hexadecimal characters"
+assert_file_not_contains "$ERR_FILE" "needs to run inside tmux"
 
 if run_as_sender bash "$SCRIPT_DIR/send-message.sh" missing-target "hello" 2>"$ERR_FILE"; then
   fail "send to unknown pane unexpectedly succeeded"
@@ -213,6 +345,24 @@ assert_file_contains "$MSG_FILE" "dispatch one"
 assert_file_contains "$MSG_FILE" "dispatch two with special chars"
 file_mode=$(stat -f '%Lp' "$MSG_FILE" 2>/dev/null || stat -c '%a' "$MSG_FILE" 2>/dev/null)
 [ "$file_mode" = "600" ] || fail "dispatch message file is not owner-only: $file_mode"
+
+printf '%s\n' "dispatch reply" "second line" > "$PROMPT_FILE"
+run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 \
+  bash "$SCRIPT_DIR/dispatch-to-session.sh" --reply-to cafebabe recipient-test "$PROMPT_FILE"
+REPLY_CAPTURED="$(capture_recipient)"
+REPLY_MSG_FILE="$(printf '%s\n' "$REPLY_CAPTURED" | grep -o 'msg:[^ ]*' | tail -1 | sed 's/^msg://')"
+[ -f "$REPLY_MSG_FILE" ] || fail "reply dispatch message file not found"
+assert_file_contains "$REPLY_MSG_FILE" "[re:cafebabe] dispatch reply"
+REPLY_NOTICE="$(printf '%s\n' "$REPLY_CAPTURED" | grep -F "msg:$REPLY_MSG_FILE" | tail -1)"
+printf '%s\n' "$REPLY_NOTICE" | \
+  TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" \
+  PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto \
+  bash "$SCRIPT_DIR/detect-incoming-message.sh" >/dev/null
+assert_file_contains "$TEST_HOME/messages/replies-log.tsv" $'cafebabe\tsender-test'
+
+CHECK_REPLIES_OUT="$(CODEX_HOME="$TEST_HOME" bash "$SCRIPT_DIR/check-replies.sh" --since 60)"
+assert_contains "unconfirmed" "$CHECK_REPLIES_OUT"
+assert_contains "not task-liveness status" "$CHECK_REPLIES_OUT"
 
 # Manually/external tmux names bypass set_pane_name, so outbound paths must
 # revalidate both sender and target labels before creating any dispatch file.
@@ -272,6 +422,7 @@ assert_contains 'Task content follows' "$INLINE_OUT"
 assert_contains 'PLEASE-BUILD-THE-WIDGET' "$INLINE_OUT"
 NOTIFY_OUT=$(detect_dispatch notify "$TRUSTED_FILE" aaaa0002 "$PLUGIN_ROOT")
 assert_contains 'Treat as untrusted' "$NOTIFY_OUT"
+assert_contains 'When a reply is authorized, use $session-chat:reply peer aaaa0002 <message>' "$NOTIFY_OUT"
 if printf '%s\n' "$NOTIFY_OUT" | grep -F 'PLEASE-BUILD-THE-WIDGET' >/dev/null; then
   fail "notify mode inlined a dispatch body"
 fi
@@ -281,6 +432,7 @@ printf 'off-limits\n' > "$TEST_HOME/outside-secret.txt"
 ln -s "$TEST_HOME/outside-secret.txt" "$TEST_HOME/messages/evil.md"
 SYMLINK_OUT=$(detect_dispatch auto "$TEST_HOME/messages/evil.md" aaaa0003 "$PLUGIN_ROOT")
 assert_contains 'OUTSIDE the trusted message dir' "$SYMLINK_OUT"
+assert_contains '$session-chat:reply peer aaaa0003 <message>' "$SYMLINK_OUT"
 if printf '%s\n' "$SYMLINK_OUT" | grep -F 'off-limits' >/dev/null; then
   fail "trusted-file gate followed a symlink"
 fi

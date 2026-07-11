@@ -23,5 +23,9 @@ If the user provided a new name, validate that it only contains letters, numbers
 bash -lc 'source "$0/scripts/lib.sh" && set_pane_name "$TMUX_PANE" "$1"' "$PLUGIN_ROOT" "<name>"
 ```
 
-If this is not running inside tmux, explain that pane naming requires tmux and suggest starting one with `tmux new -s <name>`.
+If the script returns non-zero, relay its error and do not interpret blank
+output as an unnamed pane. If it reports that a sandbox denied the tmux socket,
+rerun the whole script escalated/approved. If this is not running inside tmux,
+explain that pane naming requires tmux and suggest starting one with
+`tmux new -s <name>`.
 If a current name is shown and no new name was provided, report that name and explain that other sessions can message it. If no name is set and no new name was provided, suggest `$session-chat:whoami <name>`.

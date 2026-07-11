@@ -11,7 +11,9 @@ SCOPE="${1:-current}"
 
 case "$SCOPE" in
   current|"")
-    CURRENT_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
+    CURRENT_SESSION=$(tmux_capture_checked list-panes-session \
+      "Cannot determine the current tmux session" \
+      display-message -p -t "${TMUX_PANE:-}" '#{session_name}') || exit $?
     # -s targets a whole session (all its windows). Without -s, -t is treated as
     # a window spec and only the session's active window would be listed.
     TARGET_ARGS=(-s -t "$CURRENT_SESSION")
@@ -29,13 +31,17 @@ case "$SCOPE" in
     ;;
 esac
 
-# List panes with @name set.
-# tmux does not expand "\t" in format strings, so use a delimiter that pane names
-# created by this plugin cannot contain and print real TSV output below.
-tmux list-panes "${TARGET_ARGS[@]}" -F '#{@name}|#{pane_id}|#{pane_current_command}|#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null | \
-  while IFS='|' read -r name pane_id cmd location; do
-    # Skip panes without a name
-    if [ -n "$name" ]; then
-      printf '%s\t%s\t%s\t%s\n' "$name" "$pane_id" "$cmd" "$location"
-    fi
-  done
+# List panes with @name set. Capture before formatting so a tmux failure cannot
+# collapse into a legitimate empty pane list.
+PANE_ROWS=$(tmux_capture_checked list-panes-rows "Cannot list tmux panes" \
+  list-panes "${TARGET_ARGS[@]}" \
+  -F '#{@name}|#{pane_id}|#{pane_current_command}|#{session_name}:#{window_index}.#{pane_index}') || exit $?
+
+# tmux does not expand "\t" in format strings, so use a delimiter that pane
+# names created by this plugin cannot contain and print real TSV output below.
+while IFS='|' read -r name pane_id cmd location; do
+  [ -n "$name" ] || continue
+  printf '%s\t%s\t%s\t%s\n' "$name" "$pane_id" "$cmd" "$location"
+done <<EOF_ROWS
+$PANE_ROWS
+EOF_ROWS

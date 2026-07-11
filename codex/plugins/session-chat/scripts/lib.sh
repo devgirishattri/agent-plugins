@@ -36,6 +36,36 @@ validate_label() {
   fi
 }
 
+validate_reply_id() {
+  local reply_id="$1"
+  if ! [[ "$reply_id" =~ ^[a-f0-9]{8,16}$ ]]; then
+    echo "ERROR: Reply id must be 8-16 lowercase hexadecimal characters." >&2
+    return 1
+  fi
+}
+
+correlate_reply() {
+  # correlate_reply <reply-id> <message> — transport-owned correlation. Keep an
+  # already-present exact token, otherwise prepend it once. Callers must never
+  # ask an agent to compose this protocol marker by hand.
+  local reply_id="$1" message="$2" token conflicting cleaned
+  validate_reply_id "$reply_id" || return 1
+  token="[re:${reply_id}]"
+  conflicting=$(printf '%s' "$message" \
+    | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null \
+    | grep -Fvx "$token" | head -1 || true)
+  if [ -n "$conflicting" ]; then
+    echo "ERROR: Reply contains conflicting correlation token $conflicting; use --reply-to $reply_id only." >&2
+    return 1
+  fi
+  cleaned=$(printf '%s' "$message" | sed "s/\\[re:${reply_id}\\][[:space:]]*//g")
+  if [ -n "$cleaned" ]; then
+    printf '%s %s' "$token" "$cleaned"
+  else
+    printf '%s' "$token"
+  fi
+}
+
 # Coerce free-form text (session titles, prompts) into a valid pane label:
 # whitespace runs become single hyphens, every other invalid char is dropped,
 # repeated/edge hyphens collapse, length capped at 48. Empty output means the
@@ -232,25 +262,68 @@ pop_pane_name_err() {
   _pop_tmux_err get-pane-name
 }
 
-# Format the "(tmux: ...)" suffix for a tmux-command error, given the stderr
-# _pop_tmux_err returned. "Operation not permitted" is the signature of a
-# sandboxed exec (e.g. a Codex sandbox profile) denying the tmux socket
-# connect() outright — confirmed live 2026-07-09 (REPRO-0162, self-name query;
-# and again via fresh-session data hitting resolve_pane instead): the exact
-# same command succeeds on a later, differently-
-# classified invocation, so this is not a fixable state within the current
-# process — the caller needs to re-run the whole command escalated/approved,
-# not just retry the tmux call.
-pane_name_err_detail() {
+# Format the "(tmux: ...)" suffix for a tmux-command error. Permission errors
+# are the signature of a sandboxed exec denying the tmux socket outright. This
+# is not fixable inside the current process: the caller must rerun the whole
+# command escalated/approved, not merely retry one tmux call.
+tmux_err_detail() {
   local tmux_err="$1"
+  local allow_name_override="${2:-}"
   [ -n "$tmux_err" ] || return 0
   local hint=""
   case "$tmux_err" in
-    *"Operation not permitted"*)
-      hint=" — looks like a sandboxed exec denied the tmux socket; re-run this command escalated/approved, or set SESSION_CHAT_PANE_NAME to skip self-name resolution"
+    *"Operation not permitted"*|*"Permission denied"*)
+      hint=" — looks like a sandboxed exec denied the tmux socket; re-run this command escalated/approved"
+      if [ "$allow_name_override" = "allow-name-override" ]; then
+        hint="$hint, or set SESSION_CHAT_PANE_NAME to skip self-name resolution"
+      fi
       ;;
   esac
   printf ' (tmux: %s)%s' "$tmux_err" "$hint"
+}
+
+pane_name_err_detail() {
+  tmux_err_detail "$1" allow-name-override
+}
+
+report_current_pane_name_failure() {
+  local tmux_err="$1"
+  if [ -n "$tmux_err" ]; then
+    echo "ERROR: Cannot read the current tmux pane name$(pane_name_err_detail "$tmux_err")" >&2
+  else
+    echo "ERROR: This pane has no name. Run \$session-chat:whoami <name> first." >&2
+  fi
+}
+
+# Run a tmux command whose stdout is data consumed by a user-facing script.
+# On failure, preserve stderr, print one actionable error, and return non-zero.
+# Legitimate empty stdout remains a successful empty result.
+tmux_capture_checked() {
+  local tag="$1"
+  local action="$2"
+  shift 2
+
+  local err_file output rc tmux_err
+  if err_file="$(_tmux_err_file "$tag")"; then
+    output=$(tmux "$@" 2>"$err_file")
+    rc=$?
+    tmux_err=$(_pop_tmux_err "$tag")
+  else
+    output=$(tmux "$@" 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      tmux_err="$output"
+      output=""
+    else
+      tmux_err=""
+    fi
+  fi
+
+  if [ "$rc" -ne 0 ]; then
+    echo "ERROR: ${action}$(tmux_err_detail "$tmux_err")" >&2
+    return "$rc"
+  fi
+  printf '%s' "$output"
 }
 
 # --- Pane resolution (searches ALL tmux sessions) ---
@@ -279,7 +352,11 @@ resolve_pane() {
     # cause when we have one instead of always implying the target is
     # unregistered — confirmed live 2026-07-09 in fresh Codex sessions: this
     # was the actual, and only, failure point in 4/4 attempts.
-    echo "ERROR: No pane named '$label'. Run \$session-chat:panes all to see all available named panes.$(pane_name_err_detail "$tmux_err")" >&2
+    if [ -n "$tmux_err" ]; then
+      echo "ERROR: Cannot resolve tmux pane '$label'$(tmux_err_detail "$tmux_err")" >&2
+    else
+      echo "ERROR: No pane named '$label'. Run \$session-chat:panes all to see all available named panes." >&2
+    fi
     return 1
   fi
   if [ "$count" -gt 1 ]; then
@@ -1149,7 +1226,7 @@ send_message() {
   my_name=$(get_my_name)
   tmux_err=$(pop_pane_name_err)
   if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run \$session-chat:whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
+    report_current_pane_name_failure "$tmux_err"
     return 1
   fi
   if ! validate_label "$my_name"; then
@@ -1194,7 +1271,7 @@ dispatch_message() {
   my_name=$(get_my_name)
   tmux_err=$(pop_pane_name_err)
   if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run \$session-chat:whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
+    report_current_pane_name_failure "$tmux_err"
     return 1
   fi
   if ! validate_label "$my_name"; then

@@ -15,6 +15,7 @@ Use this skill when the user asks how session-chat works, which command to use, 
 | Multi-line task, code, logs, or detailed report | `$session-chat:dispatch <pane> <task>` | Writes the full prompt to a trusted message file and sends a notification. |
 | Work that should be tracked and resumed from a file | `$session-chat:dispatch <pane> <task>` | Receiver sees the file path, line count, and message id. |
 | Unsure whether content might contain newlines or shell-sensitive text | `$session-chat:dispatch <pane> <task>` | Avoids send payload limits and inline quoting ambiguity. |
+| Reply or acknowledgement to an incoming message | `$session-chat:reply <pane> <id> <message>` | Transport adds `[re:<id>]` exactly once; do not type the token manually. |
 
 ## Recipient Prerequisites
 
@@ -67,6 +68,10 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
 
 ## Common Failures
 
+- `Operation not permitted` or `Permission denied` while accessing tmux: the
+  sandbox blocked the tmux socket. This is not an empty pane list, an unnamed
+  pane, or a missing target. Relay the error and rerun the entire plugin script
+  escalated/approved; retrying only one inner `tmux` command is insufficient.
 - `did not land within Xms after N attempts`: target was busy through all retries. The message is **not lost** — it's in the recipient's durable inbox (`~/.codex/messages/queue/<name>.tsv` for Codex, `~/.claude/messages/queue/<name>.tsv` for Claude) and surfaces on the recipient's next prompt (`UserPromptSubmit` hook) or as soon as it finishes its current turn (`Stop` hook blocks the stop with the queued messages as feedback). To land more sends live, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
 - `timed out waiting for send lock`: rare now that the unset lock timeout auto-sizes to the send budget and resets on holder change. If `SESSION_CHAT_LOCK_TIMEOUT_MS` is set, that value is treated as an absolute cap.
 - `pane 'X' is at a shell prompt`: the recipient's agent exited; the message would have been executed by their shell. Restart the agent in that pane (set `SESSION_CHAT_ALLOW_SHELL_TARGET=1` only for deliberate shell targets, e.g. tests).
@@ -91,7 +96,7 @@ Use `$session-chat:messages-list` to inspect trusted dispatch message files in `
 
 - `$session-chat:broadcast [--all] [--match GLOB] <text>`: fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `$session-chat:send` per pane.
 - `$session-chat:message-search <pattern> [--days N] [--peer NAME]`: search the message archive (every sent + surfaced incoming message, 200-char excerpts, 30-day retention) plus full dispatch bodies.
-- `$session-chat:check-replies [--pending] [--since MIN]`: which sent messages have been answered and which still await a reply. Replies are matched by `[re:<id>]` tokens — when you reply to a message, include `[re:<its id>]` in your `$session-chat:send`; when you expect an answer, ask the peer to do the same.
+- `$session-chat:check-replies [--pending] [--since MIN]`: which sent messages have confirmed correlated replies. Use `$session-chat:reply <pane> <id> <message>` for responses; it generates `[re:<id>]` automatically. An unconfirmed row is not evidence that the peer still has an active task.
 - `$session-chat:pane-health [name] [--all]`: liveness, cwd/location, inbox backlog, and lock state per named pane; catches dead, duplicate, or repo-drifted workers before dispatch.
 
 ## Reinstalling Source Changes

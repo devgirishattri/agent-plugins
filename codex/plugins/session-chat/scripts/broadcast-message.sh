@@ -57,20 +57,25 @@ fi
 ensure_tmux
 
 MY_NAME=$(get_my_name)
+TMUX_ERR=$(pop_pane_name_err)
 if [ -z "$MY_NAME" ]; then
-  echo "ERROR: This pane has no name. Run \$session-chat:whoami <name> first." >&2
+  report_current_pane_name_failure "$TMUX_ERR"
   exit 1
 fi
 
 if [ "$SCOPE" = "all" ]; then
   LIST_ARGS=(-a)
 else
-  CURRENT_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
+  CURRENT_SESSION=$(tmux_capture_checked broadcast-session \
+    "Cannot determine the current tmux session" \
+    display-message -p -t "${TMUX_PANE:-}" '#{session_name}') || exit $?
   LIST_ARGS=(-s -t "$CURRENT_SESSION")
 fi
 
 # Collect unique target names: named panes only, never self (by pane id or by
 # name — a broadcast that loops back to its sender is always a bug).
+PANE_ROWS=$(tmux_capture_checked broadcast-rows "Cannot list broadcast targets" \
+  list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}') || exit $?
 TARGETS=()
 SEEN=""
 while IFS=$'\t' read -r name pane_id; do
@@ -85,7 +90,9 @@ while IFS=$'\t' read -r name pane_id; do
   case " $SEEN " in *" $name "*) continue ;; esac
   SEEN="$SEEN $name"
   TARGETS+=("$name")
-done < <(tmux list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}' 2>/dev/null)
+done <<EOF_ROWS
+$PANE_ROWS
+EOF_ROWS
 
 if [ "${#TARGETS[@]}" -eq 0 ]; then
   echo "No named panes matched (scope: ${SCOPE}, pattern: ${PATTERN}). Run \$session-chat:panes to see targets." >&2

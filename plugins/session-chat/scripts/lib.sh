@@ -184,6 +184,47 @@ _pop_tmux_err() {
   rm -f "$err_file" 2>/dev/null
 }
 
+# Run a user-facing tmux command with its stderr preserved and its result
+# fail-checked, so a sandbox denial can never masquerade as a valid empty
+# result. No user-facing tmux call may drop its stderr with 2>/dev/null.
+#
+#   tmux_capture_checked <tag> <stdout_var> <err_var> <tmux-args...>
+#
+# On success (exit 0 AND clean stderr): <stdout_var>=stdout, <err_var>="", rc 0.
+# On failure (nonzero exit OR anything on stderr): <stdout_var>="" (the data
+# output is CLEARED so callers cannot accidentally treat a denial as empty
+# data), <err_var>=the captured stderr, rc 1. Callers classify <err_var> with
+# tmux_err_detail / pane_name_err_detail and surface it.
+#
+# Primary path routes stderr to a private per-tag file. If that private scratch
+# dir is unavailable, the fallback still captures stderr via 2>&1 (folded into
+# the stream, then split back out on failure) rather than discarding it.
+tmux_capture_checked() {
+  local tag="$1" stdout_var="$2" err_var="$3"
+  shift 3
+  local out err_file rc err=""
+  if err_file="$(_tmux_err_file "$tag")"; then
+    out=$(tmux "$@" 2>"$err_file")
+    rc=$?
+    err=$(_pop_tmux_err "$tag")
+  else
+    out=$(tmux "$@" 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      err="$out"
+      out=""
+    fi
+  fi
+  if [ "$rc" -ne 0 ] || [ -n "$err" ]; then
+    printf -v "$stdout_var" '%s' ""
+    printf -v "$err_var" '%s' "$err"
+    return 1
+  fi
+  printf -v "$stdout_var" '%s' "$out"
+  printf -v "$err_var" '%s' ""
+  return 0
+}
+
 get_pane_name() {
   local pane_id="$1" err_file
   if err_file="$(_tmux_err_file get-pane-name)"; then
@@ -223,8 +264,28 @@ pane_name_err_detail() {
   [ -n "$tmux_err" ] || return 0
   local hint=""
   case "$tmux_err" in
-    *"Operation not permitted"*)
+    *"Operation not permitted"*|*"Permission denied"*)
       hint=" — looks like a sandboxed exec denied the tmux socket; re-run this command escalated/approved, or set SESSION_CHAT_PANE_NAME to skip self-name resolution"
+      ;;
+  esac
+  printf ' (tmux: %s)%s' "$tmux_err" "$hint"
+}
+
+# General-purpose sibling of pane_name_err_detail for callers that ENUMERATE
+# panes (list-panes, pane-health, broadcast) or resolve the current session,
+# rather than resolve one pane by name. Same socket-denial classification
+# ("Operation not permitted" or "Permission denied"), minus the self-name
+# SESSION_CHAT_PANE_NAME escape hatch — that hint is meaningless when you are
+# listing every pane rather than resolving your own. Callers use this to turn a
+# silently-empty tmux result under sandbox denial into a loud, actionable error
+# instead of falsely reporting "no named panes".
+tmux_err_detail() {
+  local tmux_err="$1"
+  [ -n "$tmux_err" ] || return 0
+  local hint=""
+  case "$tmux_err" in
+    *"Operation not permitted"*|*"Permission denied"*)
+      hint=" — looks like a sandboxed exec denied the tmux socket; re-run this command escalated/approved"
       ;;
   esac
   printf ' (tmux: %s)%s' "$tmux_err" "$hint"
@@ -867,6 +928,39 @@ log_sent_message() {
   archive_message "out" "$to" "$type" "$id" "$6"
 }
 
+# Validate a reply-to message id and return the message carrying a single
+# leading [re:ID] correlation token. The id charset (8-16 lowercase hex) is
+# exactly what log_reply_ids correlates, so a token this produces is always
+# matchable. Idempotent: if the message already contains the exact [re:ID]
+# token, it is returned unchanged — the token must appear exactly once (a doubled
+# literal token is noise even though log_reply_ids dedupes by id). Prints the
+# (possibly-prefixed) message on stdout; on a malformed id prints an error to
+# stderr and returns 1 WITHOUT printing a message, so callers can fail closed.
+apply_reply_to() {
+  local id="$1" message="$2"
+  if ! printf '%s' "$id" | grep -qE '^[a-f0-9]{8,16}$'; then
+    echo "ERROR: --reply-to expects an 8-16 char lowercase hex message id (got '$id')." >&2
+    return 1
+  fi
+  # Inspect correlation tokens already present. A token for a DIFFERENT id is a
+  # conflict — a single reply cannot correlate to two different messages, so
+  # refuse rather than silently pick one. Tokens for the SAME id (however many,
+  # wherever placed) are collapsed to exactly one leading token below.
+  local existing other
+  existing=$(printf '%s' "$message" | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null | sort -u)
+  other=$(printf '%s\n' "$existing" | grep -vxF "[re:$id]" | sed '/^$/d')
+  if [ -n "$other" ]; then
+    echo "ERROR: message already carries a conflicting correlation token ($(printf '%s' "$other" | tr '\n' ' ')); refusing to add [re:$id]." >&2
+    return 1
+  fi
+  # Strip every existing [re:$id] token (and any spaces trailing it), then
+  # prepend exactly one leading token. ($id is validated hex, so the sed pattern
+  # carries no metacharacters, and the message is sed INPUT, never the pattern.)
+  local stripped
+  stripped=$(printf '%s' "$message" | sed "s/\[re:$id\] *//g")
+  printf '[re:%s] %s' "$id" "$stripped"
+}
+
 log_reply_ids() {
   # log_reply_ids <from> <text> — record every [re:<id>] token in <text> as a
   # reply from <from>. The bracketed form is required: a bare "re:" inside an
@@ -882,6 +976,28 @@ log_reply_ids() {
     printf '%s\t%s\t%s\n' "$(now_ms)" "$id" "$from" >> "$rf" 2>/dev/null || true
   done
   trim_log_file "$rf"
+}
+
+log_reply_ids_from_file() {
+  # log_reply_ids_from_file <from> <file> — correlate [re:<id>] tokens carried in
+  # a dispatched task body. Dispatch queue rows store only the file path (not the
+  # body), so live AND queued dispatch replies are correlated by scanning a
+  # bounded prefix of the file here. The caller MUST have already validated the
+  # file as trusted (trusted_message_file) before calling this — we read its
+  # contents, so an untrusted/symlinked path must never reach it.
+  #
+  # Only a bounded prefix is scanned: --reply-to prepends [re:<id>] at the very
+  # top, so a small prefix always suffices, and bounding the read caps cost and
+  # blast radius for a large or hostile body. Override with the byte budget
+  # SESSION_CHAT_REPLY_SCAN_BYTES (default 4096).
+  local from="$1" file="$2"
+  [ -n "$from" ] || return 0
+  [ -f "$file" ] || return 0
+  local bytes prefix
+  bytes=$(normalize_positive_int "${SESSION_CHAT_REPLY_SCAN_BYTES:-4096}" 4096)
+  prefix=$(head -c "$bytes" "$file" 2>/dev/null) || return 0
+  [ -n "$prefix" ] || return 0
+  log_reply_ids "$from" "$prefix"
 }
 
 # --- Message archive (search) ---
@@ -1142,6 +1258,10 @@ EOF
   enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" "$target_messages_dir" || return 1
   # Notification line: no truncated preview. Recipient hook + receiver agent
   # are responsible for reading $msg_file. The 'id:' field is the verify marker.
+  # A reply's [re:<id>] token lives at the top of the task file, not here — the
+  # recipient correlates it by scanning a bounded prefix of the trusted file
+  # (see log_reply_ids_from_file / detect-incoming-message.sh), which covers both
+  # live and queued dispatches uniformly.
   if send_text "$target_pane" \
     "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" \
     "id:${uid}"; then

@@ -17,6 +17,7 @@ Present the tab-separated data above as a markdown table:
 | Name | Pane | Status | Command | Location | Backlog | Send-Lock |
 
 Rules:
+- If the output is an `ERROR:` line (e.g. the tmux socket was denied with `Operation not permitted`), do NOT report "no named panes" — surface the error verbatim, including its escalated/approved retry hint, so the user knows the health check was blocked rather than clean
 - `DEAD` means the pane's process exited — sends to it will queue forever; the user should restart it or remove the pane
 - `DUPLICATE` means two panes share a name and neither is reachable — rename one via `/whoami` in that pane
 - `Location` is the pane's working directory — flag it if a worker is in an unexpected repo/worktree for the task it's about to receive

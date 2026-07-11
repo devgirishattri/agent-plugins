@@ -649,6 +649,291 @@ else
 fi
 rm -rf "$SL_HOME"
 
+# --- Test 31: sandbox denial of the tmux socket is surfaced, never swallowed ---
+# A sandboxed exec (e.g. a Codex sandbox profile) denies the tmux socket with
+# "Operation not permitted". The user-facing enumerators (list-panes,
+# pane-health, broadcast) and the self-name query (get-my-name) must classify
+# that denial into a loud, actionable error + nonzero exit — NOT print an empty
+# list / empty name and exit 0, which reads as a false "no panes / no name".
+DENY_BIN=$(mktemp -d)
+cat > "$DENY_BIN/tmux" <<'FAKE_TMUX'
+#!/usr/bin/env bash
+# Fake tmux that denies the socket the way a sandboxed exec does. Denies EVERY
+# subcommand (display-message AND list-panes) so the current-scope self-session
+# query is exercised as the ROOT failure, not just the follow-on list probe.
+echo "tmux: connect failed: Operation not permitted" >&2
+exit 1
+FAKE_TMUX
+chmod +x "$DENY_BIN/tmux"
+
+# Fake tmux whose denial signature is "Permission denied" instead — the other
+# socket-denial string the classifier must recognize.
+PERM_BIN=$(mktemp -d)
+cat > "$PERM_BIN/tmux" <<'PERM_TMUX'
+#!/usr/bin/env bash
+echo "tmux: connect failed: Permission denied" >&2
+exit 1
+PERM_TMUX
+chmod +x "$PERM_BIN/tmux"
+
+# Fake tmux that SUCCEEDS with genuinely-empty output (a real "no named panes"
+# / "no name set" state) — the control that proves classification did not turn
+# an honest empty result into a spurious error.
+OK_BIN=$(mktemp -d)
+cat > "$OK_BIN/tmux" <<'OK_TMUX'
+#!/usr/bin/env bash
+exit 0
+OK_TMUX
+chmod +x "$OK_BIN/tmux"
+
+deny_run() { PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" bash "$@"; }
+ok_run()   { PATH="$OK_BIN:$PATH"   TMUX="fake,0,0" TMUX_PANE="%0" bash "$@"; }
+
+# has_denial <combined-output>: classified escalated-retry message present for
+# either recognized socket-denial signature.
+has_denial() { echo "$1" | grep -q "escalated/approved" && echo "$1" | grep -Eq "Operation not permitted|Permission denied"; }
+
+# (a) list-panes, enumeration scope (all): denial -> ERROR + rc!=0 + no rows.
+lp_out=$(deny_run "$HERE/list-panes.sh" all 2>&1); lp_rc=$?
+lp_stdout=$(deny_run "$HERE/list-panes.sh" all 2>/dev/null)
+if [ "$lp_rc" -ne 0 ] && has_denial "$lp_out" && [ -z "$lp_stdout" ]; then
+  pass "denial_list_panes_surfaced"
+else
+  fail "denial_list_panes_surfaced" "rc=$lp_rc out=$lp_out stdout=$lp_stdout"
+fi
+
+# (a2) list-panes, CURRENT scope (no arg): the self-session display-message is
+#      the ROOT failure and must be classified at its source, not swallowed.
+lpc_out=$(deny_run "$HERE/list-panes.sh" 2>&1); lpc_rc=$?
+lpc_stdout=$(deny_run "$HERE/list-panes.sh" 2>/dev/null)
+if [ "$lpc_rc" -ne 0 ] && has_denial "$lpc_out" && echo "$lpc_out" | grep -q "current tmux session" && [ -z "$lpc_stdout" ]; then
+  pass "denial_list_panes_current_scope_surfaced"
+else
+  fail "denial_list_panes_current_scope_surfaced" "rc=$lpc_rc out=$lpc_out stdout=$lpc_stdout"
+fi
+
+# (b) pane-health, enumeration scope (--all): denial -> ERROR + rc!=0, and
+#     specifically NOT the benign "No named panes found" all-clear.
+ph_out=$(deny_run "$HERE/pane-health.sh" --all 2>&1); ph_rc=$?
+if [ "$ph_rc" -ne 0 ] && has_denial "$ph_out" && ! echo "$ph_out" | grep -q "No named panes found"; then
+  pass "denial_pane_health_surfaced"
+else
+  fail "denial_pane_health_surfaced" "rc=$ph_rc out=$ph_out"
+fi
+
+# (b2) pane-health, CURRENT scope (no arg): self-session display-message denial
+#      is the ROOT failure and must be classified at its source.
+phc_out=$(deny_run "$HERE/pane-health.sh" 2>&1); phc_rc=$?
+if [ "$phc_rc" -ne 0 ] && has_denial "$phc_out" && echo "$phc_out" | grep -q "current tmux session" && ! echo "$phc_out" | grep -q "No named panes found"; then
+  pass "denial_pane_health_current_scope_surfaced"
+else
+  fail "denial_pane_health_current_scope_surfaced" "rc=$phc_rc out=$phc_out"
+fi
+
+# (c) get-my-name: denial -> ERROR + rc!=0 + empty stdout (self-name flavor hint,
+#     which additionally names the SESSION_CHAT_PANE_NAME escape hatch).
+gmn_out=$(deny_run "$HERE/get-my-name.sh" 2>&1); gmn_rc=$?
+gmn_stdout=$(deny_run "$HERE/get-my-name.sh" 2>/dev/null)
+if [ "$gmn_rc" -ne 0 ] && has_denial "$gmn_out" && echo "$gmn_out" | grep -q "SESSION_CHAT_PANE_NAME" && [ -z "$gmn_stdout" ]; then
+  pass "denial_get_my_name_surfaced"
+else
+  fail "denial_get_my_name_surfaced" "rc=$gmn_rc out=$gmn_out stdout=$gmn_stdout"
+fi
+
+# (d) broadcast, self-name path: no SESSION_CHAT_PANE_NAME -> the denied self-name
+#     query must report a resolution failure, NOT "This pane has no name".
+bc_self=$(deny_run "$HERE/broadcast-message.sh" "ping" 2>&1); bc_self_rc=$?
+if [ "$bc_self_rc" -ne 0 ] && has_denial "$bc_self" && ! echo "$bc_self" | grep -q "This pane has no name"; then
+  pass "denial_broadcast_selfname_surfaced"
+else
+  fail "denial_broadcast_selfname_surfaced" "rc=$bc_self_rc out=$bc_self"
+fi
+
+# (e) broadcast, enumeration path: self-name asserted via env AND --all scope so
+#     we skip the self-session query and reach the pane listing -> denial there
+#     must report a listing failure, NOT the benign "No named panes matched".
+bc_enum=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me \
+  bash "$HERE/broadcast-message.sh" --all "ping" 2>&1); bc_enum_rc=$?
+if [ "$bc_enum_rc" -ne 0 ] && has_denial "$bc_enum" && ! echo "$bc_enum" | grep -q "No named panes matched"; then
+  pass "denial_broadcast_enumeration_surfaced"
+else
+  fail "denial_broadcast_enumeration_surfaced" "rc=$bc_enum_rc out=$bc_enum"
+fi
+
+# (e2) broadcast, CURRENT scope: self-name asserted via env so we pass the name
+#      gate, then the self-session display-message denial is the ROOT failure.
+bc_cur=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me \
+  bash "$HERE/broadcast-message.sh" "ping" 2>&1); bc_cur_rc=$?
+if [ "$bc_cur_rc" -ne 0 ] && has_denial "$bc_cur" && echo "$bc_cur" | grep -q "current tmux session" && ! echo "$bc_cur" | grep -q "No named panes matched"; then
+  pass "denial_broadcast_current_scope_surfaced"
+else
+  fail "denial_broadcast_current_scope_surfaced" "rc=$bc_cur_rc out=$bc_cur"
+fi
+
+# (g) "Permission denied" is classified identically to "Operation not permitted".
+pd_out=$(PATH="$PERM_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" bash "$HERE/list-panes.sh" all 2>&1); pd_rc=$?
+if [ "$pd_rc" -ne 0 ] && has_denial "$pd_out" && echo "$pd_out" | grep -q "Permission denied"; then
+  pass "denial_permission_denied_classified"
+else
+  fail "denial_permission_denied_classified" "rc=$pd_rc out=$pd_out"
+fi
+
+# (f) control: an honest empty result (tmux OK, nothing named) stays a clean
+#     exit-0 empty listing — denial classification must not false-positive.
+ctl_out=$(ok_run "$HERE/list-panes.sh" all 2>&1); ctl_rc=$?
+if [ "$ctl_rc" -eq 0 ] && [ -z "$ctl_out" ]; then
+  pass "empty_list_not_misclassified_as_denial"
+else
+  fail "empty_list_not_misclassified_as_denial" "rc=$ctl_rc out=$ctl_out"
+fi
+
+rm -rf "$DENY_BIN" "$PERM_BIN" "$OK_BIN"
+
+# --- Test 32: reply correlation — apply_reply_to normalization ---
+# Exactly-one leading token; repeated same-id tokens collapse; a conflicting
+# different token is refused; malformed ids fail closed.
+ar=$(
+  source "$HERE/lib.sh"
+  printf 'VALID=[%s]\n'    "$(apply_reply_to deadbeef 'hello world')"
+  printf 'LEAD=[%s]\n'     "$(apply_reply_to deadbeef '[re:deadbeef] hello')"
+  printf 'DUP=[%s]\n'      "$(apply_reply_to deadbeef '[re:deadbeef] [re:deadbeef] x')"
+  printf 'MID=[%s]\n'      "$(apply_reply_to deadbeef 'foo [re:deadbeef] bar')"
+  conflict_err=$(apply_reply_to deadbeef '[re:cafebabe] x' 2>&1 >/dev/null); conflict_rc=$?
+  if [ "$conflict_rc" -ne 0 ] && printf '%s' "$conflict_err" | grep -q 'conflicting correlation token'; then echo CONFLICT=ok; else echo CONFLICT=bad; fi
+  if apply_reply_to deadbeef '[re:deadbeef] [re:cafebabe] x' >/dev/null 2>&1; then echo MIXCONFLICT=bad; else echo MIXCONFLICT=ok; fi
+  apply_reply_to ABCDEF12 x >/dev/null 2>&1 && echo UPPER=bad || echo UPPER=ok
+  apply_reply_to abc x >/dev/null 2>&1 && echo SHORT=bad || echo SHORT=ok
+  apply_reply_to abcdef1234567890a x >/dev/null 2>&1 && echo LONG=bad || echo LONG=ok
+  apply_reply_to 'dead beef' x >/dev/null 2>&1 && echo SPACE=bad || echo SPACE=ok
+  printf 'COUNT=%s\n' "$(apply_reply_to deadbeef '[re:deadbeef] [re:deadbeef] x' | grep -oF '[re:deadbeef]' | wc -l | tr -d ' ')"
+)
+if echo "$ar" | grep -qF 'VALID=[[re:deadbeef] hello world]' \
+   && echo "$ar" | grep -qF 'LEAD=[[re:deadbeef] hello]' \
+   && echo "$ar" | grep -qF 'DUP=[[re:deadbeef] x]' \
+   && echo "$ar" | grep -qF 'MID=[[re:deadbeef] foo bar]' \
+   && echo "$ar" | grep -q 'CONFLICT=ok' && echo "$ar" | grep -q 'MIXCONFLICT=ok' \
+   && echo "$ar" | grep -q 'UPPER=ok' && echo "$ar" | grep -q 'SHORT=ok' \
+   && echo "$ar" | grep -q 'LONG=ok' && echo "$ar" | grep -q 'SPACE=ok' \
+   && echo "$ar" | grep -q 'COUNT=1'; then
+  pass "reply_apply_normalization"
+else
+  fail "reply_apply_normalization" "out=$ar"
+fi
+
+# --- Test 33: send-path reply correlation (token lands in payload) ---
+sc=$(
+  source "$HERE/lib.sh"
+  RB=$(mktemp -d); export MESSAGES_DIR="$RB/messages"
+  payload=$(apply_reply_to deadbeef01 'thanks, done')
+  log_reply_ids peer "$payload"
+  awk '/deadbeef01/{c++} END{print c+0}' "$MESSAGES_DIR/replies-log.tsv" 2>/dev/null
+  rm -rf "$RB"
+)
+if [ "$sc" = "1" ]; then pass "reply_send_correlation"; else fail "reply_send_correlation" "count=$sc"; fi
+
+# --- Test 34: transport rejects a malformed --reply-to before sending ---
+# Run with TMUX/TMUX_PANE unset: the id must be validated BEFORE ensure_tmux, so
+# a bad --reply-to reports the id error, not "Not inside tmux" (ordering defect).
+inv_send=$(env -u TMUX -u TMUX_PANE bash "$HERE/send-message.sh" --reply-to NOTHEX alpha "hi" 2>&1); inv_send_rc=$?
+PF34=$(mktemp); printf 'body\n' > "$PF34"
+inv_disp=$(env -u TMUX -u TMUX_PANE bash "$HERE/dispatch-to-session.sh" --reply-to 12xy alpha "$PF34" 2>&1); inv_disp_rc=$?
+rm -f "$PF34"
+if [ "$inv_send_rc" -ne 0 ] && echo "$inv_send" | grep -q "8-16 char lowercase hex" \
+   && [ "$inv_disp_rc" -ne 0 ] && echo "$inv_disp" | grep -q "8-16 char lowercase hex"; then
+  pass "reply_transport_rejects_bad_id"
+else
+  fail "reply_transport_rejects_bad_id" "send(rc=$inv_send_rc)=$inv_send disp(rc=$inv_disp_rc)=$inv_disp"
+fi
+
+# --- Test 35: dispatch body scan — main path + bounded prefix ---
+df=$(
+  source "$HERE/lib.sh"
+  RB=$(mktemp -d); export MESSAGES_DIR="$RB/messages"; mkdir -p "$MESSAGES_DIR"
+  f="$MESSAGES_DIR/body.md"; printf '[re:cafed00d] big task\nmore lines\n' > "$f"
+  log_reply_ids_from_file peer "$f"
+  echo "MAIN=$(awk '/cafed00d/{c++} END{print c+0}' "$MESSAGES_DIR/replies-log.tsv" 2>/dev/null)"
+  # Token past the scan window must NOT be seen.
+  g="$MESSAGES_DIR/big.md"; { head -c 4000 /dev/zero | tr '\0' 'x'; printf '\n[re:beefbeef]\n'; } > "$g"
+  SESSION_CHAT_REPLY_SCAN_BYTES=1024 log_reply_ids_from_file peer "$g"
+  echo "BOUND=$(awk '/beefbeef/{c++} END{print c+0}' "$MESSAGES_DIR/replies-log.tsv" 2>/dev/null)"
+  rm -rf "$RB"
+)
+if echo "$df" | grep -q 'MAIN=1' && echo "$df" | grep -q 'BOUND=0'; then
+  pass "reply_dispatch_body_scan"
+else
+  fail "reply_dispatch_body_scan" "out=$df"
+fi
+
+# --- Test 36: end-to-end dispatch correlation (live + queued) via detect ---
+RC_HOME=$(mktemp -d); RC_MSGS="$RC_HOME/.claude/messages"; mkdir -p "$RC_MSGS/queue"
+RPLUG="$(cd "$HERE/.." && pwd)"
+# Live dispatch: notification points at a trusted file whose body leads with a
+# reply token distinct from the message's own id.
+LDFILE="$RC_MSGS/live-dispatch.md"; printf '[re:feedface] please do the thing\n' > "$LDFILE"; chmod 600 "$LDFILE"
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:abcd1234] dispatch (1 lines) — read msg file id:abcd1234"}' "$LDFILE" \
+  | env HOME="$RC_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$RPLUG" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto \
+    bash "$HERE/detect-incoming-message.sh" >/dev/null 2>&1
+live_corr=$(awk '/feedface/{c++} END{print c+0}' "$RC_MSGS/replies-log.tsv" 2>/dev/null || echo 0)
+# Queued dispatch: enqueue a dispatch row for a trusted file, surface on Stop.
+QDFILE="$RC_MSGS/queued-dispatch.md"; printf '[re:cafef00d] queued task body\n' > "$QDFILE"; chmod 600 "$QDFILE"
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$RC_MSGS"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+  enqueue_message me qd1 dispatch peer "$QDFILE" "$RC_MSGS"
+  mark_message_ready me qd1 "$RC_MSGS"
+)
+printf '{"hook_event_name":"Stop"}' \
+  | env HOME="$RC_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$RPLUG" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0 \
+    bash "$HERE/detect-incoming-message.sh" >/dev/null 2>&1
+queued_corr=$(awk '/cafef00d/{c++} END{print c+0}' "$RC_MSGS/replies-log.tsv" 2>/dev/null || echo 0)
+if [ "$live_corr" -ge 1 ] && [ "$queued_corr" -ge 1 ]; then
+  pass "reply_dispatch_correlation_live_and_queued"
+else
+  fail "reply_dispatch_correlation_live_and_queued" "live=$live_corr queued=$queued_corr log=$(cat "$RC_MSGS/replies-log.tsv" 2>/dev/null)"
+fi
+rm -rf "$RC_HOME"
+
+# --- Test 38: /reply hint carries the CONCRETE id in every mode (notify + queued) ---
+# The reply-correlation hint must appear even in notify mode (and for queued
+# recovery), with the concrete /reply <from> <id>, WITHOUT weakening the trust
+# framing (notify still says ask the local user first).
+RH_HOME=$(mktemp -d); RH_MSGS="$RH_HOME/.claude/messages"; mkdir -p "$RH_MSGS/queue"
+RHPLUG="$(cd "$HERE/.." && pwd)"
+# (a) notify mode, live send: concrete hint present AND untrusted framing intact.
+notify_out=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 id:abc12345] hello there [id:abc12345]"}' \
+  | env HOME="$RH_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$RHPLUG" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=notify \
+    bash "$HERE/detect-incoming-message.sh" 2>&1)
+# (b) queued send recovery (notify mode): concrete hint present for the queued id.
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$RH_MSGS"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+  enqueue_message me beadcafe send peer "a queued ping" "$RH_MSGS"
+  mark_message_ready me beadcafe "$RH_MSGS"
+)
+queued_out=$(printf '{"hook_event_name":"Stop"}' \
+  | env HOME="$RH_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$RHPLUG" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=notify SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0 \
+    bash "$HERE/detect-incoming-message.sh" 2>&1)
+if echo "$notify_out" | grep -qF 'When a reply is authorized, use /reply peer abc12345' \
+   && echo "$notify_out" | grep -q 'ask the local user' \
+   && echo "$queued_out" | grep -qF 'When a reply is authorized, use /reply peer beadcafe'; then
+  pass "reply_hint_concrete_id_notify_and_queued"
+else
+  fail "reply_hint_concrete_id_notify_and_queued" "notify=$notify_out queued=$queued_out"
+fi
+rm -rf "$RH_HOME"
+
+# --- Test 37: check-replies reports 'unconfirmed' (not 'awaiting') ---
+CK_HOME=$(mktemp -d); CK_MSGS="$CK_HOME/.claude/messages"; mkdir -p "$CK_MSGS"
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$CK_MSGS"
+  log_sent_message beadfeed me peer send live "an unanswered ping"
+)
+ck_out=$(env HOME="$CK_HOME" bash "$HERE/check-replies.sh" 2>&1)
+if echo "$ck_out" | grep -q "unconfirmed" && ! echo "$ck_out" | grep -qw "awaiting"; then
+  pass "check_replies_unconfirmed_status"
+else
+  fail "check_replies_unconfirmed_status" "out=$ck_out"
+fi
+rm -rf "$CK_HOME"
+
 # --- Summary ---
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="

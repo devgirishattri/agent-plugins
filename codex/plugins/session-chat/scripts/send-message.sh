@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # send-message.sh — Send a message to a named tmux pane
-# Usage: send-message.sh [--priority high|normal] [--ttl MINUTES] <target-name> <message>
+# Usage: send-message.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] <target-name> <message>
 #   --priority high  queued recovery surfaces this before normal messages
 #   --ttl MINUTES    if still queued after this window, drop instead of surfacing
 # Supported platforms: macOS, Linux
@@ -8,6 +8,8 @@ set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
+REPLY_TO=""
+REPLY_TO_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --priority)
@@ -18,6 +20,11 @@ while [ $# -gt 0 ]; do
       shift
       _ttl_min=$(normalize_positive_int "${1:-0}" 0)
       export SESSION_CHAT_TTL_MS=$((_ttl_min * 60000))
+      ;;
+    --reply-to)
+      shift
+      REPLY_TO="${1:-}"
+      REPLY_TO_SET=1
       ;;
     *) break ;;
   esac
@@ -30,13 +37,17 @@ MESSAGE="$*"
 
 if [ -z "$TARGET_NAME" ]; then
   echo "ERROR: No target specified."
-  echo "Usage: send-message.sh <pane-name> <message>"
+  echo "Usage: send-message.sh [--reply-to ID] <pane-name> <message>"
   exit 1
 fi
 
 if [ -z "$MESSAGE" ]; then
   echo "ERROR: No message specified."
   exit 1
+fi
+
+if [ "$REPLY_TO_SET" = "1" ]; then
+  MESSAGE=$(correlate_reply "$REPLY_TO" "$MESSAGE") || exit 1
 fi
 
 ensure_tmux

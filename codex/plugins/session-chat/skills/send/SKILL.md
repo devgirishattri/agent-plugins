@@ -18,11 +18,14 @@ Usage: $session-chat:send <pane-name> <message>
 ```
 
 Use this skill only for single-line messages up to `SESSION_CHAT_SEND_MAX_LEN` characters, default 1024. For long, multi-line, or quoting-sensitive content, use `$session-chat:dispatch` instead.
+If this message responds to an incoming session-chat message or dispatch, use
+`$session-chat:reply <pane> <incoming-id> <message>` instead so the transport
+records correlation automatically.
 
 Run:
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/send-message.sh" [--priority high] [--ttl <minutes>] "<target-name>" "<message>"
+bash "$PLUGIN_ROOT/scripts/send-message.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target-name>" "<message>"
 ```
 
 If tmux is not active, explain that messaging requires running Codex inside tmux.

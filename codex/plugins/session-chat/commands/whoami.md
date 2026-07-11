@@ -22,4 +22,8 @@ argument-hint: "[name]"
    ```
 
 5. Report: `Pane renamed to **<name>**.`
-6. If both current name and `$ARGUMENTS` are empty, report: `No name set. Use $session-chat:whoami <name> to set one.`
+6. If the script returns non-zero, relay its error. If a sandbox denied the tmux
+   socket, rerun the whole script escalated/approved; do not treat blank output
+   as an unnamed pane.
+7. If both current name and `$ARGUMENTS` are empty after a successful query,
+   report: `No name set. Use $session-chat:whoami <name> to set one.`

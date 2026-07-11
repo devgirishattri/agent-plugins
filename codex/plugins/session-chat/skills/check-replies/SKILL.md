@@ -1,6 +1,6 @@
 ---
 name: check-replies
-description: "Show which session-chat messages this pane sent have been answered and which still await a reply. Use when the user asks who has replied, what is pending, or whether a worker answered."
+description: "Show which session-chat messages this pane sent have confirmed correlated replies and which remain unconfirmed. Use when the user asks who replied or whether a response was correlated; this is not task-liveness status."
 ---
 
 # Check Replies
@@ -20,6 +20,11 @@ bash "$PLUGIN_ROOT/scripts/check-replies.sh" [--pending] [--since <minutes>]
 ```
 
 Present the tab-separated output as a table: ID, To, Type, Delivery, Age, Reply, Excerpt.
-`awaiting` rows are messages nobody has answered yet — list them first if the user asked what is pending.
-Replies are matched by `[re:<id>]` tokens in incoming messages; when asking a pane to respond, tell it to include `[re:<id>]` in its reply.
-If a message has been awaiting for a long time, suggest `$session-chat:pane-health <name>` to check the recipient.
+`unconfirmed` means no correlated reply has arrived; it does not prove that the
+recipient is still working or that a scheduler task remains active. List those
+rows first if the user asks what is pending.
+Replies are matched by transport-generated `[re:<id>]` tokens. Use
+`$session-chat:reply <pane> <id> <message>` instead of asking a person or agent
+to type the token manually.
+If a message stays unconfirmed for a long time, suggest
+`$session-chat:pane-health <name>` and check the scheduler ledger separately.

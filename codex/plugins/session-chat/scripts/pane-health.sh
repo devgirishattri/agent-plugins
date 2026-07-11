@@ -34,12 +34,16 @@ done
 if [ -n "$TARGET" ] || [ "$SCOPE" = "all" ]; then
   LIST_ARGS=(-a)
 else
-  CURRENT_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null)
+  CURRENT_SESSION=$(tmux_capture_checked pane-health-session \
+    "Cannot determine the current tmux session" \
+    display-message -p -t "${TMUX_PANE:-}" '#{session_name}') || exit $?
   LIST_ARGS=(-s -t "$CURRENT_SESSION")
 fi
 
-PANE_ROWS=$(tmux list-panes "${LIST_ARGS[@]}" -F $'#{@name}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}\t#{pane_current_path}' 2>/dev/null \
-  | awk -F'\t' '$1 != ""')
+RAW_PANE_ROWS=$(tmux_capture_checked pane-health-rows "Cannot inspect tmux pane health" \
+  list-panes "${LIST_ARGS[@]}" \
+  -F $'#{@name}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}\t#{pane_current_path}') || exit $?
+PANE_ROWS=$(printf '%s\n' "$RAW_PANE_ROWS" | awk -F'\t' '$1 != ""')
 
 if [ -n "$TARGET" ]; then
   PANE_ROWS=$(printf '%s\n' "$PANE_ROWS" | awk -F'\t' -v want="$TARGET" '$1 == want')

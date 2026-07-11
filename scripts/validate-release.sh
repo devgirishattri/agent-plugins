@@ -94,6 +94,22 @@ def require_tokens(path: pathlib.Path, *tokens: str) -> None:
         fail(f"{path}: missing semantic parity contract token(s): {missing}")
 
 
+def require_one_of(path: pathlib.Path, *tokens: str) -> None:
+    if not path.is_file():
+        fail(f"missing parity contract file: {path}")
+    text = path.read_text()
+    if not any(token in text for token in tokens):
+        fail(f"{path}: expected at least one semantic contract token: {tokens}")
+
+
+def reject_pattern(path: pathlib.Path, pattern: str, label: str) -> None:
+    if not path.is_file():
+        fail(f"missing parity contract file: {path}")
+    match = re.search(pattern, path.read_text(), flags=re.MULTILINE)
+    if match:
+        fail(f"{path}: {label}: {match.group(0)!r}")
+
+
 def require_order(path: pathlib.Path, first: str, second: str) -> None:
     if not path.is_file():
         fail(f"missing parity contract file: {path}")
@@ -483,8 +499,57 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
     chat = provider_root / "session-chat" / "scripts"
     require_tokens(chat / "lib.sh", "umask 077", "chmod 700", "chmod 600", "[ -L")
     require_tokens(chat / "lib.sh", 'validate_label "$label"', 'validate_label "$my_name"')
+    require_tokens(chat / "lib.sh", "Operation not permitted", "Permission denied", "escalated/approved")
+    require_tokens(chat / "lib.sh", "conflicting correlation token")
+    require_one_of(chat / "lib.sh", "correlate_reply", "apply_reply_to")
+    require_tokens(chat / "send-message.sh", "--reply-to")
+    require_one_of(chat / "send-message.sh", "correlate_reply", "apply_reply_to")
+    require_tokens(chat / "dispatch-to-session.sh", "--reply-to")
+    require_one_of(chat / "dispatch-to-session.sh", "correlate_reply", "apply_reply_to")
     require_tokens(chat / "detect-incoming-message.sh", "ensure_messages_dir", "[ -O", "stat -f", "pwd -P", "SESSION_CHAT_DISPATCH_INLINE_MAX")
+    require_tokens(chat / "detect-incoming-message.sh", "log_reply_ids")
+    require_one_of(chat / "detect-incoming-message.sh", "head -c 512", "log_reply_ids_from_file")
+    require_tokens(chat / "detect-incoming-message.sh", "When a reply is authorized")
     require_tokens(chat / "pane-health.sh", "pane_current_path")
+    require_tokens(chat / "check-replies.sh", "unconfirmed")
+    require_one_of(chat / "check-replies.sh", "task-liveness", "task progress")
+
+    # User-facing discovery scripts must preserve tmux stderr and fail loudly.
+    # A direct `2>/dev/null` here previously turned Codex sandbox denial into a
+    # successful empty list, empty name, or healthy-fleet report.
+    for script_name in ("list-panes.sh", "pane-health.sh", "get-my-name.sh", "broadcast-message.sh"):
+        script_path = chat / script_name
+        require_one_of(script_path, "tmux_capture_checked", "_tmux_err_file", "pop_pane_name_err")
+        reject_pattern(
+            script_path,
+            r"\btmux\b[^\n]*2>/dev/null",
+            "user-facing tmux stderr must not be discarded",
+        )
+
+    chat_test = chat / "test-session-chat.sh"
+    require_tokens(
+        chat_test,
+        "Operation not permitted", "Permission denied", "escalated/approved",
+        "list-panes.sh", "pane-health.sh", "get-my-name.sh", "broadcast-message.sh",
+        "--reply-to", "unconfirmed",
+        "When a reply is authorized",
+    )
+    require_one_of(chat_test, "CONFLICT=ok", "conflicting correlation token")
+
+    if provider_root == root / "plugins":
+        chat_docs = provider_root / "session-chat" / "commands"
+        for doc_name in ("panes.md", "pane-health.md", "whoami.md", "broadcast.md"):
+            require_tokens(chat_docs / doc_name, "Operation not permitted", "escalated/approved")
+        require_tokens(chat_docs / "reply.md", "/reply", "--reply-to", "exactly once")
+        require_tokens(provider_root / "session-chat" / "skills" / "session-chat" / "SKILL.md", "/reply", "unconfirmed")
+        require_tokens(chat / "detect-incoming-message.sh", "/reply")
+    else:
+        chat_docs = provider_root / "session-chat" / "skills"
+        for skill_name in ("panes", "pane-health", "whoami", "broadcast"):
+            require_tokens(chat_docs / skill_name / "SKILL.md", "sandbox denied", "escalated/approved")
+        require_tokens(chat_docs / "reply" / "SKILL.md", "$session-chat:reply", "--reply-to", "exactly once", "apply_patch")
+        require_tokens(chat_docs / "session-chat" / "SKILL.md", "$session-chat:reply", "unconfirmed")
+        require_tokens(chat / "detect-incoming-message.sh", "$session-chat:reply")
 
     context = provider_root / "session-context" / "scripts"
     require_tokens(context / "lib.sh", "umask 077", "chmod 700", "chmod 600", "[ -L")
