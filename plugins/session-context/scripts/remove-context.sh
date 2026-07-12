@@ -14,7 +14,16 @@ for arg in "$@"; do
   case "$arg" in
     --confirmed) CONFIRMED=1 ;;
     -*) echo "ERROR: unknown option '$arg'." >&2; exit 1 ;;
-    *) [ -z "$PROJECT_NAME" ] && PROJECT_NAME="$arg" ;;
+    *)
+      # A destructive capability boundary must reject unexpected operands rather
+      # than silently discarding them (e.g. a mistyped extra name).
+      if [ -z "$PROJECT_NAME" ]; then
+        PROJECT_NAME="$arg"
+      else
+        echo "ERROR: unexpected argument '$arg'." >&2
+        exit 1
+      fi
+      ;;
   esac
 done
 
@@ -90,9 +99,16 @@ fi
 # Delete the current snapshot (if present) plus every archived history version —
 # including ORPHANED history when the current snapshot is already gone.
 removed=0
-if [ "$SNAP_EXISTS" -eq 1 ] && rm -f "$SNAPSHOT"; then removed=$((removed + 1)); fi
+# Fail closed: a removal that cannot complete must not report success (which could
+# leave a partially-deleted store looking fully cleaned). The EXIT trap releases
+# the writer lock on the error exit.
+if [ "$SNAP_EXISTS" -eq 1 ]; then
+  rm -f "$SNAPSHOT" || { _context_store_error "cannot remove snapshot: $SNAPSHOT"; exit 1; }
+  removed=$((removed + 1))
+fi
 for h in "${HIST_FILES[@]}"; do
-  if rm -f "$h"; then removed=$((removed + 1)); fi
+  rm -f "$h" || { _context_store_error "cannot remove history file: $h"; exit 1; }
+  removed=$((removed + 1))
 done
 
 release_context_store_lock || exit 1

@@ -147,8 +147,12 @@ fi
 # --- Test 6: builtin fallback path when session-chat is absent (real tmux) ---
 # Point the override at a dir with no send-message.sh so session_chat_root
 # resolves but the executable check fails, forcing the builtin transport.
+# Recipient is a neutral `cat` sink, not a shell: a shell would EXECUTE the pasted
+# notification and its command-not-found redraw can consume the line before
+# capture-pane stabilizes on a loaded CI runner (the same render flake fixed in
+# the session-chat suite). `cat` echoes stdin verbatim as stable pane output.
 tmux -L "$SOCKET" new-session -d -s "$SESSION" -x 200 -y 50
-tmux -L "$SOCKET" split-window -t "$SESSION" -h
+tmux -L "$SOCKET" split-window -t "$SESSION" -h "cat"
 PANES=$(tmux -L "$SOCKET" list-panes -t "$SESSION" -F '#{pane_id}')
 read -r SENDER_PANE RECIPIENT_PANE <<< "$(echo "$PANES" | tr '\n' ' ')"
 tmux -L "$SOCKET" set-option -p -t "$SENDER_PANE" @name "sctx-sender"
@@ -170,8 +174,16 @@ fallback_out=$(
     bash "'"$HERE"'/share-context.sh" sctx-recipient proj-1 2>&1
   '
 )
-sleep 0.3
-recipient_cap=$(tmux -L "$SOCKET" capture-pane -t "$RECIPIENT_PANE" -p -S -200 2>/dev/null)
+# Adaptive poll for the marker to render (replaces a fixed sleep that raced pane
+# render on loaded CI runners); -J joins wrapped lines so a wrapped marker matches.
+recipient_cap=""
+fb_waited=0
+while :; do
+  recipient_cap=$(tmux -L "$SOCKET" capture-pane -J -t "$RECIPIENT_PANE" -p -S -200 2>/dev/null)
+  echo "$recipient_cap" | grep -qF '[context:proj-1]' && break
+  [ "$fb_waited" -ge 5000 ] && break
+  sleep 0.05; fb_waited=$((fb_waited + 50))
+done
 if echo "$fallback_out" | grep -q "transport: session-context builtin" \
    && echo "$recipient_cap" | grep -qF '[context:proj-1]'; then
   pass "builtin_fallback_delivers"
@@ -294,6 +306,14 @@ else
   fail "remove_errors_when_nothing_exists" "rc=$rc out=$out"
 fi
 
+# --- Test 14b: remove rejects an unexpected extra operand (capability boundary) ---
+out=$(SESSION_CONTEXT_HOME="$ORPH" bash "$HERE/remove-context.sh" rmproj extra --confirmed 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "unexpected argument"; then
+  pass "remove_rejects_extra_operand"
+else
+  fail "remove_rejects_extra_operand" "rc=$rc out=$out"
+fi
+
 # --- Test 15: concurrent first-use saves serialize — one safe store, all land ---
 # Regression for the store-init race Tier B closed on the Claude side: parallel
 # first-time saves each ran the whole-store harden sweep UNLOCKED and one
@@ -321,36 +341,46 @@ else
   fail "concurrent_store_saves" "failed=$race_failed present=$race_present/6 mode=$race_mode temp=$race_temp"
 fi
 
-# --- Test 16: the writer lock serializes saves (a held lock blocks a save) ---
+# --- Test 16: the writer lock serializes saves (event-gated, no wall-clock race) ---
 # A save must hold the exclusive writer lock before it hardens/writes, so while
-# another holder holds it the save BLOCKS rather than racing the holder's tree —
-# then completes once the lock is released. Markers live OUTSIDE the store so the
-# save's tree validation does not reject them.
+# another holder holds it the save BLOCKS rather than racing the holder's tree,
+# then completes once released. The holder waits for a RELEASE marker instead of
+# sleeping — it CANNOT release on its own, so a descheduled test process cannot
+# race the observation window. Markers live OUTSIDE the store so tree validation
+# ignores them.
 LSTORE="$TMP/lock-serial"; mkdir -p "$LSTORE"
-PROBE_ACQ="$TMP/probe-acquired"; PROBE_REL="$TMP/probe-releasing"
-rm -f "$PROBE_ACQ" "$PROBE_REL"
+LS_ACQ="$TMP/ls-acquired"; LS_REL="$TMP/ls-release"; rm -f "$LS_ACQ" "$LS_REL"
 (
   source "$HERE/lib.sh"
   acquire_context_store_lock "$LSTORE" >/dev/null 2>&1 || exit 1
-  : > "$PROBE_ACQ"
-  sleep 2
-  : > "$PROBE_REL"
+  : > "$LS_ACQ"
+  hw=0; while [ ! -e "$LS_REL" ] && [ "$hw" -lt 4000 ]; do sleep 0.05; hw=$((hw + 50)); done
   release_context_store_lock >/dev/null 2>&1
 ) &
 lock_holder_pid=$!
-lw=0; while [ ! -e "$PROBE_ACQ" ] && [ "$lw" -lt 3000 ]; do sleep 0.05; lw=$((lw + 50)); done
-printf 'lock probe\n' > "$TMP/lock-probe.md"
-SESSION_CONTEXT_HOME="$LSTORE" bash "$HERE/save-context.sh" lockprobe "$TMP/lock-probe.md" \
-  > "$TMP/lock-probe.out" 2>&1 &
-lock_save_pid=$!
-sleep 0.6   # holder releases at ~2s; the save must still be blocked at 0.6s
-if [ ! -e "$PROBE_REL" ] && [ ! -f "$LSTORE/lockprobe.md" ]; then lock_blocked=1; else lock_blocked=0; fi
-wait "$lock_holder_pid" 2>/dev/null
-wait "$lock_save_pid"; lock_save_rc=$?
-if [ "$lock_blocked" -eq 1 ] && [ "$lock_save_rc" -eq 0 ] && [ -f "$LSTORE/lockprobe.md" ]; then
-  pass "writer_lock_serializes_saves"
+lw=0; while [ ! -e "$LS_ACQ" ] && [ "$lw" -lt 3000 ]; do sleep 0.05; lw=$((lw + 50)); done
+if [ ! -e "$LS_ACQ" ]; then
+  fail "writer_lock_serializes_saves" "holder never acquired the writer lock"
 else
-  fail "writer_lock_serializes_saves" "blocked=$lock_blocked rc=$lock_save_rc out=$(cat "$TMP/lock-probe.out" 2>/dev/null)"
+  printf 'lock probe\n' > "$TMP/lock-probe.md"
+  SESSION_CONTEXT_HOME="$LSTORE" bash "$HERE/save-context.sh" lockprobe "$TMP/lock-probe.md" \
+    > "$TMP/lock-probe.out" 2>&1 &
+  lock_save_pid=$!
+  sleep 0.4   # let the save reach acquire; the holder cannot release until we signal
+  if kill -0 "$lock_save_pid" 2>/dev/null && [ ! -f "$LSTORE/lockprobe.md" ]; then
+    lock_blocked=1
+  else
+    lock_blocked=0
+  fi
+  : > "$LS_REL"   # signal the holder to release
+  wait "$lock_holder_pid"; lock_holder_rc=$?
+  wait "$lock_save_pid"; lock_save_rc=$?
+  if [ "$lock_blocked" -eq 1 ] && [ "$lock_holder_rc" -eq 0 ] && [ "$lock_save_rc" -eq 0 ] \
+     && [ -f "$LSTORE/lockprobe.md" ]; then
+    pass "writer_lock_serializes_saves"
+  else
+    fail "writer_lock_serializes_saves" "blocked=$lock_blocked holder_rc=$lock_holder_rc save_rc=$lock_save_rc out=$(cat "$TMP/lock-probe.out" 2>/dev/null)"
+  fi
 fi
 
 # --- Summary ---
