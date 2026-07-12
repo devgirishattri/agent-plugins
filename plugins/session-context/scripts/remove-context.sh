@@ -26,9 +26,31 @@ fi
 
 validate_label "$PROJECT_NAME" || exit 1
 
-SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
+SNAPSHOTS_DIR="$(bootstrap_contexts_dir)" || exit 1
 SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 HISTORY_DIR="$SNAPSHOTS_DIR/.history"
+LOCK_HELD=0
+
+cleanup_lock() {
+  if [ "$LOCK_HELD" -eq 1 ] || [ -n "${CONTEXT_STORE_LOCK_DIR:-}" ]; then
+    release_context_store_lock >/dev/null 2>&1 || true
+    LOCK_HELD=0
+  fi
+}
+handle_signal() {
+  cleanup_lock
+  trap - EXIT HUP INT TERM
+  exit 1
+}
+trap cleanup_lock EXIT
+trap handle_signal HUP INT TERM
+
+acquire_context_store_lock "$SNAPSHOTS_DIR" || exit 1
+LOCK_HELD=1
+
+# Harden the whole store UNDER the writer lock (moved here from the old pre-lock
+# get_contexts_dir sweep, which raced concurrent writers' temp/rename).
+harden_existing_contexts_dir "$SNAPSHOTS_DIR" >/dev/null || exit 1
 
 # Collect this name's archived history versions (.history/<name>.<ts>.md). The
 # literal dot after the validated (dot-free) name is an unambiguous boundary, so
@@ -72,6 +94,11 @@ if [ "$SNAP_EXISTS" -eq 1 ] && rm -f "$SNAPSHOT"; then removed=$((removed + 1));
 for h in "${HIST_FILES[@]}"; do
   if rm -f "$h"; then removed=$((removed + 1)); fi
 done
+
+release_context_store_lock || exit 1
+LOCK_HELD=0
+trap - EXIT HUP INT TERM
+
 if [ "$SNAP_EXISTS" -eq 1 ]; then
   echo "Removed context snapshot '$PROJECT_NAME' and its history — ${removed} file(s) deleted."
 else

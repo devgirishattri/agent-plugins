@@ -139,6 +139,32 @@ done
 [ -z "$(find "$RACE_STORE" -name '.session-context.tmp.*' -print -quit)" ] \
   || fail "atomic save left a temporary file behind"
 
+# Writer lock serializes saves: while a holder holds the lock, a competing save
+# BLOCKS (never races the holder's tree / temp) and completes once released.
+# Markers live OUTSIDE the store so tree validation does not reject them.
+LOCK_SERIAL_STORE="$TMP/lock-serial"; mkdir -p "$LOCK_SERIAL_STORE"
+LS_ACQ="$TMP/ls-acquired"; LS_REL="$TMP/ls-releasing"; rm -f "$LS_ACQ" "$LS_REL"
+(
+  source "$SCRIPT_DIR/lib.sh"
+  acquire_context_store_lock "$LOCK_SERIAL_STORE" >/dev/null 2>&1 || exit 1
+  : > "$LS_ACQ"
+  sleep 2
+  : > "$LS_REL"
+  release_context_store_lock >/dev/null 2>&1
+) &
+ls_holder_pid=$!
+ls_w=0; while [ ! -e "$LS_ACQ" ] && [ "$ls_w" -lt 3000 ]; do sleep 0.05; ls_w=$((ls_w + 50)); done
+printf 'lock probe\n' > "$TMP/ls-probe.md"
+SESSION_CONTEXT_HOME="$LOCK_SERIAL_STORE" bash "$SCRIPT_DIR/save-context.sh" lockprobe "$TMP/ls-probe.md" \
+  > "$TMP/ls-probe.out" 2>&1 &
+ls_save_pid=$!
+sleep 0.6   # holder releases at ~2s; the competing save must still be blocked here
+{ [ ! -e "$LS_REL" ] && [ ! -f "$LOCK_SERIAL_STORE/lockprobe.md" ]; } \
+  || fail "competing save did not block on the held writer lock"
+wait "$ls_holder_pid" 2>/dev/null
+wait "$ls_save_pid" || fail "blocked save did not complete after the writer lock was released"
+[ -f "$LOCK_SERIAL_STORE/lockprobe.md" ] || fail "blocked save produced no snapshot after release"
+
 # A kill -9-style stale writer lock is reclaimed only after its recorded PID
 # is confirmed dead; the replacement PID file remains owner-only.
 STALE_STORE="$TMP/stale-contexts"

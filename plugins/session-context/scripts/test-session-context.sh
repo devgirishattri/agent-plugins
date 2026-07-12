@@ -198,12 +198,12 @@ harden_out=$(
   B=$(mktemp -d); S="$B/store"; mkdir -p "$S/.history"
   umask 022
   printf x > "$S/a.md"; chmod 644 "$S/a.md"
-  printf x > "$S/.history/a.20200101T000000Z.md"; chmod 640 "$S/.history/a.20200101T000000Z.md"
+  printf x > "$S/.history/a.20200101-000000Z.md"; chmod 640 "$S/.history/a.20200101-000000Z.md"
   printf x > "$S/auto.md"; chmod 400 "$S/auto.md"
   chmod 755 "$S" "$S/.history"
   m() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
-  if harden_contexts_dir "$S"; then
-    echo "RC0 STORE=$(m "$S") HIST=$(m "$S/.history") FILE=$(m "$S/a.md") HFILE=$(m "$S/.history/a.20200101T000000Z.md") AUTO=$(m "$S/auto.md")"
+  if harden_existing_contexts_dir "$S"; then
+    echo "RC0 STORE=$(m "$S") HIST=$(m "$S/.history") FILE=$(m "$S/a.md") HFILE=$(m "$S/.history/a.20200101-000000Z.md") AUTO=$(m "$S/auto.md")"
   fi
   rm -rf "$B"
 )
@@ -219,9 +219,9 @@ fi
 reject_out=$(
   source "$HERE/lib.sh"
   B=$(mktemp -d); mkdir -p "$B/real"; ln -s "$B/real" "$B/link"
-  harden_contexts_dir "$B/link" >/dev/null 2>&1 && echo ROOT_ACCEPT || echo ROOT_REJECT
+  harden_existing_contexts_dir "$B/link" >/dev/null 2>&1 && echo ROOT_ACCEPT || echo ROOT_REJECT
   mkdir -p "$B/store"; ln -s /etc/hosts "$B/store/evil.md"
-  harden_contexts_dir "$B/store" >/dev/null 2>&1 && echo NESTED_ACCEPT || echo NESTED_REJECT
+  harden_existing_contexts_dir "$B/store" >/dev/null 2>&1 && echo NESTED_ACCEPT || echo NESTED_REJECT
   rm -rf "$B"
 )
 if echo "$reject_out" | grep -q "ROOT_REJECT" && echo "$reject_out" | grep -q "NESTED_REJECT"; then
@@ -233,10 +233,10 @@ fi
 # --- Test 10: context removal is confirmation-gated ---
 RMHOME="$TMP/rmstore"; mkdir -p "$RMHOME/.history"
 printf '# snap\n' > "$RMHOME/rmproj.md"
-printf '# v1\n' > "$RMHOME/.history/rmproj.20200101T000000Z.md"
-printf '# v2\n' > "$RMHOME/.history/rmproj.20200102T000000Z.md"
+printf '# v1\n' > "$RMHOME/.history/rmproj.20200101-000000Z.md"
+printf '# v2\n' > "$RMHOME/.history/rmproj.20200102-000000Z.md"
 printf '# other\n' > "$RMHOME/other.md"
-printf '# ov1\n' > "$RMHOME/.history/other.20200101T000000Z.md"
+printf '# ov1\n' > "$RMHOME/.history/other.20200101-000000Z.md"
 out=$(SESSION_CONTEXT_HOME="$RMHOME" bash "$HERE/remove-context.sh" rmproj 2>&1); rc=$?
 if [ "$rc" -ne 0 ] && echo "$out" | grep -q "REFUSED" && [ -f "$RMHOME/rmproj.md" ]; then
   pass "remove_refuses_without_confirmed"
@@ -248,7 +248,7 @@ fi
 out=$(SESSION_CONTEXT_HOME="$RMHOME" bash "$HERE/remove-context.sh" rmproj --confirmed 2>&1); rc=$?
 hist_left=$(ls "$RMHOME/.history/rmproj."*.md 2>/dev/null | wc -l | tr -d ' ')
 if [ "$rc" -eq 0 ] && [ ! -f "$RMHOME/rmproj.md" ] && [ "$hist_left" = "0" ] \
-   && [ -f "$RMHOME/other.md" ] && [ -f "$RMHOME/.history/other.20200101T000000Z.md" ] \
+   && [ -f "$RMHOME/other.md" ] && [ -f "$RMHOME/.history/other.20200101-000000Z.md" ] \
    && echo "$out" | grep -q "3 file(s) deleted"; then
   pass "remove_confirmed_deletes_snapshot_and_history"
 else
@@ -263,7 +263,7 @@ shape_out=$(
   printf '# snap' > "$S/proj.md"
   chmod 755 "$S" "$S/src"
   before=$(stat -c '%a' "$S" 2>/dev/null || stat -f '%Lp' "$S" 2>/dev/null)
-  harden_contexts_dir "$S" >/dev/null 2>&1 && echo ACCEPT || echo REJECT
+  harden_existing_contexts_dir "$S" >/dev/null 2>&1 && echo ACCEPT || echo REJECT
   after=$(stat -c '%a' "$S" 2>/dev/null || stat -f '%Lp' "$S" 2>/dev/null)
   echo "UNCHANGED=$([ "$before" = "$after" ] && echo yes || echo no)"
   rm -rf "$B"
@@ -276,8 +276,8 @@ fi
 
 # --- Test 13: confirmed removal cleans ORPHANED history when snapshot is gone ---
 ORPH="$TMP/orphstore"; mkdir -p "$ORPH/.history"
-printf '# v1' > "$ORPH/.history/gone.20200101T000000Z.md"
-printf '# v2' > "$ORPH/.history/gone.20200102T000000Z.md"
+printf '# v1' > "$ORPH/.history/gone.20200101-000000Z.md"
+printf '# v2' > "$ORPH/.history/gone.20200102-000000Z.md"
 out=$(SESSION_CONTEXT_HOME="$ORPH" bash "$HERE/remove-context.sh" gone --confirmed 2>&1); rc=$?
 left=$(ls "$ORPH/.history/gone."*.md 2>/dev/null | wc -l | tr -d ' ')
 if [ "$rc" -eq 0 ] && [ "$left" = "0" ] && echo "$out" | grep -q "orphaned history"; then
@@ -292,6 +292,65 @@ if [ "$rc" -ne 0 ] && echo "$out" | grep -q "No current or archived context snap
   pass "remove_errors_when_nothing_exists"
 else
   fail "remove_errors_when_nothing_exists" "rc=$rc out=$out"
+fi
+
+# --- Test 15: concurrent first-use saves serialize — one safe store, all land ---
+# Regression for the store-init race Tier B closed on the Claude side: parallel
+# first-time saves each ran the whole-store harden sweep UNLOCKED and one
+# spuriously failed. The writer lock now serializes harden + atomic write.
+RACE_STORE="$TMP/race-contexts"
+race_pids=()
+for race_index in 1 2 3 4 5 6; do
+  printf 'race %s\n' "$race_index" > "$TMP/race-$race_index.md"
+  SESSION_CONTEXT_HOME="$RACE_STORE" \
+    bash "$HERE/save-context.sh" "race$race_index" "$TMP/race-$race_index.md" \
+      > "$TMP/race-$race_index.out" 2>&1 &
+  race_pids+=("$!")
+done
+race_failed=0
+for race_pid in "${race_pids[@]}"; do wait "$race_pid" || race_failed=1; done
+race_present=0
+for race_index in 1 2 3 4 5 6; do
+  [ -f "$RACE_STORE/race$race_index.md" ] && race_present=$((race_present + 1))
+done
+race_mode=$(stat -c '%a' "$RACE_STORE" 2>/dev/null || stat -f '%Lp' "$RACE_STORE" 2>/dev/null)
+race_temp=$(find "$RACE_STORE" -name '.session-context.tmp.*' -print -quit 2>/dev/null)
+if [ "$race_failed" -eq 0 ] && [ "$race_present" -eq 6 ] && [ "$race_mode" = "700" ] && [ -z "$race_temp" ]; then
+  pass "concurrent_store_saves"
+else
+  fail "concurrent_store_saves" "failed=$race_failed present=$race_present/6 mode=$race_mode temp=$race_temp"
+fi
+
+# --- Test 16: the writer lock serializes saves (a held lock blocks a save) ---
+# A save must hold the exclusive writer lock before it hardens/writes, so while
+# another holder holds it the save BLOCKS rather than racing the holder's tree —
+# then completes once the lock is released. Markers live OUTSIDE the store so the
+# save's tree validation does not reject them.
+LSTORE="$TMP/lock-serial"; mkdir -p "$LSTORE"
+PROBE_ACQ="$TMP/probe-acquired"; PROBE_REL="$TMP/probe-releasing"
+rm -f "$PROBE_ACQ" "$PROBE_REL"
+(
+  source "$HERE/lib.sh"
+  acquire_context_store_lock "$LSTORE" >/dev/null 2>&1 || exit 1
+  : > "$PROBE_ACQ"
+  sleep 2
+  : > "$PROBE_REL"
+  release_context_store_lock >/dev/null 2>&1
+) &
+lock_holder_pid=$!
+lw=0; while [ ! -e "$PROBE_ACQ" ] && [ "$lw" -lt 3000 ]; do sleep 0.05; lw=$((lw + 50)); done
+printf 'lock probe\n' > "$TMP/lock-probe.md"
+SESSION_CONTEXT_HOME="$LSTORE" bash "$HERE/save-context.sh" lockprobe "$TMP/lock-probe.md" \
+  > "$TMP/lock-probe.out" 2>&1 &
+lock_save_pid=$!
+sleep 0.6   # holder releases at ~2s; the save must still be blocked at 0.6s
+if [ ! -e "$PROBE_REL" ] && [ ! -f "$LSTORE/lockprobe.md" ]; then lock_blocked=1; else lock_blocked=0; fi
+wait "$lock_holder_pid" 2>/dev/null
+wait "$lock_save_pid"; lock_save_rc=$?
+if [ "$lock_blocked" -eq 1 ] && [ "$lock_save_rc" -eq 0 ] && [ -f "$LSTORE/lockprobe.md" ]; then
+  pass "writer_lock_serializes_saves"
+else
+  fail "writer_lock_serializes_saves" "blocked=$lock_blocked rc=$lock_save_rc out=$(cat "$TMP/lock-probe.out" 2>/dev/null)"
 fi
 
 # --- Summary ---
