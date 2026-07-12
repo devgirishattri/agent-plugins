@@ -167,35 +167,47 @@ else fail "duplicate_name" "expected duplicate error, got: $out"; fi
 # Restore: rename DUP_PANE
 tmux -L "$SOCKET" set-option -p -t "$DUP_PANE" @name "gamma"
 
-# --- Test 7: lock contention (two parallel sends to alpha both land) ---
-(SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "send_message alpha 'parallel-A'" >/dev/null 2>&1) &
-(SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "send_message alpha 'parallel-B'" >/dev/null 2>&1) &
-wait
-# Poll until BOTH parallel sends render (adaptive; replaces a fixed sleep that
-# raced the pane render on slower CI runners).
-lc_waited=0
-while :; do
-  recipient_log=$(cap "$RECIPIENT_PANE")
-  { echo "$recipient_log" | grep -qF 'parallel-A' && echo "$recipient_log" | grep -qF 'parallel-B'; } && break
-  [ "$lc_waited" -ge 3000 ] && break
-  sleep 0.05; lc_waited=$((lc_waited + 50))
-done
-if echo "$recipient_log" | grep -qF 'parallel-A' && echo "$recipient_log" | grep -qF 'parallel-B'; then
+# --- Test 7: lock contention (two parallel sends to one recipient both land) ---
+# Send to a neutral `cat` sink, NOT a shell. A bash recipient EXECUTES the pasted
+# `[from:...]` line; its command-not-found redraw can consume the text before
+# capture-pane stabilizes on a loaded CI runner, so the marker never becomes
+# stable output — the long-standing flake. `cat` echoes stdin verbatim as stable
+# pane text, making the marker reliably observable. Mirrors the Codex harness
+# (codex/plugins/session-chat/scripts/test-session-chat.sh:105-107,702-712).
+# capture-pane -J joins wrapped lines so a wrapped marker still matches.
+tmux -L "$SOCKET" new-window -t "$SESSION" -n lcsink "cat"
+LC_SINK=$(tmux -L "$SOCKET" list-panes -t "$SESSION:lcsink" -F '#{pane_id}' | sed -n '1p')
+tmux -L "$SOCKET" set-option -p -t "$LC_SINK" @name "lc-sink"
+(SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 run_lib "$SENDER_PANE" "send_message lc-sink 'parallel-A'" >/dev/null 2>&1) & lc_pid_a=$!
+(SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 run_lib "$SENDER_PANE" "send_message lc-sink 'parallel-B'" >/dev/null 2>&1) & lc_pid_b=$!
+wait "$lc_pid_a"
+wait "$lc_pid_b"
+lc_captured=$(tmux -L "$SOCKET" capture-pane -J -t "$LC_SINK" -p -S -200 2>/dev/null)
+if echo "$lc_captured" | grep -qF 'parallel-A' && echo "$lc_captured" | grep -qF 'parallel-B'; then
   pass "lock_contention"
 else
   fail "lock_contention" "missing one of parallel-A/B in recipient"
 fi
+tmux -L "$SOCKET" kill-window -t "$SESSION:lcsink" 2>/dev/null || true
 
 # --- Test 8: retry path triggers on tight timeout (should still succeed via retry) ---
-# Use a tight timeout to force at least one retry under load
-out=$(SESSION_CHAT_VERIFY_TIMEOUT_MS=200 SESSION_CHAT_SEND_RETRIES=3 run_lib "$SENDER_PANE" "send_message alpha 'retry-probe'" 2>&1)
-if echo "$out" | grep -q ERROR; then
-  fail "retry_eventual_success" "retries exhausted: $out"
-elif cap_wait "$RECIPIENT_PANE" 'retry-probe' >/dev/null; then
+# Recipient is `sleep 0.4; cat`: for the first 0.4s no `cat` is consuming input, so
+# the tight 100ms verify window is guaranteed to miss at least once and force the
+# retry path; the 200ms linear backoff (200/400/600/800) carries a later attempt
+# past 0.4s, when `cat` starts and the marker lands as stable output. This tests
+# the retry contract deterministically — no CI-load or shell-execution assumption.
+# Mirrors the Codex harness (codex/.../test-session-chat.sh:714-719).
+tmux -L "$SOCKET" new-window -t "$SESSION" -n retry "sleep 0.4; cat"
+RETRY_PANE=$(tmux -L "$SOCKET" list-panes -t "$SESSION:retry" -F '#{pane_id}' | sed -n '1p')
+tmux -L "$SOCKET" set-option -p -t "$RETRY_PANE" @name "retry-recipient"
+SESSION_CHAT_VERIFY_TIMEOUT_MS=100 SESSION_CHAT_SEND_RETRIES=4 SESSION_CHAT_RETRY_BACKOFF_MS=200 \
+  run_lib "$SENDER_PANE" "send_message retry-recipient 'retry-probe'" >/dev/null 2>&1
+if tmux -L "$SOCKET" capture-pane -J -t "$RETRY_PANE" -p -S -200 2>/dev/null | grep -qF 'retry-probe'; then
   pass "retry_eventual_success"
 else
   fail "retry_eventual_success" "no marker on recipient"
 fi
+tmux -L "$SOCKET" kill-window -t "$SESSION:retry" 2>/dev/null || true
 
 # --- Test 8b: Enter (submit) failure queues instead of dropping the durable copy ---
 # Regression guard: a failed `send-keys Enter` must NOT be reported as live
