@@ -83,20 +83,93 @@ sanitize_label() {
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 MESSAGES_DIR="$CODEX_DIR/messages"
 
+_require_private_message_dir() {
+  local path="$1"
+  if [ -L "$path" ]; then
+    echo "ERROR: Refusing symbolic-link message directory: $path" >&2
+    return 1
+  fi
+  if [ ! -e "$path" ]; then
+    mkdir -p "$path" 2>/dev/null || return 1
+  fi
+  if [ ! -d "$path" ] || [ ! -O "$path" ]; then
+    echo "ERROR: Refusing unsafe message directory: $path" >&2
+    return 1
+  fi
+  chmod 700 "$path" 2>/dev/null || return 1
+}
+
+_require_private_message_file_or_absent() {
+  local path="$1"
+  _require_private_message_dir "$(dirname "$path")" || return 1
+  if [ -L "$path" ]; then
+    echo "ERROR: Refusing symbolic-link message file: $path" >&2
+    return 1
+  fi
+  if [ -e "$path" ]; then
+    if [ ! -f "$path" ] || [ ! -O "$path" ]; then
+      echo "ERROR: Refusing unsafe message file: $path" >&2
+      return 1
+    fi
+    local links
+    links=$(stat -c '%h' "$path" 2>/dev/null || stat -f '%l' "$path" 2>/dev/null) || return 1
+    if [ "$links" != "1" ]; then
+      echo "ERROR: Refusing multiply-linked message file: $path" >&2
+      return 1
+    fi
+    chmod 600 "$path" 2>/dev/null || return 1
+  fi
+}
+
+_message_temp_file() {
+  local target="$1"
+  _require_private_message_dir "$(dirname "$target")" || return 1
+  mktemp "${target}.tmp.XXXXXX" 2>/dev/null || {
+    echo "ERROR: Could not create private message temp file beside: $target" >&2
+    return 1
+  }
+}
+
+_write_private_message_file() {
+  local path="$1" text="$2"
+  _require_private_message_file_or_absent "$path" || return 1
+  if ! (set -o noclobber; umask 077; printf '%s\n' "$text" > "$path") 2>/dev/null; then
+    echo "ERROR: Refusing to overwrite existing dispatch file: $path" >&2
+    return 1
+  fi
+  _require_private_message_file_or_absent "$path" || { rm -f "$path" 2>/dev/null; return 1; }
+}
+
 harden_messages_dir() {
   local messages_dir="${1:-$MESSAGES_DIR}"
-  if [ ! -d "$messages_dir" ] || [ -L "$messages_dir" ] || [ ! -O "$messages_dir" ]; then
+  if [ -L "$messages_dir" ] || [ ! -d "$messages_dir" ] || [ ! -O "$messages_dir" ]; then
     echo "ERROR: Refusing unsafe messages directory: $messages_dir" >&2
     return 1
   fi
   chmod 700 "$messages_dir" 2>/dev/null || return 1
   local marker="$messages_dir/.perms-hardened-v1"
+  _require_private_message_file_or_absent "$marker" || return 1
   if [ ! -e "$marker" ]; then
+    if find "$messages_dir" -type l -print -quit 2>/dev/null | grep . >/dev/null 2>&1; then
+      echo "ERROR: Refusing symbolic link below messages directory: $messages_dir" >&2
+      return 1
+    fi
     find "$messages_dir" -type d -exec chmod 700 {} + 2>/dev/null || return 1
     find "$messages_dir" -type f -exec chmod 600 {} + 2>/dev/null || return 1
     : > "$marker" || return 1
     chmod 600 "$marker" 2>/dev/null || return 1
   fi
+  local dir file
+  for dir in "$messages_dir/queue" "$messages_dir/archive"; do
+    [ ! -e "$dir" ] && [ ! -L "$dir" ] || _require_private_message_dir "$dir" || return 1
+  done
+  if [ -e "$messages_dir/queue" ]; then
+    dir="$messages_dir/queue/.locks"
+    [ ! -e "$dir" ] && [ ! -L "$dir" ] || _require_private_message_dir "$dir" || return 1
+  fi
+  for file in "$messages_dir/sent-log.tsv" "$messages_dir/replies-log.tsv"; do
+    _require_private_message_file_or_absent "$file" || return 1
+  done
 }
 
 ensure_messages_dir() {
@@ -505,7 +578,13 @@ acquire_send_lock() {
   local last_owner=""
   local pid
 
-  mkdir -p "$(dirname "$lock_dir")"
+  local lock_parent
+  lock_parent=$(dirname "$lock_dir")
+  _require_private_message_dir "$lock_parent" || return 1
+  if [ -L "$lock_dir" ] || { [ -e "$lock_dir" ] && { [ ! -d "$lock_dir" ] || [ ! -O "$lock_dir" ]; }; }; then
+    echo "ERROR: Refusing unsafe send lock: $lock_dir" >&2
+    return 1
+  fi
   while [ "$elapsed" -lt "$timeout_ms" ]; do
     if mkdir "$lock_dir" 2>/dev/null; then
       printf '%s\n' "$$" > "$lock_dir/pid"
@@ -658,8 +737,9 @@ prune_recent_ids_unlocked() {
   local messages_dir="${3:-$MESSAGES_DIR}"
   local rf tmp
   rf=$(recent_file_for "$recipient" "$messages_dir")
+  _require_private_message_file_or_absent "$rf" || return 1
   [ -f "$rf" ] || return 0
-  tmp="${rf}.tmp.$$"
+  tmp=$(_message_temp_file "$rf") || return 1
   awk -F'\t' -v now="$now" '$1 != "" && $2 ~ /^[0-9]+$/ && $2 > now' "$rf" > "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$rf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 }
@@ -669,6 +749,7 @@ recent_ids_unlocked() {
   local messages_dir="${2:-$MESSAGES_DIR}"
   local rf
   rf=$(recent_file_for "$recipient" "$messages_dir")
+  _require_private_message_file_or_absent "$rf" || return 1
   [ -f "$rf" ] || return 0
   awk -F'\t' '$1 != "" { print $1 }' "$rf" 2>/dev/null || true
 }
@@ -677,12 +758,14 @@ mark_recent_id_unlocked() {
   local recipient="$1" id="$2" now="$3"
   local messages_dir="${4:-$MESSAGES_DIR}"
   [ -n "$recipient" ] && [ -n "$id" ] || return 0
-  local rf expires
+  local rf expires tmp
   rf=$(recent_file_for "$recipient" "$messages_dir")
-  mkdir -p "$(dirname "$rf")" 2>/dev/null || true
+  _require_private_message_dir "$(dirname "$rf")" || return 1
+  _require_private_message_file_or_absent "$rf" || return 1
   expires=$((now + $(recent_id_ttl_ms)))
-  awk -F'\t' -v id="$id" '$1 != id' "$rf" > "${rf}.tmp.$$" 2>/dev/null || true
-  mv -f "${rf}.tmp.$$" "$rf" 2>/dev/null || rm -f "${rf}.tmp.$$" 2>/dev/null
+  tmp=$(_message_temp_file "$rf") || return 1
+  awk -F'\t' -v id="$id" '$1 != id' "$rf" > "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$rf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   printf '%s\t%s\n' "$id" "$expires" >> "$rf"
 }
 
@@ -745,10 +828,12 @@ enqueue_message() {
   ensure_messages_dir "$messages_dir" || return 1
   local qf lock ready_at
   qf=$(queue_file_for "$recipient" "$messages_dir")
-  mkdir -p "$(dirname "$qf")" 2>/dev/null || true
+  _require_private_message_dir "$(dirname "$qf")" || return 1
+  _require_private_message_file_or_absent "$qf" || return 1
   ready_at=$(queue_ready_at_ms)
   lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
+  _require_private_message_file_or_absent "$qf" || { release_send_lock "$lock"; return 1; }
   emit_queue_record "$id" "$type" "$from" "$ready_at" "$(queue_priority_value)" "$(queue_expires_at_ms)" "$payload" >> "$qf"
   release_send_lock "$lock"
 }
@@ -758,10 +843,12 @@ dequeue_message_id() {
   local messages_dir="${3:-$MESSAGES_DIR}"
   local qf lock tmp
   qf=$(queue_file_for "$recipient" "$messages_dir")
+  _require_private_message_file_or_absent "$qf" || return 1
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
-  tmp="${qf}.tmp.$$"
+  _require_private_message_file_or_absent "$qf" || { release_send_lock "$lock"; return 1; }
+  tmp=$(_message_temp_file "$qf") || { release_send_lock "$lock"; return 1; }
   awk -F'\t' -v id="$id" '$1 != id' "$qf" > "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   release_send_lock "$lock"
@@ -772,10 +859,12 @@ mark_message_ready() {
   local messages_dir="${3:-$MESSAGES_DIR}"
   local qf lock tmp now line
   qf=$(queue_file_for "$recipient" "$messages_dir")
+  _require_private_message_file_or_absent "$qf" || return 1
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
-  tmp="${qf}.tmp.$$"
+  _require_private_message_file_or_absent "$qf" || { release_send_lock "$lock"; return 1; }
+  tmp=$(_message_temp_file "$qf") || { release_send_lock "$lock"; return 1; }
   now=$(now_ms)
   : > "$tmp"
   while IFS= read -r line; do
@@ -806,8 +895,10 @@ claim_inbox_ids() {
 
   local qf lock now tmp line claim_id
   qf=$(queue_file_for "$recipient")
+  _require_private_message_file_or_absent "$qf" || return 1
   lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 1
+  _require_private_message_file_or_absent "$qf" || { release_send_lock "$lock"; return 1; }
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
 
@@ -822,7 +913,7 @@ claim_inbox_ids() {
   done < <(printf '%s\n' "$claim_ids" | tr ' ' '\n')
 
   if [ -f "$qf" ]; then
-    tmp="${qf}.tmp.$$"
+    tmp=$(_message_temp_file "$qf") || { release_send_lock "$lock"; return 1; }
     : > "$tmp"
     while IFS= read -r line; do
       parse_queue_record "$line" || continue
@@ -851,9 +942,11 @@ drain_inbox() {
   [ -n "$recipient" ] || return 0
   local qf lock now recent_ids
   qf=$(queue_file_for "$recipient")
+  _require_private_message_file_or_absent "$qf" || return 1
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 0
+  _require_private_message_file_or_absent "$qf" || { release_send_lock "$lock"; return 1; }
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
   recent_ids=$(recent_ids_unlocked "$recipient" | tr '\n' ' ')
@@ -889,7 +982,8 @@ drain_inbox() {
       remove_ids="$remove_ids $QR_ID"
     done < "$qf"
   done
-  local tmp="${qf}.tmp.$$"
+  local tmp
+  tmp=$(_message_temp_file "$qf") || { release_send_lock "$lock"; return 1; }
   : > "$tmp"
   while IFS= read -r line; do
     parse_queue_record "$line" || continue
@@ -912,11 +1006,14 @@ inbox_candidates() {
   [ -n "$recipient" ] || return 0
   local qf lock now recent_ids recent_file line pass_prio
   qf=$(queue_file_for "$recipient")
+  _require_private_message_file_or_absent "$qf" || return 1
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 0
+  _require_private_message_file_or_absent "$qf" || { release_send_lock "$lock"; return 1; }
   now=$(now_ms)
   recent_file=$(recent_file_for "$recipient")
+  _require_private_message_file_or_absent "$recent_file" || { release_send_lock "$lock"; return 1; }
   recent_ids=""
   if [ -f "$recent_file" ]; then
     recent_ids=$(awk -F'\t' -v now="$now" '$1 != "" && $2 ~ /^[0-9]+$/ && $2 > now { print $1 }' "$recent_file" 2>/dev/null | tr '\n' ' ')
@@ -948,9 +1045,11 @@ drain_inbox_ids() {
   [ -n "$recipient" ] || return 0
   local qf lock now recent_ids remove_ids line pass_prio tmp
   qf=$(queue_file_for "$recipient")
+  _require_private_message_file_or_absent "$qf" || return 1
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient")
   acquire_send_lock "$lock" "queue:${recipient}" || return 0
+  _require_private_message_file_or_absent "$qf" || { release_send_lock "$lock"; return 1; }
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
   recent_ids=$(recent_ids_unlocked "$recipient" | tr '\n' ' ')
@@ -984,7 +1083,7 @@ drain_inbox_ids() {
       remove_ids="$remove_ids $QR_ID"
     done < "$qf"
   done
-  tmp="${qf}.tmp.$$"
+  tmp=$(_message_temp_file "$qf") || { release_send_lock "$lock"; return 1; }
   : > "$tmp"
   while IFS= read -r line; do
     parse_queue_record "$line" || continue
@@ -1018,7 +1117,8 @@ trim_log_file() {
   lines=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
   is_nonnegative_int "$lines" || return 0
   [ "$lines" -gt "$max" ] || return 0
-  local tmp="${f}.tmp.$$"
+  local tmp
+  tmp=$(_message_temp_file "$f") || return 0
   tail -n "$keep" "$f" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 }
 
@@ -1027,10 +1127,13 @@ log_sent_message() {
   local id="$1" from="$2" to="$3" type="$4" delivery="$5"
   local excerpt
   excerpt=$(log_excerpt "$6")
+  local sf
+  sf=$(sent_log_file)
   ensure_messages_dir || return 0
+  _require_private_message_file_or_absent "$sf" || return 0
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$(sent_log_file)" 2>/dev/null || true
-  trim_log_file "$(sent_log_file)"
+    "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$sf" 2>/dev/null || true
+  trim_log_file "$sf"
   archive_message "out" "$to" "$type" "$id" "$6"
 }
 
@@ -1043,6 +1146,7 @@ log_reply_ids() {
   local rf id
   rf=$(replies_log_file)
   ensure_messages_dir || return 0
+  _require_private_message_file_or_absent "$rf" || return 0
   printf '%s' "$text" | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null | sed 's/^\[re://; s/\]$//' | sort -u | \
   while IFS= read -r id; do
     [ -n "$id" ] || continue
@@ -1068,9 +1172,10 @@ archive_message() {
   local dir day f
   ensure_messages_dir || return 0
   dir="$MESSAGES_DIR/archive"
-  mkdir -p "$dir" 2>/dev/null || return 0
+  _require_private_message_dir "$dir" || return 0
   day=$(date +%Y-%m-%d 2>/dev/null) || return 0
   f="$dir/${day}.tsv"
+  _require_private_message_file_or_absent "$f" || return 0
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(now_ms)" "$direction" "$peer" "$type" "$id" \
     "$(printf '%s' "$text" | tr '\t\n\r' '   ' | cut -c1-200)" >> "$f" 2>/dev/null || true
   find "$dir" -name '*.tsv' -type f -mtime +"$(archive_retention_days)" -delete 2>/dev/null || true
@@ -1291,8 +1396,7 @@ dispatch_message() {
   local msg_id
   msg_id="$(date +%s)-$$-${uid}-${my_name}-to-${target_name}"
   local msg_file="$target_messages_dir/${msg_id}.md"
-  printf '%s\n' "$message" > "$msg_file"
-  chmod 600 "$msg_file" 2>/dev/null || { rm -f "$msg_file"; return 1; }
+  _write_private_message_file "$msg_file" "$message" || return 1
 
   # Send single-line notification with file reference
   local line_count

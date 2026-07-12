@@ -959,6 +959,154 @@ else
 fi
 rm -rf "$CK_HOME"
 
+# --- Test 39: nested queue subtree symlink planted AFTER the perms marker is
+#     rejected on enqueue (the one-time migration marker must not grant a pass to
+#     a later-swapped queue dir). ---
+qsub_out=$(
+  source "$HERE/lib.sh"
+  QB=$(mktemp -d); md="$QB/messages"; export MESSAGES_DIR="$md"
+  mkdir -p "$md/queue"
+  harden_messages_dir "$md"                 # stamps .perms-hardened-v1 marker
+  outside="$QB/outside"; mkdir -p "$outside"
+  rm -rf "$md/queue"; ln -s "$outside" "$md/queue"   # swap queue -> symlink, post-marker
+  enqueue_message peer id1 send me hello "$md"; echo "ENQ_RC=$?"
+  [ -z "$(ls -A "$outside" 2>/dev/null)" ] && echo "OUTSIDE_CLEAN"
+  rm -rf "$QB"
+)
+if echo "$qsub_out" | grep -q 'ENQ_RC=1' && echo "$qsub_out" | grep -q 'OUTSIDE_CLEAN'; then
+  pass "queue_subtree_symlink_rejected_post_marker"
+else
+  fail "queue_subtree_symlink_rejected_post_marker" "out=$qsub_out"
+fi
+
+# --- Test 40: a symlinked queue-file LEAF (planted after the marker, inside a
+#     real queue dir) is refused and its out-of-tree target preserved — subtree
+#     dir guards alone don't catch leaf redirection. ---
+leaf_out=$(
+  source "$HERE/lib.sh"
+  LB=$(mktemp -d); md="$LB/messages"; export MESSAGES_DIR="$md"
+  mkdir -p "$md/queue"
+  harden_messages_dir "$md"
+  outside="$LB/outside.tsv"; printf 'ORIGINAL\n' > "$outside"
+  ln -s "$outside" "$md/queue/peer.tsv"     # queue_file_for peer -> outside
+  enqueue_message peer id1 send me hello "$md"; echo "ENQ_RC=$?"
+  [ "$(cat "$outside")" = "ORIGINAL" ] && echo "LEAF_PRESERVED"
+  rm -rf "$LB"
+)
+if echo "$leaf_out" | grep -q 'ENQ_RC=1' && echo "$leaf_out" | grep -q 'LEAF_PRESERVED'; then
+  pass "queue_leaf_symlink_preserved"
+else
+  fail "queue_leaf_symlink_preserved" "out=$leaf_out"
+fi
+
+# --- Test 41: a HARDLINKED queue-file leaf (link count 2 => shares an inode with
+#     an outside file) is refused before any write; the outside content is
+#     preserved. ---
+hard_out=$(
+  source "$HERE/lib.sh"
+  HB=$(mktemp -d); md="$HB/messages"; export MESSAGES_DIR="$md"
+  mkdir -p "$md/queue"
+  harden_messages_dir "$md"
+  outside="$HB/outside.tsv"; printf 'ORIGINAL\n' > "$outside"
+  ln "$outside" "$md/queue/peer.tsv"        # hardlink, planted post-marker
+  enqueue_message peer id1 send me hello "$md"; echo "ENQ_RC=$?"
+  [ "$(cat "$outside")" = "ORIGINAL" ] && echo "HARD_PRESERVED"
+  rm -rf "$HB"
+)
+if echo "$hard_out" | grep -q 'ENQ_RC=1' && echo "$hard_out" | grep -q 'HARD_PRESERVED'; then
+  pass "queue_leaf_hardlink_rejected"
+else
+  fail "queue_leaf_hardlink_rejected" "out=$hard_out"
+fi
+
+# --- Test 42: sent-log / replies-log / archive date-file leaves that are
+#     symlinks to out-of-tree files are never appended through (best-effort ops
+#     skip on refusal); the outside targets stay untouched. ---
+log_out=$(
+  source "$HERE/lib.sh"
+  GB=$(mktemp -d); md="$GB/messages"; export MESSAGES_DIR="$md"
+  mkdir -p "$md/archive"
+  harden_messages_dir "$md"
+  out_sent="$GB/outside-sent.tsv"; printf 'ORIGINAL\n' > "$out_sent"
+  out_rep="$GB/outside-rep.tsv";  printf 'ORIGINAL\n' > "$out_rep"
+  out_arch="$GB/outside-arch.tsv"; printf 'ORIGINAL\n' > "$out_arch"
+  day=$(date +%Y-%m-%d)
+  ln -s "$out_sent" "$md/sent-log.tsv"
+  ln -s "$out_rep"  "$md/replies-log.tsv"
+  ln -s "$out_arch" "$md/archive/$day.tsv"
+  # Each guard is exercised by the function that owns that leaf. archive_message
+  # is called DIRECTLY: log_sent_message returns at its own sent-log guard and
+  # would never reach the archive append, so relying on it would false-green ARCH.
+  log_sent_message id1 me peer send live "hello there"   # sent-log leaf guard
+  log_reply_ids peer "[re:deadbeef] ok"                  # replies-log leaf guard
+  archive_message out peer send id1 "hello there"        # archive day-file leaf guard
+  echo "SENT=$(wc -l < "$out_sent" | tr -d ' ')"
+  echo "REP=$(wc -l < "$out_rep" | tr -d ' ')"
+  echo "ARCH=$(wc -l < "$out_arch" | tr -d ' ')"
+  rm -rf "$GB"
+)
+if echo "$log_out" | grep -q 'SENT=1' && echo "$log_out" | grep -q 'REP=1' && echo "$log_out" | grep -q 'ARCH=1'; then
+  pass "log_and_archive_leaf_symlink_preserved"
+else
+  fail "log_and_archive_leaf_symlink_preserved" "out=$log_out"
+fi
+
+# --- Test 43: the receiver trust gate rejects a HARDLINKED dispatch file (link
+#     count 2 => an outside path shares the inode), so hardlinked outside content
+#     is never treated as a trusted task body. ---
+HL_HOME=$(mktemp -d); HL_MSGS="$HL_HOME/.claude/messages"; mkdir -p "$HL_MSGS"
+printf 'HARDLINKBODY\n' > "$HL_HOME/outside-body.txt"
+ln "$HL_HOME/outside-body.txt" "$HL_MSGS/task.md"   # hardlink into the messages dir
+chmod 600 "$HL_MSGS/task.md"
+hl_out=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:abcd1234] dispatch (1 lines)"}' "$HL_MSGS/task.md" \
+  | env HOME="$HL_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="" SESSION_CHAT_INCOMING_MODE=auto \
+    bash "$HERE/detect-incoming-message.sh")
+if echo "$hl_out" | grep -q 'OUTSIDE the trusted message dir' && ! echo "$hl_out" | grep -q 'HARDLINKBODY'; then
+  pass "trust_reject_hardlink"
+else
+  fail "trust_reject_hardlink" "out=$hl_out"
+fi
+rm -rf "$HL_HOME"
+
+# --- Test 44: a DANGLING .perms-hardened-v1 marker symlink must be rejected, not
+#     followed by the create redirection out of the tree. harden + enqueue fail
+#     closed and the out-of-tree marker target is never created. ---
+dm_out=$(
+  source "$HERE/lib.sh"
+  DB=$(mktemp -d); md="$DB/messages"; export MESSAGES_DIR="$md"
+  mkdir -p "$md"
+  outside="$DB/outside-marker"                    # does NOT exist (dangling target)
+  ln -s "$outside" "$md/.perms-hardened-v1"
+  harden_messages_dir "$md"; echo "HARDEN_RC=$?"
+  enqueue_message peer id1 send me hello "$md"; echo "ENQ_RC=$?"
+  [ ! -e "$outside" ] && echo "OUTSIDE_NOT_CREATED"
+  rm -rf "$DB"
+)
+if echo "$dm_out" | grep -q 'HARDEN_RC=1' && echo "$dm_out" | grep -q 'ENQ_RC=1' \
+   && echo "$dm_out" | grep -q 'OUTSIDE_NOT_CREATED'; then
+  pass "dangling_marker_symlink_rejected"
+else
+  fail "dangling_marker_symlink_rejected" "out=$dm_out"
+fi
+
+# --- Test 45: a queue subdir loosened to 0777 AFTER the perms marker is
+#     re-tightened to 0700 on the next op (owner-only contract holds post-marker),
+#     and the op still succeeds. ---
+loose_out=$(
+  source "$HERE/lib.sh"
+  LB=$(mktemp -d); md="$LB/messages"; export MESSAGES_DIR="$md"
+  mkdir -p "$md/queue"; harden_messages_dir "$md"   # marker set
+  chmod 777 "$md/queue"                             # loosen AFTER marker
+  enqueue_message peer id1 send me hello "$md"; echo "ENQ_RC=$?"
+  echo "QMODE=$(stat -c '%a' "$md/queue" 2>/dev/null || stat -f '%Lp' "$md/queue" 2>/dev/null)"
+  rm -rf "$LB"
+)
+if echo "$loose_out" | grep -q 'ENQ_RC=0' && echo "$loose_out" | grep -q 'QMODE=700'; then
+  pass "queue_subtree_loose_dir_tightened_post_marker"
+else
+  fail "queue_subtree_loose_dir_tightened_post_marker" "out=$loose_out"
+fi
+
 # --- Summary ---
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="

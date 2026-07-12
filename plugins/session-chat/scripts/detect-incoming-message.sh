@@ -146,6 +146,16 @@ trusted_message_file() {
   [ -L "$file" ] && return 1
   [ -f "$file" ] || return 1
   [ -O "$file" ] || return 1
+  # Reject a file with more than one hardlink: a second link means an outside
+  # path shares this inode, so the "trusted" content could be a peer's hardlink
+  # to arbitrary data they still control. A dispatch file we wrote has link
+  # count 1. GNU stat first, BSD stat fallback.
+  local links
+  links=$(stat -c '%h' "$file" 2>/dev/null || stat -f '%l' "$file" 2>/dev/null)
+  case "$links" in
+    1) ;;
+    *) return 1 ;;
+  esac
   # Owner-only mode required: reject any file with group/other permission bits
   # set (must be 0600 or stricter). A loose-mode file in the shared dir could
   # have been readable or writable by another local user before we saw it.

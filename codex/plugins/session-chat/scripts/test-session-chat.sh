@@ -404,6 +404,116 @@ if CODEX_HOME="$UNSAFE_HOME" bash -c 'source "$0"; ensure_messages_dir' "$SCRIPT
   fail "messages directory hardening accepted a symlink root"
 fi
 
+MARKER_HOME="$TEST_HOME/marker-symlink-codex"
+mkdir -p "$MARKER_HOME/messages"
+chmod 700 "$MARKER_HOME/messages"
+ln -s "$MARKER_HOME/outside-marker" "$MARKER_HOME/messages/.perms-hardened-v1"
+if CODEX_HOME="$MARKER_HOME" bash -c 'source "$0"; ensure_messages_dir' "$SCRIPT_DIR/lib.sh" 2> "$MARKER_HOME/marker.err"; then
+  fail "messages directory hardening accepted a dangling marker symlink"
+fi
+[ ! -e "$MARKER_HOME/outside-marker" ] || fail "dangling marker symlink created an outside file"
+
+LOOSE_QUEUE_HOME="$TEST_HOME/loose-queue-codex"
+mkdir -p "$LOOSE_QUEUE_HOME/messages/queue"
+chmod 700 "$LOOSE_QUEUE_HOME/messages" "$LOOSE_QUEUE_HOME/messages/queue"
+CODEX_HOME="$LOOSE_QUEUE_HOME" bash -c 'source "$0"; ensure_messages_dir' "$SCRIPT_DIR/lib.sh"
+chmod 777 "$LOOSE_QUEUE_HOME/messages/queue"
+CODEX_HOME="$LOOSE_QUEUE_HOME" bash -c 'source "$0"; enqueue_message recipient-test aaaa0000 send sender-test payload' "$SCRIPT_DIR/lib.sh"
+loose_queue_mode=$(stat -c '%a' "$LOOSE_QUEUE_HOME/messages/queue" 2>/dev/null || stat -f '%Lp' "$LOOSE_QUEUE_HOME/messages/queue" 2>/dev/null)
+[ "$loose_queue_mode" = "700" ] || fail "post-marker queue directory remained mode $loose_queue_mode"
+
+# The migration marker must not bypass validation of nested runtime paths.
+# Queue, lock, archive, and recipient-ledger symlinks must never redirect a
+# write outside the trusted messages root.
+NESTED_HOME="$TEST_HOME/nested-symlink-codex"
+mkdir -p "$NESTED_HOME/messages" "$NESTED_HOME/outside-queue"
+chmod 700 "$NESTED_HOME/messages" "$NESTED_HOME/outside-queue"
+: > "$NESTED_HOME/messages/.perms-hardened-v1"
+chmod 600 "$NESTED_HOME/messages/.perms-hardened-v1"
+ln -s "$NESTED_HOME/outside-queue" "$NESTED_HOME/messages/queue"
+if CODEX_HOME="$NESTED_HOME" bash -c 'source "$0"; enqueue_message recipient-test aaaa0001 send sender-test payload' \
+  "$SCRIPT_DIR/lib.sh" 2> "$NESTED_HOME/queue.err"; then
+  fail "message enqueue accepted a symlinked queue directory"
+fi
+assert_file_contains "$NESTED_HOME/queue.err" 'Refusing symbolic-link message directory'
+[ ! -e "$NESTED_HOME/outside-queue/recipient-test.tsv" ] || fail "queue symlink redirected a message write"
+
+LOCK_LINK_HOME="$TEST_HOME/lock-symlink-codex"
+mkdir -p "$LOCK_LINK_HOME/messages/queue" "$LOCK_LINK_HOME/outside-locks"
+chmod 700 "$LOCK_LINK_HOME/messages" "$LOCK_LINK_HOME/messages/queue" "$LOCK_LINK_HOME/outside-locks"
+: > "$LOCK_LINK_HOME/messages/.perms-hardened-v1"
+chmod 600 "$LOCK_LINK_HOME/messages/.perms-hardened-v1"
+ln -s "$LOCK_LINK_HOME/outside-locks" "$LOCK_LINK_HOME/messages/queue/.locks"
+if CODEX_HOME="$LOCK_LINK_HOME" bash -c 'source "$0"; enqueue_message recipient-test aaaa0002 send sender-test payload' \
+  "$SCRIPT_DIR/lib.sh" 2> "$LOCK_LINK_HOME/locks.err"; then
+  fail "message enqueue accepted a symlinked queue lock directory"
+fi
+assert_file_contains "$LOCK_LINK_HOME/locks.err" 'Refusing symbolic-link message directory'
+[ -z "$(find "$LOCK_LINK_HOME/outside-locks" -mindepth 1 -print -quit)" ] || fail "lock symlink redirected a lock write"
+
+FILE_LINK_HOME="$TEST_HOME/file-symlink-codex"
+mkdir -p "$FILE_LINK_HOME/messages/queue"
+chmod 700 "$FILE_LINK_HOME/messages" "$FILE_LINK_HOME/messages/queue"
+: > "$FILE_LINK_HOME/messages/.perms-hardened-v1"
+chmod 600 "$FILE_LINK_HOME/messages/.perms-hardened-v1"
+printf 'outside sentinel\n' > "$FILE_LINK_HOME/outside.tsv"
+ln -s "$FILE_LINK_HOME/outside.tsv" "$FILE_LINK_HOME/messages/queue/recipient-test.tsv"
+if CODEX_HOME="$FILE_LINK_HOME" bash -c 'source "$0"; enqueue_message recipient-test aaaa0003 send sender-test payload' \
+  "$SCRIPT_DIR/lib.sh" 2> "$FILE_LINK_HOME/file.err"; then
+  fail "message enqueue accepted a symlinked recipient ledger"
+fi
+assert_file_contains "$FILE_LINK_HOME/file.err" 'Refusing symbolic-link message file'
+[ "$(cat "$FILE_LINK_HOME/outside.tsv")" = 'outside sentinel' ] || fail "recipient ledger symlink modified an outside file"
+
+HARDLINK_HOME="$TEST_HOME/hardlink-codex"
+mkdir -p "$HARDLINK_HOME/messages/queue"
+chmod 700 "$HARDLINK_HOME/messages" "$HARDLINK_HOME/messages/queue"
+: > "$HARDLINK_HOME/messages/.perms-hardened-v1"
+chmod 600 "$HARDLINK_HOME/messages/.perms-hardened-v1"
+printf 'hardlink sentinel\n' > "$HARDLINK_HOME/outside.tsv"
+ln "$HARDLINK_HOME/outside.tsv" "$HARDLINK_HOME/messages/queue/recipient-test.tsv"
+if CODEX_HOME="$HARDLINK_HOME" bash -c 'source "$0"; enqueue_message recipient-test aaaa0004 send sender-test payload' \
+  "$SCRIPT_DIR/lib.sh" 2> "$HARDLINK_HOME/hardlink.err"; then
+  fail "message enqueue accepted a multiply-linked recipient ledger"
+fi
+assert_file_contains "$HARDLINK_HOME/hardlink.err" 'Refusing multiply-linked message file'
+[ "$(cat "$HARDLINK_HOME/outside.tsv")" = 'hardlink sentinel' ] || fail "recipient ledger hardlink modified an outside file"
+
+NO_CLOBBER_HOME="$TEST_HOME/no-clobber-codex"
+mkdir -p "$NO_CLOBBER_HOME/messages"
+chmod 700 "$NO_CLOBBER_HOME/messages"
+printf 'existing dispatch\n' > "$NO_CLOBBER_HOME/messages/preplanted.md"
+chmod 600 "$NO_CLOBBER_HOME/messages/preplanted.md"
+if CODEX_HOME="$NO_CLOBBER_HOME" bash -c 'source "$0"; _write_private_message_file "$1" replacement' \
+  "$SCRIPT_DIR/lib.sh" "$NO_CLOBBER_HOME/messages/preplanted.md" 2> "$NO_CLOBBER_HOME/no-clobber.err"; then
+  fail "private dispatch writer overwrote a pre-planted file"
+fi
+assert_file_contains "$NO_CLOBBER_HOME/no-clobber.err" 'Refusing to overwrite existing dispatch file'
+[ "$(cat "$NO_CLOBBER_HOME/messages/preplanted.md")" = 'existing dispatch' ] || fail "private dispatch writer changed a pre-planted file"
+
+LOG_LINK_HOME="$TEST_HOME/log-symlink-codex"
+mkdir -p "$LOG_LINK_HOME/messages"
+chmod 700 "$LOG_LINK_HOME/messages"
+: > "$LOG_LINK_HOME/messages/.perms-hardened-v1"
+chmod 600 "$LOG_LINK_HOME/messages/.perms-hardened-v1"
+printf 'log sentinel\n' > "$LOG_LINK_HOME/outside-log.tsv"
+ln -s "$LOG_LINK_HOME/outside-log.tsv" "$LOG_LINK_HOME/messages/sent-log.tsv"
+CODEX_HOME="$LOG_LINK_HOME" bash -c 'source "$0"; log_sent_message aaaa0005 sender-test peer send queued payload' \
+  "$SCRIPT_DIR/lib.sh" 2> "$LOG_LINK_HOME/log.err"
+assert_file_contains "$LOG_LINK_HOME/log.err" 'Refusing symbolic-link message file'
+[ "$(cat "$LOG_LINK_HOME/outside-log.tsv")" = 'log sentinel' ] || fail "sent-log symlink modified an outside file"
+
+ARCHIVE_LINK_HOME="$TEST_HOME/archive-symlink-codex"
+mkdir -p "$ARCHIVE_LINK_HOME/messages" "$ARCHIVE_LINK_HOME/outside-archive"
+chmod 700 "$ARCHIVE_LINK_HOME/messages" "$ARCHIVE_LINK_HOME/outside-archive"
+: > "$ARCHIVE_LINK_HOME/messages/.perms-hardened-v1"
+chmod 600 "$ARCHIVE_LINK_HOME/messages/.perms-hardened-v1"
+ln -s "$ARCHIVE_LINK_HOME/outside-archive" "$ARCHIVE_LINK_HOME/messages/archive"
+CODEX_HOME="$ARCHIVE_LINK_HOME" bash -c 'source "$0"; archive_message out peer send aaaa0004 payload' \
+  "$SCRIPT_DIR/lib.sh" 2> "$ARCHIVE_LINK_HOME/archive.err"
+assert_file_contains "$ARCHIVE_LINK_HOME/archive.err" 'Refusing symbolic-link message directory'
+[ -z "$(find "$ARCHIVE_LINK_HOME/outside-archive" -mindepth 1 -print -quit)" ] || fail "archive symlink redirected a history write"
+
 detect_dispatch() {
   local mode="$1" file="$2" id="$3" root="$4" inline_max="${5:-6000}"
   printf '%s\n' "[from:peer pane:%999 msg:$file id:$id] dispatch (2 lines) — read msg file" \
@@ -435,6 +545,14 @@ assert_contains 'OUTSIDE the trusted message dir' "$SYMLINK_OUT"
 assert_contains '$session-chat:reply peer aaaa0003 <message>' "$SYMLINK_OUT"
 if printf '%s\n' "$SYMLINK_OUT" | grep -F 'off-limits' >/dev/null; then
   fail "trusted-file gate followed a symlink"
+fi
+printf 'hardlinked secret\n' > "$TEST_HOME/outside-hardlink.md"
+chmod 600 "$TEST_HOME/outside-hardlink.md"
+ln "$TEST_HOME/outside-hardlink.md" "$TEST_HOME/messages/hardlinked.md"
+HARDLINK_OUT=$(detect_dispatch auto "$TEST_HOME/messages/hardlinked.md" aaaa0009 "$PLUGIN_ROOT")
+assert_contains 'OUTSIDE the trusted message dir' "$HARDLINK_OUT"
+if printf '%s\n' "$HARDLINK_OUT" | grep -F 'hardlinked secret' >/dev/null; then
+  fail "trusted-file gate read a multiply-linked dispatch file"
 fi
 mkdir -p "$TEST_HOME/no-lib"
 LOOSE_FILE="$TEST_HOME/messages/loose.md"

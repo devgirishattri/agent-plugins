@@ -458,6 +458,22 @@ require_tokens(root / "plugins/session-manager/commands/session-delete.md", "Ask
 require_tokens(root / "codex/plugins/session-manager/skills/session-delete/SKILL.md", "request_user_input", "--confirmed", "codex delete --force")
 require_tokens(root / "plugins/session-manager/scripts/delete-session.sh", "--confirmed", "REFUSED")
 require_tokens(root / "plugins/session-manager/scripts/delete-all-sessions.sh", "--confirmed", "REFUSED")
+require_tokens(
+    root / "plugins/session-manager/scripts/delete-session.sh",
+    "canonical_dir", "within_boundary", "safe_target", "safe_leaf", "pwd -P",
+)
+require_tokens(
+    root / "plugins/session-manager/scripts/delete-all-sessions.sh",
+    "projects_real", "pwd -P", '"$projects_real"/*',
+)
+require_tokens(
+    root / "plugins/session-manager/scripts/test-session-manager.sh",
+    "delete_refuses_symlinked_project_parent",
+    "delete_refuses_symlinked_nonproject_parent",
+    "bulk_delete_refuses_outside_projects",
+    "delete_refuses_hardlinked_history_lock",
+    "history_flock_failure_reported_not_removed",
+)
 require_order(root / "plugins/session-manager/commands/session-delete.md", "No, cancel (Recommended)", "Yes, delete all")
 require_order(root / "codex/plugins/session-manager/skills/session-delete/SKILL.md", "No, cancel (Recommended)", "Yes, delete it")
 require_tokens(root / "plugins/creating-docs/commands/doc-review.md", "doc-reviewer")
@@ -486,7 +502,16 @@ require_tokens(root / "plugins/session-scheduler/commands/tasks-clean.md", "AskU
 require_tokens(root / "codex/plugins/session-scheduler/skills/tasks-clean/SKILL.md", "request_user_input", "If (and only if) `--apply` was in")
 require_tokens(root / "plugins/session-chat/commands/dispatch.md", "Write tool", "Do NOT embed the task text in a shell heredoc")
 require_tokens(root / "codex/plugins/session-chat/skills/dispatch/SKILL.md", "apply_patch", "Never embed prompt text in a shell heredoc")
-require_tokens(root / ".github/workflows/validate.yml", "actions/checkout@v7")
+require_tokens(
+    root / ".github/workflows/validate.yml",
+    "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7",
+)
+for workflow in sorted((root / ".github/workflows").glob("*.y*ml")):
+    reject_pattern(
+        workflow,
+        r"uses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@(?![0-9a-f]{40}(?:\s|#|$))\S+",
+        "third-party actions must be pinned to a full commit SHA",
+    )
 require_tokens(
     root / ".github/workflows/validate.yml",
     "plugins/session-manager/scripts/test-session-manager.sh",
@@ -511,6 +536,7 @@ require_tokens(root / "plugins/session-scheduler/scripts/test-session-scheduler.
 for provider_root in (root / "plugins", root / "codex/plugins"):
     chat = provider_root / "session-chat" / "scripts"
     require_tokens(chat / "lib.sh", "umask 077", "chmod 700", "chmod 600", "[ -L")
+    require_tokens(chat / "lib.sh", "mktemp", "%h", "noclobber")
     require_tokens(chat / "lib.sh", 'validate_label "$label"', 'validate_label "$my_name"')
     require_tokens(chat / "lib.sh", "Operation not permitted", "Permission denied", "escalated/approved")
     require_tokens(chat / "lib.sh", "conflicting correlation token")
@@ -520,6 +546,7 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
     require_tokens(chat / "dispatch-to-session.sh", "--reply-to")
     require_one_of(chat / "dispatch-to-session.sh", "correlate_reply", "apply_reply_to")
     require_tokens(chat / "detect-incoming-message.sh", "ensure_messages_dir", "[ -O", "stat -f", "pwd -P", "SESSION_CHAT_DISPATCH_INLINE_MAX")
+    require_tokens(chat / "detect-incoming-message.sh", "%h")
     require_tokens(chat / "detect-incoming-message.sh", "log_reply_ids")
     require_one_of(chat / "detect-incoming-message.sh", "head -c 512", "log_reply_ids_from_file")
     require_tokens(chat / "detect-incoming-message.sh", "When a reply is authorized")
@@ -548,8 +575,16 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
         "When a reply is authorized",
     )
     require_one_of(chat_test, "CONFLICT=ok", "conflicting correlation token")
+    require_tokens(chat_test, "hardlink")
 
     if provider_root == root / "plugins":
+        require_tokens(
+            chat_test,
+            "dangling_marker_symlink_rejected",
+            "queue_subtree_loose_dir_tightened_post_marker",
+            "log_and_archive_leaf_symlink_preserved",
+            "trust_reject_hardlink",
+        )
         chat_docs = provider_root / "session-chat" / "commands"
         for doc_name in ("panes.md", "pane-health.md", "whoami.md", "broadcast.md"):
             require_tokens(chat_docs / doc_name, "Operation not permitted", "escalated/approved")
@@ -557,6 +592,7 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
         require_tokens(provider_root / "session-chat" / "skills" / "session-chat" / "SKILL.md", "/reply", "unconfirmed")
         require_tokens(chat / "detect-incoming-message.sh", "/reply")
     else:
+        require_tokens(chat_test, "dangling marker symlink", "post-marker queue directory")
         chat_docs = provider_root / "session-chat" / "skills"
         for skill_name in ("panes", "pane-health", "whoami", "broadcast"):
             require_tokens(chat_docs / skill_name / "SKILL.md", "sandbox denied", "escalated/approved")

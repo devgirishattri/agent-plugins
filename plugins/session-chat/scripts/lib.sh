@@ -78,10 +78,20 @@ harden_messages_dir() {
   # cannot vouch for the tree's privacy — the caller must then refuse to write.
   chmod 700 "$dir" 2>/dev/null || return 1
   local marker="$dir/.perms-hardened-v1"
+  # The marker itself is a leaf that could have been planted during a loose
+  # window: a symlink here would either short-circuit hardening (if it resolves)
+  # or be followed OUT of the tree by the create redirection below (if it
+  # dangles). safe_messages_file rejects a symlink / non-regular / unowned /
+  # multi-hardlink marker (and 0600-tightens a valid one); only then may we
+  # trust an existing marker as proof the tree was already migrated.
+  safe_messages_file "$marker" || return 1
   [ -e "$marker" ] && return 0
   find "$dir" -type d ! -type l -exec chmod 700 {} + 2>/dev/null || return 1
   find "$dir" -type f ! -type l -exec chmod 600 {} + 2>/dev/null || return 1
-  : > "$marker" 2>/dev/null || return 1
+  # Atomic no-clobber create (O_EXCL) so a marker swapped in mid-migration is
+  # never followed, then re-validate what we actually created.
+  ( set -o noclobber; : > "$marker" ) 2>/dev/null || return 1
+  safe_messages_file "$marker" || return 1
   return 0
 }
 
@@ -95,6 +105,96 @@ ensure_messages_dir() {
   [ -L "$messages_dir" ] && return 1
   mkdir -p "$messages_dir" 2>/dev/null || true
   harden_messages_dir "$messages_dir"
+}
+
+# A queue/archive/.locks subdir can be swapped for a symlink AFTER
+# harden_messages_dir's one-time migration has stamped its marker — the marker
+# short-circuits re-hardening, so every operation that opens one of these nested
+# dirs must re-verify it HERE rather than trust the migration. Returns non-zero
+# (nothing created; caller must refuse) when <path> exists as a symlink or is
+# owned by another user. With mode "create" a missing dir is made 0700; in the
+# default "check" mode a missing dir is treated as safe (nothing to follow yet),
+# so read-only ops don't materialize a queue that isn't there.
+safe_messages_subdir() {
+  local path="$1" mode="${2:-check}"
+  # -L first: a symlink-to-dir passes -d, so reject the symlink before any test
+  # that would follow it.
+  [ -L "$path" ] && return 1
+  if [ ! -e "$path" ]; then
+    [ "$mode" = "create" ] || return 0
+    mkdir -m 700 "$path" 2>/dev/null || true
+    [ -L "$path" ] && return 1
+  fi
+  [ -d "$path" ] || return 1
+  [ -O "$path" ] || return 1
+  # Enforce owner-only (0700) on EVERY validation: a real dir planted loose
+  # (e.g. 0777) after the perms marker would otherwise let another local user
+  # write into the queue/archive. A chmod that cannot take means we can't vouch
+  # for its privacy — fail closed.
+  chmod 700 "$path" 2>/dev/null || return 1
+  return 0
+}
+
+# Guard (and, in "create" mode, materialize) the queue subtree every inbox
+# operation touches: <base>/queue and <base>/queue/.locks. Returns non-zero if
+# either is a symlink or owned by another user, so a nested symlink planted after
+# the perms marker is never written through (an append/lock mkdir) or read from
+# (a peek/drain that would surface attacker-controlled rows to the agent). This
+# runs on EVERY queue op — writers pass "create", read/modify ops use the default
+# check mode (a missing subtree simply means "no queue yet", i.e. empty).
+guard_queue_subtree() {
+  local base="${1:-$MESSAGES_DIR}" mode="${2:-check}"
+  safe_messages_subdir "$base/queue" "$mode" || return 1
+  safe_messages_subdir "$base/queue/.locks" "$mode" || return 1
+}
+
+# Even inside a validated (real, 0700, owner-only) parent dir, a LEAF file — a
+# recipient queue TSV, a .recent-* ledger, sent-log/replies-log, or an archive
+# date TSV — can itself be redirected: a symlink or extra hardlink planted during
+# a pre-hardening loose window survives the one-time migration, which chmods files
+# but never unlinks them. Appending (>>) or reading (<) through it escapes the
+# tree, and the subtree directory guards do NOT catch leaf redirection. Every op
+# resolves the leaf here first.
+#
+# Returns 0 when the leaf is ABSENT (the normal create-on-first-write case) or is
+# a plain, owner-owned, single-hardlink regular file; non-zero otherwise:
+#   - a symlink (even a dangling one)
+#   - a non-regular file (FIFO, device, directory) — I/O through these escapes,
+#     blocks, or corrupts
+#   - a leaf owned by another user
+#   - a leaf with link count != 1 (a second hardlink means an outside path shares
+#     the inode, so writing here writes there too)
+# An existing valid leaf is (re-)tightened to 0600 so a loose-perms plant is
+# closed before any I/O. Call this BOTH before taking the queue lock (fail fast)
+# AND again after taking it, immediately before the read/rewrite, to narrow the
+# replacement race.
+safe_messages_file() {
+  local path="$1" links
+  [ -L "$path" ] && return 1
+  [ -e "$path" ] || return 0
+  [ -f "$path" ] || return 1
+  [ -O "$path" ] || return 1
+  # Reject an extra hardlink to an outside ledger. GNU stat first, BSD fallback.
+  links=$(stat -c '%h' "$path" 2>/dev/null || stat -f '%l' "$path" 2>/dev/null)
+  case "$links" in
+    ''|*[!0-9]*) return 1 ;;
+    1) ;;
+    *) return 1 ;;
+  esac
+  chmod 600 "$path" 2>/dev/null || return 1
+  return 0
+}
+
+# Create an unpredictable, symlink-safe rewrite temp file BESIDE <target> (same
+# directory, so the follow-up mv is an atomic same-filesystem rename) and echo
+# its path. A fixed "${target}.tmp.$$" name is predictable and can be pre-planted
+# as a symlink; mktemp opens with O_CREAT|O_EXCL, so it neither follows nor reuses
+# such a plant. Echoes nothing and returns non-zero on failure — callers MUST
+# bail rather than fall back to a predictable path.
+messages_tmp_beside() {
+  local tmp
+  tmp=$(mktemp "${1}.tmp.XXXXXX" 2>/dev/null) || return 1
+  printf '%s' "$tmp"
 }
 
 # Resolve the trusted messages dir for the *recipient* pane's runtime so a
@@ -616,8 +716,9 @@ prune_recent_ids_unlocked() {
   local recipient="$1" now="$2"
   local rf tmp
   rf=$(recent_file_for "$recipient")
+  safe_messages_file "$rf" || return 0
   [ -f "$rf" ] || return 0
-  tmp="${rf}.tmp.$$"
+  tmp=$(messages_tmp_beside "$rf") || return 0
   awk -F'\t' -v now="$now" '$1 != "" && $2 ~ /^[0-9]+$/ && $2 > now' "$rf" > "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$rf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 }
@@ -626,6 +727,7 @@ recent_ids_unlocked() {
   local recipient="$1"
   local rf
   rf=$(recent_file_for "$recipient")
+  safe_messages_file "$rf" || return 0
   [ -f "$rf" ] || return 0
   awk -F'\t' '$1 != "" { print $1 }' "$rf" 2>/dev/null || true
 }
@@ -636,9 +738,13 @@ mark_recent_id_unlocked() {
   local rf expires
   rf=$(recent_file_for "$recipient")
   mkdir -p "$(dirname "$rf")" 2>/dev/null || true
+  # Refuse to rewrite/append through a symlinked ledger leaf.
+  safe_messages_file "$rf" || return 0
   expires=$((now + $(recent_id_ttl_ms)))
-  awk -F'\t' -v id="$id" '$1 != id' "$rf" > "${rf}.tmp.$$" 2>/dev/null || true
-  mv -f "${rf}.tmp.$$" "$rf" 2>/dev/null || rm -f "${rf}.tmp.$$" 2>/dev/null
+  local tmp
+  tmp=$(messages_tmp_beside "$rf") || return 0
+  awk -F'\t' -v id="$id" '$1 != id' "$rf" > "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$rf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   printf '%s\t%s\n' "$id" "$expires" >> "$rf"
 }
 
@@ -647,6 +753,7 @@ recent_id_seen() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 1
   ensure_messages_dir || return 1
+  guard_queue_subtree "$MESSAGES_DIR" create || return 1
   local now found=1
   local lock
   lock=$(queue_lock_path "$recipient")
@@ -664,6 +771,7 @@ mark_recent_id() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 0
   ensure_messages_dir || return 1
+  guard_queue_subtree "$MESSAGES_DIR" create || return 1
   local now
   local lock
   lock=$(queue_lock_path "$recipient")
@@ -687,11 +795,18 @@ mark_recent_id() {
 peek_inbox() {
   local skip_ids="$1" recipient="$2"
   [ -n "$recipient" ] || return 0
+  # Refuse to read through a symlinked queue subtree — surfacing rows from an
+  # attacker-redirected queue would inject them into the agent's prompt.
+  guard_queue_subtree "$MESSAGES_DIR" || return 0
   local qf lock
   qf=$(queue_file_for "$recipient")
+  safe_messages_file "$qf" || return 0
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient")
   acquire_lock "queue:${recipient}" "$lock" || return 0
+  # Revalidate under the lock, immediately before reading, to narrow the window
+  # in which the leaf could be swapped between the pre-lock check and the read.
+  safe_messages_file "$qf" || { release_lock "queue:${recipient}" "$lock"; return 0; }
   local now recent_ids line pass_prio
   now=$(now_ms)
   recent_ids=$(recent_ids_unlocked "$recipient" | tr '\n' ' ')
@@ -717,15 +832,18 @@ peek_inbox() {
 claim_inbox_ids() {
   local recipient="$1" ids="$2"
   [ -n "$recipient" ] || return 0
+  guard_queue_subtree "$MESSAGES_DIR" || return 1
   local qf lock
   qf=$(queue_file_for "$recipient")
+  safe_messages_file "$qf" || return 1
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient")
   acquire_lock "queue:${recipient}" "$lock" || return 1
+  safe_messages_file "$qf" || { release_lock "queue:${recipient}" "$lock"; return 1; }
   local now tmp line
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
-  tmp="${qf}.tmp.$$"
+  tmp=$(messages_tmp_beside "$qf") || { release_lock "queue:${recipient}" "$lock"; return 1; }
   : > "$tmp"
   while IFS= read -r line; do
     parse_queue_record "$line" || continue
@@ -751,6 +869,7 @@ recent_id_seen_or_mark() {
   local recipient="$1" id="$2"
   [ -n "$recipient" ] && [ -n "$id" ] || return 1
   ensure_messages_dir || return 1
+  guard_queue_subtree "$MESSAGES_DIR" create || return 1
   local now seen=1
   local lock
   lock=$(queue_lock_path "$recipient")
@@ -771,12 +890,17 @@ enqueue_message() {
   local recipient="$1" id="$2" type="$3" from="$4" payload="$5"
   local messages_dir="${6:-$MESSAGES_DIR}"
   ensure_messages_dir "$messages_dir" || return 1
+  # Create + verify queue/ and queue/.locks are real, owner-only dirs — never
+  # append the durable copy (or mkdir the lock) through a nested symlink.
+  guard_queue_subtree "$messages_dir" create || return 1
   local qf ready_at lock
   qf=$(queue_file_for "$recipient" "$messages_dir")
-  mkdir -p "$(dirname "$qf")" 2>/dev/null || true
+  # Never append the durable copy through a symlinked queue-file leaf.
+  safe_messages_file "$qf" || return 1
   ready_at=$(queue_ready_at_ms)
   lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_lock "queue:${recipient}" "$lock" || return 1
+  safe_messages_file "$qf" || { release_lock "queue:${recipient}" "$lock"; return 1; }
   emit_queue_record "$id" "$type" "$from" "$ready_at" "$(queue_priority_value)" "$(queue_expires_at_ms)" "$payload" >> "$qf"
   release_lock "queue:${recipient}" "$lock"
 }
@@ -785,12 +909,16 @@ dequeue_message_id() {
   # dequeue_message_id <recipient_name> <id> [messages_dir] — remove this id
   local recipient="$1" id="$2"
   local messages_dir="${3:-$MESSAGES_DIR}"
+  guard_queue_subtree "$messages_dir" || return 1
   local qf lock
   qf=$(queue_file_for "$recipient" "$messages_dir")
+  safe_messages_file "$qf" || return 1
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_lock "queue:${recipient}" "$lock" || return 1
-  local tmp="${qf}.tmp.$$"
+  safe_messages_file "$qf" || { release_lock "queue:${recipient}" "$lock"; return 1; }
+  local tmp
+  tmp=$(messages_tmp_beside "$qf") || { release_lock "queue:${recipient}" "$lock"; return 1; }
   awk -F'\t' -v id="$id" '$1 != id' "$qf" > "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$qf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   release_lock "queue:${recipient}" "$lock"
@@ -803,11 +931,14 @@ mark_message_ready() {
   local recipient="$1" id="$2"
   local messages_dir="${3:-$MESSAGES_DIR}"
   local qf tmp now line lock
+  guard_queue_subtree "$messages_dir" || return 1
   qf=$(queue_file_for "$recipient" "$messages_dir")
+  safe_messages_file "$qf" || return 1
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient" "$messages_dir")
   acquire_lock "queue:${recipient}" "$lock" || return 1
-  tmp="${qf}.tmp.$$"
+  safe_messages_file "$qf" || { release_lock "queue:${recipient}" "$lock"; return 1; }
+  tmp=$(messages_tmp_beside "$qf") || { release_lock "queue:${recipient}" "$lock"; return 1; }
   now=$(now_ms)
   : > "$tmp"
   while IFS= read -r line; do
@@ -831,11 +962,14 @@ drain_inbox() {
   local skip_ids="$1"
   local recipient="$2"
   [ -n "$recipient" ] || return 0
+  guard_queue_subtree "$MESSAGES_DIR" || return 0
   local qf lock
   qf=$(queue_file_for "$recipient")
+  safe_messages_file "$qf" || return 0
   [ -f "$qf" ] || return 0
   lock=$(queue_lock_path "$recipient")
   acquire_lock "queue:${recipient}" "$lock" || return 0
+  safe_messages_file "$qf" || { release_lock "queue:${recipient}" "$lock"; return 0; }
   local now recent_ids
   now=$(now_ms)
   prune_recent_ids_unlocked "$recipient" "$now"
@@ -878,7 +1012,8 @@ drain_inbox() {
   done
   # Rewrite the queue, keeping only rows we neither surfaced, skipped, nor
   # deferred. Deferred (not-ready) rows are re-emitted in canonical form.
-  local tmp="${qf}.tmp.$$"
+  local tmp
+  tmp=$(messages_tmp_beside "$qf") || { release_lock "queue:${recipient}" "$lock"; return 0; }
   : > "$tmp"
   while IFS= read -r line; do
     parse_queue_record "$line" || continue
@@ -907,24 +1042,30 @@ log_excerpt() {
 trim_log_file() {
   local f="$1"
   local max=5000 keep=2500
+  # Refuse to read/rewrite through a redirected log leaf (symlink/hardlink/etc).
+  safe_messages_file "$f" || return 0
   [ -f "$f" ] || return 0
   local lines
   lines=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
   is_nonnegative_int "$lines" || return 0
   [ "$lines" -gt "$max" ] || return 0
-  local tmp="${f}.tmp.$$"
+  local tmp
+  tmp=$(messages_tmp_beside "$f") || return 0
   tail -n "$keep" "$f" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 }
 
 log_sent_message() {
   # log_sent_message <id> <from> <to> <type> <delivery> <excerpt-source>
   local id="$1" from="$2" to="$3" type="$4" delivery="$5"
-  local excerpt
+  local excerpt slf
   excerpt=$(log_excerpt "$6")
   ensure_messages_dir || return 0
+  slf=$(sent_log_file)
+  # Never append the outbound ledger through a redirected leaf.
+  safe_messages_file "$slf" || return 0
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$(sent_log_file)" 2>/dev/null || true
-  trim_log_file "$(sent_log_file)"
+    "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$slf" 2>/dev/null || true
+  trim_log_file "$slf"
   archive_message "out" "$to" "$type" "$id" "$6"
 }
 
@@ -970,6 +1111,8 @@ log_reply_ids() {
   local rf id
   rf=$(replies_log_file)
   ensure_messages_dir || return 0
+  # Never append the replies ledger through a redirected leaf.
+  safe_messages_file "$rf" || return 0
   printf '%s' "$text" | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null | sed 's/^\[re://; s/\]$//' | sort -u | \
   while IFS= read -r id; do
     [ -n "$id" ] || continue
@@ -1016,15 +1159,17 @@ archive_message() {
   local direction="$1" peer="$2" type="$3" id="$4" text="$5"
   local dir day f
   # Fail closed: never create the archive under an unsafe (symlink/unowned)
-  # messages root. Archiving is best-effort, so just skip on refusal.
+  # messages root or through a redirected archive dir/day-file. Archiving is
+  # best-effort, so just skip on refusal.
   ensure_messages_dir || return 0
   dir="$MESSAGES_DIR/archive"
-  mkdir -p "$dir" 2>/dev/null || return 0
+  safe_messages_subdir "$dir" create || return 0
   day=$(date +%Y-%m-%d 2>/dev/null) || return 0
   f="$dir/${day}.tsv"
+  safe_messages_file "$f" || return 0
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(now_ms)" "$direction" "$peer" "$type" "$id" \
     "$(printf '%s' "$text" | tr '\t\n\r' '   ' | cut -c1-200)" >> "$f" 2>/dev/null || true
-  find "$dir" -name '*.tsv' -type f -mtime +"$(archive_retention_days)" -delete 2>/dev/null || true
+  find "$dir" -name '*.tsv' -type f ! -type l -mtime +"$(archive_retention_days)" -delete 2>/dev/null || true
 }
 
 # --- Communication ---
@@ -1246,12 +1391,34 @@ dispatch_message() {
   local msg_id
   msg_id="$(date +%s)-$$-${uid}-${my_name}-to-${target_name}"
   local msg_file="$target_messages_dir/${msg_id}.md"
-  cat > "$msg_file" <<EOF
-$message
-EOF
-  # umask 077 already yields 0600, but assert it explicitly: this file holds the
-  # full task body and the recipient's trust gate rejects anything not owner-only.
-  chmod 600 "$msg_file" 2>/dev/null || true
+  # Atomic no-clobber write: create AND fill the task file in ONE O_EXCL
+  # redirection (noclobber, scoped to this subshell so it never leaks into the
+  # caller; umask 077 forces 0600 at creation). Writing the whole body at once —
+  # not create-empty-then-append — leaves no window in which the fresh file could
+  # be swapped for a symlink before the body lands. A pre-planted file or symlink
+  # at this path makes the O_EXCL create fail, and we refuse.
+  if ! ( set -o noclobber; umask 077; printf '%s\n' "$message" > "$msg_file" ) 2>/dev/null; then
+    echo "ERROR: could not create dispatch file (path exists or is unsafe): $msg_file" >&2
+    return 1
+  fi
+  # Validate what we just wrote before advertising it: a regular, owner-owned,
+  # single-hardlink file — the same properties the recipient's trust gate
+  # requires. Remove and refuse on any mismatch so a losing race can't be sent.
+  local _links=""
+  _links=$(stat -c '%h' "$msg_file" 2>/dev/null || stat -f '%l' "$msg_file" 2>/dev/null)
+  if [ -L "$msg_file" ] || [ ! -f "$msg_file" ] || [ ! -O "$msg_file" ] || [ "$_links" != "1" ]; then
+    rm -f "$msg_file" 2>/dev/null
+    echo "ERROR: dispatch file failed post-write validation (unsafe path): $msg_file" >&2
+    return 1
+  fi
+  # Assert 0600 as a hard invariant before advertising the file. The recipient's
+  # trust gate rejects anything not owner-only, so a chmod we cannot confirm means
+  # we must not notify — fail closed: remove and refuse.
+  if ! chmod 600 "$msg_file" 2>/dev/null; then
+    rm -f "$msg_file" 2>/dev/null
+    echo "ERROR: could not enforce owner-only mode on dispatch file: $msg_file" >&2
+    return 1
+  fi
   local line_count
   line_count=$(printf '%s\n' "$message" | wc -l | tr -d ' ')
   # Durable copy first (points at the task file), then the live nudge.

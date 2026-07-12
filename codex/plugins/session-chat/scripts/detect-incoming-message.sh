@@ -159,12 +159,14 @@ trusted_message_file() {
   [ ! -L "$file" ] || return 1
   [ -f "$file" ] || return 1
   [ -O "$file" ] || return 1
-  local mode
+  local mode links
   mode=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null) || return 1
   case "$mode" in
     ?00) ;;
     *) return 1 ;;
   esac
+  links=$(stat -c '%h' "$file" 2>/dev/null || stat -f '%l' "$file" 2>/dev/null) || return 1
+  [ "$links" = "1" ] || return 1
   local real_dir canon_messages
   real_dir=$(cd "$(dirname "$file")" 2>/dev/null && pwd -P) || return 1
   canon_messages=$(cd "$MESSAGES_DIR" 2>/dev/null && pwd -P) || return 1
