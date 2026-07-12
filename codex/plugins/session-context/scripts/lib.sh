@@ -491,7 +491,22 @@ ensure_contexts_dir() {
     fi
   fi
 
-  harden_existing_contexts_dir "$requested"
+  # Bootstrap only: revalidate the store ROOT as a real, owner-owned, non-symlink
+  # directory and echo its canonical path. The whole-tree harden sweep is NOT run
+  # here — it must execute while the writer lock is held, because an unlocked sweep
+  # races a concurrent save's temp/rename and spuriously fails one of several
+  # parallel first-time saves. Writers call bootstrap_contexts_dir then harden
+  # under their own lock; get_contexts_dir does bootstrap+lock+harden+release for
+  # read callers.
+  if [ -L "$requested" ] || [ ! -d "$requested" ]; then
+    _context_store_error "context store is not a directory: $requested"
+    return 1
+  fi
+  _context_require_owner "$requested" || return 1
+  (cd "$requested" 2>/dev/null && pwd -P) || {
+    _context_store_error "cannot resolve context store: $requested"
+    return 1
+  }
 }
 
 _context_pid_alive() {
@@ -649,7 +664,10 @@ atomic_copy_context_file() {
   fi
 }
 
-get_contexts_dir() {
+# Writer entry point: resolve SESSION_CONTEXT_HOME and bootstrap the store ROOT
+# only (no harden sweep, no lock). The caller MUST acquire_context_store_lock and
+# then run harden_existing_contexts_dir while holding it before mutating the store.
+bootstrap_contexts_dir() {
   # SESSION_CONTEXT_HOME must be provided by the caller. The context-* skills
   # (and the SessionStart hook) export it automatically, resolving
   # <git-root|pwd>/tmp/contexts. Fail closed rather than guessing a location.
@@ -660,6 +678,25 @@ get_contexts_dir() {
     return 1
   fi
   ensure_contexts_dir "$SESSION_CONTEXT_HOME"
+}
+
+# Read entry point: bootstrap the root, then acquire the writer lock and run the
+# whole-tree harden sweep UNDER the lock (so it never races a concurrent writer's
+# temp/rename), release, and echo the canonical store path. The caller's per-file
+# read checks run after release — a point-in-time snapshot is not required.
+get_contexts_dir() {
+  local root harden_rc
+  root=$(bootstrap_contexts_dir) || return 1
+  acquire_context_store_lock "$root" || return 1
+  harden_existing_contexts_dir "$root" >/dev/null
+  harden_rc=$?
+  if ! release_context_store_lock; then
+    return 1
+  fi
+  if [ "$harden_rc" -ne 0 ]; then
+    return 1
+  fi
+  printf '%s\n' "$root"
 }
 
 list_snapshot_names() {

@@ -21,7 +21,7 @@ if [ -L "$SNAPSHOT_FILE" ] || [ ! -f "$SNAPSHOT_FILE" ]; then
   exit 1
 fi
 
-SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
+SNAPSHOTS_DIR="$(bootstrap_contexts_dir)" || exit 1
 DEST="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 HISTORY_DIR="$SNAPSHOTS_DIR/.history"
 MAX_HISTORY=10
@@ -43,6 +43,11 @@ trap handle_signal HUP INT TERM
 
 acquire_context_store_lock "$SNAPSHOTS_DIR" || exit 1
 LOCK_HELD=1
+
+# Harden the whole store UNDER the writer lock. This sweep moved here from the old
+# pre-lock get_contexts_dir call: run unlocked, it raced concurrent saves'
+# temp/rename and spuriously failed one of several parallel first-time saves.
+harden_existing_contexts_dir "$SNAPSHOTS_DIR" >/dev/null || exit 1
 
 # Version history: archive the previous snapshot before overwriting it.
 # Brand-new names create no history entry.

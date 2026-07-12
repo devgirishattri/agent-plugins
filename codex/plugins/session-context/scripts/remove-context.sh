@@ -18,7 +18,7 @@ fi
 
 validate_label "$PROJECT_NAME" || exit 1
 
-SNAPSHOTS_DIR="$(get_contexts_dir)" || exit 1
+SNAPSHOTS_DIR="$(bootstrap_contexts_dir)" || exit 1
 SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 HISTORY_DIR="$SNAPSHOTS_DIR/.history"
 LOCK_HELD=0
@@ -39,6 +39,10 @@ trap handle_signal HUP INT TERM
 
 acquire_context_store_lock "$SNAPSHOTS_DIR" || exit 1
 LOCK_HELD=1
+
+# Harden the whole store UNDER the writer lock (moved here from the old pre-lock
+# get_contexts_dir sweep, which raced concurrent writers' temp/rename).
+harden_existing_contexts_dir "$SNAPSHOTS_DIR" >/dev/null || exit 1
 
 current_removed=0
 history_removed=0
