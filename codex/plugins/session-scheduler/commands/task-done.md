@@ -12,7 +12,7 @@ argument-hint: <task-id> [--force] [note]
 
    ```bash
    export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
-   bash "$PLUGIN_ROOT/scripts/task-done.sh" "<task-id>" "<note>"
+   bash "$PLUGIN_ROOT/scripts/task-done.sh" "<task-id>" [--force] "<note>"
    ```
 
 3. Legal from `assigned` or `review` (review approval). Other transitions are rejected; `--force` overrides and records "forced" in history.

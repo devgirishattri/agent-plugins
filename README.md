@@ -26,14 +26,18 @@ plugins/
   <plugin>/                     # Claude plugin implementations
     .claude-plugin/plugin.json
     commands/
+    skills/
     scripts/
+    hooks/                      # Optional lifecycle hooks
 
 codex/
   plugins/
     <plugin>/                   # Codex plugin implementations
       .codex-plugin/plugin.json
-      commands/
+      skills/                   # Runtime-invocable $plugin:skill workflows
+      commands/                 # Provider-parity reference documents
       scripts/
+      hooks/                    # Optional lifecycle hooks
 ```
 
 ## Provider Discovery
@@ -59,16 +63,28 @@ Add this repo as a Codex marketplace from GitHub:
 codex plugin marketplace add https://github.com/devgirishattri/agent-plugins.git
 ```
 
+Install a plugin from that marketplace:
+
+```bash
+codex plugin add <plugin-name>@girishattri-plugins
+```
+
+Review bundled hooks when Codex prompts for trust; installing or enabling a
+plugin does not automatically trust its lifecycle hooks.
+
 Upgrade the configured marketplace after new plugin versions are published:
 
 ```bash
 codex plugin marketplace upgrade girishattri-plugins
 ```
 
-Reload Codex after upgrading so the running plugin registry uses the new cached version. Use `/reload-plugins` when available, or restart the Codex session. To verify the installed cache, inspect:
+Start a new Codex session after installing or upgrading so the updated plugin
+skills and tools are loaded. These trust and session-pickup behaviors are
+documented in [OpenAI's Codex plugin guide](https://learn.chatgpt.com/docs/plugins).
+Verify installed and enabled versions with:
 
 ```bash
-ls "$HOME/.codex/plugins/cache/girishattri-plugins/session-chat"
+codex plugin list --json
 ```
 
 To upgrade all configured Git marketplaces:
@@ -97,11 +113,15 @@ Install a plugin from the marketplace:
 claude plugin install <plugin-name>@girishattri-plugins
 ```
 
-Upgrade all installed plugins to the latest marketplace versions:
+Refresh the configured marketplace, then update an installed plugin:
 
 ```bash
-claude plugin upgrade
+claude plugin marketplace update girishattri-plugins
+claude plugin update <plugin-name>@girishattri-plugins
 ```
+
+Repeat the second command for each installed plugin you want to update, then
+restart Claude Code so it loads the updated plugin version.
 
 For local development, add a checkout path instead:
 
@@ -112,8 +132,11 @@ claude plugin marketplace add /path/to/agent-plugins
 ## Development Notes
 
 - Keep provider-specific manifests separate.
-- Keep command behavior aligned across `plugins/<name>/commands/` and `codex/plugins/<name>/commands/`.
-- Codex runtime surfaces (verified live 2026-06-11): **skills** are loaded and invocable (`$plugin:skill`); plugin `commands/*.md` are NOT loaded by the Codex runtime — treat them as reference docs mirroring the Claude commands, and always ship a skill twin for runtime behavior.
+- Keep Claude command behavior aligned with the corresponding Codex skills and
+  provider-parity command references.
+- Codex exposes plugin skills as invocable `$plugin:skill` workflows. Treat
+  `codex/plugins/<name>/commands/*.md` as provider-parity reference documents,
+  and always ship a skill twin for runtime behavior.
 - Codex hooks must live at `codex/plugins/<name>/hooks/hooks.json` (a plugin-root `hooks.json` is silently ignored by the runtime). Hook commands must use the runtime-provided `PLUGIN_ROOT`; never derive a plugin root from the session cwd or pin a marketplace-cache version.
 - Codex skills resolve scripts relative to the selected installed `SKILL.md` source. They must not rely on `CODEX_PLUGIN_ROOT`, which is not guaranteed in model-launched shell commands.
 - Interactive/destructive workflows use Codex `request_user_input` when that capability is available and fall back to a direct blocking question with default-cancel semantics. Claude keeps the matching `AskUserQuestion` flow.

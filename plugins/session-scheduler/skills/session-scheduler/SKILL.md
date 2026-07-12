@@ -7,7 +7,7 @@ description: When and how to track multi-pane orchestrator → executor work wit
 
 A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `<project_root>/tmp/scheduler/tasks/<id>.json`; prompts go to `<project_root>/tmp/scheduler/prompts/<id>.md`.
 
-Storage is keyed on `SESSION_SCHEDULER_HOME`, which the `/task-*` commands export automatically (resolving `<git-root>/tmp/scheduler`, or pwd when not in a git repo). The scripts **require** this variable and refuse to run when it is unset — they never guess a cwd/tmp location. Set `SESSION_SCHEDULER_HOME=<dir>` yourself only when invoking the scripts directly or to point at a shared ledger. `/task-assign --context` additionally exports `SESSION_CONTEXT_HOME` so the session-context snapshot resolves the same way.
+Storage is keyed on `SESSION_SCHEDULER_HOME`, which the `/task-*` commands export automatically (resolving `<git-root>/tmp/scheduler`, or `<pwd>/tmp/scheduler` when not in a git repo). The scripts **require** this variable and refuse to run when it is unset — they never guess a cwd/tmp location. Set `SESSION_SCHEDULER_HOME=<dir>` yourself only when invoking the scripts directly or to point at a shared ledger. `/task-assign --context` additionally exports `SESSION_CONTEXT_HOME` so the session-context snapshot resolves the same way.
 
 Project-local storage means **claude and codex panes working in the same project share the same ledger** — orchestrator and reviewer can both read/write the same task list.
 
@@ -36,7 +36,7 @@ Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executo
 Legal status transitions (enforced by every command):
 `created→assigned`, `created→blocked`, `assigned→review`, `assigned→done`, `assigned→blocked`, `assigned→assigned` (reassignment), `review→done` (approve), `review→blocked` (reject), `blocked→assigned`. Anything else is rejected with the current status and legal next steps; override with `--force` (or `SESSION_SCHEDULER_FORCE=1`), which records "forced" in history.
 
-`/tasks-clean` removes old `done`/`blocked` files (dry-run by default).
+`/tasks-clean` removes old task files past `--older-than DAYS` (default 7) — **any status** by default; narrow with `--status done|blocked`. Dry-run by default.
 
 ## Stages, ETAs, and dependencies
 
@@ -49,17 +49,17 @@ Legal status transitions (enforced by every command):
 
 1. **session-chat ≥ 0.13.0** installed. The lock + retry behavior prevents corrupted dispatches, and 0.13's durable inbox means a dispatch or ack to a busy pane is recovered on its next turn rather than lost.
 2. **Executor pane has `SESSION_CHAT_INCOMING_MODE=auto`** (or `assist`). Default `notify` tells the executor *not* to read dispatched files — your tasks will be assigned in the ledger but never acted on. Run `/session-chat:incoming-mode auto` in the executor's shell.
-3. **All participating panes have run `/whoami <name>`.** Pane names are the addressing scheme.
+3. **All participating panes have unique registered names** (via `/whoami <name>` or SessionStart auto-naming). Pane names are the addressing scheme.
 
-`/scheduler-doctor` checks all three and warns on misconfiguration.
+`/scheduler-doctor` checks the session-chat install/version (#1) and incoming-mode (#2), warning on misconfiguration, and reports the current pane name (it cannot inspect other panes for #3).
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `/task-new <name> [--meta k=v] [--stage NAME] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id. |
-| `/task-assign <pane> <id> [--eta MIN] [--stage NAME] [--context NAME] [--force] <prompt>` | Dispatch the task to an executor and update the ledger. |
-| `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage]` | Read-only view. Default = active (created+assigned+review). Shows OVERDUE/STALE flags. |
+| `/task-new <name> [--meta k=v] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id. |
+| `/task-assign <pane> <id> [--eta MIN] [--stage NAME] [--context NAME] [--reviewer PANE] [--workflow ID] [--force] <prompt>` | Dispatch the task to an executor and update the ledger. |
+| `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage\|--by-workflow\|--workflow ID]` | Read-only view. Default = active (created+assigned+review). Shows OVERDUE/STALE flags. |
 | `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); acks the assigner. |
 | `/task-done <id> [--force] [note]` | Executor or reviewer calls this; records duration; auto-acks the assigner via `/send`. |
 | `/task-block <id> [--force] <reason>` | Executor or reviewer calls this when blocked/rejecting; reason required. |
@@ -78,20 +78,28 @@ Legal status transitions (enforced by every command):
   "assigner": "orchestrator-pane-name",
   "assignee": "executor-pane-name|null",
   "prompt_file": "/path/to/scheduler/prompts/abcd1234.md|null",
+  "reviewer": "reviewer-pane-name|null",
   "depends_on": ["task-id", "..."],
   "created_at": "ISO-8601",
   "updated_at": "ISO-8601",
   "started_at": "ISO-8601 (first assignment) | null",
   "eta_at": "ISO-8601 (from --eta) | null",
   "duration_seconds": 1234,
-  "meta": { "free-form": "key/value", "context": "context-snapshot-name" },
+  "meta": {
+    "free-form": "key/value",
+    "context": "context-snapshot-name",
+    "context_home": "/abs/.../tmp/contexts",
+    "workflow_id": "workflow-group-id",
+    "scheduler_home": "/abs/.../tmp/scheduler",
+    "review_...": "reviewer-routing bookkeeping (review_dispatch_status, review_dispatched_at, …)"
+  },
   "history": [
     { "ts": "...", "event": "created|assigned|review|done|blocked", "actor": "...", "note": "..." }
   ]
 }
 ```
 
-`started_at`, `eta_at`, `duration_seconds`, `stage`, and `depends_on` are optional — older task files without them still work.
+`started_at`, `eta_at`, `duration_seconds`, `stage`, `reviewer`, and `depends_on` are optional — older task files without them still work.
 
 Atomic writes (tmp + mv) — concurrent executors updating different tasks won't conflict.
 
@@ -103,7 +111,7 @@ Atomic writes (tmp + mv) — concurrent executors updating different tasks won't
 
 ## Failure modes
 
-- **`session-chat dispatch failed; ledger NOT updated`** — only happens on a hard failure (no name, unknown/ambiguous target). A *busy* executor is no longer a failure: with session-chat ≥ 0.13.0 the dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. For a hard failure, fix it (run `/session-chat:panes`, ensure the executor has a name), then retry `/task-assign`.
+- **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — only happens on a hard failure (no name, unknown/ambiguous target). A *busy* executor is no longer a failure: with session-chat ≥ 0.13.0 the dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. For a hard failure, fix it (run `/session-chat:panes`, ensure the executor has a name), then retry `/task-assign`.
 - **Done/block acks are best-effort** — `/task-done` and `/task-block` always update the ledger first, then send the ack via session-chat. With ≥ 0.13.0 the ack is durably delivered (recovered on the assigner's next turn); if session-chat is missing the ledger is still updated and the ack is skipped with a warning.
 - **Tasks are `assigned` but executor never acts** — almost always `INCOMING_MODE=notify` on the executor side. Run `/session-chat:incoming-mode auto` in the executor's shell.
 - **`jq` missing** — `brew install jq`. The ledger is JSON; jq is a hard dependency.

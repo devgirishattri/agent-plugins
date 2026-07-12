@@ -9,7 +9,7 @@ When this skill is invoked, do not add a preamble or narrate the plan. Run the r
 
 Resolve `PLUGIN_ROOT` from this selected skill's absolute source path by going up two directories from `<plugin-root>/skills/context-load/SKILL.md`. Never derive it from the project working directory or embed a cache version.
 
-`SESSION_CONTEXT_HOME` is required by the scripts and is exported automatically by the command wrapper to `<git-root>/tmp/contexts` (or pwd when not in a git repo) unless already set.
+`SESSION_CONTEXT_HOME` is required by the scripts and is exported automatically by the command wrapper to `<git-root>/tmp/contexts` (or `<pwd>/tmp/contexts` when not in a git repo) unless already set.
 
 If no snapshot name is provided, tell the user:
 
@@ -24,4 +24,4 @@ export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-topl
 bash "$PLUGIN_ROOT/scripts/load-context.sh" "<snapshot-name>"
 ```
 
-Internalize the loaded context, especially what was done, files changed, decisions, open issues, and where the prior session left off. Summarize what was loaded. If a staleness WARNING appears at the end of the output (snapshot older than 7 days, configurable via `SESSION_CONTEXT_STALE_DAYS`), surface it and suggest regenerating with `$session-context:context-generate`. If no snapshot is found, suggest `$session-context:context-list`.
+Internalize the loaded context, especially what was done, files changed, decisions, open issues, and where the prior session left off. Summarize what was loaded. If a staleness WARNING appears at the end of the output (snapshot 7 or more days old, configurable via `SESSION_CONTEXT_STALE_DAYS`), surface it and suggest regenerating with `$session-context:context-generate`. If no snapshot is found, suggest `$session-context:context-list`.

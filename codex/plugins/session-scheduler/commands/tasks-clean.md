@@ -1,6 +1,6 @@
 ---
-description: Dry-run or delete scheduler task records
-argument-hint: "[--older-than 7d] [--status done] [--apply]"
+description: Dry-run or delete scheduler task records of any status, optionally narrowed by --status
+argument-hint: "[--older-than 7d] [--status STATUS] [--apply]"
 ---
 
 ## Instructions

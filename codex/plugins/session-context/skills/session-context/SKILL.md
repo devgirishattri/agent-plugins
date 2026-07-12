@@ -7,7 +7,7 @@ description: "Understand when and how to capture, restore, search, remove, and h
 
 A snapshot is a concise Markdown summary of a working session: what changed, key decisions, open issues, and where work stopped. Use it when another Codex session must continue without re-deriving the state.
 
-Snapshots live under `SESSION_CONTEXT_HOME`. Each `$session-context:context-*` skill exports a default of `<git-root>/tmp/contexts` (falling back to `<pwd>/tmp/contexts`) unless the environment already points to an intentionally shared directory. Direct script callers must set the variable explicitly; the scripts fail closed when it is absent. The store is private by default: directories are owner-only, regular files are owner-only (scheduler-created immutable snapshots remain `0400`), and unsafe symlinked, unowned, or special-file paths are rejected before content access.
+Snapshots live under `SESSION_CONTEXT_HOME`. Each `$session-context:context-*` skill exports a default of `<git-root>/tmp/contexts` (falling back to `<pwd>/tmp/contexts`) unless the environment already points to an intentionally shared directory. Direct callers of every script must set the variable explicitly; the scripts fail closed when it is absent. For `context-search`, the value selects the current repository's store while other discoverable project roots are scanned separately. The store is private by default: directories are owner-only, regular files are owner-only (scheduler-created immutable snapshots remain `0400`), and unsafe symlinked, unowned, or special-file paths are rejected before content access.
 
 ## When to use it
 

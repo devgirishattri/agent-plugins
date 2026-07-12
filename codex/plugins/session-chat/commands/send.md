@@ -25,4 +25,4 @@ is transport-generated rather than manually typed.
 7. If the target is not found, suggest `$session-chat:panes`.
 8. For single-line or length limits, suggest `$session-chat:dispatch <pane-name> <task prompt>`.
 9. For duplicate names, suggest `$session-chat:whoami <name>` in one pane.
-10. If there is an error that the send did not land within the timeout, tell the user the target may be busy; retry when idle or raise `SESSION_CHAT_VERIFY_TIMEOUT_MS`.
+10. If a live timeout is followed by `Queued ...`, report durable queued success and do not retry. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` only when immediate live delivery matters. Retry only a hard failure that did not queue, after fixing its cause.

@@ -22,7 +22,7 @@ A structured process for creating and updating project documentation. Documents 
 
 ## Naming Convention
 
-**All documentation filenames MUST use UPPER_CASE with underscores** (e.g., `AUTH_OVERVIEW.md`, `API_REFERENCE.md`, `DATABASE_SCHEMA.md`). This makes docs visually distinct from code files and easy to spot in directory listings.
+New project-specific documentation filenames should use UPPER_CASE with underscores (e.g., `AUTH_OVERVIEW.md`, `API_REFERENCE.md`, `DATABASE_SCHEMA.md`) unless the project defines another convention. Preserve conventional community filenames such as `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, and existing repository conventions.
 
 - Good: `AUTH_OVERVIEW.md`, `API_REFERENCE.md`, `DEPLOYMENT_GUIDE.md`
 - Bad: `auth-overview.md`, `api_reference.md`, `deployment-guide.md`
@@ -46,7 +46,7 @@ The metadata header (Date/Status/Related) is recommended for discoverability but
 
 **Date**: YYYY-MM-DD
 **Status**: Draft | Active | Deprecated
-**Related**: `AUTH_OVERVIEW.md`, `API_REFERENCE.md`
+**Related**: [related documentation, if any]
 
 ## Overview
 
@@ -115,7 +115,7 @@ bash "$PLUGIN_ROOT/scripts/check-todos.sh" "$DOCS_DIR"
 
 ### validate-links.sh
 
-Checks that all cross-references in docs actually point to existing files. Catches stale links after renames or deletions.
+Checks that Markdown `.md` cross-references (inline links and `**Related**:` header refs) point to existing files. Catches stale links after renames or deletions.
 
 ```bash
 bash "$PLUGIN_ROOT/scripts/validate-links.sh" "$DOCS_DIR"

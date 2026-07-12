@@ -29,8 +29,8 @@ argument-hint: <session-name> <prompt>
      If no data-safe file writer exists, ask the user for an existing prompt
      file instead of falling back to shell interpolation.
 
-5. Report: `Dispatched task to **<target>**. The recipient must use SESSION_CHAT_INCOMING_MODE=auto or assist to read and act on the task; the default notify mode only reports that a dispatch arrived.`
+5. Relay the script's `Dispatched task ...` or `Queued dispatch ...` result accurately. For either successful result, mention that the recipient must use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to read and act on the task; default `notify` only reports that a dispatch arrived.
 6. If the target is not found, suggest `$session-chat:panes`.
 7. If there is an error about no name, suggest `$session-chat:whoami <name>`.
 8. For duplicate names, suggest `$session-chat:whoami <name>` in one pane.
-9. If there is an error that the dispatch did not land within the timeout, tell the user the target may be busy; retry when idle or raise `SESSION_CHAT_VERIFY_TIMEOUT_MS`.
+9. If a live timeout is followed by `Queued dispatch ...`, report durable queued success and do not retry. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` only when immediate live delivery matters. Retry only a hard failure that did not queue, after fixing its cause.

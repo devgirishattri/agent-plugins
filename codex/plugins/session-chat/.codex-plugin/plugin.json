@@ -1,6 +1,6 @@
 {
   "name": "session-chat",
-  "version": "0.17.3",
+  "version": "0.17.4",
   "description": "Private, durable messaging and trusted task dispatch between Codex sessions via tmux.",
   "author": {
     "name": "Girish Attri",

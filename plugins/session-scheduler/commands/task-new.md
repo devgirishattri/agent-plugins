@@ -17,6 +17,7 @@ Options:
 - `--meta key=value` — free-form metadata (repeatable).
 - `--stage NAME` — optional pipeline stage label (suggested: `plan`, `dispatch`, `execute`, `audit`, `push`; any alphanumeric/`_`/`-` label works).
 - `--workflow ID` — group related tasks under a workflow id (stored as `meta.workflow_id`); list them together with `/task-status --workflow ID`.
+- `--reviewer PANE` — record a reviewer pane on the task (stored as `.reviewer`); when the executor runs `/task-review`, the audit request is auto-dispatched to this pane.
 - `--depends-on id1,id2` — comma-separated existing task ids this task depends on. Each id must already exist; `/task-assign` refuses to dispatch until every dependency is `done` (unless `--force`).
 
 After creation, suggest `/task-assign <pane> <id> <prompt>` to dispatch.

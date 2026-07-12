@@ -18,7 +18,7 @@ Each pattern doc should follow this structure:
 
 **Date**: YYYY-MM-DD
 **Status**: Active | Deprecated | Superseded by [OTHER_PATTERN.md]
-**Related**: `PATTERN_X.md`, `MODULE_Y.md`
+**Related**: [related pattern or module documentation, if any]
 
 ## Overview
 

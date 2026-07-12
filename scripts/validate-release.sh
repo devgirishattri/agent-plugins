@@ -68,6 +68,7 @@ python3 <<'PY'
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 root = pathlib.Path.cwd()
@@ -108,6 +109,37 @@ def reject_pattern(path: pathlib.Path, pattern: str, label: str) -> None:
     match = re.search(pattern, path.read_text(), flags=re.MULTILINE)
     if match:
         fail(f"{path}: {label}: {match.group(0)!r}")
+
+
+def validate_tracked_markdown_links() -> None:
+    """Validate local .md links in public/tracked docs, excluding ignored plans."""
+    output = subprocess.check_output(
+        ["git", "ls-files", "-z", "--", "*.md"], text=True
+    )
+    markdown_link = re.compile(r"\[[^\]]*\]\(([^)]+\.md(?:#[^)]+)?)\)")
+    related_ref = re.compile(r"`([^`]+\.md)`")
+    broken = []
+    for raw in filter(None, output.split("\0")):
+        path = root / raw
+        text = path.read_text()
+        refs = [match.group(1) for match in markdown_link.finditer(text)]
+        for line in text.splitlines():
+            if line.startswith("**Related**:"):
+                refs.extend(related_ref.findall(line))
+        for ref in refs:
+            if re.match(r"^(?:https?://|mailto:)", ref):
+                continue
+            target_text = ref.split("#", 1)[0]
+            if not target_text or any(token in target_text for token in ("<", ">", "$")):
+                continue
+            target = (path.parent / target_text).resolve()
+            if not target.is_file():
+                broken.append(f"{path.relative_to(root)} -> {ref}")
+    if broken:
+        fail("broken tracked Markdown reference(s): " + "; ".join(broken))
+
+
+validate_tracked_markdown_links()
 
 
 def require_order(path: pathlib.Path, first: str, second: str) -> None:
@@ -506,6 +538,98 @@ require_tokens(
     root / ".github/workflows/validate.yml",
     "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7",
 )
+require_tokens(
+    root / "README.md",
+    "codex plugin add <plugin-name>@girishattri-plugins",
+    "codex plugin list --json",
+    "Start a new Codex session",
+    "does not automatically trust its lifecycle hooks",
+    "https://learn.chatgpt.com/docs/plugins",
+    "claude plugin marketplace update girishattri-plugins",
+    "claude plugin update <plugin-name>@girishattri-plugins",
+)
+reject_pattern(root / "README.md", r"/reload-plugins", "undocumented plugin reload command")
+reject_pattern(root / "README.md", r"claude plugin upgrade", "unsupported Claude plugin command")
+require_tokens(root / ".shellcheckrc", "CI gates on --severity=warning")
+require_tokens(
+    root / "codex/plugins/session-chat/skills/session-chat/SKILL.md",
+    "transcript's first user message",
+    "do not retry a queued result",
+)
+require_tokens(
+    root / "codex/plugins/session-scheduler/commands/task-assign.md",
+    "task-<id>-<random>",
+)
+require_tokens(
+    root / "codex/plugins/session-scheduler/skills/session-scheduler/SKILL.md",
+    "task-<id>-<random>",
+)
+require_tokens(
+    root / "codex/plugins/session-context/skills/context-load/SKILL.md",
+    "7 or more days old",
+)
+require_tokens(
+    root / "codex/plugins/session-context/skills/session-context/SKILL.md",
+    "Direct callers of every script must set the variable explicitly",
+)
+reject_pattern(
+    root / "codex/plugins/session-context/skills/session-context/SKILL.md",
+    r"context-search[^.]*is the exception",
+    "Codex context search also requires SESSION_CONTEXT_HOME",
+)
+for context_skill in sorted(
+    (root / "codex/plugins/session-context/skills").glob("*/SKILL.md")
+):
+    if context_skill.parent.name == "session-context":
+        continue
+    require_tokens(context_skill, "<pwd>/tmp/contexts")
+    reject_pattern(
+        context_skill,
+        r"\bor pwd when not in a git repo\b",
+        "non-git fallback must include tmp/contexts",
+    )
+require_tokens(
+    root / "plugins/session-scheduler/skills/session-scheduler/SKILL.md",
+    "<pwd>/tmp/scheduler",
+)
+require_tokens(
+    root / "plugins/session-chat/commands/dispatch.md",
+    "This is success — do not re-dispatch.",
+)
+require_tokens(root / "plugins/session-chat/commands/send.md", "do not retry it")
+require_tokens(root / "plugins/session-chat/commands/reply.md", "do not resend")
+require_tokens(
+    root / "plugins/session-chat/skills/session-chat/SKILL.md",
+    "public `/send` and `/dispatch` wrappers translate that to a normal success exit",
+)
+require_tokens(
+    root / "plugins/session-context/skills/session-context/SKILL.md",
+    "not a file copy",
+    "via `/whoami <name>` or SessionStart",
+)
+require_tokens(
+    root / "plugins/session-scheduler/commands/task-assign.md",
+    "A **busy** recipient is *not* a failure",
+    "[--context NAME|auto]",
+)
+require_tokens(
+    root / "plugins/session-scheduler/skills/session-scheduler/SKILL.md",
+    "unique registered names",
+)
+for stale_retry_doc in (
+    root / "plugins/session-chat/commands/dispatch.md",
+    root / "plugins/session-chat/commands/send.md",
+    root / "plugins/session-chat/commands/reply.md",
+    root / "codex/plugins/session-chat/commands/dispatch.md",
+    root / "codex/plugins/session-chat/commands/send.md",
+    root / "codex/plugins/session-chat/skills/dispatch/SKILL.md",
+    root / "codex/plugins/session-chat/skills/send/SKILL.md",
+):
+    reject_pattern(
+        stale_retry_doc,
+        r"retry (?:once after|when idle)",
+        "queued delivery must not be retried",
+    )
 for workflow in sorted((root / ".github/workflows").glob("*.y*ml")):
     reject_pattern(
         workflow,

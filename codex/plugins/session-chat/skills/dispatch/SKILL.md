@@ -43,6 +43,6 @@ Stage the prompt as data, never as shell source:
 
 If tmux is not active, explain that dispatch requires running Codex inside tmux.
 If the target is not found, suggest `$session-chat:panes`. If this pane has no name, suggest `$session-chat:whoami <name>`.
-On success, mention that the recipient must use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to read and act on the task; default `notify` only reports that a dispatch arrived.
+Relay the script's `Dispatched task ...` or `Queued dispatch ...` result accurately. For either successful result, mention that the recipient must use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to read and act on the task; default `notify` only reports that a dispatch arrived.
 If the output reports multiple panes named the same target, tell the user to rename one pane with `$session-chat:whoami <name>`.
-If the output says the dispatch did not land within the timeout, say the target may be busy and retry when idle or raise `SESSION_CHAT_VERIFY_TIMEOUT_MS`.
+If a live timeout is followed by `Queued dispatch ...`, report durable queued success and do not retry. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` only when immediate live delivery matters. Retry only a hard failure that did not queue, after fixing its cause.

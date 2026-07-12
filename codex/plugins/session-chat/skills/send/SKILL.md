@@ -32,4 +32,4 @@ If tmux is not active, explain that messaging requires running Codex inside tmux
 If the target is not found, suggest `$session-chat:panes`. If this pane has no name, suggest `$session-chat:whoami <name>`.
 If the output reports a single-line or length limit, suggest `$session-chat:dispatch <pane-name> <task prompt>`.
 If the output reports multiple panes named the same target, tell the user to rename one pane with `$session-chat:whoami <name>`.
-If the output says the message did not land within the timeout, say the target may be busy and retry when idle or raise `SESSION_CHAT_VERIFY_TIMEOUT_MS`.
+If a live timeout is followed by `Queued ...`, report durable queued success and do not retry. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` only when immediate live delivery matters. Retry only a hard failure that did not queue, after fixing its cause.

@@ -9,7 +9,7 @@ A snapshot is a markdown summary of a working session — **what you worked on, 
 decisions you made, and where you left off** — written so a *future* session (or a
 peer session) can resume without re-deriving everything from scratch.
 
-Snapshots are stored under `SESSION_CONTEXT_HOME`, which the `/context-*` commands (and the SessionStart hook) export automatically, resolving `<git-root>/tmp/contexts` (or pwd when not in a git repo). The scripts **require** this variable and refuse to run when it is unset rather than guessing a location; set it yourself only for direct script use or to point at a shared location.
+Snapshots are stored under `SESSION_CONTEXT_HOME`, which the `/context-*` commands (and the SessionStart hook) export automatically, resolving `<git-root>/tmp/contexts` (or `<pwd>/tmp/contexts` when not in a git repo). Most scripts **require** this variable and refuse to run when it is unset rather than guessing a location (`/context-search`, which scans across projects, is the exception — it uses `SESSION_CONTEXT_HOME` only as an override for the current repo's store); set it yourself only for direct script use or to point at a shared location.
 
 Snapshots are stored **project-local** at `<project_root>/tmp/contexts/<name>.md`,
 where the project root resolves via `git rev-parse --show-toplevel` (falling back to
@@ -25,8 +25,9 @@ is told it can `/context-load` instead of starting cold.
   preserve the state you'd otherwise lose.
 - **When resuming work** in a new session — `/context-list` then `/context-load` to
   pick up where the previous session stopped.
-- **When handing work to a peer pane** — `/context-share` pushes a snapshot to
-  another named session.
+- **When handing work to a peer pane** — `/context-share` notifies another pane
+  that a shared snapshot is available (it does not copy the file; the peer loads
+  it from the same store).
 
 **Don't use it for** a quick one-line status to another pane — that's
 `/session-chat:send`. Snapshots are for substantial, reusable state.
@@ -49,7 +50,7 @@ produce the summary — never try to offload generation to a separate agent.
   ↓ (optional)
 /context-diff <name>       → compare the current snapshot with an archived version
   ↓ (optional)
-/context-share <session> [name]  → push a snapshot to another named pane
+/context-share <session> [name]  → notify the named pane a shared snapshot is available
   ↓ (when stale)
 /context-remove <name>     → delete a snapshot
 ```
@@ -60,10 +61,10 @@ produce the summary — never try to offload generation to a separate agent.
 |---|---|
 | `/context-generate [name]` | Summarize the current session and save it (overwrites a same-named snapshot; the previous version is archived). Omit the name to derive one from the session/directory name. |
 | `/context-list` | List snapshots for this project (name, line count, last modified, history version count). |
-| `/context-load <name>` | Load a snapshot's contents into the current session. Warns if the snapshot is older than 7 days (override with `SESSION_CONTEXT_STALE_DAYS`). |
+| `/context-load <name>` | Load a snapshot's contents into the current session. Warns if the snapshot is 7 or more days old (override with `SESSION_CONTEXT_STALE_DAYS`). |
 | `/context-diff <name>` | Unified diff of the newest archived version vs. current. `--versions` lists timestamps; pass a timestamp to diff that version. |
 | `/context-search <pattern> [--list]` | Read-only search of snapshot *contents* across local projects (current repo always; other roots best-effort via decoded session paths — lossy for hyphenated directory names). |
-| `/context-share <session> [name]` | Send a snapshot to another named tmux pane. |
+| `/context-share <session> [name]` | Notify another pane that a shared snapshot is available (same store; not a file copy). |
 | `/context-remove <name>` | Delete a snapshot. |
 
 Snapshot names must contain only letters, numbers, hyphens, and underscores.
@@ -73,8 +74,9 @@ Snapshot names must contain only letters, numbers, hyphens, and underscores.
 `/context-share` notifies another pane over tmux, so:
 
 1. **You must be inside tmux** — sharing is a tmux-only operation.
-2. **The recipient pane must be named** (it ran `/whoami <name>`); names are how
-   panes are addressed, and the search spans all tmux sessions.
+2. **The recipient pane must be named** (via `/whoami <name>` or SessionStart
+   auto-naming); names are how panes are addressed, and the search spans all
+   tmux sessions.
 3. **The recipient should be working in the same repo / context store.** Sharing
    does *not* copy the snapshot file — it relies on the project-local
    `tmp/contexts/` dir being shared, then sends the peer a one-line message

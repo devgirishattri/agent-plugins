@@ -8,7 +8,7 @@ allowed-tools: Bash(bash:*), Write
 
 Do not narrate or add a preamble. Run the script directly and report only the result.
 
-`/dispatch` is for **task hand-off** — multi-line prompts, code, structured work. The full prompt is written to a file under `~/.claude/messages/` and the recipient gets a one-line notification with the file path. See the `session-chat` skill for the full contract, recipient prerequisites, and `INCOMING_MODE` requirements.
+`/dispatch` is for **task hand-off** — multi-line prompts, code, structured work. The full prompt is written to a file under the recipient runtime's messages dir (`~/.claude/messages/` for a Claude pane, `~/.codex/messages/` for a Codex pane) and the recipient gets a one-line notification with the file path. See the `session-chat` skill for the full contract, recipient prerequisites, and `INCOMING_MODE` requirements.
 
 1. Parse $ARGUMENTS: optional `--priority high` (surfaces before normal messages if queued) and `--ttl <minutes>` (drop instead of surfacing if still queued after the window) come first; then the target session name; everything after is the prompt.
 
@@ -24,9 +24,12 @@ Do not narrate or add a preamble. Run the script directly and report only the re
    ```
    4. Optionally remove the temp file afterward with `rm -f "<prompt-file-path>"`.
 
-4. Report: "Dispatched task to **<target>**. Use `/panes` to check status or `/send <target> <message>` to follow up. Note: if `<target>` runs with `SESSION_CHAT_INCOMING_MODE=notify` (default) they will be **told not to read** the dispatch file — set `auto` or `assist` for orchestration."
+4. Report the script's result **verbatim** — both success cases are fine, but they mean different things:
+   - `Dispatched task to '<target>'` — the prompt landed live in the recipient's pane now.
+   - `Queued dispatch to '<target>' — recipient was busy; it will arrive on their next turn.` — durable delivery; the recipient's inbox surfaces it on its next turn. **This is success — do not re-dispatch.**
+   Then add: "Use `/panes` to check status or `/send <target> <message>` to follow up. Note: if `<target>` runs with `SESSION_CHAT_INCOMING_MODE=notify` (default) they will be **told not to read** the dispatch file — set `auto` or `assist` for orchestration."
 
 5. If error about target not found, run `/panes` to show available sessions.
 6. If error about no name, tell user to run `/whoami <name>` first.
 7. If error mentions duplicate names, ask the user to rename one pane via `/whoami`.
-8. If "did not land within Xms", retry once after a short pause; if it persists raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` (recipient may be in a long-running TUI frame).
+8. **Do not retry a `Queued …` result** — durable delivery surfaces it on the recipient's next turn, so re-dispatching only duplicates the task. (Raising `SESSION_CHAT_VERIFY_TIMEOUT_MS` only makes more dispatches land *live*; it does not change whether delivery happens.) Only a **hard failure** — the script prints an `ERROR:` and exits non-zero (no name, unknown/ambiguous target) — should be retried, after fixing the named cause.

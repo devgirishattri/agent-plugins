@@ -12,7 +12,7 @@ argument-hint: <task-id> [--force] <reason>
 
    ```bash
    export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
-   bash "$PLUGIN_ROOT/scripts/task-block.sh" "<task-id>" "<reason>"
+   bash "$PLUGIN_ROOT/scripts/task-block.sh" "<task-id>" [--force] "<reason>"
    ```
 
 3. Legal from `created`, `assigned`, or `review` (review rejection). Other transitions are rejected; `--force` overrides and records "forced" in history. Unblock by re-running `task-assign` (blocked → assigned is legal).

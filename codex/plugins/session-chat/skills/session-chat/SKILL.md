@@ -20,7 +20,7 @@ Use this skill when the user asks how session-chat works, which command to use, 
 ## Recipient Prerequisites
 
 - The recipient must be running inside tmux.
-- The recipient pane must have a unique name from `$session-chat:whoami <name>`.
+- The recipient pane must have a unique registered name, either from `$session-chat:whoami <name>` or best-effort SessionStart auto-naming from the transcript's first user message.
 - Use `$session-chat:panes` to inspect the current tmux session, or `$session-chat:panes all` when the target may be in another tmux session.
 - In Codex, the plugin `hooks.json` runs on `SessionStart` and `UserPromptSubmit` to load tmux styling, auto-name unnamed panes when possible, and surface incoming messages according to `SESSION_CHAT_INCOMING_MODE`.
 - For orchestration, the recipient should set `SESSION_CHAT_INCOMING_MODE=auto` or `SESSION_CHAT_INCOMING_MODE=assist`.
@@ -44,13 +44,13 @@ The trailing id keeps the verification marker visible in TUIs that show the end 
 
 ## Reliability Contract
 
-Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies either a marker or a newly-created `[Pasted text #N]` placeholder in `capture-pane -S -200`, then sends a line-edit clear sequence (`C-e`, `C-u`, `C-a`, `C-k`) for any partial paste, backs off, and retries before returning failure.
+Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies either a marker or a newly-created `[Pasted text #N]` placeholder in `capture-pane -S -200`, then sends a three-pair line-edit clear sequence (`C-e C-u`, `C-a C-k`, `C-e C-u`) for any partial paste, backs off, and retries before returning failure.
 
-Codex TUI redraws, wrapping, approval prompts, and active command output can still hide typed markers from `capture-pane`. If a valid send reports that it did not land, retry after the target is idle or raise the verification timeout.
+Codex TUI redraws, wrapping, approval prompts, and active command output can still hide typed markers from `capture-pane`. The wrapper converts that timeout into a durable `Queued ...` success when the fallback was recorded; do not retry a queued result. Raising the verification timeout only increases the chance of immediate live delivery.
 
 For durable fallback, the sender writes the queue row and dispatch file into the recipient runtime's message directory. Codex recipients use `${CODEX_HOME:-~/.codex}/messages`; Claude recipients use `${CLAUDE_HOME:-~/.claude}/messages`. Queue operations lock under that recipient message directory so mixed Codex/Claude fallback does not depend on both runtimes sharing the same `TMPDIR`.
 
-Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and performs a one-time safe migration of an existing owner-owned, non-symlink message tree. Unsafe roots or dispatch files are rejected.
+Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and performs a one-time safe migration of an existing owner-owned, non-symlink message tree. Every operation revalidates queue, lock, archive, and ledger paths; symlinked, multiply-linked, non-regular, or unowned paths are rejected. Dispatch files use atomic no-clobber creation and are revalidated before notification and before trusted reads.
 
 ## Tunables
 
@@ -62,7 +62,7 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
 - `SESSION_CHAT_LOCK_TIMEOUT_MS`: how long a sender waits for a per-pane send lock. Default: auto-derived from the send budget (~4× one send) and reset whenever the lock holder changes, so fan-in to one pane queues instead of failing. When set explicitly, it is a hard cap.
 - `SESSION_CHAT_SEND_RETRIES`: retry count after verify timeouts. Default: `2`.
 - `SESSION_CHAT_RETRY_BACKOFF_MS`: linear retry backoff base in milliseconds. Default: `200`.
-- `SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS`: how long a pre-live durable queue row waits before hook recovery if the sender dies mid-send. Default: auto-derived from lock plus send budget; known live-send failures mark the row ready immediately.
+- `SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS`: how long a pre-live durable queue row waits before hook recovery if the sender dies mid-send. Default: auto-derived from lock plus send budget plus 1000ms; known live-send failures mark the row ready immediately.
 - `SESSION_CHAT_RECENT_ID_TTL_MS`: how long surfaced message ids suppress duplicate live arrivals. Default: `600000`.
 - `SESSION_CHAT_DISPATCH_INLINE_MAX`: maximum trusted dispatch-body characters inlined in `auto` mode. Default: `6000`; total hook context remains capped at `10000`.
 
@@ -72,11 +72,11 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
   sandbox blocked the tmux socket. This is not an empty pane list, an unnamed
   pane, or a missing target. Relay the error and rerun the entire plugin script
   escalated/approved; retrying only one inner `tmux` command is insufficient.
-- `did not land within Xms after N attempts`: target was busy through all retries. The message is **not lost** — it's in the recipient's durable inbox (`~/.codex/messages/queue/<name>.tsv` for Codex, `~/.claude/messages/queue/<name>.tsv` for Claude) and surfaces on the recipient's next prompt (`UserPromptSubmit` hook) or as soon as it finishes its current turn (`Stop` hook blocks the stop with the queued messages as feedback). To land more sends live, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
+- `did not land within Xms after N attempts` followed by `Queued ...`: target was busy through all live attempts, but the message is **not lost** — it is already in the recipient's durable inbox (`~/.codex/messages/queue/<name>.tsv` for Codex, `~/.claude/messages/queue/<name>.tsv` for Claude). Do not retry the queued message. It surfaces on the recipient's next prompt (`UserPromptSubmit` hook) or as soon as the current turn finishes (`Stop` hook feedback). Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES` only when immediate live landing matters.
 - `timed out waiting for send lock`: rare now that the unset lock timeout auto-sizes to the send budget and resets on holder change. If `SESSION_CHAT_LOCK_TIMEOUT_MS` is set, that value is treated as an absolute cap.
 - `pane 'X' is at a shell prompt`: the recipient's agent exited; the message would have been executed by their shell. Restart the agent in that pane (set `SESSION_CHAT_ALLOW_SHELL_TARGET=1` only for deliberate shell targets, e.g. tests).
 - `Multiple panes named X`: rename one pane with `$session-chat:whoami <name>` in that pane.
-- `No pane named X`: run `$session-chat:panes all` and confirm the recipient has run `$session-chat:whoami <name>`.
+- `No pane named X`: run `$session-chat:panes all` and confirm the recipient has a unique registered name; use `$session-chat:whoami <name>` there if SessionStart auto-naming did not provide one.
 - `$session-chat:send only supports single-line messages`: use `$session-chat:dispatch`.
 - `$session-chat:send payload exceeds ... characters`: use `$session-chat:dispatch`.
 
@@ -107,4 +107,4 @@ This source tree may be newer than the running Codex plugin cache. To make the r
 codex plugin marketplace upgrade girishattri-plugins
 ```
 
-Then restart Codex or use `/reload-plugins` if the runtime supports it. To verify the cached version, inspect the unversioned plugin cache directory at `$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/` and compare the selected version with the plugin manifest. If the running session still reports an older selected directory, reload before testing new commands.
+Then start a new Codex session so the updated plugin is loaded. Verify the installed version with `codex plugin list --json`, or inspect `$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/` when diagnosing cache contents.

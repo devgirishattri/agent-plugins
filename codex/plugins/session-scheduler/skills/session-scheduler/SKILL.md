@@ -18,7 +18,7 @@ Use this skill when the user asks to coordinate multiple panes, track assigned w
 | Request review | `$session-scheduler:task-review <task-id> [--force] <note>` |
 | Mark done | `$session-scheduler:task-done <task-id> [--force] [note]` |
 | Mark blocked | `$session-scheduler:task-block <task-id> [--force] <reason>` |
-| Clean old tasks | `$session-scheduler:tasks-clean [--older-than 7d] [--status done] [--apply]` |
+| Clean old tasks | `$session-scheduler:tasks-clean [--older-than 7d] [--status STATUS] [--apply]` |
 | Inspect setup | `$session-scheduler:scheduler-doctor` |
 
 ## Lifecycle
@@ -29,10 +29,11 @@ Legal status transitions (enforced by every command): `created→assigned`, `cre
 - `--eta MINUTES` on assign stores `eta_at`; overdue tasks are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
 - Stages are optional free-form labels (suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`); view grouped output with `task-status --by-stage` or `task-board`.
 - `--depends-on` gates assignment until every dependency is `done`.
-- `--context NAME` attaches an existing session-context snapshot. `--context auto` creates a private immutable task handoff from the approved prompt and current ledger state, then attaches it.
-- `--reviewer PANE` stores the independent reviewer route. When the executor calls `task-review`, the scheduler automatically dispatches the audit packet to that pane and preserves the review state even if delivery needs retrying.
+- `--context NAME` attaches an existing session-context snapshot. `--context auto` creates a private immutable task handoff named `task-<id>-<random>` from the approved prompt and current ledger state, then attaches it.
+- `--reviewer PANE` stores the independent reviewer route. When the executor calls `task-review`, the scheduler automatically dispatches the audit packet to that pane. A hard delivery failure leaves the task in review and must be retried with `task-review`; there is no one-line send downgrade.
 - `--workflow ID` groups related tasks in canonical `meta.workflow_id`; `--workflow-id` remains an alias. `task-status --by-workflow` shows each complete workflow arc, including done steps, while omitting tasks without a workflow id; `--workflow ID` filters one workflow.
 - Every assignment records and embeds the absolute scheduler/context homes so a child checkout does not silently write to a different ledger.
+- `tasks-clean` selects task files older than its threshold regardless of status unless `--status` narrows the selection. It is dry-run only unless `--apply` is explicitly requested and confirmed.
 
 ## Scope
 
@@ -43,6 +44,6 @@ Intentionally includes task ids, assignment, explicit reviewer routes, workflow 
 - `session-chat` 0.13.0 or newer must be available. Its durable inbox means a dispatch or ack to a busy pane is recovered on that pane's next turn rather than lost.
 - Executor panes must have unique session-chat names.
 - Executor panes should use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to act on assigned dispatches.
-- Task files are stored under `SESSION_SCHEDULER_HOME`, which the `$session-scheduler:*` commands export automatically to `<git-root>/tmp/scheduler` (or pwd when not in a git repo) unless already set. In a multi-checkout workspace, start every pane with the same root-level value; assignment and review packets repeat that absolute value.
+- Task files are stored under `SESSION_SCHEDULER_HOME`, which the `$session-scheduler:*` commands export automatically to `<git-root>/tmp/scheduler` (or `<pwd>/tmp/scheduler` when not in a git repo) unless already set. In a multi-checkout workspace, start every pane with the same root-level value; assignment and review packets repeat that absolute value.
 - Scripts require `SESSION_SCHEDULER_HOME` and refuse to run without it rather than guessing a cwd/tmp location. Set it yourself only for direct script use or to point at a shared ledger.
 - `$session-scheduler:task-assign --context` also exports `SESSION_CONTEXT_HOME` to `<git-root>/tmp/contexts` unless already set, so attached context snapshots resolve consistently.

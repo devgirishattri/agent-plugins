@@ -1,5 +1,5 @@
 ---
-description: Delete old finished tasks (dry-run by default; --apply to actually delete)
+description: Delete old task files past a threshold — any status by default, narrow with --status (dry-run by default; --apply to actually delete)
 argument-hint: "[--older-than DAYS] [--status STATUS] [--apply]"
 allowed-tools: Bash(bash:*)
 ---

@@ -29,7 +29,7 @@
     {
       "name": "creating-docs",
       "description": "Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks. Includes a doc-reviewer subagent for independent accuracy passes.",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "author": {
         "name": "Girish Attri"
       },
@@ -47,7 +47,7 @@
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude (and Codex) sessions via tmux. Durable delivery routes fallback/dispatch into the recipient runtime's messages dir.",
-      "version": "0.17.3",
+      "version": "0.17.4",
       "author": {
         "name": "Girish Attri"
       },
@@ -66,7 +66,7 @@
     {
       "name": "session-context",
       "description": "Generate, list, load, share, and remove Claude session context snapshots for the current project. Surfaces available snapshots on session start.",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "author": {
         "name": "Girish Attri"
       },
@@ -84,7 +84,7 @@
     {
       "name": "session-scheduler",
       "description": "Thin file-backed task ledger for orchestrator \u2192 executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "author": {
         "name": "Girish Attri"
       },
