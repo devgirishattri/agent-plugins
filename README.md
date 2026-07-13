@@ -129,6 +129,108 @@ For local development, add a checkout path instead:
 claude plugin marketplace add /path/to/agent-plugins
 ```
 
+## Session Chat Configuration
+
+The Claude and Codex `session-chat` plugins share the same transport
+configuration except for two Claude-only hook limits noted below. Export
+long-lived settings in the shell that starts Claude Code or Codex, then restart
+or reload the session. Command-scoped exports affect only that invocation.
+
+### Shared variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SESSION_CHAT_INCOMING_MODE` | `notify` | Controls receiver behavior: `notify`, `assist`, `auto`, or `off`. Orchestration normally uses `auto` or `assist`. |
+| `SESSION_CHAT_VERIFY_TIMEOUT_MS` | `4000` | Maximum marker-verification wait for each live-send attempt. |
+| `SESSION_CHAT_SETTLE_MS` | `300` | Delay after Enter before another sender may use the target pane. |
+| `SESSION_CHAT_SEND_MAX_LEN` | `1024` | Maximum single-line payload length for `send`; use `dispatch` for larger or multiline content. |
+| `SESSION_CHAT_SEND_RETRIES` | `2` | Retries after live marker-verification timeouts; total attempts are retries plus one. |
+| `SESSION_CHAT_RETRY_BACKOFF_MS` | `200` | Linear retry-backoff base in milliseconds. |
+| `SESSION_CHAT_LOCK_TIMEOUT_MS` | Derived | Per-target send-lock wait budget. When unset, it is derived from the send budget and resets when the lock holder changes; an explicitly configured value is a hard cap. |
+| `SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS` | Derived | Delay before a recipient may surface a pre-live durable queue row. The default is the lock budget plus one send budget plus 1000 ms. |
+| `SESSION_CHAT_RECENT_ID_TTL_MS` | `600000` | How long surfaced message IDs suppress duplicate live and queued arrivals. |
+| `SESSION_CHAT_DISPATCH_INLINE_MAX` | `6000` | Maximum trusted dispatch-body characters inlined in `auto` mode. |
+| `SESSION_CHAT_ARCHIVE_RETENTION_DAYS` | `30` | Retention for daily searchable message-archive files. |
+| `SESSION_CHAT_SKIP_VERIFY` | Unset (`0`) | Set to `1` to skip live marker verification. This weakens delivery guarantees. |
+| `SESSION_CHAT_ALLOW_SHELL_TARGET` | `0` | Set to `1` to permit sending to panes at a shell prompt. Use only for deliberate shell targets because the message may execute as shell input. |
+| `SESSION_CHAT_PANE_NAME` | Unset | Explicitly supplies the sender pane name and bypasses self-name lookup, primarily for sandboxed tmux environments. |
+| `SESSION_CHAT_TARGET_MESSAGES_DIR` | Auto-detected | Overrides the local mailbox and every target mailbox. Export the same absolute directory in all participating panes before starting their agents so live dispatch trust and queued recovery use one root. |
+| `SESSION_CHAT_PRIORITY` | `normal` | Queue priority: `high` or `1` surfaces before normal messages. Prefer the `--priority` command option. |
+| `SESSION_CHAT_TTL_MS` | `0` | Queue expiry in milliseconds; `0` means no expiry. Prefer the `--ttl` command option, which accepts minutes. |
+
+### Provider-specific variables
+
+| Variable | Provider | Default | Purpose |
+|----------|----------|---------|---------|
+| `CODEX_HOME` | Both, for Codex storage | `$HOME/.codex` | Locates Codex sessions and the default Codex `messages/` directory when `SESSION_CHAT_TARGET_MESSAGES_DIR` is unset. |
+| `CLAUDE_HOME` | Both, for Claude storage | `$HOME/.claude` | Locates the default Claude `messages/` directory used by normal transport and cross-runtime routing when `SESSION_CHAT_TARGET_MESSAGES_DIR` is unset. |
+| `SESSION_CHAT_SURFACE_MAX` | Claude only | `9000` | Maximum combined queued-message surface budget before the hook stops selecting additional rows. |
+| `SESSION_CHAT_REPLY_SCAN_BYTES` | Claude only | `4096` | Maximum prefix read from a trusted dispatch file when scanning for reply-correlation tokens. |
+
+`HOME` supplies the standard fallback roots, and `TMPDIR` selects the parent
+for private temporary and send-lock directories. The runtime supplies `TMUX`,
+`TMUX_PANE`, and the provider plugin-root variables; these are integration
+inputs, not session-chat user settings.
+
+## Other Plugin Configuration
+
+The remaining plugins expose the variables below. A `Yes` in both provider
+columns means both implementations read the variable for the stated purpose;
+provider-specific differences are called out explicitly.
+
+### Session context
+
+| Variable | Claude | Codex | Default | Purpose |
+|----------|--------|-------|---------|---------|
+| `SESSION_CONTEXT_HOME` | Yes | Yes | Wrapper-derived | Snapshot store. Command wrappers use `<git-root>/tmp/contexts` (or `<pwd>/tmp/contexts` outside Git). Most direct scripts require it; Claude's direct `context-search` can fall back to the current root, while Codex's currently requires it. |
+| `SESSION_CONTEXT_STALE_DAYS` | Yes | Yes | `7` | Age at which `context-load` warns that a snapshot is stale. |
+| `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the `session-chat` dependency used by `context-share`. |
+| `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for the `session-chat` dependency. |
+
+The core context-store variable names and normal wrapper defaults are shared,
+but direct `context-search` unset behavior differs as noted above.
+`SESSION_CHAT_PLUGIN_ROOT` is a Codex-only locator; both providers support
+`SESSION_CHAT_ROOT_OVERRIDE`.
+
+### Session scheduler
+
+| Variable | Claude | Codex | Default | Purpose |
+|----------|--------|-------|---------|---------|
+| `SESSION_SCHEDULER_HOME` | Yes | Yes | Wrapper-derived | Shared task ledger. Command wrappers use `<git-root>/tmp/scheduler` (or `<pwd>/tmp/scheduler` outside Git); direct script use must set it explicitly. |
+| `SESSION_CONTEXT_HOME` | Yes | Yes | Wrapper-derived | Resolves an attached session-context snapshot. Required when direct script use attaches a context. |
+| `SESSION_SCHEDULER_STALE_MINUTES` | Yes | Yes | `30` | Age after which assigned or review tasks are marked `STALE`. |
+| `SESSION_SCHEDULER_FORCE` | Yes | Yes | `0` | Set to `1` to permit otherwise illegal status transitions. Prefer the `--force` option. |
+| `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the scheduler's `session-chat` dependency. |
+| `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for `session-chat`. |
+| `SESSION_SCHEDULER_SKIP_VERSION_CHECK` | Yes | No | `0` | Claude-only escape hatch that bypasses the minimum `session-chat` version check when set to `1`. |
+
+The scheduler also reads the already-documented
+`SESSION_CHAT_INCOMING_MODE` in its doctor command. Scheduler storage, context
+attachment, stale detection, and force behavior are shared; dependency-locator
+and version-check overrides are not fully aligned.
+
+### Session manager and provider homes
+
+| Variable | Claude | Codex | Default | Purpose |
+|----------|--------|-------|---------|---------|
+| `CLAUDE_HOME` | Partial | Not applicable | `$HOME/.claude` | Claude `session-stats` uses it, but Claude list, search, and delete scripts currently use `$HOME/.claude` directly. Claude session-context cross-project search also honors it. |
+| `CODEX_HOME` | Not applicable | Yes | `$HOME/.codex` | Codex session-manager uses it for session and state storage. Codex session-context and session-scheduler also use it for session discovery, message storage, and plugin-cache lookup. |
+
+Session-manager therefore has equivalent provider-home intent but not literal or
+behavioral parity: Codex consistently honors `CODEX_HOME`, while most Claude
+session-manager operations do not honor `CLAUDE_HOME`.
+
+### Creating docs
+
+`creating-docs` exposes no plugin-specific user environment variables. Its
+plugin-root values and validator target directories are runtime or command
+inputs rather than persistent configuration.
+
+Standard shell/runtime inputs such as `HOME`, `TMPDIR`, `TMUX`, `TMUX_PANE`,
+`PLUGIN_ROOT`, and `CLAUDE_PLUGIN_ROOT` are not plugin-specific customization
+variables. Test-only fault-injection variables and shell-local implementation
+variables are intentionally omitted.
+
 ## Development Notes
 
 - Keep provider-specific manifests separate.

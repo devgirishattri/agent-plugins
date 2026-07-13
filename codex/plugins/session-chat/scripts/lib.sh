@@ -81,7 +81,7 @@ sanitize_label() {
 # --- Message directory ---
 
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
-MESSAGES_DIR="$CODEX_DIR/messages"
+MESSAGES_DIR="${SESSION_CHAT_TARGET_MESSAGES_DIR:-$CODEX_DIR/messages}"
 
 _require_private_message_dir() {
   local path="$1"

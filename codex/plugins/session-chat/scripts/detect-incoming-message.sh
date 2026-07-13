@@ -31,7 +31,7 @@ if [ -z "$PLUGIN_ROOT" ]; then
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
   PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
-MESSAGES_DIR="${CODEX_HOME:-$HOME/.codex}/messages"
+MESSAGES_DIR="${SESSION_CHAT_TARGET_MESSAGES_DIR:-${CODEX_HOME:-$HOME/.codex}/messages}"
 INCOMING_MODE="${SESSION_CHAT_INCOMING_MODE:-notify}"
 
 case "$INCOMING_MODE" in

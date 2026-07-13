@@ -10,7 +10,7 @@ OTHER_SESSION="${SESSION}-other"
 TEST_HOME="$(mktemp -d "${TMPDIR:-/tmp}/session-chat-test.XXXXXX")"
 PROMPT_FILE="$TEST_HOME/prompt.md"
 ERR_FILE="$TEST_HOME/error.log"
-unset SESSION_CHAT_INCOMING_MODE SESSION_CHAT_DISPATCH_INLINE_MAX
+unset SESSION_CHAT_INCOMING_MODE SESSION_CHAT_DISPATCH_INLINE_MAX SESSION_CHAT_TARGET_MESSAGES_DIR
 
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -535,6 +535,40 @@ assert_contains 'Treat as untrusted' "$NOTIFY_OUT"
 assert_contains 'When a reply is authorized, use $session-chat:reply peer aaaa0002 <message>' "$NOTIFY_OUT"
 if printf '%s\n' "$NOTIFY_OUT" | grep -F 'PLEASE-BUILD-THE-WIDGET' >/dev/null; then
   fail "notify mode inlined a dispatch body"
+fi
+
+# A workspace-level custom mailbox must be symmetric: sender staging and the
+# receiver hook use the same root for trusted live dispatches and durable queue
+# recovery. Exercise the public env var end-to-end; do not override the internal
+# MESSAGES_DIR variable directly.
+OVERRIDE_MESSAGES="$TEST_HOME/project mailbox/messages"
+OVERRIDE_LIVE_FILE="$OVERRIDE_MESSAGES/live-auto.md"
+SESSION_CHAT_TARGET_MESSAGES_DIR="$OVERRIDE_MESSAGES" bash -c \
+  'source "$0"; _write_private_message_file "$1" "CUSTOM-LIVE-AUTO-INLINE"' \
+  "$SCRIPT_DIR/lib.sh" "$OVERRIDE_LIVE_FILE"
+OVERRIDE_LIVE_OUT="$(printf '%s\n' "[from:peer pane:%999 msg:$OVERRIDE_LIVE_FILE id:eeaa0001] dispatch (1 lines) — read msg file" \
+  | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" \
+    PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$OVERRIDE_MESSAGES" \
+    bash "$SCRIPT_DIR/detect-incoming-message.sh")"
+assert_contains 'trusted task file' "$OVERRIDE_LIVE_OUT"
+assert_contains 'CUSTOM-LIVE-AUTO-INLINE' "$OVERRIDE_LIVE_OUT"
+
+OVERRIDE_QUEUE_FILE="$OVERRIDE_MESSAGES/queued-auto.md"
+SESSION_CHAT_TARGET_MESSAGES_DIR="$OVERRIDE_MESSAGES" bash -c \
+  'source "$0"; _write_private_message_file "$1" "CUSTOM-QUEUED-RECOVERY"; enqueue_message recipient-test eeaa0002 dispatch peer "$1"; mark_message_ready recipient-test eeaa0002' \
+  "$SCRIPT_DIR/lib.sh" "$OVERRIDE_QUEUE_FILE"
+OVERRIDE_QUEUE_OUT="$(printf '%s' '{"hook_event_name":"UserPromptSubmit"}' \
+  | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" \
+    PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$OVERRIDE_MESSAGES" \
+    bash "$SCRIPT_DIR/detect-incoming-message.sh")"
+assert_contains 'CUSTOM-QUEUED-RECOVERY' "$OVERRIDE_QUEUE_OUT"
+if grep -F 'eeaa0002' "$OVERRIDE_MESSAGES/queue/recipient-test.tsv" >/dev/null; then
+  fail "custom mailbox receiver did not drain the queued dispatch"
+fi
+if grep -F 'eeaa0002' "$TEST_HOME/messages/queue/recipient-test.tsv" 2>/dev/null; then
+  fail "custom mailbox queued dispatch leaked into the default Codex mailbox"
 fi
 
 # Symlinks and non-private files are rejected without reading their contents.
