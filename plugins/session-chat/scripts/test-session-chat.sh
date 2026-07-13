@@ -1172,6 +1172,39 @@ else
 fi
 rm -rf "$CMB"
 
+# --- Test 48: lib-less receiver honors CLAUDE_HOME (and the override still
+#     wins over it) — regression guard for the pre-source MESSAGES_DIR fallback
+#     in detect-incoming-message.sh. No tmux/lib needed: CLAUDE_PLUGIN_ROOT=""
+#     keeps lib.sh unsourced, so this exercises the raw fallback expression
+#     directly, same harness style as tests 13-18.
+CHB_FAKEHOME=$(mktemp -d)
+CHB_BASE=$(mktemp -d); CH="$CHB_BASE/claude-home"
+mkdir -p "$CH/messages"
+printf 'CLAUDE-HOME-FALLBACK-BODY\n' > "$CH/messages/chtask.md"; chmod 600 "$CH/messages/chtask.md"
+
+# (a) override UNSET: a lib-less receiver must still trust a dispatch file
+#     under CLAUDE_HOME/messages (matches what a lib-sourcing sender would
+#     have written there). Fails against the old $HOME/.claude/messages-only
+#     fallback — the file would be rejected as outside the trusted dir.
+chb_a_out=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:c1a2b3c4] dispatch (1 lines) — read msg file"}' "$CH/messages/chtask.md" \
+  | env HOME="$CHB_FAKEHOME" TMUX="fake-socket,0,0" CLAUDE_HOME="$CH" CLAUDE_PLUGIN_ROOT="" \
+    SESSION_CHAT_INCOMING_MODE=auto bash "$HERE/detect-incoming-message.sh")
+
+# (b) override SET to a third dir: must beat CLAUDE_HOME in the lib-less path too.
+CHB_OV=$(mktemp -d)
+printf 'OVERRIDE-BEATS-CLAUDE-HOME-BODY\n' > "$CHB_OV/ovtask.md"; chmod 600 "$CHB_OV/ovtask.md"
+chb_b_out=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:d5e6f7a8] dispatch (1 lines) — read msg file"}' "$CHB_OV/ovtask.md" \
+  | env HOME="$CHB_FAKEHOME" TMUX="fake-socket,0,0" CLAUDE_HOME="$CH" CLAUDE_PLUGIN_ROOT="" \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$CHB_OV" SESSION_CHAT_INCOMING_MODE=auto bash "$HERE/detect-incoming-message.sh")
+
+if echo "$chb_a_out" | grep -q 'trusted task file' && echo "$chb_a_out" | grep -q 'CLAUDE-HOME-FALLBACK-BODY' \
+   && echo "$chb_b_out" | grep -q 'trusted task file' && echo "$chb_b_out" | grep -q 'OVERRIDE-BEATS-CLAUDE-HOME-BODY'; then
+  pass "lib_less_claude_home_fallback_and_override_precedence"
+else
+  fail "lib_less_claude_home_fallback_and_override_precedence" "a_out=$chb_a_out b_out=$chb_b_out"
+fi
+rm -rf "$CHB_FAKEHOME" "$CHB_BASE" "$CHB_OV"
+
 # --- Summary ---
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="

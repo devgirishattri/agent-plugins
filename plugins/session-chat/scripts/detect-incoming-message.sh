@@ -18,8 +18,11 @@ HOOK_INPUT=$(cat)
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 # Honor the public mailbox override even when lib.sh is unavailable (the
 # HAVE_LIB=0 fallback below); when lib.sh IS sourced it re-resolves the same
-# value, so sourcing never clobbers the override.
-MESSAGES_DIR="${SESSION_CHAT_TARGET_MESSAGES_DIR:-$HOME/.claude/messages}"
+# value, so sourcing never clobbers the override. Precedence matches lib.sh
+# exactly: SESSION_CHAT_TARGET_MESSAGES_DIR, then CLAUDE_HOME, then ~/.claude —
+# skipping CLAUDE_HOME here would make a lib-less receiver distrust dispatch
+# files a lib-sourcing sender wrote under a custom CLAUDE_HOME.
+MESSAGES_DIR="${SESSION_CHAT_TARGET_MESSAGES_DIR:-${CLAUDE_HOME:-$HOME/.claude}/messages}"
 INCOMING_MODE="${SESSION_CHAT_INCOMING_MODE:-notify}"
 
 case "$INCOMING_MODE" in
