@@ -248,7 +248,7 @@ ensure_context_regular_file() {
 }
 
 _context_lock_fingerprint() {
-  local lock_dir="$1/.session-context.lock" lock_id pid_id entry_count
+  local lock_dir="$1/.session-context.lock" lock_id pid_id reclaim_id entry_count
   _context_path_exists "$lock_dir" || return 2
   lock_id=$(_context_path_identity "$lock_dir") || return 2
   if _context_path_exists "$lock_dir/pid"; then
@@ -256,8 +256,13 @@ _context_lock_fingerprint() {
   else
     pid_id="missing"
   fi
+  if _context_path_exists "$lock_dir/.reclaim"; then
+    reclaim_id=$(_context_path_identity "$lock_dir/.reclaim") || return 2
+  else
+    reclaim_id="missing"
+  fi
   entry_count=$(find -P "$lock_dir" -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l | tr -d ' ')
-  printf '%s|%s|%s\n' "$lock_id" "$pid_id" "$entry_count"
+  printf '%s|%s|%s|%s\n' "$lock_id" "$pid_id" "$reclaim_id" "$entry_count"
 }
 
 _context_check_lock_generation() {
@@ -282,27 +287,48 @@ _context_check_lock_generation() {
   find -P "$lock_dir" -mindepth 1 -print0 2>/dev/null | while IFS= read -r -d '' path; do
     _context_path_exists "$path" || continue
     relative=${path#"$lock_dir"/}
-    if [ "$relative" != "pid" ]; then
-      _context_store_error "unexpected file in context store: $path"
-      exit 1
-    fi
-    if [ -L "$path" ] || [ ! -f "$path" ]; then
-      _context_path_exists "$path" || continue
-      _context_store_error "writer-lock PID must be a regular non-symlink file: $path"
-      exit 1
-    fi
-    _context_require_owner "$path" || exit 1
-    mode=$(_context_path_mode "$path") || exit 2
-    if [ "$mode" != "600" ]; then
-      _context_store_error "writer-lock PID file must be mode 600: $path"
-      exit 1
-    fi
-    holder_pid=$(sed -n '1p' "$path" 2>/dev/null) || holder_pid=""
-    # Empty is valid only during the bounded mkdir-to-publish window.
-    if [ -n "$holder_pid" ] && ! [[ "$holder_pid" =~ ^[0-9]+$ ]]; then
-      _context_store_error "writer lock contains an invalid holder PID: $path"
-      exit 1
-    fi
+    case "$relative" in
+      pid)
+        if [ -L "$path" ] || [ ! -f "$path" ]; then
+          _context_path_exists "$path" || continue
+          _context_store_error "writer-lock PID must be a regular non-symlink file: $path"
+          exit 1
+        fi
+        _context_require_owner "$path" || exit 1
+        mode=$(_context_path_mode "$path") || exit 2
+        if [ "$mode" != "600" ]; then
+          _context_store_error "writer-lock PID file must be mode 600: $path"
+          exit 1
+        fi
+        holder_pid=$(sed -n '1p' "$path" 2>/dev/null) || holder_pid=""
+        # Empty is valid only during the bounded mkdir-to-publish window.
+        if [ -n "$holder_pid" ] && ! [[ "$holder_pid" =~ ^[0-9]+$ ]]; then
+          _context_store_error "writer lock contains an invalid holder PID: $path"
+          exit 1
+        fi
+        ;;
+      .reclaim)
+        if [ -L "$path" ] || [ ! -d "$path" ]; then
+          _context_path_exists "$path" || continue
+          _context_store_error "writer-lock reclaim claim must be a real directory: $path"
+          exit 1
+        fi
+        _context_require_owner "$path" || exit 1
+        mode=$(_context_path_mode "$path") || exit 2
+        if [ "$mode" != "700" ]; then
+          _context_store_error "writer-lock reclaim claim must be mode 700: $path"
+          exit 1
+        fi
+        if [ -n "$(find -P "$path" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+          _context_store_error "writer-lock reclaim claim must be empty: $path"
+          exit 1
+        fi
+        ;;
+      *)
+        _context_store_error "unexpected file in context store: $path"
+        exit 1
+        ;;
+    esac
   done
   traversal_status=("${PIPESTATUS[@]}")
   if [ "${traversal_status[0]}" -ne 0 ] || [ "${traversal_status[1]}" -ne 0 ]; then
@@ -519,9 +545,147 @@ _context_pid_alive() {
   ps -p "$pid" -o pid= 2>/dev/null | tr -d '[:space:]' | grep -Fxq "$pid"
 }
 
+_context_lock_generation_token() {
+  local root="$1" lock_dir="$1/.session-context.lock" pid_file
+  local lock_id pid_id holder_pid
+  _context_path_exists "$lock_dir" || return 2
+  lock_id=$(_context_path_identity "$lock_dir") || return 2
+  pid_file="$lock_dir/pid"
+  _context_path_exists "$pid_file" || return 2
+  pid_id=$(_context_path_identity "$pid_file") || return 2
+  holder_pid=$(sed -n '1p' "$pid_file" 2>/dev/null) || return 2
+  [[ "$holder_pid" =~ ^[0-9]+$ ]] || return 2
+  printf '%s|%s|%s\n' "$lock_id" "$pid_id" "$holder_pid"
+}
+
+_context_drop_reclaim_claim() {
+  local lock_dir="$1" expected_claim_id="$2" claim_dir="$1/.reclaim"
+  local actual_claim_id mode
+  _context_path_exists "$claim_dir" || return 0
+  if [ -L "$claim_dir" ] || [ ! -d "$claim_dir" ]; then
+    _context_store_error "writer-lock reclaim claim changed type: $claim_dir"
+    return 1
+  fi
+  _context_require_owner "$claim_dir" || return 1
+  actual_claim_id=$(_context_path_identity "$claim_dir") || return 1
+  if [ "$actual_claim_id" != "$expected_claim_id" ]; then
+    _context_store_error "writer-lock reclaim claim changed generation: $claim_dir"
+    return 1
+  fi
+  mode=$(_context_path_mode "$claim_dir") || return 1
+  if [ "$mode" != "700" ]; then
+    _context_store_error "writer-lock reclaim claim must be mode 700: $claim_dir"
+    return 1
+  fi
+  if [ -n "$(find -P "$claim_dir" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+    _context_store_error "writer-lock reclaim claim must be empty: $claim_dir"
+    return 1
+  fi
+  rmdir "$claim_dir" || {
+    _context_store_error "cannot release writer-lock reclaim claim: $claim_dir"
+    return 1
+  }
+}
+
+_context_quarantine_lock_generation() {
+  local root="$1" expected_token="$2" reclaim_mode="$3"
+  local lock_dir="$1/.session-context.lock" claim_dir claim_id current_token
+  local expected_lock_id expected_pid_id expected_holder_pid stale_dir actual_id mode
+  IFS='|' read -r expected_lock_id expected_pid_id expected_holder_pid <<< "$expected_token"
+  if [ -z "$expected_lock_id" ] || [ -z "$expected_pid_id" ] \
+    || ! [[ "$expected_holder_pid" =~ ^[0-9]+$ ]]; then
+    _context_store_error "invalid writer-lock generation token"
+    return 1
+  fi
+
+  claim_dir="$lock_dir/.reclaim"
+  if ! mkdir -m 700 "$claim_dir" 2>/dev/null; then
+    return 2
+  fi
+  claim_id=$(_context_path_identity "$claim_dir") || {
+    _context_store_error "cannot identify writer-lock reclaim claim: $claim_dir"
+    return 1
+  }
+  if ! _context_validate_lock_artifact "$root"; then
+    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+    return 1
+  fi
+  if ! current_token=$(_context_lock_generation_token "$root"); then
+    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+    return 2
+  fi
+  if [ "$current_token" != "$expected_token" ]; then
+    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+    return 2
+  fi
+
+  case "$reclaim_mode" in
+    dead)
+      if _context_pid_alive "$expected_holder_pid"; then
+        _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+        return 2
+      fi
+      ;;
+    owner)
+      if [ "$expected_holder_pid" != "$$" ]; then
+        _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+        _context_store_error "refusing to release a writer lock held by PID $expected_holder_pid: $lock_dir"
+        return 1
+      fi
+      ;;
+    *)
+      _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+      _context_store_error "unknown writer-lock reclaim mode: $reclaim_mode"
+      return 1
+      ;;
+  esac
+
+  stale_dir="${root}.session-context-stale.$$"
+  if _context_path_exists "$stale_dir"; then
+    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+    _context_store_error "stale-lock quarantine path already exists: $stale_dir"
+    return 1
+  fi
+  if ! mv "$lock_dir" "$stale_dir" 2>/dev/null; then
+    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+    _context_path_exists "$lock_dir" || return 2
+    _context_store_error "cannot quarantine writer lock: $lock_dir"
+    return 1
+  fi
+
+  if [ -L "$stale_dir" ] || [ ! -d "$stale_dir" ]; then
+    _context_store_error "reclaimed writer lock changed type: $stale_dir"
+    return 1
+  fi
+  _context_require_owner "$stale_dir" || return 1
+  actual_id=$(_context_path_identity "$stale_dir") || return 1
+  if [ "$actual_id" != "$expected_lock_id" ]; then
+    _context_store_error "reclaimed writer lock changed generation: $stale_dir"
+    return 1
+  fi
+  mode=$(_context_path_mode "$stale_dir") || return 1
+  [ "$mode" = "700" ] || {
+    _context_store_error "reclaimed writer lock must be mode 700: $stale_dir"
+    return 1
+  }
+  actual_id=$(_context_path_identity "$stale_dir/pid") || return 1
+  if [ "$actual_id" != "$expected_pid_id" ] \
+    || [ "$(sed -n '1p' "$stale_dir/pid" 2>/dev/null)" != "$expected_holder_pid" ]; then
+    _context_store_error "reclaimed writer-lock PID changed generation: $stale_dir/pid"
+    return 1
+  fi
+  ensure_context_regular_file "$stale_dir/pid" || return 1
+  rm -f "$stale_dir/pid" || return 1
+  _context_drop_reclaim_claim "$stale_dir" "$claim_id" || return 1
+  rmdir "$stale_dir" || {
+    _context_store_error "cannot remove stale writer-lock quarantine: $stale_dir"
+    return 1
+  }
+}
+
 acquire_context_store_lock() {
-  local root="$1" lock_dir="$1/.session-context.lock" pid_file holder_pid stale_dir
-  local attempts=0
+  local root="$1" lock_dir="$1/.session-context.lock" pid_file holder_pid generation_token
+  local attempts=0 reclaim_rc
   while ! mkdir -m 700 "$lock_dir" 2>/dev/null; do
     if [ -L "$lock_dir" ] || { _context_path_exists "$lock_dir" && [ ! -d "$lock_dir" ]; }; then
       _context_store_error "writer lock is not a safe directory: $lock_dir"
@@ -543,7 +707,12 @@ acquire_context_store_lock() {
         sleep 0.02
         continue
       fi
-      holder_pid=$(sed -n '1p' "$pid_file" 2>/dev/null) || holder_pid=""
+      if ! generation_token=$(_context_lock_generation_token "$root"); then
+        _context_path_exists "$lock_dir" || continue
+        sleep 0.002
+        continue
+      fi
+      holder_pid=${generation_token##*|}
       if ! [[ "$holder_pid" =~ ^[0-9]+$ ]]; then
         if ! _context_path_exists "$lock_dir" || ! _context_path_exists "$pid_file"; then
           continue
@@ -563,26 +732,22 @@ acquire_context_store_lock() {
       if _context_pid_alive "$holder_pid"; then
         : # A live owner keeps the lock; continue the bounded wait below.
       else
-        # Move the dead holder's lock out of the store atomically. Competing
-        # reclaimers simply lose the rename race and retry against new state.
-        stale_dir="${root}.session-context-stale.$$.$attempts"
-        if _context_path_exists "$stale_dir"; then
-          _context_store_error "stale-lock quarantine path already exists: $stale_dir"
-          return 1
-        fi
-        if mv "$lock_dir" "$stale_dir" 2>/dev/null; then
-          if [ -L "$stale_dir" ] || [ ! -d "$stale_dir" ]; then
-            _context_store_error "reclaimed writer lock changed type: $stale_dir"
-            return 1
-          fi
-          _context_require_owner "$stale_dir" || return 1
-          ensure_context_regular_file "$stale_dir/pid" || return 1
-          rm -f "$stale_dir/pid" || return 1
-          rmdir "$stale_dir" || return 1
+        if _context_quarantine_lock_generation "$root" "$generation_token" dead; then
           attempts=0
           continue
+        else
+          reclaim_rc=$?
+          if [ "$reclaim_rc" -eq 2 ]; then
+            attempts=$((attempts + 1))
+            if [ "$attempts" -ge 250 ]; then
+              _context_store_error "timed out claiming stale writer lock: $lock_dir"
+              return 1
+            fi
+            sleep 0.02
+            continue
+          fi
+          return 1
         fi
-        _context_path_exists "$lock_dir" || continue
       fi
     fi
     attempts=$((attempts + 1))
@@ -608,40 +773,47 @@ acquire_context_store_lock() {
     _context_store_error "cannot publish writer-lock holder PID: $pid_file"
     return 1
   fi
+  if ! CONTEXT_STORE_LOCK_TOKEN=$(_context_lock_generation_token "$root"); then
+    rm -f "$pid_file" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
+    CONTEXT_STORE_LOCK_DIR=""
+    CONTEXT_STORE_LOCK_TOKEN=""
+    _context_store_error "cannot record writer-lock generation: $lock_dir"
+    return 1
+  fi
 }
 
 release_context_store_lock() {
-  local lock_dir="${CONTEXT_STORE_LOCK_DIR:-}" pid_file holder_pid
+  local lock_dir="${CONTEXT_STORE_LOCK_DIR:-}" root expected_token release_rc current_token
+  local attempts=0
   [ -n "$lock_dir" ] || return 0
-  if [ -L "$lock_dir" ] || [ ! -d "$lock_dir" ]; then
-    _context_store_error "writer lock changed before release: $lock_dir"
+  expected_token="${CONTEXT_STORE_LOCK_TOKEN:-}"
+  if [ -z "$expected_token" ]; then
+    _context_store_error "writer lock has no recorded generation: $lock_dir"
     return 1
   fi
-  _context_require_owner "$lock_dir" || return 1
-  pid_file="$lock_dir/pid"
-  if ! _context_path_exists "$pid_file"; then
-    rmdir "$lock_dir" || {
-      _context_store_error "cannot release initializing writer lock: $lock_dir"
+  root=${lock_dir%/.session-context.lock}
+  while :; do
+    if _context_quarantine_lock_generation "$root" "$expected_token" owner; then
+      break
+    else
+      release_rc=$?
+    fi
+    [ "$release_rc" -eq 2 ] || return 1
+    if ! current_token=$(_context_lock_generation_token "$root") \
+      || [ "$current_token" != "$expected_token" ]; then
+      _context_store_error "writer lock changed before release: $lock_dir"
       return 1
-    }
-    CONTEXT_STORE_LOCK_DIR=""
-    return 0
-  fi
-  ensure_context_regular_file "$pid_file" || return 1
-  holder_pid=$(sed -n '1p' "$pid_file" 2>/dev/null) || holder_pid=""
-  if [ "$holder_pid" != "$$" ]; then
-    _context_store_error "refusing to release a writer lock held by PID ${holder_pid:-unknown}: $lock_dir"
-    return 1
-  fi
-  rm -f "$pid_file" || {
-    _context_store_error "cannot remove writer-lock PID file: $pid_file"
-    return 1
-  }
-  rmdir "$lock_dir" || {
-    _context_store_error "cannot release writer lock: $lock_dir"
-    return 1
-  }
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 250 ]; then
+      _context_store_error "timed out claiming writer lock for release: $lock_dir"
+      return 1
+    fi
+    sleep 0.02
+  done
   CONTEXT_STORE_LOCK_DIR=""
+  CONTEXT_STORE_LOCK_TOKEN=""
 }
 
 atomic_copy_context_file() {

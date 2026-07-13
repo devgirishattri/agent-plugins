@@ -169,6 +169,25 @@ wait "$ls_holder_pid" || fail "lock holder exited nonzero"
 wait "$ls_save_pid" || fail "blocked save did not complete after the writer lock was released"
 [ -f "$LOCK_SERIAL_STORE/lockprobe.md" ] || fail "blocked save produced no snapshot after release"
 
+# A stale observer may briefly claim the current generation before discovering
+# its token changed. The owner release path waits for that transient claim to be
+# dropped instead of failing or spinning without a bound.
+RELEASE_CLAIM_STORE="$TMP/release-claim-contexts"
+mkdir -m 700 "$RELEASE_CLAIM_STORE"
+if ! bash -c '
+  source "$1"
+  root="$2"
+  acquire_context_store_lock "$root" || exit 1
+  mkdir -m 700 "$root/.session-context.lock/.reclaim"
+  (sleep 0.1; rmdir "$root/.session-context.lock/.reclaim") &
+  dropper=$!
+  release_context_store_lock || exit 1
+  wait "$dropper" || exit 1
+  [ ! -e "$root/.session-context.lock" ]
+' _ "$SCRIPT_DIR/lib.sh" "$RELEASE_CLAIM_STORE"; then
+  fail "writer release did not wait for a transient generation claim"
+fi
+
 # A kill -9-style stale writer lock is reclaimed only after its recorded PID
 # is confirmed dead; the replacement PID file remains owner-only.
 STALE_STORE="$TMP/stale-contexts"
@@ -192,7 +211,44 @@ SESSION_CONTEXT_HOME="$STALE_STORE" bash -c '
 [ -z "$(find "$TMP" -maxdepth 1 -name 'stale-contexts.session-context-stale.*' -print -quit)" ] \
   || fail "stale-lock quarantine was left behind"
 
-# The lock directory permits only its owner-only numeric pid file.
+# ABA regression: a waiter may observe a dead generation, get descheduled while
+# that pathname turns over, then resume against a new live writer. The exact old
+# lock+PID token must NOT authorize quarantining the replacement generation.
+ABA_STORE="$TMP/aba-contexts"
+mkdir -m 700 "$ABA_STORE"
+if ! bash -c '
+  source "$1"
+  root="$2"
+  mkdir -m 700 "$root/.session-context.lock"
+  dead_pid=999999
+  while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
+  printf "%s\n" "$dead_pid" > "$root/.session-context.lock/pid"
+  chmod 600 "$root/.session-context.lock/pid"
+  old_token=$(_context_lock_generation_token "$root") || exit 1
+
+  rm -f "$root/.session-context.lock/pid"
+  rmdir "$root/.session-context.lock"
+  mkdir -m 700 "$root/.session-context.lock"
+  printf "%s\n" "$$" > "$root/.session-context.lock/pid"
+  chmod 600 "$root/.session-context.lock/pid"
+  new_token=$(_context_lock_generation_token "$root") || exit 1
+  [ "$new_token" != "$old_token" ] || exit 1
+
+  if _context_quarantine_lock_generation "$root" "$old_token" dead; then
+    exit 1
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 2 ] || exit 1
+  [ "$(_context_lock_generation_token "$root")" = "$new_token" ] || exit 1
+  [ ! -e "$root/.session-context.lock/.reclaim" ] || exit 1
+  [ -z "$(find "${root}.session-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] || exit 1
+' _ "$SCRIPT_DIR/lib.sh" "$ABA_STORE"; then
+  fail "stale generation token quarantined a replacement writer lock"
+fi
+
+# The lock directory permits an owner-only numeric PID plus the transient empty
+# owner-only reclaim claim. Every other entry or claim shape remains rejected.
 BAD_LOCK_STORE="$TMP/bad-lock-contexts"
 mkdir -m 700 "$BAD_LOCK_STORE"
 mkdir -m 700 "$BAD_LOCK_STORE/.session-context.lock"
@@ -204,6 +260,18 @@ if SESSION_CONTEXT_HOME="$BAD_LOCK_STORE" \
   fail "tree validator accepted an extra writer-lock file"
 fi
 assert_contains "$TMP/bad-lock.out" "unexpected file in context store"
+
+BAD_RECLAIM_STORE="$TMP/bad-reclaim-contexts"
+mkdir -m 700 "$BAD_RECLAIM_STORE"
+mkdir -m 700 "$BAD_RECLAIM_STORE/.session-context.lock"
+printf '%s\n' "$$" > "$BAD_RECLAIM_STORE/.session-context.lock/pid"
+chmod 600 "$BAD_RECLAIM_STORE/.session-context.lock/pid"
+mkdir -m 755 "$BAD_RECLAIM_STORE/.session-context.lock/.reclaim"
+if SESSION_CONTEXT_HOME="$BAD_RECLAIM_STORE" \
+  bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/bad-reclaim.out" 2>&1; then
+  fail "tree validator accepted a loose writer-lock reclaim claim"
+fi
+assert_contains "$TMP/bad-reclaim.out" "reclaim claim must be mode 700"
 
 INVALID_PID_STORE="$TMP/invalid-pid-contexts"
 mkdir -m 700 "$INVALID_PID_STORE"

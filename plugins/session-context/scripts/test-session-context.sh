@@ -383,6 +383,95 @@ else
   fi
 fi
 
+# --- Test 17: owner release waits for a transient generation claim ---
+RELEASE_CLAIM_STORE="$TMP/release-claim-contexts"
+mkdir -m 700 "$RELEASE_CLAIM_STORE"
+if bash -c '
+  source "$1"
+  root="$2"
+  acquire_context_store_lock "$root" || exit 1
+  mkdir -m 700 "$root/.session-context.lock/.reclaim"
+  (sleep 0.1; rmdir "$root/.session-context.lock/.reclaim") &
+  dropper=$!
+  release_context_store_lock || exit 1
+  wait "$dropper" || exit 1
+  [ ! -e "$root/.session-context.lock" ]
+' _ "$HERE/lib.sh" "$RELEASE_CLAIM_STORE"; then
+  pass "release_waits_for_transient_generation_claim"
+else
+  fail "release_waits_for_transient_generation_claim" "owner release failed during bounded claim contention"
+fi
+
+# --- Test 18: dead-lock recovery and generation turnover are both safe ---
+STALE_STORE="$TMP/stale-contexts"
+mkdir -m 700 "$STALE_STORE"
+if bash -c '
+  source "$1"
+  root="$2"
+  mkdir -m 700 "$root/.session-context.lock"
+  dead_pid=999999
+  while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
+  printf "%s\n" "$dead_pid" > "$root/.session-context.lock/pid"
+  chmod 600 "$root/.session-context.lock/pid"
+  acquire_context_store_lock "$root" || exit 1
+  [ "$(sed -n "1p" "$root/.session-context.lock/pid")" = "$$" ] || exit 1
+  release_context_store_lock || exit 1
+  [ ! -e "$root/.session-context.lock" ] || exit 1
+' _ "$HERE/lib.sh" "$STALE_STORE"; then
+  pass "dead_writer_lock_reclaimed"
+else
+  fail "dead_writer_lock_reclaimed" "dead generation was not reclaimed safely"
+fi
+
+ABA_STORE="$TMP/aba-contexts"
+mkdir -m 700 "$ABA_STORE"
+if bash -c '
+  source "$1"
+  root="$2"
+  mkdir -m 700 "$root/.session-context.lock"
+  dead_pid=999999
+  while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
+  printf "%s\n" "$dead_pid" > "$root/.session-context.lock/pid"
+  chmod 600 "$root/.session-context.lock/pid"
+  old_token=$(_context_lock_generation_token "$root") || exit 1
+
+  rm -f "$root/.session-context.lock/pid"
+  rmdir "$root/.session-context.lock"
+  mkdir -m 700 "$root/.session-context.lock"
+  printf "%s\n" "$$" > "$root/.session-context.lock/pid"
+  chmod 600 "$root/.session-context.lock/pid"
+  new_token=$(_context_lock_generation_token "$root") || exit 1
+  [ "$new_token" != "$old_token" ] || exit 1
+
+  if _context_quarantine_lock_generation "$root" "$old_token" dead; then
+    exit 1
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 2 ] || exit 1
+  [ "$(_context_lock_generation_token "$root")" = "$new_token" ] || exit 1
+  [ ! -e "$root/.session-context.lock/.reclaim" ] || exit 1
+  [ -z "$(find "${root}.session-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] || exit 1
+' _ "$HERE/lib.sh" "$ABA_STORE"; then
+  pass "stale_generation_cannot_reclaim_replacement"
+else
+  fail "stale_generation_cannot_reclaim_replacement" "replacement generation changed or was quarantined"
+fi
+
+# --- Test 19: the transient reclaim claim stays owner-only and empty ---
+BAD_RECLAIM_STORE="$TMP/bad-reclaim-contexts"
+mkdir -m 700 "$BAD_RECLAIM_STORE"
+mkdir -m 700 "$BAD_RECLAIM_STORE/.session-context.lock"
+printf '%s\n' "$$" > "$BAD_RECLAIM_STORE/.session-context.lock/pid"
+chmod 600 "$BAD_RECLAIM_STORE/.session-context.lock/pid"
+mkdir -m 755 "$BAD_RECLAIM_STORE/.session-context.lock/.reclaim"
+bad_reclaim_out=$(SESSION_CONTEXT_HOME="$BAD_RECLAIM_STORE" bash "$HERE/list-contexts.sh" 2>&1); bad_reclaim_rc=$?
+if [ "$bad_reclaim_rc" -ne 0 ] && echo "$bad_reclaim_out" | grep -q "reclaim claim must be mode 700"; then
+  pass "loose_reclaim_claim_rejected"
+else
+  fail "loose_reclaim_claim_rejected" "rc=$bad_reclaim_rc out=$bad_reclaim_out"
+fi
+
 # --- Summary ---
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
