@@ -6,6 +6,16 @@
 # Usage: bash test-session-chat.sh [-v]
 set -uo pipefail
 
+# A workspace-exported mailbox override must not redirect baseline fixtures
+# into the real project mailbox, and a workspace-exported self-name escape
+# hatch must not short-circuit the self-name resolution that several baseline
+# tests (real-tmux @name paths, and the sandbox-denial self-name tests) rely
+# on. Per-test uses of these vars (e.g. test 26, and the custom-mailbox tests
+# near the end) set them explicitly per invocation, so they are unaffected by
+# this top-level unset.
+unset SESSION_CHAT_TARGET_MESSAGES_DIR
+unset SESSION_CHAT_PANE_NAME
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SOCKET="session-chat-test-$$"
 SESSION="sct"
@@ -1118,6 +1128,49 @@ if echo "$loose_out" | grep -q 'ENQ_RC=0' && echo "$loose_out" | grep -q 'QMODE=
 else
   fail "queue_subtree_loose_dir_tightened_post_marker" "out=$loose_out"
 fi
+
+# --- Test 46: custom mailbox: live dispatch trusted + auto-inlined ---
+# SESSION_CHAT_TARGET_MESSAGES_DIR relocates the whole mailbox; the receiver
+# hook sources lib.sh (CLAUDE_PLUGIN_ROOT set) so this exercises the
+# clobber regression directly: MESSAGES_DIR must resolve to the custom dir
+# both before and after lib.sh is sourced.
+CMB=$(mktemp -d); CMB_HOME="$CMB/home"; CMB_MSGS="$CMB/custom-mailbox"
+mkdir -p "$CMB_HOME" "$CMB_MSGS"
+PLUGROOT="$(cd "$HERE/.." && pwd)"
+printf 'CUSTOM-DIR-TASK-BODY\nsecond line\n' > "$CMB_MSGS/ctask.md"; chmod 600 "$CMB_MSGS/ctask.md"
+cmb_out=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:cafe1234] dispatch (2 lines) — read msg file for full task id:cafe1234"}' "$CMB_MSGS/ctask.md" \
+  | env HOME="$CMB_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$PLUGROOT" SESSION_CHAT_PANE_NAME=me \
+    SESSION_CHAT_INCOMING_MODE=auto SESSION_CHAT_TARGET_MESSAGES_DIR="$CMB_MSGS" \
+    bash "$HERE/detect-incoming-message.sh")
+if echo "$cmb_out" | grep -q 'trusted task file' && echo "$cmb_out" | grep -q 'CUSTOM-DIR-TASK-BODY' \
+   && [ ! -d "$CMB_HOME/.claude/messages" ]; then
+  pass "custom_mailbox_live_dispatch_trusted"
+else
+  fail "custom_mailbox_live_dispatch_trusted" "default_dir_exists=$([ -d "$CMB_HOME/.claude/messages" ] && echo yes || echo no) out=$cmb_out"
+fi
+
+# --- Test 47: custom mailbox: queued recovery drains through the hook ---
+# Seed the queue via the public var only (no exported MESSAGES_DIR) — the
+# sourced lib.sh must resolve MESSAGES_DIR to the custom dir on its own.
+printf 'CUSTOM-QUEUED-BODY\n' > "$CMB_MSGS/qtask.md"; chmod 600 "$CMB_MSGS/qtask.md"
+(
+  export SESSION_CHAT_TARGET_MESSAGES_DIR="$CMB_MSGS" SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+  source "$HERE/lib.sh"
+  enqueue_message me qd123456 dispatch peer "$CMB_MSGS/qtask.md"
+  mark_message_ready me qd123456
+)
+cmbq_out=$(printf '{"hook_event_name":"Stop"}' | env HOME="$CMB_HOME" TMUX="fake,0,0" \
+  CLAUDE_PLUGIN_ROOT="$PLUGROOT" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto \
+  SESSION_CHAT_TARGET_MESSAGES_DIR="$CMB_MSGS" SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0 \
+  bash "$HERE/detect-incoming-message.sh")
+cmbq_remaining=$(awk -F'\t' '$1=="qd123456"{c++} END{print c+0}' "$CMB_MSGS/queue/me.tsv" 2>/dev/null)
+cmbq_ledger=$(grep -c qd123456 "$CMB_MSGS/queue/.recent-me.tsv" 2>/dev/null || echo 0)
+if echo "$cmbq_out" | grep -q 'CUSTOM-QUEUED-BODY' && [ "$cmbq_remaining" = "0" ] && [ "$cmbq_ledger" -ge 1 ]; then
+  pass "custom_mailbox_queued_recovery_drains"
+else
+  fail "custom_mailbox_queued_recovery_drains" "remaining=$cmbq_remaining ledger=$cmbq_ledger out=$cmbq_out"
+fi
+rm -rf "$CMB"
 
 # --- Summary ---
 echo

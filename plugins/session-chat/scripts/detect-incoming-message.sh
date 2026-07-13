@@ -16,7 +16,10 @@
 HOOK_INPUT=$(cat)
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
-MESSAGES_DIR="$HOME/.claude/messages"
+# Honor the public mailbox override even when lib.sh is unavailable (the
+# HAVE_LIB=0 fallback below); when lib.sh IS sourced it re-resolves the same
+# value, so sourcing never clobbers the override.
+MESSAGES_DIR="${SESSION_CHAT_TARGET_MESSAGES_DIR:-$HOME/.claude/messages}"
 INCOMING_MODE="${SESSION_CHAT_INCOMING_MODE:-notify}"
 
 case "$INCOMING_MODE" in

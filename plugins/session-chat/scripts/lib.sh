@@ -56,7 +56,11 @@ sanitize_label() {
 
 # --- Message directory ---
 
-MESSAGES_DIR="${CLAUDE_HOME:-$HOME/.claude}/messages"
+# SESSION_CHAT_TARGET_MESSAGES_DIR relocates the whole mailbox (dispatch files,
+# durable queue, ledgers): the receiver must trust and drain the same dir
+# senders were pointed at, so the override applies to the local MESSAGES_DIR
+# itself — not just target_messages_dir_for_pane. Mirrors the Codex lib.
+MESSAGES_DIR="${SESSION_CHAT_TARGET_MESSAGES_DIR:-${CLAUDE_HOME:-$HOME/.claude}/messages}"
 
 # Lock the private messages tree to owner-only, and FAIL CLOSED on any unsafe
 # root. umask 077 already keeps *new* files/dirs private (0600/0700); this

@@ -56,7 +56,7 @@ This means a failed send **does not leave junk in the recipient's prompt**. If y
 
 ## Durable delivery & orchestrator fan-in
 
-Every `/send` and `/dispatch` is **written to the recipient's durable inbox before the live paste** — under the **recipient runtime's** messages dir: `~/.claude/messages/queue/<recipient>.tsv` for a Claude pane, `~/.codex/messages/queue/<recipient>.tsv` for a Codex pane (each runtime only drains its own dir). So delivery no longer depends on the paste landing while the recipient is busy:
+Every `/send` and `/dispatch` is **written to the recipient's durable inbox before the live paste** — under the **recipient runtime's** messages dir: `${CLAUDE_HOME:-~/.claude}/messages/queue/<recipient>.tsv` for a Claude pane, `${CODEX_HOME:-~/.codex}/messages/queue/<recipient>.tsv` for a Codex pane (each runtime only drains its own dir). An exported `SESSION_CHAT_TARGET_MESSAGES_DIR` takes precedence over both and, when set in every participating pane, becomes the shared sender and receiver mailbox root instead. So delivery no longer depends on the paste landing while the recipient is busy:
 
 - **Live paste lands** → the message appears in the recipient's prompt now, and the durable copy is removed (no duplicate).
 - **Live paste fails** (recipient mid-generation / in an approval gate) → the wrapper prints **"Queued … will arrive on their next turn"** and **exits 0** (the internal send/dispatch function signals the queued path with return code 3; the public `/send` and `/dispatch` wrappers translate that to a normal success exit). The recipient's `UserPromptSubmit` hook drains the inbox on its **next** turn — and the `Stop` hook drains it when the recipient **finishes its current turn**, so even a pane that never submits another prompt surfaces queued messages as soon as it stops working. Nothing is lost. Dedup across the two paths is by the `id:` marker.
@@ -99,6 +99,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 | `SESSION_CHAT_ARCHIVE_RETENTION_DAYS` | 30 | How long daily message-archive files are kept for `/message-search`. |
 | `SESSION_CHAT_SKIP_VERIFY` | 0 | Set `1` to skip receipt verification (not recommended). |
 | `SESSION_CHAT_INCOMING_MODE` | notify | Recipient-side: `auto` / `assist` / `notify` / `off`. Use `/incoming-mode` to inspect or generate the export line. |
+| `SESSION_CHAT_TARGET_MESSAGES_DIR` | unset (per-runtime default) | Overrides the local mailbox and every target mailbox; export the same absolute directory in all participating panes before starting their agents, otherwise senders and receivers can resolve different queues. |
 
 ## Helper commands
 
@@ -108,7 +109,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 - `/pane-health [name] [--all]` — liveness, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them.
 - `/message-search <pattern> [--days N] [--peer NAME]` — search the message archive (every sent + surfaced incoming message, 200-char excerpts, 30-day retention via `SESSION_CHAT_ARCHIVE_RETENTION_DAYS`) plus full dispatch bodies.
 - `/incoming-mode` — show or set `SESSION_CHAT_INCOMING_MODE` (prints an `export` line to `eval`).
-- `/messages-list` — read-only inventory of dispatch files under `~/.claude/messages/`.
+- `/messages-list` — read-only inventory of dispatch files under `${SESSION_CHAT_TARGET_MESSAGES_DIR:-${CLAUDE_HOME:-~/.claude}/messages}`.
 - `/messages-clean` — delete old dispatch files (dry-run by default; pass `--apply` to actually delete).
 
 ## Common failure modes
