@@ -590,7 +590,8 @@ for context_skill in sorted(
     )
 require_tokens(
     root / "plugins/session-scheduler/skills/session-scheduler/SKILL.md",
-    "<pwd>/tmp/scheduler",
+    "inherited when the agent process started",
+    "fail closed",
 )
 require_tokens(
     root / "plugins/session-chat/commands/dispatch.md",
@@ -731,9 +732,31 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
     require_tokens(scheduler / "lib.sh", 'SESSION_CHAT_MIN_VERSION="0.13.0"')
     require_tokens(scheduler / "task-new.sh", "--reviewer", "workflow_id")
     require_tokens(scheduler / "task-assign.sh", "--context auto", ".meta.workflow_id", ".meta.scheduler_home")
-    require_tokens(scheduler / "task-assign.sh", "printf '%q'", "export SESSION_SCHEDULER_HOME", "$session-scheduler:task-done", "/session-scheduler:task-done")
+    require_tokens(scheduler / "task-assign.sh", "Shared scheduler home (provenance):", "inherited", "relaunch", "$session-scheduler:task-done", "/session-scheduler:task-done")
     require_tokens(scheduler / "task-assign.sh", ".meta.review_dispatched_at", ".meta.review_dispatch_error")
-    require_tokens(scheduler / "task-review.sh", "printf '%q'", "reviewer", "dispatch", "RETRY_REVIEW_DISPATCH", ".meta.review_dispatched_at")
+    require_tokens(scheduler / "task-review.sh", "Shared scheduler home (provenance):", "reviewer", "dispatch", "RETRY_REVIEW_DISPATCH", ".meta.review_dispatched_at")
+    reject_pattern(scheduler / "task-assign.sh", r"export SESSION_(SCHEDULER|CONTEXT)_HOME=", "assignment packets must not print executable export lines")
+    reject_pattern(scheduler / "task-review.sh", r"export SESSION_(SCHEDULER|CONTEXT)_HOME=", "review packets must not print executable export lines")
+    scheduler_plugin = provider_root / "session-scheduler"
+    for scheduler_doc in sorted(
+        list((scheduler_plugin / "commands").glob("*.md"))
+        + list((scheduler_plugin / "skills").glob("*/SKILL.md"))
+    ):
+        reject_pattern(
+            scheduler_doc,
+            r"^\s*export SESSION_(SCHEDULER|CONTEXT)_HOME",
+            "agent-facing scheduler docs must not instruct an executable export",
+        )
+        reject_pattern(
+            scheduler_doc,
+            r"(^|\s)env\s+SESSION_(SCHEDULER|CONTEXT)_HOME=",
+            "agent-facing scheduler docs must not instruct an env-prefixed helper",
+        )
+        reject_pattern(
+            scheduler_doc,
+            r"SESSION_(SCHEDULER|CONTEXT)_HOME=\S*\s+bash(\s|$)",
+            "agent-facing scheduler docs must not instruct an assignment-prefixed helper",
+        )
 
 require_tokens(
     root / "plugins/session-chat/scripts/detect-incoming-message.sh",

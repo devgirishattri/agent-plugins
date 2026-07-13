@@ -5,11 +5,11 @@ description: When and how to track multi-pane orchestrator → executor work wit
 
 # session-scheduler: file-backed task ledger
 
-A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `<project_root>/tmp/scheduler/tasks/<id>.json`; prompts go to `<project_root>/tmp/scheduler/prompts/<id>.md`.
+A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `$SESSION_SCHEDULER_HOME/tasks/<id>.json`; prompts go to `$SESSION_SCHEDULER_HOME/prompts/<id>.md`.
 
-Storage is keyed on `SESSION_SCHEDULER_HOME`, which the `/task-*` commands export automatically (resolving `<git-root>/tmp/scheduler`, or `<pwd>/tmp/scheduler` when not in a git repo). The scripts **require** this variable and refuse to run when it is unset — they never guess a cwd/tmp location. Set `SESSION_SCHEDULER_HOME=<dir>` yourself only when invoking the scripts directly or to point at a shared ledger. `/task-assign --context` additionally exports `SESSION_CONTEXT_HOME` so the session-context snapshot resolves the same way.
+Storage is keyed on `SESSION_SCHEDULER_HOME`, which must already be present in each pane's environment, **inherited when the agent process started** — the launcher/parent shell establishes it before the agent starts, and every participating pane must be launched with the same absolute value. The `/task-*` commands and the scripts never export or derive it (there is no git-root/cwd fallback); they **fail closed** when it is unset, and the fix is to relaunch the pane/session with the correct environment. Direct human script use may set `SESSION_SCHEDULER_HOME=<dir>` in the parent shell beforehand, but agent-facing instructions never combine environment setup with helper execution — an already-running agent invokes each helper as exactly one literal Bash segment using the inherited value. `/task-assign --context` requires `SESSION_CONTEXT_HOME` under the same inherited-at-startup contract.
 
-Project-local storage means **claude and codex panes working in the same project share the same ledger** — orchestrator and reviewer can both read/write the same task list.
+Launching every pane with the same shared home means **claude and codex panes working in the same project share the same ledger** — orchestrator and reviewer can both read/write the same task list.
 
 No daemon, no priority queue, no automatic reassignment — just a ledger you can read with `/task-status`.
 
@@ -43,7 +43,7 @@ Legal status transitions (enforced by every command):
 - **Stages** are optional free-form labels (`--stage` on `/task-new` or `/task-assign`). Suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`. View grouped output with `/task-status --by-stage` or `/task-board`.
 - **ETAs**: `/task-assign --eta MINUTES` stores `eta_at`; tasks past it are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
 - **Dependencies**: `/task-new --depends-on id1,id2` stores `depends_on`. `/task-assign` refuses to dispatch until every dependency is `done` (the error names the unmet deps) unless `--force`.
-- **Context attach**: `/task-assign --context NAME` resolves the session-context snapshot at `<git-root>/tmp/contexts/NAME.md`, records `meta.context`, and tells the executor to `/session-context:context-load NAME` before starting.
+- **Context attach**: `/task-assign --context NAME` resolves the session-context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`, records `meta.context`, and tells the executor to `/session-context:context-load NAME` before starting.
 
 ## Hard prerequisites
 

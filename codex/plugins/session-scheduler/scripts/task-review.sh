@@ -113,12 +113,7 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
     [ -n "$SCHEDULER_HOME_RECORDED" ] || SCHEDULER_HOME_RECORDED=$(absolute_existing_dir "$SCHEDULER_DIR")
     CONTEXT_HOME_RECORDED=$(jq -r '.meta.context_home // .context_home // empty' "$FILE")
     CONTEXT_NAME=$(jq -r '.meta.context // empty' "$FILE")
-    SCHEDULER_HOME_EXPORT=$(printf '%q' "$SCHEDULER_HOME_RECORDED")
-    CONTEXT_HOME_EXPORT=""
     CONTEXT_NAME_ARG=""
-    if [ -n "$CONTEXT_HOME_RECORDED" ]; then
-      CONTEXT_HOME_EXPORT=$(printf '%q' "$CONTEXT_HOME_RECORDED")
-    fi
     if [ -n "$CONTEXT_NAME" ]; then
       CONTEXT_NAME_ARG=$(printf '%q' "$CONTEXT_NAME")
     fi
@@ -127,17 +122,26 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
       printf 'Review task ID: %s\n' "$ID"
       printf 'Task name: %s\n' "$TASK_NAME"
       printf 'Reviewer: %s\n' "$REVIEWER"
-      printf 'Shared Scheduler Home: %s\n' "$SCHEDULER_HOME_RECORDED"
-      printf 'Shared Context Home: %s\n\n' "${CONTEXT_HOME_RECORDED:-(not set)}"
+      printf 'Shared scheduler home (provenance): %s\n' "$SCHEDULER_HOME_RECORDED"
+      printf 'Shared context home (provenance): %s\n\n' "${CONTEXT_HOME_RECORDED:-(not set)}"
       printf 'Review request: %s\n' "$REVIEW_REQUEST_NOTE"
       if [ "$RETRY_REVIEW_DISPATCH" -eq 1 ] && [ "$NOTE" != "$REVIEW_REQUEST_NOTE" ]; then
         printf 'Dispatch retry note: %s\n' "$NOTE"
       fi
-      printf '\nAudit the completed work independently. Before using scheduler commands, run exactly:\n'
-      printf 'export SESSION_SCHEDULER_HOME=%s\n' "$SCHEDULER_HOME_EXPORT"
-      if [ -n "$CONTEXT_HOME_EXPORT" ]; then
-        printf 'export SESSION_CONTEXT_HOME=%s\n' "$CONTEXT_HOME_EXPORT"
-      fi
+      printf '\nAudit the completed work independently.\n'
+      printf '\nEnvironment contract:\n'
+      printf -- '- The shared home paths in this packet are provenance and relaunch guidance,\n'
+      printf -- '  not commands to run.\n'
+      printf -- '- Your process must already have these exact values inherited in its\n'
+      printf -- '  environment from startup (the pane/session launcher sets them before the\n'
+      printf -- '  agent starts).\n'
+      printf -- '- Invoke scheduler skills/helpers as ONE literal Bash segment:\n'
+      printf -- '  bash "<installed session-scheduler plugin root>/scripts/<helper>.sh" ...\n'
+      printf -- '- Do not run export, do not prefix the helper with env or variable\n'
+      printf -- '  assignments, and do not combine it with any other shell segment (no\n'
+      printf -- '  chaining, pipelines, redirection, or command/process substitution).\n'
+      printf -- '- If the inherited values are absent or differ, stop and request a relaunch of\n'
+      printf -- '  this pane with the correct environment instead of deriving another ledger.\n'
       printf '\nApprove with either provider form:\n'
       printf 'Codex:  $session-scheduler:task-done %s <audit note>\n' "$ID"
       printf 'Claude: /session-scheduler:task-done %s <audit note>\n' "$ID"

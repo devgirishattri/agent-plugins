@@ -388,8 +388,10 @@ SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" wor
 ah_prompt="$SESSION_SCHEDULER_HOME/prompts/$AH_ID.md"
 ah_home=$(jq -r '.meta.scheduler_home // empty' "$SESSION_SCHEDULER_HOME/tasks/$AH_ID.json")
 abs_expected=$(cd "$SESSION_SCHEDULER_HOME" && pwd -P)
-if grep -q "Shared ledger:" "$ah_prompt" 2>/dev/null \
-   && grep -qF "export SESSION_SCHEDULER_HOME=$(printf '%q' "$abs_expected")" "$ah_prompt" 2>/dev/null \
+if grep -qF "Shared scheduler home (provenance): $abs_expected" "$ah_prompt" 2>/dev/null \
+   && grep -q "inherited" "$ah_prompt" 2>/dev/null \
+   && grep -q "relaunch" "$ah_prompt" 2>/dev/null \
+   && ! grep -qE '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$ah_prompt" 2>/dev/null \
    && [ "$ah_home" = "$abs_expected" ]; then
   pass "abs_home_propagation"
 else
@@ -480,20 +482,55 @@ else
   fail "reviewer_dispatch_retry" "st1=$st1 st2=$st2 out2=$out2"
 fi
 
-# --- Test 33: assignment + review packets list BOTH provider forms + exact export ---
+# --- Test 33: assignment + review packets list BOTH provider forms + provenance contract ---
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "mixed-prov" 2>&1)
 MX_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
 SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$MX_ID" --reviewer auditor "mixed work" >/dev/null 2>&1
 apf="$SESSION_SCHEDULER_HOME/prompts/$MX_ID.md"
 SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-review.sh" "$MX_ID" "sha-mixed" >/dev/null 2>&1
 rpf="$SESSION_SCHEDULER_HOME/prompts/$MX_ID-review.md"
+mx_abs=$(cd "$SESSION_SCHEDULER_HOME" && pwd -P)
 if grep -qF "/session-scheduler:task-done $MX_ID" "$apf" && grep -qF "\$session-scheduler:task-done $MX_ID" "$apf" \
-   && grep -qF "export SESSION_SCHEDULER_HOME=" "$apf" \
+   && grep -qF "/session-scheduler:task-review $MX_ID" "$apf" && grep -qF "\$session-scheduler:task-review $MX_ID" "$apf" \
+   && grep -qF "/session-scheduler:task-block $MX_ID" "$apf" && grep -qF "\$session-scheduler:task-block $MX_ID" "$apf" \
+   && grep -qF "Shared scheduler home (provenance): $mx_abs" "$apf" \
    && grep -qF "/session-scheduler:task-done $MX_ID" "$rpf" && grep -qF "\$session-scheduler:task-done $MX_ID" "$rpf" \
-   && grep -qF "export SESSION_SCHEDULER_HOME=" "$rpf"; then
+   && grep -qF "/session-scheduler:task-block $MX_ID" "$rpf" && grep -qF "\$session-scheduler:task-block $MX_ID" "$rpf" \
+   && grep -qF "Shared scheduler home (provenance): $mx_abs" "$rpf"; then
   pass "mixed_provider_packets"
 else
-  fail "mixed_provider_packets" "apf/rpf missing dual forms or export"
+  fail "mixed_provider_packets" "apf/rpf missing dual forms or provenance"
+fi
+
+# --- Test 33b: packets carry the inherited-env contract and NO executable env setup ---
+env_setup_clean() {
+  local f="$1"
+  grep -q "inherited" "$f" \
+    && grep -q "relaunch" "$f" \
+    && ! grep -qE '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$f" \
+    && ! grep -qE '(^|[[:space:]])env[[:space:]]+SESSION_(SCHEDULER|CONTEXT)_HOME=' "$f" \
+    && ! grep -qE 'SESSION_(SCHEDULER|CONTEXT)_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]]|$)' "$f"
+}
+if env_setup_clean "$apf" && env_setup_clean "$rpf"; then
+  pass "packets_inherited_env_contract"
+else
+  fail "packets_inherited_env_contract" "apf or rpf missing contract or contains executable env setup"
+fi
+
+# --- Test 33c: agent-facing commands/skills carry no executable export/env-prefix instructions ---
+doc_stale=""
+for doc in "$HERE/../commands"/*.md "$HERE/../skills"/*/SKILL.md; do
+  [ -f "$doc" ] || continue
+  if grep -qE '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$doc" \
+     || grep -qE '(^|[[:space:]])env[[:space:]]+SESSION_(SCHEDULER|CONTEXT)_HOME=' "$doc" \
+     || grep -qE 'SESSION_(SCHEDULER|CONTEXT)_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]]|$)' "$doc"; then
+    doc_stale="$doc_stale $doc"
+  fi
+done
+if [ -z "$doc_stale" ]; then
+  pass "docs_no_executable_export"
+else
+  fail "docs_no_executable_export" "stale executable-export pattern in:$doc_stale"
 fi
 
 # --- Test 34: ledger dirs are 0700 and task/prompt files 0600 (umask 077) ---
@@ -612,7 +649,8 @@ else
   fail "reassign_clears_review_marker" "review_dispatched_at still set: $disp_after"
 fi
 
-# --- Test 43: assignment export uses %q (spaces + apostrophe copy-paste safe) ---
+# --- Test 43: provenance records the raw canonical path (spaces + apostrophe intact,
+#     and still no executable export line even for a weird path) ---
 WQH="$TMP/sched home's weird"
 mkdir -p "$WQH"
 out=$(SESSION_SCHEDULER_HOME="$WQH" bash "$HERE/task-new.sh" "wq" 2>&1)
@@ -620,12 +658,11 @@ WQ_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
 SESSION_SCHEDULER_HOME="$WQH" bash "$HERE/task-assign.sh" worker-1 "$WQ_ID" "wq work" >/dev/null 2>&1
 wq_pf="$WQH/prompts/$WQ_ID.md"
 wq_abs=$(cd "$WQH" && pwd -P)
-wq_expected="export SESSION_SCHEDULER_HOME=$(printf '%q' "$wq_abs")"
-wq_safe=$(bash -c "$wq_expected; printf '%s' \"\$SESSION_SCHEDULER_HOME\"")
-if grep -qF "$wq_expected" "$wq_pf" 2>/dev/null && [ "$wq_safe" = "$wq_abs" ]; then
-  pass "assignment_export_quoted_special_path"
+if grep -qF "Shared scheduler home (provenance): $wq_abs" "$wq_pf" 2>/dev/null \
+   && ! grep -qE '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$wq_pf" 2>/dev/null; then
+  pass "assignment_provenance_special_path"
 else
-  fail "assignment_export_quoted_special_path" "expected=$wq_expected safe=$wq_safe"
+  fail "assignment_provenance_special_path" "expected raw path '$wq_abs' in $wq_pf"
 fi
 
 # --- Test 44: full upgrade sequence — canonical null + stale root aliases,

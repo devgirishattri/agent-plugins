@@ -5,17 +5,26 @@ argument-hint: <pane-name> <task-id> [--eta MINUTES] [--stage NAME] [--context N
 
 ## Instructions
 
-1. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
-   command reference. Do not infer it from cwd or hardcode a cache version.
+1. Resolve the absolute plugin root from the installed plugin source containing
+   this command reference and substitute it literally for `<PLUGIN_ROOT>` below.
+   Do not infer it from cwd or hardcode a cache version.
 
 2. Parse `$ARGUMENTS`: first word is target pane, second word is task id, then optional flags, everything after is the prompt. Flags must come before the prompt.
-3. Run:
+3. `SESSION_SCHEDULER_HOME` (and `SESSION_CONTEXT_HOME` when using `--context`)
+   must already be present in this pane's environment, inherited when the agent
+   process started (the pane/session launcher sets them — never export or
+   derive them here). Run exactly one Bash segment, with no `export`
+   beforehand, no `env` or variable-assignment prefix, and no other command
+   chained, piped, redirected, or substituted around it:
 
    ```bash
-   export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
-   export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
-   bash "$PLUGIN_ROOT/scripts/task-assign.sh" "<pane-name>" "<task-id>" [flags] "<prompt>"
+   bash "<PLUGIN_ROOT>/scripts/task-assign.sh" "<pane-name>" "<task-id>" [flags] "<prompt>"
    ```
+
+   If the script reports either variable is not set — or the inherited values
+   differ from the shared homes the panes were launched with — stop and request
+   that this pane be relaunched with the correct environment instead of
+   deriving another ledger or context store.
 
 4. Flags:
    - `--eta MINUTES` — stores `eta_at` (ISO-8601 UTC); tasks past it are flagged `OVERDUE` in `task-status`/`task-board`.

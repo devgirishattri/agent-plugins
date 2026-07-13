@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # lib.sh — shared helpers for session-scheduler plugin.
-# Storage (default): <project_root>/tmp/scheduler/{tasks,prompts}/...
-#   project_root resolves via `git rev-parse --show-toplevel` or pwd.
-# Override: SESSION_SCHEDULER_HOME=<dir>  (same env var as codex side, so
-#   claude and codex panes in the same project share a ledger).
+# Storage: $SESSION_SCHEDULER_HOME/{tasks,prompts}/...  (same env var as the
+#   codex side, so claude and codex panes launched with the same value share a
+#   ledger).
 # One JSON file per task. Atomic writes (tmp + mv).
 # Requires: jq, bash 4+. Depends on session-chat lib.sh for /send.
 
-# SESSION_SCHEDULER_HOME must be provided by the caller. The /task-* commands
-# export it automatically (resolving <git-root|pwd>/tmp/scheduler). Scripts
-# refuse to run without it rather than silently writing a ledger into a guessed
-# cwd/tmp location.
+# SESSION_SCHEDULER_HOME must already be present in this process's environment,
+# inherited when the invoking agent/session started: the pane/session launcher
+# (or a human's parent shell, for direct script use) establishes it BEFORE the
+# agent starts. There is no cwd/git-root fallback and the /task-* commands never
+# export it — scripts fail closed rather than guessing a ledger location.
 if [ -z "${SESSION_SCHEDULER_HOME:-}" ]; then
   echo "ERROR: SESSION_SCHEDULER_HOME is not set." >&2
-  echo "Run session-scheduler through its /task-* commands (they set it automatically)," >&2
-  echo "or export SESSION_SCHEDULER_HOME=<dir> before invoking the scripts directly." >&2
+  echo "It must be inherited from the environment this agent process started with" >&2
+  echo "(set by the pane/session launcher). An already-running agent must not export" >&2
+  echo "it or wrap this helper in env/variable assignments — request a relaunch of the" >&2
+  echo "pane/session with the correct environment instead. (A human invoking the script" >&2
+  echo "directly may export the variable in their own parent shell first.)" >&2
   exit 1
 fi
 
@@ -456,13 +459,15 @@ validate_stage() {
 }
 
 # session-context snapshots live under SESSION_CONTEXT_HOME, which must match
-# the same override honored by session-context's own get_contexts_dir(). The
-# /task-assign command exports it automatically when --context is used. Fail
-# closed if it is not set rather than guessing a snapshot location.
+# the same override honored by session-context's own get_contexts_dir(). Like
+# SESSION_SCHEDULER_HOME it must be inherited at agent startup — never exported
+# by a command. Fail closed if it is not set rather than guessing a location.
 resolve_contexts_dir() {
   if [ -z "${SESSION_CONTEXT_HOME:-}" ]; then
     echo "ERROR: SESSION_CONTEXT_HOME is not set (required to attach a --context snapshot)." >&2
-    echo "The /task-assign command exports it automatically; export it before direct use." >&2
+    echo "It must be inherited from the environment this agent process started with;" >&2
+    echo "relaunch the pane/session with the correct environment. (A human invoking the" >&2
+    echo "script directly may export the variable in their own parent shell first.)" >&2
     return 1
   fi
   printf '%s\n' "$SESSION_CONTEXT_HOME"

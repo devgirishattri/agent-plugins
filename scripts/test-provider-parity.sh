@@ -64,14 +64,25 @@ assert_review_cycle_cleared() {
 
 assert_provider_neutral_packet() {
   local packet="$1" label="$2"
-  local scheduler_home_q context_home_q
+  local scheduler_home_abs context_home_abs
   [ -f "$packet" ] || fail "$label packet missing: $packet"
-  scheduler_home_q=$(printf '%q' "$(cd "$SESSION_SCHEDULER_HOME" && pwd -P)")
-  context_home_q=$(printf '%q' "$(cd "$SESSION_CONTEXT_HOME" && pwd -P)")
-  grep -F "export SESSION_SCHEDULER_HOME=$scheduler_home_q" "$packet" >/dev/null \
-    || fail "$label packet missing exact shell-safe scheduler export"
-  grep -F "export SESSION_CONTEXT_HOME=$context_home_q" "$packet" >/dev/null \
-    || fail "$label packet missing exact shell-safe context export"
+  scheduler_home_abs=$(cd "$SESSION_SCHEDULER_HOME" && pwd -P)
+  context_home_abs=$(cd "$SESSION_CONTEXT_HOME" && pwd -P)
+  grep -F "Shared scheduler home (provenance): $scheduler_home_abs" "$packet" >/dev/null \
+    || fail "$label packet missing exact canonical scheduler home provenance"
+  grep -F "Shared context home (provenance): $context_home_abs" "$packet" >/dev/null \
+    || fail "$label packet missing exact canonical context home provenance"
+  grep -F "inherited" "$packet" >/dev/null \
+    || fail "$label packet missing inherited-environment guidance"
+  grep -F "relaunch" "$packet" >/dev/null \
+    || fail "$label packet missing relaunch guidance"
+  if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$packet" >/dev/null; then
+    fail "$label packet contains an executable export line"
+  fi
+  if grep -E '(^|[[:space:]])env[[:space:]]+SESSION_(SCHEDULER|CONTEXT)_HOME=' "$packet" >/dev/null \
+    || grep -E 'SESSION_(SCHEDULER|CONTEXT)_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]]|$)' "$packet" >/dev/null; then
+    fail "$label packet instructs an env/assignment prefix before a helper"
+  fi
   grep -F '$session-scheduler:task-done' "$packet" >/dev/null \
     || fail "$label packet missing Codex completion command"
   grep -F '/session-scheduler:task-done' "$packet" >/dev/null \
@@ -86,8 +97,9 @@ assert_provider_neutral_packet() {
     || fail "$label packet missing Claude context-load command"
 }
 
-# Spaces and an apostrophe force both providers to keep using printf %q for
-# copy-paste-safe shared-home exports.
+# Spaces and an apostrophe prove both providers record the raw canonical paths
+# as provenance without shell-quoting games (packets carry no executable
+# export/env lines at all).
 export SESSION_SCHEDULER_HOME="$TMP/shared scheduler's ledger"
 export SESSION_CONTEXT_HOME="$TMP/shared context's store"
 export SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat"

@@ -196,8 +196,8 @@ but direct `context-search` unset behavior differs as noted above.
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
-| `SESSION_SCHEDULER_HOME` | Yes | Yes | Wrapper-derived | Shared task ledger. Command wrappers use `<git-root>/tmp/scheduler` (or `<pwd>/tmp/scheduler` outside Git); direct script use must set it explicitly. |
-| `SESSION_CONTEXT_HOME` | Yes | Yes | Wrapper-derived | Resolves an attached session-context snapshot. Required when direct script use attaches a context. |
+| `SESSION_SCHEDULER_HOME` | Yes | Yes | Required (inherited) | Shared task ledger root. Must already be present in the environment a pane/agent inherits at startup; scheduler commands and skills never export or derive it, and scripts fail closed when it is unset. |
+| `SESSION_CONTEXT_HOME` | Yes | Yes | Required (inherited) | Resolves an attached session-context snapshot for the scheduler under the same contract: inherited at agent startup, required whenever a context is attached. |
 | `SESSION_SCHEDULER_STALE_MINUTES` | Yes | Yes | `30` | Age after which assigned or review tasks are marked `STALE`. |
 | `SESSION_SCHEDULER_FORCE` | Yes | Yes | `0` | Set to `1` to permit otherwise illegal status transitions. Prefer the `--force` option. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the scheduler's `session-chat` dependency. |
@@ -208,6 +208,15 @@ The scheduler also reads the already-documented
 `SESSION_CHAT_INCOMING_MODE` in its doctor command. Scheduler storage, context
 attachment, stale detection, and force behavior are shared; dependency-locator
 and version-check overrides are not fully aligned.
+
+Environment ownership for the two scheduler homes is split by role:
+launcher/parent-shell configuration establishes `SESSION_SCHEDULER_HOME` and
+`SESSION_CONTEXT_HOME` before an agent process starts; an already-running agent
+invokes each scheduler helper as a single literal Bash segment using those
+inherited values. Direct human script use may set the variables in the parent
+shell first, but generated agent instructions (skills, commands, assignment and
+review packets) never combine environment setup with helper execution — packets
+repeat the absolute homes only as provenance and relaunch guidance.
 
 ### Session manager and provider homes
 

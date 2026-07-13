@@ -57,20 +57,21 @@ else
 fi
 echo
 
-# Ledger-home mismatch: an executor that relies on the git-root default resolves
-# a DIFFERENT ledger than SESSION_SCHEDULER_HOME whenever this pane sits in a
-# worktree/child checkout. task-assign now embeds the absolute home in the
-# prompt, but flag the divergence so a direct/manual invocation isn't surprised.
+# Ledger-home drift: SESSION_SCHEDULER_HOME is inherited at pane launch, so a
+# value that does not match this pane's project root usually just means a shared
+# workspace ledger — but surface it so a misconfigured launcher is caught.
+# task-assign embeds the absolute home in every prompt as provenance.
 gitroot=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-default_home="$(abs_dir "$gitroot")/tmp/scheduler"
+project_home="$(abs_dir "$gitroot")/tmp/scheduler"
 active_home="$(abs_dir "$SCHEDULER_DIR")"
 echo "ledger home:    $active_home"
-if [ "$active_home" = "$default_home" ]; then
-  echo "  OK: matches this pane's git-root default."
+if [ "$active_home" = "$project_home" ]; then
+  echo "  OK: matches this pane's project root."
 else
-  echo "  WARN: differs from this pane's git-root default ($default_home)."
-  echo "  An executor here relying on the default would use a different ledger; rely on the"
-  echo "  absolute home task-assign embeds, or export SESSION_SCHEDULER_HOME explicitly."
+  echo "  NOTE: differs from this pane's project root ($project_home)."
+  echo "  Expected when panes share a workspace-level ledger. If it is wrong, relaunch"
+  echo "  the pane with the correct SESSION_SCHEDULER_HOME in its startup environment;"
+  echo "  agents must not export it mid-session."
 fi
 echo
 

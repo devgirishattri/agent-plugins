@@ -119,19 +119,14 @@ NAME=$(task_get "$ID" '.name')
 ASSIGNER=$(current_pane_name)
 PROMPT_FILE=$(prompt_path "$ID")
 
-# Canonical absolute ledger home. The reply slash-commands resolve
-# SESSION_SCHEDULER_HOME from the executor's OWN git-root by default, so an
-# executor sitting in a different worktree/checkout would silently write to the
-# wrong (or a fresh, empty) ledger. Embed the assigner's absolute home in the
-# prompt so the executor's task-done/review/block target THIS ledger.
+# Canonical absolute ledger home, embedded in the prompt as PROVENANCE: the
+# executor's process must already have this exact value inherited at startup
+# (set by the pane launcher). The packet never prints executable export lines —
+# if the executor's inherited value is absent or different, it must request a
+# relaunch rather than derive another ledger.
 SCHED_HOME_ABS=$(abs_dir "$SCHEDULER_DIR")
 CTX_HOME_ABS=""
 [ -n "$CONTEXT" ] && CTX_HOME_ABS=$(abs_dir "$CONTEXT_DIR")
-# printf %q so a home path with spaces or apostrophes stays a single
-# copy-paste-safe shell token (single-quote wrapping breaks on a "'").
-SCHED_HOME_Q=$(printf '%q' "$SCHED_HOME_ABS")
-CTX_HOME_Q=""
-[ -n "$CONTEXT" ] && CTX_HOME_Q=$(printf '%q' "$CTX_HOME_ABS")
 
 # If the prompt file already exists (reassignment), back it up so we can
 # restore it on dispatch failure; if it's new, delete it on dispatch failure.
@@ -165,10 +160,20 @@ Task ${ID}: ${NAME}
 ${PROMPT_TEXT}
 
 ---
-Shared ledger: ${SCHED_HOME_ABS}
-If your working directory resolves a different project root, export this first so
-your replies land in THIS ledger (the /task-* commands honor an already-set value):
-  export SESSION_SCHEDULER_HOME=${SCHED_HOME_Q}
+Shared scheduler home (provenance): ${SCHED_HOME_ABS}
+Environment contract:
+- The shared home paths in this packet are provenance and relaunch guidance,
+  not commands to run.
+- Your process must already have these exact values inherited in its
+  environment from startup (the pane/session launcher sets them before the
+  agent starts).
+- Invoke scheduler skills/helpers as ONE literal Bash segment:
+  bash "<installed session-scheduler plugin root>/scripts/<helper>.sh" ...
+- Do not run export, do not prefix the helper with env or variable
+  assignments, and do not combine it with any other shell segment (no
+  chaining, pipelines, redirection, or command/process substitution).
+- If the inherited values are absent or differ, stop and request a relaunch of
+  this pane with the correct environment instead of deriving another ledger.
 
 Reply with the form for your runtime (Claude uses /..., Codex uses \$...):
   When done:
@@ -220,9 +225,11 @@ if [ -n "$CONTEXT" ]; then
   cat >> "$PROMPT_FILE" <<EOF
 
 ## Context
-Shared context store: ${CTX_HOME_ABS}
-If your project root differs, export it so the snapshot resolves from THIS store:
-  export SESSION_CONTEXT_HOME=${CTX_HOME_Q}
+Shared context home (provenance): ${CTX_HOME_ABS}
+Your process must already have this exact SESSION_CONTEXT_HOME inherited from
+startup — the environment contract above applies to it as well. If it is
+absent or differs, stop and request a relaunch instead of deriving another
+context store.
 Load the shared context first (form for your runtime):
   Claude: /session-context:context-load ${CONTEXT_NAME}
   Codex:  \$session-context:context-load ${CONTEXT_NAME}

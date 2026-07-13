@@ -10,15 +10,18 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-# SESSION_SCHEDULER_HOME must be provided by the caller. The
-# $session-scheduler:task-* skills export it automatically (resolving
-# <git-root|pwd>/tmp/scheduler). Scripts
-# refuse to run without it rather than silently writing a ledger into a guessed
-# cwd/tmp location.
+# SESSION_SCHEDULER_HOME must already be present in this process's environment,
+# inherited when the invoking agent/session started: the pane/session launcher
+# (or a human's parent shell, for direct script use) establishes it BEFORE the
+# agent starts. There is no cwd/git-root fallback and the $session-scheduler:*
+# skills never export it — scripts fail closed rather than guessing a ledger.
 if [ -z "${SESSION_SCHEDULER_HOME:-}" ]; then
   echo "ERROR: SESSION_SCHEDULER_HOME is not set." >&2
-  echo "Run session-scheduler through a \$session-scheduler:task-* skill (it sets the home automatically)," >&2
-  echo "or export SESSION_SCHEDULER_HOME=<dir> before invoking the scripts directly." >&2
+  echo "It must be inherited from the environment this agent process started with" >&2
+  echo "(set by the pane/session launcher). An already-running agent must not export" >&2
+  echo "it or wrap this helper in env/variable assignments — request a relaunch of the" >&2
+  echo "pane/session with the correct environment instead. (A human invoking the script" >&2
+  echo "directly may export the variable in their own parent shell first.)" >&2
   exit 1
 fi
 
@@ -354,13 +357,16 @@ scheduler_force_enabled() {
 }
 
 # session-context snapshots live under SESSION_CONTEXT_HOME, which must match
-# the same override honored by session-context's own get_contexts_dir(). The
-# $session-scheduler:task-assign exports it automatically when --context is used. Fail
-# closed if it is not set rather than guessing a snapshot location.
+# the same override honored by session-context's own get_contexts_dir(). Like
+# SESSION_SCHEDULER_HOME it must be inherited at agent startup — the
+# $session-scheduler:task-assign skill never exports it. Fail closed if it is
+# not set rather than guessing a snapshot location.
 resolve_contexts_dir() {
   if [ -z "${SESSION_CONTEXT_HOME:-}" ]; then
     echo "ERROR: SESSION_CONTEXT_HOME is not set (required to attach a --context snapshot)." >&2
-    echo "\$session-scheduler:task-assign exports it automatically; export it before direct use." >&2
+    echo "It must be inherited from the environment this agent process started with;" >&2
+    echo "relaunch the pane/session with the correct environment. (A human invoking the" >&2
+    echo "script directly may export the variable in their own parent shell first.)" >&2
     return 1
   fi
   printf '%s\n' "$SESSION_CONTEXT_HOME"

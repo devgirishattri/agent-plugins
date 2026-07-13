@@ -6,9 +6,11 @@ allowed-tools: Bash(bash:*)
 
 ## Board
 
-!`export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"; bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-board.sh`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/task-board.sh"`
 
 ## Instructions
+
+`SESSION_SCHEDULER_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports it is not set, stop and request that this pane/session be relaunched with the correct environment — do not export the variable or derive another ledger.
 
 Relay the board output as-is inside a fenced code block (it is pre-aligned plain text). Per task it shows: id, name, status, assignee, age since creation, OVERDUE/STALE flags, and unmet dependency count. Tasks are grouped by stage; unstaged tasks appear under `(none)`. `done` tasks are excluded.
 

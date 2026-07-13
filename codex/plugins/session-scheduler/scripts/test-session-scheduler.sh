@@ -117,13 +117,27 @@ ASSIGN_MESSAGE_FILE=$(printf '%s\n' "$ASSIGN_CAPTURE" | grep -o 'msg:[^ ]*' | ta
 [ -n "$ASSIGN_MESSAGE_FILE" ] && [ -f "$ASSIGN_MESSAGE_FILE" ] || fail "assignment dispatch notification did not reach recipient"
 grep "$TASK_ID" "$ASSIGN_MESSAGE_FILE" >/dev/null || fail "assignment dispatch body omitted the task id"
 EXPECTED_SCHEDULER_HOME=$(cd "$TEST_HOME/scheduler" && pwd -P)
-EXPECTED_SCHEDULER_EXPORT=$(printf '%q' "$EXPECTED_SCHEDULER_HOME")
-grep -F "export SESSION_SCHEDULER_HOME=$EXPECTED_SCHEDULER_EXPORT" "$ASSIGN_MESSAGE_FILE" >/dev/null \
-  || fail "assignment packet missing exact shared scheduler export"
+grep -F "Shared scheduler home (provenance): $EXPECTED_SCHEDULER_HOME" "$ASSIGN_MESSAGE_FILE" >/dev/null \
+  || fail "assignment packet missing exact canonical scheduler home provenance"
+grep -F 'inherited' "$ASSIGN_MESSAGE_FILE" >/dev/null \
+  || fail "assignment packet missing inherited-environment guidance"
+grep -F 'relaunch' "$ASSIGN_MESSAGE_FILE" >/dev/null \
+  || fail "assignment packet missing relaunch guidance"
+if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$ASSIGN_MESSAGE_FILE" >/dev/null; then
+  fail "assignment packet contains an executable export line"
+fi
+if grep -E '(^|[[:space:]])env[[:space:]]+SESSION_(SCHEDULER|CONTEXT)_HOME=' "$ASSIGN_MESSAGE_FILE" >/dev/null \
+  || grep -E 'SESSION_(SCHEDULER|CONTEXT)_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]]|$)' "$ASSIGN_MESSAGE_FILE" >/dev/null; then
+  fail "assignment packet instructs an env/assignment prefix before a helper"
+fi
 grep -F '$session-scheduler:task-done' "$ASSIGN_MESSAGE_FILE" >/dev/null \
   || fail "assignment packet missing Codex completion command"
 grep -F '/session-scheduler:task-done' "$ASSIGN_MESSAGE_FILE" >/dev/null \
   || fail "assignment packet missing Claude completion command"
+grep -F '$session-scheduler:task-review' "$ASSIGN_MESSAGE_FILE" >/dev/null \
+  || fail "assignment packet missing Codex review command"
+grep -F '/session-scheduler:task-review' "$ASSIGN_MESSAGE_FILE" >/dev/null \
+  || fail "assignment packet missing Claude review command"
 grep -F '$session-scheduler:task-block' "$ASSIGN_MESSAGE_FILE" >/dev/null \
   || fail "assignment packet missing Codex block command"
 grep -F '/session-scheduler:task-block' "$ASSIGN_MESSAGE_FILE" >/dev/null \
@@ -255,9 +269,11 @@ CTX_ID=$(printf '%s\n' "$ctx" | awk '/^Created task/{print $3}' | sed 's/:$//')
 run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$CTX_ID" --context ctx-1 "Context work"
 grep '## Context' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null || fail "prompt missing context section"
 EXPECTED_CONTEXT_HOME=$(cd "$TEST_HOME/contexts" && pwd -P)
-EXPECTED_CONTEXT_EXPORT=$(printf '%q' "$EXPECTED_CONTEXT_HOME")
-grep -F "export SESSION_CONTEXT_HOME=$EXPECTED_CONTEXT_EXPORT" "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
-  || fail "context assignment packet missing exact shared context export"
+grep -F "Shared context home (provenance): $EXPECTED_CONTEXT_HOME" "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
+  || fail "context assignment packet missing exact canonical context home provenance"
+if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null; then
+  fail "context assignment packet contains an executable export line"
+fi
 grep -F '$session-context:context-load ctx-1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
   || fail "prompt missing Codex context-load form"
 grep -F '/session-context:context-load ctx-1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
@@ -280,7 +296,7 @@ AUTO_CONTEXT=$(jq -r '.meta.context' "$ROUTED_FILE")
 [ -f "$TEST_HOME/contexts/$AUTO_CONTEXT.md" ] || fail "automatic context snapshot missing"
 AUTO_CONTEXT_MODE=$(stat -c '%a' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null || stat -f '%Lp' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null)
 [ "$AUTO_CONTEXT_MODE" = "400" ] || fail "automatic context is not owner read-only: $AUTO_CONTEXT_MODE"
-grep 'Shared Scheduler Home:' "$TEST_HOME/scheduler/prompts/$ROUTED_ID.md" >/dev/null || fail "assignment prompt missing shared scheduler home"
+grep 'Shared scheduler home (provenance):' "$TEST_HOME/scheduler/prompts/$ROUTED_ID.md" >/dev/null || fail "assignment prompt missing shared scheduler home provenance"
 run_sender bash "$SCRIPT_DIR/task-status.sh" --by-workflow | grep 'Workflow: release-42' >/dev/null || fail "workflow grouping missing"
 run_sender bash "$SCRIPT_DIR/task-status.sh" --workflow release-42 | grep "$ROUTED_ID" >/dev/null || fail "workflow filter missing routed task"
 run_recipient bash "$SCRIPT_DIR/task-review.sh" "$ROUTED_ID" "commit feed123"
@@ -299,10 +315,21 @@ jq -e '
 ROUTED_REVIEW_PACKET="$TEST_HOME/scheduler/prompts/${ROUTED_ID}-review.md"
 [ "$(path_mode "$ROUTED_REVIEW_PACKET")" = "600" ] || fail "review prompt is not mode 600"
 awk '/^## Original assignment/{exit} {print}' "$ROUTED_REVIEW_PACKET" > "$TEST_HOME/routed-review-instructions.txt"
-grep -F "export SESSION_SCHEDULER_HOME=$EXPECTED_SCHEDULER_EXPORT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
-  || fail "review packet missing exact shared scheduler export"
-grep -F "export SESSION_CONTEXT_HOME=$EXPECTED_CONTEXT_EXPORT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
-  || fail "review packet missing exact shared context export"
+grep -F "Shared scheduler home (provenance): $EXPECTED_SCHEDULER_HOME" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  || fail "review packet missing exact canonical scheduler home provenance"
+grep -F "Shared context home (provenance): $EXPECTED_CONTEXT_HOME" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  || fail "review packet missing exact canonical context home provenance"
+grep -F 'inherited' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  || fail "review packet missing inherited-environment guidance"
+grep -F 'relaunch' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  || fail "review packet missing relaunch guidance"
+if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$TEST_HOME/routed-review-instructions.txt" >/dev/null; then
+  fail "review packet contains an executable export line"
+fi
+if grep -E '(^|[[:space:]])env[[:space:]]+SESSION_(SCHEDULER|CONTEXT)_HOME=' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  || grep -E 'SESSION_(SCHEDULER|CONTEXT)_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]]|$)' "$TEST_HOME/routed-review-instructions.txt" >/dev/null; then
+  fail "review packet instructs an env/assignment prefix before a helper"
+fi
 grep -F '$session-scheduler:task-done' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   || fail "review packet missing Codex approval command"
 grep -F '/session-scheduler:task-done' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
@@ -535,5 +562,23 @@ run_sender bash "$SCRIPT_DIR/task-status.sh" "$AUTO_RB_ID" | grep 'created' >/de
 while IFS= read -r persisted; do
   [ "$(path_mode "$persisted")" = "600" ] || fail "scheduler data file is not mode 600: $persisted"
 done < <(find "$TEST_HOME/scheduler/tasks" "$TEST_HOME/scheduler/prompts" -type f -print)
+
+# Static: agent-facing skills and commands must not carry executable
+# environment-setup instructions — no export lines for the scheduler/context
+# homes, no env or variable-assignment prefixes before a helper. (Test-fixture
+# env assignments inside this suite are intentionally exempt.)
+PLUGIN_DOC_ROOT="$SCRIPT_DIR/.."
+for doc in "$PLUGIN_DOC_ROOT"/commands/*.md "$PLUGIN_DOC_ROOT"/skills/*/SKILL.md; do
+  [ -f "$doc" ] || continue
+  if grep -qE '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$doc"; then
+    fail "agent-facing doc instructs an executable export: $doc"
+  fi
+  if grep -qE '(^|[[:space:]])env[[:space:]]+SESSION_(SCHEDULER|CONTEXT)_HOME=' "$doc"; then
+    fail "agent-facing doc instructs an env-prefixed helper: $doc"
+  fi
+  if grep -qE 'SESSION_(SCHEDULER|CONTEXT)_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]]|$)' "$doc"; then
+    fail "agent-facing doc instructs an assignment-prefixed helper: $doc"
+  fi
+done
 
 echo "session-scheduler smoke tests passed"

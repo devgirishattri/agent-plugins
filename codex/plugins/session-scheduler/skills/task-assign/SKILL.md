@@ -5,17 +5,26 @@ description: "Assign a scheduler task with ETA, workflow, reviewer routing, and 
 
 # Task Assign
 
-Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
-the directory two levels above this `SKILL.md`. Use that absolute path; never
-infer it from the working directory or hardcode a marketplace cache version.
+Resolve the absolute plugin root from this selected skill's installed source
+path: it is the directory two levels above this `SKILL.md`. Substitute that
+absolute path literally for `<PLUGIN_ROOT>` below; never infer it from the
+working directory or hardcode a marketplace cache version.
 
-Run (flags must come before the prompt text):
+`SESSION_SCHEDULER_HOME` (and `SESSION_CONTEXT_HOME` when using `--context`)
+must already be present in this pane's environment, inherited when the agent
+process started (the pane/session launcher sets them — never export or derive
+them here). Run exactly one Bash segment (flags must come before the prompt
+text), with no `export` beforehand, no `env` or variable-assignment prefix, and
+no other command chained, piped, redirected, or substituted around it:
 
 ```bash
-export SESSION_SCHEDULER_HOME="${SESSION_SCHEDULER_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/scheduler}"
-export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
-bash "$PLUGIN_ROOT/scripts/task-assign.sh" "<pane-name>" "<task-id>" [--eta MINUTES] [--stage NAME] [--context NAME|auto] [--reviewer PANE] [--workflow ID] [--force] "<prompt>"
+bash "<PLUGIN_ROOT>/scripts/task-assign.sh" "<pane-name>" "<task-id>" [--eta MINUTES] [--stage NAME] [--context NAME|auto] [--reviewer PANE] [--workflow ID] [--force] "<prompt>"
 ```
+
+If the script reports either variable is not set — or the inherited values
+differ from the shared homes the panes were launched with — stop and request a
+pane relaunch with the correct environment instead of deriving another ledger
+or context store.
 
 - `--eta MINUTES` — stores `eta_at`; overdue tasks are flagged `OVERDUE` in status/board views.
 - `--stage NAME` — set/overwrite the stage label.

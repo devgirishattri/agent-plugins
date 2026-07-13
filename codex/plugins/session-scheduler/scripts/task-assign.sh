@@ -153,12 +153,6 @@ if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
   mkdir -p "$SESSION_CONTEXT_HOME" || exit 1
   CONTEXT_HOME_ABS=$(absolute_existing_dir "$SESSION_CONTEXT_HOME") || exit 1
 fi
-SCHEDULER_HOME_EXPORT=$(printf '%q' "$SCHEDULER_HOME_ABS")
-CONTEXT_HOME_EXPORT=""
-if [ -n "$CONTEXT_HOME_ABS" ]; then
-  CONTEXT_HOME_EXPORT=$(printf '%q' "$CONTEXT_HOME_ABS")
-fi
-
 # If the prompt file already exists (reassignment), back it up so we can
 # restore it on dispatch failure; if it is new, delete it on dispatch failure.
 PROMPT_BACKUP=""
@@ -188,26 +182,24 @@ Task Name: $TASK_NAME
 Assigned To: $ASSIGNEE
 Reviewer: ${REVIEWER:-(none)}
 Workflow: ${WORKFLOW_ID:-(none)}
-Shared Scheduler Home: $SCHEDULER_HOME_ABS
-Shared Context Home: ${CONTEXT_HOME_ABS:-(not set)}
+Shared scheduler home (provenance): $SCHEDULER_HOME_ABS
+Shared context home (provenance): ${CONTEXT_HOME_ABS:-(not set)}
 
 $PROMPT
 
-For every scheduler command for this task, use the shared home above instead
-of deriving a ledger from the child checkout. Preserve SESSION_CONTEXT_HOME as
-well when loading the attached context.
-
-Before using scheduler commands in the child pane, run exactly:
-export SESSION_SCHEDULER_HOME=$SCHEDULER_HOME_EXPORT
-EOF
-
-if [ -n "$CONTEXT_HOME_EXPORT" ]; then
-  cat >> "$PROMPT_FILE" <<EOF
-export SESSION_CONTEXT_HOME=$CONTEXT_HOME_EXPORT
-EOF
-fi
-
-cat >> "$PROMPT_FILE" <<EOF
+Environment contract:
+- The shared home paths in this packet are provenance and relaunch guidance,
+  not commands to run.
+- Your process must already have these exact values inherited in its
+  environment from startup (the pane/session launcher sets them before the
+  agent starts).
+- Invoke scheduler skills/helpers as ONE literal Bash segment:
+  bash "<installed session-scheduler plugin root>/scripts/<helper>.sh" ...
+- Do not run export, do not prefix the helper with env or variable
+  assignments, and do not combine it with any other shell segment (no
+  chaining, pipelines, redirection, or command/process substitution).
+- If the inherited values are absent or differ, stop and request a relaunch of
+  this pane with the correct environment instead of deriving another ledger.
 
 When complete, report with either provider form:
 Codex:  \$session-scheduler:task-done $ID <summary>
