@@ -5,7 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/session-context-test.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+# The exact-root regression makes a parent directory read-only; restore write
+# permission even when a test failed mid-way so the temp tree is removable.
+trap 'chmod -R u+rwx "$TMP" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 fail() {
   echo "FAIL: $*" >&2
@@ -217,6 +219,8 @@ SESSION_CONTEXT_HOME="$STALE_STORE" bash -c '
 [ ! -e "$STALE_STORE/.session-context.lock" ] || fail "reclaimed writer lock was left behind"
 [ -z "$(find "$TMP" -maxdepth 1 -name 'stale-contexts.session-context-stale.*' -print -quit)" ] \
   || fail "stale-lock quarantine was left behind"
+[ -z "$(find "$STALE_STORE" -mindepth 1 -maxdepth 1 -name '.session-context-stale.*' -print -quit 2>/dev/null)" ] \
+  || fail "in-store stale-lock quarantine was left behind"
 
 # ABA regression: a waiter may observe a dead generation, get descheduled while
 # that pathname turns over, then resume against a new live writer. The exact old
@@ -250,9 +254,78 @@ if ! bash -c '
   [ "$(_context_lock_generation_token "$root")" = "$new_token" ] || exit 1
   [ ! -e "$root/.session-context.lock/.reclaim" ] || exit 1
   [ -z "$(find "${root}.session-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] || exit 1
+  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".session-context-stale.*" -print -quit 2>/dev/null)" ] || exit 1
 ' _ "$SCRIPT_DIR/lib.sh" "$ABA_STORE"; then
   fail "stale generation token quarantined a replacement writer lock"
 fi
+
+# Exact-root sandbox regression: with write access to ONLY the store itself
+# (its parent is read-only, like a Codex pane granted tmp/contexts but not
+# tmp/), owner release and dead-lock reclaim must both succeed with zero
+# parent-directory writes and zero lock/quarantine residue.
+XR_PARENT="$TMP/exact-root"
+XR_STORE="$XR_PARENT/contexts"
+mkdir -p "$XR_STORE"
+chmod 700 "$XR_STORE"
+printf '# exact-root snapshot\nsurvives lock turnover\n' > "$XR_STORE/proj-xr.md"
+chmod 600 "$XR_STORE/proj-xr.md"
+chmod 555 "$XR_PARENT"
+xr_parent_before=$(ls -1a "$XR_PARENT")
+SESSION_CONTEXT_HOME="$XR_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/xr-list-1.out" 2>&1 \
+  || { chmod 755 "$XR_PARENT"; fail "exact-root store: normal acquire/release failed: $(cat "$TMP/xr-list-1.out")"; }
+mkdir -m 700 "$XR_STORE/.session-context.lock"
+xr_dead=999999
+while kill -0 "$xr_dead" 2>/dev/null; do
+  xr_dead=$((xr_dead + 1))
+done
+printf '%s\n' "$xr_dead" > "$XR_STORE/.session-context.lock/pid"
+chmod 600 "$XR_STORE/.session-context.lock/pid"
+SESSION_CONTEXT_HOME="$XR_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/xr-list-2.out" 2>&1 \
+  || { chmod 755 "$XR_PARENT"; fail "exact-root store: dead-lock reclaim failed: $(cat "$TMP/xr-list-2.out")"; }
+xr_parent_after=$(ls -1a "$XR_PARENT")
+chmod 755 "$XR_PARENT"
+grep -Fq 'proj-xr' "$TMP/xr-list-1.out" || fail "exact-root store: first listing missed the snapshot"
+grep -Fq 'proj-xr' "$TMP/xr-list-2.out" || fail "exact-root store: reclaim listing missed the snapshot"
+assert_contains "$XR_STORE/proj-xr.md" "survives lock turnover"
+[ "$xr_parent_before" = "$xr_parent_after" ] || fail "exact-root store: parent directory contents changed"
+[ -z "$(find "$XR_STORE" -mindepth 1 \( -name '.session-context.lock' -o -name '.session-context-stale.*' -o -name '.session-context.tmp.*' \) -print -quit 2>/dev/null)" ] \
+  || fail "exact-root store: lock/quarantine residue remained"
+[ -z "$(find "${XR_STORE}.session-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] \
+  || fail "exact-root store: sibling quarantine artifact created"
+
+# A quarantine orphaned by a process killed mid-teardown is finished (swept)
+# by the next writer-lock holder, while a planted symlink at a quarantine name
+# is rejected rather than followed or removed.
+ORPHAN_STORE="$TMP/orphan-contexts"
+mkdir -m 700 "$ORPHAN_STORE"
+printf '# orphan store\n' > "$ORPHAN_STORE/proj-orphan.md"
+chmod 600 "$ORPHAN_STORE/proj-orphan.md"
+orph_dead=999999
+while kill -0 "$orph_dead" 2>/dev/null; do
+  orph_dead=$((orph_dead + 1))
+done
+ORPHAN_Q="$ORPHAN_STORE/.session-context-stale.$orph_dead"
+mkdir -m 700 "$ORPHAN_Q"
+printf '%s\n' "$orph_dead" > "$ORPHAN_Q/pid"
+chmod 600 "$ORPHAN_Q/pid"
+mkdir -m 700 "$ORPHAN_Q/.reclaim"
+SESSION_CONTEXT_HOME="$ORPHAN_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/orphan-list.out" 2>&1 \
+  || fail "orphaned quarantine blocked the store: $(cat "$TMP/orphan-list.out")"
+grep -Fq 'proj-orphan' "$TMP/orphan-list.out" || fail "orphan-store listing missed the snapshot"
+[ ! -e "$ORPHAN_Q" ] || fail "orphaned quarantine was not swept under the writer lock"
+[ ! -e "$ORPHAN_STORE/.session-context.lock" ] || fail "orphan sweep left an active writer lock"
+
+EVIL_STORE="$TMP/evil-quarantine-contexts"
+mkdir -m 700 "$EVIL_STORE"
+mkdir -m 700 "$TMP/evil-target"
+ln -s "$TMP/evil-target" "$EVIL_STORE/.session-context-stale.12345"
+if SESSION_CONTEXT_HOME="$EVIL_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/evil-list.out" 2>&1; then
+  fail "symlink quarantine was accepted: $(cat "$TMP/evil-list.out")"
+fi
+grep -q 'quarantine cannot be a symbolic link' "$TMP/evil-list.out" \
+  || fail "symlink quarantine rejection did not explain itself: $(cat "$TMP/evil-list.out")"
+[ -e "$TMP/evil-target" ] || fail "symlink quarantine target was removed"
+[ -L "$EVIL_STORE/.session-context-stale.12345" ] || fail "symlink quarantine was removed instead of rejected"
 
 # The lock directory permits an owner-only numeric PID plus the transient empty
 # owner-only reclaim claim. Every other entry or claim shape remains rejected.

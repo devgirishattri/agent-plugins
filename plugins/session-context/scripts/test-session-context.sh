@@ -20,6 +20,9 @@ mkdir -p "$SESSION_CONTEXT_HOME"
 
 cleanup() {
   tmux -L "$SOCKET" kill-server 2>/dev/null || true
+  # The exact-root regression makes a parent directory read-only; restore write
+  # permission even when a test failed mid-way so the temp tree is removable.
+  chmod -R u+rwx "$TMP" 2>/dev/null || true
   rm -rf "$TMP" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -420,6 +423,7 @@ if bash -c '
   [ "$(sed -n "1p" "$root/.session-context.lock/pid")" = "$$" ] || exit 1
   release_context_store_lock || exit 1
   [ ! -e "$root/.session-context.lock" ] || exit 1
+  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".session-context-stale.*" -print -quit 2>/dev/null)" ] || exit 1
 ' _ "$HERE/lib.sh" "$STALE_STORE"; then
   pass "dead_writer_lock_reclaimed"
 else
@@ -455,6 +459,7 @@ if bash -c '
   [ "$(_context_lock_generation_token "$root")" = "$new_token" ] || exit 1
   [ ! -e "$root/.session-context.lock/.reclaim" ] || exit 1
   [ -z "$(find "${root}.session-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] || exit 1
+  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".session-context-stale.*" -print -quit 2>/dev/null)" ] || exit 1
 ' _ "$HERE/lib.sh" "$ABA_STORE"; then
   pass "stale_generation_cannot_reclaim_replacement"
 else
@@ -502,6 +507,76 @@ if [ -z "$doc_stale" ]; then
   pass "docs_inherited_env_contract"
 else
   fail "docs_inherited_env_contract" "stale/missing:$doc_stale"
+fi
+
+# --- Test 20b: exact-root sandbox — release and dead-lock reclaim never write the parent ---
+# Models a child sandbox whose ONLY writable root is the store itself (e.g. a
+# Codex pane granted tmp/contexts but not tmp/): the quarantine used by owner
+# release and dead-lock reclaim must stay inside SESSION_CONTEXT_HOME.
+XR_PARENT="$TMP/exact-root"
+XR_STORE="$XR_PARENT/contexts"
+mkdir -p "$XR_STORE"
+chmod 700 "$XR_STORE"
+printf '# exact-root snapshot\nsurvives lock turnover\n' > "$XR_STORE/proj-xr.md"
+chmod 600 "$XR_STORE/proj-xr.md"
+chmod 555 "$XR_PARENT"
+xr_parent_before=$(ls -1a "$XR_PARENT" 2>/dev/null)
+# (a) normal lock acquisition + owner release through a real entry point
+xr_out1=$(SESSION_CONTEXT_HOME="$XR_STORE" bash "$HERE/list-contexts.sh" 2>&1); xr_rc1=$?
+# (b) a valid dead writer-lock generation, recovered through the same entry point
+mkdir -m 700 "$XR_STORE/.session-context.lock" 2>/dev/null
+xr_dead=999999
+while kill -0 "$xr_dead" 2>/dev/null; do xr_dead=$((xr_dead + 1)); done
+printf '%s\n' "$xr_dead" > "$XR_STORE/.session-context.lock/pid"
+chmod 600 "$XR_STORE/.session-context.lock/pid"
+xr_out2=$(SESSION_CONTEXT_HOME="$XR_STORE" bash "$HERE/list-contexts.sh" 2>&1); xr_rc2=$?
+xr_parent_after=$(ls -1a "$XR_PARENT" 2>/dev/null)
+xr_residue=$(find "$XR_STORE" -mindepth 1 \( -name '.session-context.lock' -o -name '.session-context-stale.*' -o -name '.session-context.tmp.*' \) -print 2>/dev/null)
+xr_sibling=$(find "${XR_STORE}.session-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)
+chmod 755 "$XR_PARENT"
+if [ "$xr_rc1" -eq 0 ] && [ "$xr_rc2" -eq 0 ] \
+   && echo "$xr_out1" | grep -qF "proj-xr" \
+   && echo "$xr_out2" | grep -qF "proj-xr" \
+   && grep -qF "survives lock turnover" "$XR_STORE/proj-xr.md" \
+   && [ "$xr_parent_before" = "$xr_parent_after" ] \
+   && [ -z "$xr_residue" ] && [ -z "$xr_sibling" ]; then
+  pass "exact_root_release_and_reclaim_no_parent_write"
+else
+  fail "exact_root_release_and_reclaim_no_parent_write" "rc1=$xr_rc1 rc2=$xr_rc2 residue=$xr_residue sibling=$xr_sibling out1=$xr_out1 out2=$xr_out2"
+fi
+
+# --- Test 20c: a quarantine orphaned by a killed teardown is swept under the lock ---
+ORPHAN_STORE="$TMP/orphan-contexts"
+mkdir -m 700 "$ORPHAN_STORE"
+printf '# orphan store\n' > "$ORPHAN_STORE/proj-orphan.md"
+chmod 600 "$ORPHAN_STORE/proj-orphan.md"
+orph_dead=999999
+while kill -0 "$orph_dead" 2>/dev/null; do orph_dead=$((orph_dead + 1)); done
+ORPHAN_Q="$ORPHAN_STORE/.session-context-stale.$orph_dead"
+mkdir -m 700 "$ORPHAN_Q"
+printf '%s\n' "$orph_dead" > "$ORPHAN_Q/pid"
+chmod 600 "$ORPHAN_Q/pid"
+mkdir -m 700 "$ORPHAN_Q/.reclaim"
+orph_out=$(SESSION_CONTEXT_HOME="$ORPHAN_STORE" bash "$HERE/list-contexts.sh" 2>&1); orph_rc=$?
+if [ "$orph_rc" -eq 0 ] && echo "$orph_out" | grep -qF "proj-orphan" \
+   && [ ! -e "$ORPHAN_Q" ] \
+   && [ ! -e "$ORPHAN_STORE/.session-context.lock" ]; then
+  pass "orphaned_quarantine_swept_under_lock"
+else
+  fail "orphaned_quarantine_swept_under_lock" "rc=$orph_rc exists=$([ -e "$ORPHAN_Q" ] && echo yes || echo no) out=$orph_out"
+fi
+
+# --- Test 20d: a planted symlink at a quarantine name is rejected, not followed ---
+EVIL_STORE="$TMP/evil-quarantine-contexts"
+mkdir -m 700 "$EVIL_STORE"
+mkdir -m 700 "$TMP/evil-target"
+ln -s "$TMP/evil-target" "$EVIL_STORE/.session-context-stale.12345"
+evil_out=$(SESSION_CONTEXT_HOME="$EVIL_STORE" bash "$HERE/list-contexts.sh" 2>&1); evil_rc=$?
+if [ "$evil_rc" -ne 0 ] && echo "$evil_out" | grep -q "quarantine cannot be a symbolic link" \
+   && [ -e "$TMP/evil-target" ] && [ -L "$EVIL_STORE/.session-context-stale.12345" ]; then
+  pass "quarantine_symlink_rejected_not_followed"
+else
+  fail "quarantine_symlink_rejected_not_followed" "rc=$evil_rc out=$evil_out"
 fi
 
 # --- Test 21: unset SESSION_CONTEXT_HOME fails closed with inherited/relaunch guidance ---

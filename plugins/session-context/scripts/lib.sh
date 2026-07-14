@@ -324,7 +324,8 @@ _context_validate_tree() {
   _context_validate_directory "$root" || return 1
 
   find -P "$root" -mindepth 1 \
-    \( -path "$root/.session-context.lock" -o -path "$root/.session-context.lock/*" \) -prune \
+    \( -path "$root/.session-context.lock" -o -path "$root/.session-context.lock/*" \
+       -o -path "$root/.session-context-stale.*" \) -prune \
     -o -print0 2>/dev/null | while IFS= read -r -d '' path; do
     # A concurrent writer may remove its lock between find(1) and inspection.
     if ! _context_path_exists "$path"; then
@@ -368,6 +369,7 @@ _context_validate_tree() {
     _context_store_error "cannot safely traverse context store: $root"
     return 1
   fi
+  _context_validate_quarantine_artifact "$root" || return 1
   _context_validate_lock_artifact "$root"
 }
 
@@ -390,7 +392,8 @@ harden_existing_contexts_dir() {
   # before chmod so a concurrent replacement is rejected rather than followed.
   _context_harden_directory "$root" || return 1
   find -P "$root" -mindepth 1 \
-    \( -path "$root/.session-context.lock" -o -path "$root/.session-context.lock/*" \) -prune \
+    \( -path "$root/.session-context.lock" -o -path "$root/.session-context.lock/*" \
+       -o -path "$root/.session-context-stale.*" \) -prune \
     -o -print0 2>/dev/null | while IFS= read -r -d '' path; do
     if ! _context_path_exists "$path"; then
       continue
@@ -417,6 +420,9 @@ harden_existing_contexts_dir() {
     return 1
   fi
   _context_harden_lock_artifact "$root" || return 1
+  # Under the writer lock, finish dismantling any quarantine abandoned by a
+  # process killed mid-teardown (live teardowns keep their own).
+  _context_sweep_stale_quarantines "$root" || return 1
 
   (cd "$root" 2>/dev/null && pwd -P) || {
     _context_store_error "cannot resolve context store: $root"
@@ -527,6 +533,177 @@ _context_drop_reclaim_claim() {
   }
 }
 
+_context_quarantine_dir_pid() {
+  # In-store quarantine names embed the PID of the process performing the
+  # teardown: <root>/.session-context-stale.<pid>. Echo that PID or fail.
+  local name
+  name=$(basename "$1")
+  name=${name#.session-context-stale.}
+  [[ "$name" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$name"
+}
+
+_context_remove_quarantine_dir() {
+  # Bounded teardown of one in-store quarantine: a compliant teardown stage
+  # holds at most a stale `pid` file and an empty `.reclaim` claim before the
+  # final rmdir, so anything else fails closed. Never recursive, and tolerant
+  # of entries vanishing when a concurrent teardown finishes first.
+  local stale_dir="$1" entry relative
+  _context_path_exists "$stale_dir" || return 0
+  if [ -L "$stale_dir" ] || [ ! -d "$stale_dir" ]; then
+    _context_store_error "writer-lock quarantine must be a real directory: $stale_dir"
+    return 1
+  fi
+  _context_require_owner "$stale_dir" || return 1
+  while IFS= read -r -d '' entry; do
+    _context_path_exists "$entry" || continue
+    relative=${entry#"$stale_dir"/}
+    case "$relative" in
+      pid)
+        if [ -L "$entry" ] || [ ! -f "$entry" ]; then
+          _context_path_exists "$entry" || continue
+          _context_store_error "quarantined writer-lock PID must be a regular non-symlink file: $entry"
+          return 1
+        fi
+        _context_require_owner "$entry" || return 1
+        rm -f "$entry" || {
+          _context_path_exists "$entry" || continue
+          _context_store_error "cannot remove quarantined writer-lock PID: $entry"
+          return 1
+        }
+        ;;
+      .reclaim)
+        if [ -L "$entry" ] || [ ! -d "$entry" ]; then
+          _context_path_exists "$entry" || continue
+          _context_store_error "quarantined reclaim claim must be a real directory: $entry"
+          return 1
+        fi
+        _context_require_owner "$entry" || return 1
+        if [ -n "$(find -P "$entry" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+          _context_store_error "quarantined reclaim claim must be empty: $entry"
+          return 1
+        fi
+        rmdir "$entry" 2>/dev/null || {
+          _context_path_exists "$entry" || continue
+          _context_store_error "cannot remove quarantined reclaim claim: $entry"
+          return 1
+        }
+        ;;
+      *)
+        _context_store_error "unexpected file in writer-lock quarantine: $entry"
+        return 1
+        ;;
+    esac
+  done < <(find -P "$stale_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  rmdir "$stale_dir" 2>/dev/null || {
+    _context_path_exists "$stale_dir" || return 0
+    _context_store_error "cannot remove writer-lock quarantine: $stale_dir"
+    return 1
+  }
+}
+
+_context_validate_quarantine_artifact() {
+  # In-store quarantines are transient: an owner release or dead-lock reclaim
+  # renames the validated lock generation to <root>/.session-context-stale.<pid>
+  # (a same-directory rename, so an exact-root sandbox with no parent write
+  # access can still release) and dismantles it immediately. Validation accepts
+  # only the shapes a compliant teardown can produce, tolerates entries
+  # vanishing when that teardown completes mid-check, and never mutates a
+  # quarantine — a live teardown owner must not have its stage rejected or
+  # removed out from under it.
+  local root="$1" stale_dir mode entry relative holder_pid
+  while IFS= read -r -d '' stale_dir; do
+    _context_path_exists "$stale_dir" || continue
+    if [ -L "$stale_dir" ]; then
+      _context_store_error "writer-lock quarantine cannot be a symbolic link: $stale_dir"
+      return 1
+    fi
+    if [ ! -d "$stale_dir" ]; then
+      _context_store_error "writer-lock quarantine must be a directory: $stale_dir"
+      return 1
+    fi
+    if ! _context_quarantine_dir_pid "$stale_dir" >/dev/null; then
+      _context_store_error "writer-lock quarantine must embed a numeric reclaimer PID: $stale_dir"
+      return 1
+    fi
+    if ! _context_require_owner "$stale_dir"; then
+      _context_path_exists "$stale_dir" || continue
+      return 1
+    fi
+    mode=$(_context_path_mode "$stale_dir") || continue
+    if [ "$mode" != "700" ]; then
+      _context_store_error "writer-lock quarantine must be mode 700: $stale_dir"
+      return 1
+    fi
+    while IFS= read -r -d '' entry; do
+      _context_path_exists "$entry" || continue
+      relative=${entry#"$stale_dir"/}
+      case "$relative" in
+        pid)
+          if [ -L "$entry" ] || [ ! -f "$entry" ]; then
+            _context_path_exists "$entry" || continue
+            _context_store_error "quarantined writer-lock PID must be a regular non-symlink file: $entry"
+            return 1
+          fi
+          if ! _context_require_owner "$entry"; then
+            _context_path_exists "$entry" || continue
+            return 1
+          fi
+          mode=$(_context_path_mode "$entry") || continue
+          if [ "$mode" != "600" ]; then
+            _context_store_error "quarantined writer-lock PID file must be mode 600: $entry"
+            return 1
+          fi
+          holder_pid=$(sed -n '1p' "$entry" 2>/dev/null) || holder_pid=""
+          if [ -n "$holder_pid" ] && ! [[ "$holder_pid" =~ ^[0-9]+$ ]]; then
+            _context_store_error "quarantined writer lock contains an invalid holder PID: $entry"
+            return 1
+          fi
+          ;;
+        .reclaim)
+          if [ -L "$entry" ] || [ ! -d "$entry" ]; then
+            _context_path_exists "$entry" || continue
+            _context_store_error "quarantined reclaim claim must be a real directory: $entry"
+            return 1
+          fi
+          if ! _context_require_owner "$entry"; then
+            _context_path_exists "$entry" || continue
+            return 1
+          fi
+          if [ -n "$(find -P "$entry" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+            _context_store_error "quarantined reclaim claim must be empty: $entry"
+            return 1
+          fi
+          ;;
+        *)
+          _context_path_exists "$entry" || continue
+          _context_store_error "unexpected file in writer-lock quarantine: $entry"
+          return 1
+          ;;
+      esac
+    done < <(find -P "$stale_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  done < <(find -P "$root" -mindepth 1 -maxdepth 1 -name '.session-context-stale.*' -print0 2>/dev/null)
+}
+
+_context_sweep_stale_quarantines() {
+  # Callers hold the writer lock, so among compliant processes this is the only
+  # sweeper. A quarantine whose name-embedded PID is dead was abandoned by a
+  # process killed mid-teardown; finish its bounded dismantling. A live
+  # embedded PID marks an in-flight teardown that owns its own cleanup.
+  local root="$1" stale_dir holder_pid
+  while IFS= read -r -d '' stale_dir; do
+    _context_path_exists "$stale_dir" || continue
+    if ! holder_pid=$(_context_quarantine_dir_pid "$stale_dir"); then
+      _context_store_error "writer-lock quarantine must embed a numeric reclaimer PID: $stale_dir"
+      return 1
+    fi
+    if _context_pid_alive "$holder_pid"; then
+      continue
+    fi
+    _context_remove_quarantine_dir "$stale_dir" || return 1
+  done < <(find -P "$root" -mindepth 1 -maxdepth 1 -name '.session-context-stale.*' -print0 2>/dev/null)
+}
+
 _context_quarantine_lock_generation() {
   # Quarantine exactly the generation represented by <expected_token>. Creating
   # .reclaim is the atomic claim. The token is then re-read under that claim; a
@@ -590,12 +767,20 @@ _context_quarantine_lock_generation() {
 
   # With the generation-specific claim held, compliant owners and competing
   # reclaimers cannot remove this pathname. The rename therefore moves only the
-  # generation whose lock/PID identities were revalidated above.
-  stale_dir="${root}.session-context-stale.$$"
+  # generation whose lock/PID identities were revalidated above. The quarantine
+  # lives INSIDE the store: a same-directory rename needs write access only to
+  # SESSION_CONTEXT_HOME itself, never to its parent, so an exact-root sandbox
+  # (writable contexts/ under an unwritable tmp/) can release and reclaim.
+  stale_dir="$root/.session-context-stale.$$"
   if _context_path_exists "$stale_dir"; then
-    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-    _context_store_error "stale-lock quarantine path already exists: $stale_dir"
-    return 1
+    # $$ names the live teardown owner, and this process fully dismantles each
+    # quarantine before minting another, so a survivor at our own name is an
+    # orphan from a recycled PID. Dismantle it bounded before reusing the name.
+    if ! _context_remove_quarantine_dir "$stale_dir"; then
+      _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
+      _context_store_error "stale-lock quarantine path already exists: $stale_dir"
+      return 1
+    fi
   fi
   if ! mv "$lock_dir" "$stale_dir" 2>/dev/null; then
     _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
