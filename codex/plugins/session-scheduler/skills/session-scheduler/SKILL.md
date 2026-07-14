@@ -35,6 +35,31 @@ Legal status transitions (enforced by every command): `created→assigned`, `cre
 - Every assignment records and embeds the absolute scheduler/context homes so a child checkout does not silently write to a different ledger.
 - `tasks-clean` selects task files older than its threshold regardless of status unless `--status` narrows the selection. It is dry-run only unless `--apply` is explicitly requested and confirmed.
 
+## Transport contract
+
+Scheduler helpers can perform nested session-chat/tmux transport: `task-assign`
+dispatches before its ledger write, while `task-review`, `task-done`, and
+`task-block` can dispatch or notify after a transition is durable. In Codex,
+request scoped escalation/approval for the exact installed helper on the first attempt
+whenever it may dispatch or notify. Keep raw token zero as `bash` and
+invoke the helper as one literal Bash segment; never use `bash -c`, wrappers,
+`env`, assignment prefixes, exports, pipelines, chaining, redirection,
+substitution, or broad provider-home access to bypass the sandbox.
+
+Escalation is transport access, not authority: recorded roles and recipients,
+arguments, confirmations, and lifecycle rules remain in force. A failed
+post-transition done/block notification is partial success; inspect
+`task-status`, never rerun the completed transition, and never use --force to
+repair transport. Send a separate exact session-chat message only when
+authorized. `task-review` permits a dispatch-only retry only while the task is
+in `review`, has no successful reviewer-dispatch timestamp, and the prior
+dispatch is known to have failed. If dispatch succeeded but timestamp
+persistence failed, delivery is ambiguous even though a later helper call
+cannot distinguish it: do not retry until recipient or outbox evidence proves
+no packet was delivered, and never duplicate a delivered packet. A hard
+`task-assign` dispatch failure retains its existing rollback behavior and may
+be retried only after the transport cause is fixed.
+
 ## Scope
 
 Intentionally includes task ids, assignment, explicit reviewer routes, workflow groups, status, review gates, stages, ETAs, dependencies, task-scoped context, done/block reports, cleanup, and diagnostics. It defers a full role registry, fanout, timeout reassignment, priority queues, and daemon behavior.

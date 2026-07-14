@@ -533,6 +533,79 @@ else
   fail "docs_no_executable_export" "stale executable-export pattern in:$doc_stale"
 fi
 
+# --- Test 33d: assignment + review packets carry the nested-transport contract ---
+if grep -qF "Transport contract:" "$apf" && grep -qF "on the first attempt" "$apf" \
+   && grep -qF "never rerun task-done or task-block" "$apf" && grep -qF "use --force to repair" "$apf" \
+   && grep -qF "never duplicate a delivered packet" "$apf" \
+   && grep -qF "Transport contract:" "$rpf" && grep -qF "on the first attempt" "$rpf" \
+   && grep -qF "never rerun task-done or task-block" "$rpf"; then
+  pass "packets_transport_contract"
+else
+  fail "packets_transport_contract" "apf or rpf missing transport-contract guidance"
+fi
+
+# --- Test 33e: task-done with failing ack — transition intact + partial-success warning ---
+# Stub identity differs from the assigner so the ack is actually attempted, and
+# send-message hard-fails to simulate sandboxed tmux transport denial.
+ACK_FAIL="$TMP/session-chat-ackfail"
+mkdir -p "$ACK_FAIL/scripts" "$ACK_FAIL/.claude-plugin"
+printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$ACK_FAIL/.claude-plugin/plugin.json"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$ACK_FAIL/scripts/dispatch-to-session.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$ACK_FAIL/scripts/send-message.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "worker-actor"' > "$ACK_FAIL/scripts/get-my-name.sh"
+chmod 644 "$ACK_FAIL/scripts"/*.sh
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "ack-fail-done" 2>&1)
+AF_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$AF_ID" "ack-fail work" >/dev/null 2>&1
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$ACK_FAIL" bash "$HERE/task-done.sh" "$AF_ID" "finished" 2>&1)
+rc=$?
+af_status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$AF_ID.json")
+if [ "$rc" -eq 0 ] && [ "$af_status" = "done" ] \
+   && echo "$out" | grep -qF "partial success" \
+   && echo "$out" | grep -qF "Do NOT rerun task-done" \
+   && echo "$out" | grep -qF "use --force to repair"; then
+  pass "task_done_partial_success_warning"
+else
+  fail "task_done_partial_success_warning" "rc=$rc status=$af_status out=$out"
+fi
+
+# --- Test 33f: task-block with failing ack — transition intact + partial-success warning ---
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "ack-fail-block" 2>&1)
+AB_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$ACK_FAIL" bash "$HERE/task-block.sh" "$AB_ID" "upstream denied" 2>&1)
+rc=$?
+ab_status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$AB_ID.json")
+if [ "$rc" -eq 0 ] && [ "$ab_status" = "blocked" ] \
+   && echo "$out" | grep -qF "partial success" \
+   && echo "$out" | grep -qF "Do NOT rerun task-block" \
+   && echo "$out" | grep -qF "use --force to repair"; then
+  pass "task_block_partial_success_warning"
+else
+  fail "task_block_partial_success_warning" "rc=$rc status=$ab_status out=$out"
+fi
+
+# --- Test 33g: agent-facing docs carry the first-attempt escalation + non-retry guidance ---
+doc_missing=""
+for n in task-assign task-review task-done task-block; do
+  d="$HERE/../commands/$n.md"
+  if ! grep -qF "on the first attempt" "$d" || ! grep -qF "one literal Bash segment" "$d"; then
+    doc_missing="$doc_missing $n(escalation)"
+  fi
+done
+for n in task-done task-block; do
+  d="$HERE/../commands/$n.md"
+  if ! grep -qF "never rerun" "$d" || ! grep -qF "use --force to repair" "$d"; then
+    doc_missing="$doc_missing $n(partial-success)"
+  fi
+done
+grep -qF "never duplicate" "$HERE/../commands/task-review.md" || doc_missing="$doc_missing task-review(duplicate)"
+grep -qF "Transport contract" "$HERE/../skills/session-scheduler/SKILL.md" || doc_missing="$doc_missing umbrella(contract)"
+if [ -z "$doc_missing" ]; then
+  pass "docs_transport_escalation_guidance"
+else
+  fail "docs_transport_escalation_guidance" "missing:$doc_missing"
+fi
+
 # --- Test 34: ledger dirs are 0700 and task/prompt files 0600 (umask 077) ---
 mode_of() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "perm-task" 2>&1)

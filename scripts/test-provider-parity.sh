@@ -76,6 +76,12 @@ assert_provider_neutral_packet() {
     || fail "$label packet missing inherited-environment guidance"
   grep -F "relaunch" "$packet" >/dev/null \
     || fail "$label packet missing relaunch guidance"
+  grep -F "Transport contract:" "$packet" >/dev/null \
+    || fail "$label packet missing nested-transport contract"
+  grep -F "on the first attempt" "$packet" >/dev/null \
+    || fail "$label packet missing first-attempt escalation guidance"
+  grep -F "never rerun task-done or task-block" "$packet" >/dev/null \
+    || fail "$label packet missing partial-success non-retry guidance"
   if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$packet" >/dev/null; then
     fail "$label packet contains an executable export line"
   fi

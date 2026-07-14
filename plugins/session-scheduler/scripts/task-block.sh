@@ -34,7 +34,14 @@ if ! task_set_status "$ID" "blocked" "$ACTOR" "$REASON"; then
 fi
 
 if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
-  session_chat_send "$ASSIGNER" "task ${ID} (${NAME}) BLOCKED by ${ACTOR}: ${REASON}"
+  # Notification is nested session-chat/tmux transport AFTER an irreversible
+  # legal transition. On failure, report the partial success explicitly — the
+  # transition must not be retried and this script never self-escalates.
+  if ! session_chat_send "$ASSIGNER" "task ${ID} (${NAME}) BLOCKED by ${ACTOR}: ${REASON}"; then
+    echo "WARN: partial success — the ledger transition to blocked succeeded, but the session-chat notification to '$ASSIGNER' failed." >&2
+    echo "  Task $ID is already blocked. Do NOT rerun task-block and do NOT use --force to repair the notification." >&2
+    echo "  Report this partial success; only when authorized, send a separate exact session-chat message to '$ASSIGNER'." >&2
+  fi
 fi
 
 echo "Task $ID marked blocked."

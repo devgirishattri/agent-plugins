@@ -95,6 +95,17 @@ def require_tokens(path: pathlib.Path, *tokens: str) -> None:
         fail(f"{path}: missing semantic parity contract token(s): {missing}")
 
 
+def require_phrases(path: pathlib.Path, *phrases: str) -> None:
+    """Like require_tokens, but whitespace-normalized so a phrase may wrap
+    across lines in prose while still being contractually present."""
+    if not path.is_file():
+        fail(f"missing parity contract file: {path}")
+    text = re.sub(r"\s+", " ", path.read_text())
+    missing = [phrase for phrase in phrases if phrase not in text]
+    if missing:
+        fail(f"{path}: missing contract phrase(s): {missing}")
+
+
 def require_one_of(path: pathlib.Path, *tokens: str) -> None:
     if not path.is_file():
         fail(f"missing parity contract file: {path}")
@@ -757,6 +768,24 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
             r"SESSION_(SCHEDULER|CONTEXT)_HOME=\S*\s+bash(\s|$)",
             "agent-facing scheduler docs must not instruct an assignment-prefixed helper",
         )
+    # 0.5.4 nested-transport contract: packets and helpers must carry the
+    # first-attempt scoped-escalation and partial-success/non-retry guidance.
+    require_phrases(scheduler / "task-assign.sh", "Transport contract:", "on the first attempt", "never rerun task-done or task-block", "use --force to repair")
+    require_phrases(scheduler / "task-review.sh", "Transport contract:", "on the first attempt", "never duplicate a delivered packet")
+    require_phrases(scheduler / "task-done.sh", "Do NOT rerun task-done", "use --force to repair", "partial success")
+    require_phrases(scheduler / "task-block.sh", "Do NOT rerun task-block", "use --force to repair", "partial success")
+    sched_task_doc_names = ("task-assign", "task-review", "task-done", "task-block")
+    escalation_docs = [scheduler_plugin / "commands" / f"{name}.md" for name in sched_task_doc_names]
+    if provider_root != root / "plugins":
+        escalation_docs += [scheduler_plugin / "skills" / name / "SKILL.md" for name in sched_task_doc_names]
+    for doc in escalation_docs:
+        require_phrases(doc, "on the first attempt", "one literal Bash segment")
+        doc_key = doc.stem if doc.stem != "SKILL" else doc.parent.name
+        if doc_key in ("task-done", "task-block"):
+            require_phrases(doc, "never rerun", "--force")
+        if doc_key == "task-review":
+            require_phrases(doc, "never duplicate")
+    require_phrases(scheduler_plugin / "skills" / "session-scheduler" / "SKILL.md", "Transport contract", "on the first attempt")
 
 require_tokens(
     root / "plugins/session-chat/scripts/detect-incoming-message.sh",

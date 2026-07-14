@@ -218,6 +218,15 @@ shell first, but generated agent instructions (skills, commands, assignment and
 review packets) never combine environment setup with helper execution — packets
 repeat the absolute homes only as provenance and relaunch guidance.
 
+The four transport-bearing helpers (`task-assign`, `task-review`, `task-done`,
+`task-block`) additionally perform nested session-chat/tmux transport. A
+sandboxed runtime (e.g. Codex) should grant scoped escalation/approval for the
+exact installed helper on its first invocation; the helpers never self-escalate,
+and agents must not bypass a transport denial with wrappers or command
+composition. A notification that fails after a completed `done`/`blocked`
+transition is reported as an explicit partial success — the transition is never
+rerun and `--force` is never a notification repair.
+
 ### Session manager and provider homes
 
 | Variable | Claude | Codex | Default | Purpose |

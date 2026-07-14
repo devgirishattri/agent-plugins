@@ -172,16 +172,20 @@ session_chat_root() {
 
 # Send a one-line message via session-chat /send. Best-effort: if session-chat
 # is missing or send fails, log to stderr but do not abort the scheduler op.
+# Returns non-zero on failure so callers that notify AFTER a state transition
+# (task-done/task-block) can emit explicit partial-success guidance. Never
+# attempts to self-escalate transport access from Bash.
 session_chat_send() {
   local target="$1"
   local message="$2"
   local root
   if ! root=$(session_chat_root); then
     echo "WARN: session-chat not installed; skipping ack to '$target'." >&2
-    return 0
+    return 1
   fi
   if ! bash "$root/scripts/send-message.sh" "$target" "$message" >/dev/null 2>&1; then
     echo "WARN: session-chat /send to '$target' failed (recipient busy or absent)." >&2
+    return 1
   fi
 }
 

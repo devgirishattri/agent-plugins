@@ -45,6 +45,16 @@ Legal status transitions (enforced by every command):
 - **Dependencies**: `/task-new --depends-on id1,id2` stores `depends_on`. `/task-assign` refuses to dispatch until every dependency is `done` (the error names the unmet deps) unless `--force`.
 - **Context attach**: `/task-assign --context NAME` resolves the session-context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`, records `meta.context`, and tells the executor to `/session-context:context-load NAME` before starting.
 
+## Nested transport and escalation
+
+`/task-assign`, `/task-review`, `/task-done`, and `/task-block` perform nested session-chat/tmux transport (dispatch or notification) in addition to their ledger writes. Transport contract:
+
+1. Invoke exactly one literal Bash segment: `bash "<canonical installed helper>" <arguments>`.
+2. In a sandboxed runtime (e.g. Codex), request scoped escalation/approval for that exact installed helper on the first attempt whenever it may dispatch or notify through session-chat/tmux.
+3. Never work around the sandbox with `bash -c`, wrappers, `env`, assignment prefixes, exports, pipelines, chaining, redirection, substitution, or broad provider-home access.
+4. Escalation is transport access, not authority: role, recipient, argument, confirmation, and lifecycle policies remain authoritative.
+5. If transport fails **after** a state transition, inspect `/task-status <id>` before acting: never rerun `task-done`/`task-block` once the task is done/blocked; never use --force to repair a notification; report the partial success and, only when authorized, send a separate exact session-chat message. `/task-review` retries dispatch only while the task is in `review` with no successful reviewer-dispatch timestamp (never duplicate a delivered packet); `/task-assign` keeps its rollback on hard dispatch failure.
+
 ## Hard prerequisites
 
 1. **session-chat ≥ 0.13.0** installed. The lock + retry behavior prevents corrupted dispatches, and 0.13's durable inbox means a dispatch or ack to a busy pane is recovered on its next turn rather than lost.
@@ -112,6 +122,6 @@ Atomic writes (tmp + mv) — concurrent executors updating different tasks won't
 ## Failure modes
 
 - **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — only happens on a hard failure (no name, unknown/ambiguous target). A *busy* executor is no longer a failure: with session-chat ≥ 0.13.0 the dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. For a hard failure, fix it (run `/session-chat:panes`, ensure the executor has a name), then retry `/task-assign`.
-- **Done/block acks are best-effort** — `/task-done` and `/task-block` always update the ledger first, then send the ack via session-chat. With ≥ 0.13.0 the ack is durably delivered (recovered on the assigner's next turn); if session-chat is missing the ledger is still updated and the ack is skipped with a warning.
+- **Done/block acks are best-effort** — `/task-done` and `/task-block` always update the ledger first, then send the ack via session-chat. With ≥ 0.13.0 the ack is durably delivered (recovered on the assigner's next turn); if session-chat is missing the ledger is still updated and the ack is skipped with a warning. A failed ack is a **partial success**: the transition already happened, so never rerun the helper and never use --force to repair the notification — follow the transport contract above.
 - **Tasks are `assigned` but executor never acts** — almost always `INCOMING_MODE=notify` on the executor side. Run `/session-chat:incoming-mode auto` in the executor's shell.
 - **`jq` missing** — `brew install jq`. The ledger is JSON; jq is a hard dependency.

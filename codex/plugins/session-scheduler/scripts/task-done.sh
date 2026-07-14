@@ -41,9 +41,19 @@ fi
 
 ASSIGNER=$(jq -r '.assigner // ""' "$FILE")
 if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
+  NOTIFICATION_FAILED=0
   CHAT_ROOT=$(session_chat_root 2>/dev/null || true)
   if [ -n "$CHAT_ROOT" ]; then
-    bash "$CHAT_ROOT/scripts/send-message.sh" "$ASSIGNER" "Task $ID done: $NOTE" >&2 || true
+    if ! bash "$CHAT_ROOT/scripts/send-message.sh" "$ASSIGNER" "Task $ID done: $NOTE" >&2; then
+      NOTIFICATION_FAILED=1
+    fi
+  else
+    NOTIFICATION_FAILED=1
+  fi
+  if [ "$NOTIFICATION_FAILED" -eq 1 ]; then
+    echo "WARN: Assigner notification failed after task $ID reached done (partial success)." >&2
+    echo "Do NOT rerun task-done or use --force to repair the notification." >&2
+    echo "Report the partial success and, only when authorized, send a separate exact session-chat message." >&2
   fi
 fi
 

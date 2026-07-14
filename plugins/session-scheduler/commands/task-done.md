@@ -19,4 +19,8 @@ If the script reports `SESSION_SCHEDULER_HOME` is not set — or your inherited 
 - Legal from `assigned` or `review` (review approval). Other transitions are rejected; `--force` overrides and records "forced" in history.
 - Records `duration_seconds` (done time minus `started_at`) when the task was assigned at some point.
 
+Transport and escalation: after the ledger write this helper performs nested session-chat/tmux transport (it notifies the assigner). If the runtime sandboxes tmux/socket access, request scoped escalation/approval for this exact installed helper on the first attempt — the command stays one literal Bash segment, and never work around the sandbox with `bash -c`, wrappers, `env`, assignment prefixes, exports, pipelines, chaining, redirection, substitution, or broad provider-home access. Escalation is transport access, not authority: role, recipient, argument, confirmation, and lifecycle policies remain authoritative.
+
+Partial success: if the script warns that the notification failed after the transition, the task is already `done` (verify with `/task-status <id>`) — never rerun `task-done`, and never use --force to repair a notification. Report the partial success; only when authorized, send a separate exact session-chat message to the assigner.
+
 Confirm and surface the note and duration if present.

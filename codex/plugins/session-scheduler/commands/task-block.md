@@ -24,5 +24,16 @@ argument-hint: <task-id> [--force] <reason>
    request that this pane be relaunched with the correct environment instead of
    deriving another ledger.
 
+   **Transport contract:** `task-block` writes the legal `blocked` transition
+   before its nested session-chat/tmux notification to the assigner. In Codex,
+   request scoped escalation/approval for the exact installed helper on the first attempt
+   whenever it may notify. Invoke it as one literal Bash segment
+   with raw token zero still `bash`; never use `bash -c`, a wrapper, `env`, an
+   assignment prefix, an export, a pipeline, chaining, redirection,
+   substitution, or broad provider-home access to bypass the sandbox.
+   Escalation grants transport access only: the recorded role and recipient,
+   exact arguments, confirmation requirements, and lifecycle rules remain
+   authoritative.
+
 3. Legal from `created`, `assigned`, or `review` (review rejection). Other transitions are rejected; `--force` overrides and records "forced" in history. Unblock by re-running `task-assign` (blocked → assigned is legal).
-4. Report that the task was marked blocked. If the ledger has an assigner, the script also attempts a one-line session-chat acknowledgement.
+4. Report that the task was marked blocked. If the ledger has an assigner different from the current actor, the script also attempts a one-line session-chat acknowledgement. If that notification fails, the transition is already durable: report the partial success, never rerun the helper, and never use --force to repair a notification. Only when authorized, send a separate exact session-chat message to the recorded recipient.

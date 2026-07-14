@@ -43,7 +43,14 @@ fi
 if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
   msg="task ${ID} (${NAME}) done by ${ACTOR}"
   [ -n "$NOTE" ] && msg="${msg} — ${NOTE}"
-  session_chat_send "$ASSIGNER" "$msg"
+  # Notification is nested session-chat/tmux transport AFTER an irreversible
+  # legal transition. On failure, report the partial success explicitly — the
+  # transition must not be retried and this script never self-escalates.
+  if ! session_chat_send "$ASSIGNER" "$msg"; then
+    echo "WARN: partial success — the ledger transition to done succeeded, but the session-chat notification to '$ASSIGNER' failed." >&2
+    echo "  Task $ID is already done. Do NOT rerun task-done and do NOT use --force to repair the notification." >&2
+    echo "  Report this partial success; only when authorized, send a separate exact session-chat message to '$ASSIGNER'." >&2
+  fi
 fi
 
 echo "Task $ID marked done."

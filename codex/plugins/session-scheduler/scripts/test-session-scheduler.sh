@@ -34,6 +34,10 @@ run_reviewer() {
   TMUX="$TMUX_ENV" TMUX_PANE="$REVIEWER" CODEX_HOME="$TEST_HOME" SESSION_SCHEDULER_HOME="$TEST_HOME/scheduler" SESSION_CHAT_ROOT_OVERRIDE="$SESSION_CHAT_ROOT" "$@"
 }
 
+run_without_tmux() {
+  TMUX="" TMUX_PANE="" CODEX_HOME="$TEST_HOME" SESSION_SCHEDULER_HOME="$TEST_HOME/scheduler" SESSION_CHAT_ROOT_OVERRIDE="$SESSION_CHAT_ROOT" "$@"
+}
+
 SESSION_CHAT_ROOT="${SESSION_CHAT_ROOT_OVERRIDE:-${SESSION_CHAT_PLUGIN_ROOT:-$SCRIPT_DIR/../../session-chat}}"
 [ -d "$SESSION_CHAT_ROOT" ] || fail "session-chat test dependency missing: $SESSION_CHAT_ROOT"
 
@@ -123,6 +127,10 @@ grep -F 'inherited' "$ASSIGN_MESSAGE_FILE" >/dev/null \
   || fail "assignment packet missing inherited-environment guidance"
 grep -F 'relaunch' "$ASSIGN_MESSAGE_FILE" >/dev/null \
   || fail "assignment packet missing relaunch guidance"
+grep -F 'Transport contract:' "$ASSIGN_MESSAGE_FILE" >/dev/null \
+  || fail "assignment packet missing nested-transport contract"
+grep -F 'on the first attempt' "$ASSIGN_MESSAGE_FILE" >/dev/null \
+  || fail "assignment packet missing first-attempt escalation guidance"
 if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$ASSIGN_MESSAGE_FILE" >/dev/null; then
   fail "assignment packet contains an executable export line"
 fi
@@ -323,6 +331,10 @@ grep -F 'inherited' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   || fail "review packet missing inherited-environment guidance"
 grep -F 'relaunch' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   || fail "review packet missing relaunch guidance"
+grep -F 'Transport contract:' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  || fail "review packet missing nested-transport contract"
+grep -F 'on the first attempt' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  || fail "review packet missing first-attempt escalation guidance"
 if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$TEST_HOME/routed-review-instructions.txt" >/dev/null; then
   fail "review packet contains an executable export line"
 fi
@@ -482,6 +494,60 @@ printf '#!/usr/bin/env bash\nexit 1\n' > "$FAIL_STUB/dispatch-to-session.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAIL_STUB/send-message.sh"
 chmod +x "$FAIL_STUB"/*.sh
 
+# A nested notification failure after task-done/task-block is partial success:
+# the transition remains durable, the helper still exits successfully, and the
+# warning forbids replay/--force repair. Stub transport keeps this deterministic
+# without asking real tmux to deliver the new checks.
+FAIL_SEND_ROOT="$TEST_HOME/fail-send-stub"
+mkdir -p "$FAIL_SEND_ROOT/.codex-plugin" "$FAIL_SEND_ROOT/scripts"
+printf '{"name":"session-chat","version":"0.16.5"}\n' > "$FAIL_SEND_ROOT/.codex-plugin/plugin.json"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$FAIL_SEND_ROOT/scripts/dispatch-to-session.sh"
+printf '#!/usr/bin/env bash\necho "stub notification failure" >&2\nexit 1\n' > "$FAIL_SEND_ROOT/scripts/send-message.sh"
+chmod +x "$FAIL_SEND_ROOT/scripts"/*.sh
+
+partial_done=$(run_without_tmux bash "$SCRIPT_DIR/task-new.sh" "Partial-success done task")
+PARTIAL_DONE_ID=$(printf '%s\n' "$partial_done" | awk '/^Created task/{print $3}' | sed 's/:$//')
+PARTIAL_DONE_FILE="$TEST_HOME/scheduler/tasks/$PARTIAL_DONE_ID.json"
+jq '.status="assigned" | .assigner="stub-assigner" | .started_at=.created_at' \
+  "$PARTIAL_DONE_FILE" > "$TEST_HOME/partial-done.tmp"
+mv "$TEST_HOME/partial-done.tmp" "$PARTIAL_DONE_FILE"
+if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_SEND_ROOT" \
+  bash "$SCRIPT_DIR/task-done.sh" "$PARTIAL_DONE_ID" "completed without ack" \
+  > "$TEST_HOME/partial-done.out" 2> "$TEST_HOME/partial-done.err"; then
+  fail "task-done aborted after a best-effort notification failure"
+fi
+[ "$(jq -r '.status' "$PARTIAL_DONE_FILE")" = "done" ] \
+  || fail "task-done notification failure rolled back the done transition"
+grep -F 'partial success' "$TEST_HOME/partial-done.err" >/dev/null \
+  || fail "task-done notification warning omitted partial success"
+grep -F 'Do NOT rerun task-done' "$TEST_HOME/partial-done.err" >/dev/null \
+  || fail "task-done notification warning omitted replay prohibition"
+grep -F 'use --force to repair' "$TEST_HOME/partial-done.err" >/dev/null \
+  || fail "task-done notification warning omitted force-repair prohibition"
+grep -F 'separate exact session-chat message' "$TEST_HOME/partial-done.err" >/dev/null \
+  || fail "task-done notification warning omitted authorized fallback guidance"
+
+partial_block=$(run_without_tmux bash "$SCRIPT_DIR/task-new.sh" "Partial-success blocked task")
+PARTIAL_BLOCK_ID=$(printf '%s\n' "$partial_block" | awk '/^Created task/{print $3}' | sed 's/:$//')
+PARTIAL_BLOCK_FILE="$TEST_HOME/scheduler/tasks/$PARTIAL_BLOCK_ID.json"
+jq '.assigner="stub-assigner"' "$PARTIAL_BLOCK_FILE" > "$TEST_HOME/partial-block.tmp"
+mv "$TEST_HOME/partial-block.tmp" "$PARTIAL_BLOCK_FILE"
+if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_SEND_ROOT" \
+  bash "$SCRIPT_DIR/task-block.sh" "$PARTIAL_BLOCK_ID" "blocked without ack" \
+  > "$TEST_HOME/partial-block.out" 2> "$TEST_HOME/partial-block.err"; then
+  fail "task-block aborted after a best-effort notification failure"
+fi
+[ "$(jq -r '.status' "$PARTIAL_BLOCK_FILE")" = "blocked" ] \
+  || fail "task-block notification failure rolled back the blocked transition"
+grep -F 'partial success' "$TEST_HOME/partial-block.err" >/dev/null \
+  || fail "task-block notification warning omitted partial success"
+grep -F 'Do NOT rerun task-block' "$TEST_HOME/partial-block.err" >/dev/null \
+  || fail "task-block notification warning omitted replay prohibition"
+grep -F 'use --force to repair' "$TEST_HOME/partial-block.err" >/dev/null \
+  || fail "task-block notification warning omitted force-repair prohibition"
+grep -F 'separate exact session-chat message' "$TEST_HOME/partial-block.err" >/dev/null \
+  || fail "task-block notification warning omitted authorized fallback guidance"
+
 # Review-dispatch metadata is scoped to one assignment cycle. Exercise a
 # successful review, rejection, and rework before failing the next review
 # dispatch: the stale first-cycle success timestamp must not block a normal
@@ -580,5 +646,39 @@ for doc in "$PLUGIN_DOC_ROOT"/commands/*.md "$PLUGIN_DOC_ROOT"/skills/*/SKILL.md
     fail "agent-facing doc instructs an assignment-prefixed helper: $doc"
   fi
 done
+
+# Static: the state-changing/dispatching task docs must tell Codex to request
+# scoped access on the first invocation while preserving the literal helper
+# shape. Transport failure is never repaired with --force.
+for task_doc in task-assign task-review task-done task-block; do
+  for doc in \
+    "$PLUGIN_DOC_ROOT/commands/$task_doc.md" \
+    "$PLUGIN_DOC_ROOT/skills/$task_doc/SKILL.md"; do
+    grep -F 'on the first attempt' "$doc" >/dev/null \
+      || fail "transport doc missing first-attempt escalation guidance: $doc"
+    grep -F 'one literal Bash segment' "$doc" >/dev/null \
+      || fail "transport doc missing literal Bash segment contract: $doc"
+    grep -F 'use --force to repair' "$doc" >/dev/null \
+      || fail "transport doc missing force-repair prohibition: $doc"
+  done
+done
+for terminal_doc in task-done task-block; do
+  for doc in \
+    "$PLUGIN_DOC_ROOT/commands/$terminal_doc.md" \
+    "$PLUGIN_DOC_ROOT/skills/$terminal_doc/SKILL.md"; do
+    grep -F 'never rerun' "$doc" >/dev/null \
+      || fail "terminal transport doc missing replay prohibition: $doc"
+  done
+done
+for doc in \
+  "$PLUGIN_DOC_ROOT/commands/task-review.md" \
+  "$PLUGIN_DOC_ROOT/skills/task-review/SKILL.md"; do
+  grep -F 'never duplicate' "$doc" >/dev/null \
+    || fail "review transport doc missing duplicate-delivery prohibition: $doc"
+done
+grep -F 'Transport contract' "$PLUGIN_DOC_ROOT/skills/session-scheduler/SKILL.md" >/dev/null \
+  || fail "umbrella skill missing transport contract"
+grep -F 'on the first attempt' "$PLUGIN_DOC_ROOT/skills/session-scheduler/SKILL.md" >/dev/null \
+  || fail "umbrella skill missing first-attempt escalation guidance"
 
 echo "session-scheduler smoke tests passed"
