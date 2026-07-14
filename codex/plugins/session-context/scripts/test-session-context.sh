@@ -510,8 +510,12 @@ fi
 for remove_doc in \
   "$PLUGIN_ROOT/commands/context-remove.md" \
   "$PLUGIN_ROOT/skills/context-remove/SKILL.md"; do
-  grep -Fiq 'preview exactly' "$remove_doc" \
-    || fail "context-remove doc omits its exact pre-confirmation preview: $remove_doc"
+  grep -Fq 'point-in-time preview' "$remove_doc" \
+    || fail "context-remove doc omits its point-in-time pre-confirmation preview: $remove_doc"
+  grep -Fq '^[A-Za-z0-9_-]+$' "$remove_doc" \
+    || fail "context-remove doc omits pre-preview label validation: $remove_doc"
+  grep -Fq 'writer lock' "$remove_doc" \
+    || fail "context-remove doc omits concurrent-preview guidance: $remove_doc"
 done
 
 # Agent-facing context instructions must consume the launcher-provided store

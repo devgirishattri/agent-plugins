@@ -29,4 +29,4 @@ Rules:
 - This command is read-only.
 - If `$ARGUMENTS` is empty, tell the user: Usage: `/context-search <pattern> [--list]`
 - If no matches were found, report that and suggest `/context-list` to see snapshots for the current project.
-- Suggest `/context-load <snapshot>` to load a matching snapshot (only works when run from inside that snapshot's project).
+- To load a cross-project match, the pane must have inherited that project's absolute context-store path as `SESSION_CONTEXT_HOME` — merely changing directories does not switch stores. Relaunch the pane through that project's launcher with the correct environment, then `/context-load <snapshot>`.

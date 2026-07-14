@@ -490,6 +490,14 @@ grep -qF "on the first attempt" "$HERE/../commands/context-share.md" \
   || doc_stale="$doc_stale context-share(escalation)"
 grep -qF "one literal Bash segment" "$HERE/../commands/context-share.md" \
   || doc_stale="$doc_stale context-share(literal-segment)"
+grep -qF "point-in-time preview" "$HERE/../commands/context-remove.md" \
+  || doc_stale="$doc_stale context-remove(point-in-time)"
+grep -qF '^[A-Za-z0-9_-]+$' "$HERE/../commands/context-remove.md" \
+  || doc_stale="$doc_stale context-remove(label-validation)"
+grep -qF "writer lock" "$HERE/../commands/context-remove.md" \
+  || doc_stale="$doc_stale context-remove(concurrency-caveat)"
+grep -qF "merely changing directories does not switch stores" "$HERE/../commands/context-search.md" \
+  || doc_stale="$doc_stale context-search(cross-project-load)"
 if [ -z "$doc_stale" ]; then
   pass "docs_inherited_env_contract"
 else

@@ -51,4 +51,8 @@ Rules:
   no longer exist or have no discoverable store are skipped, so coverage of
   other projects is best-effort.
 - If no matches were found, report that and suggest `$session-context:context-list` to see snapshots for the current project.
-- Suggest `$session-context:context-load <snapshot>` to load a matching snapshot (only works when run from inside that snapshot's project).
+- To load a cross-project match, the pane must have inherited the matching
+  project's absolute context-store path as `SESSION_CONTEXT_HOME`. Merely
+  changing directories does not switch stores; relaunch the pane through that
+  project's launcher with the correct environment, then use
+  `$session-context:context-load <snapshot>`.

@@ -12,11 +12,11 @@ Removing a snapshot is **destructive** — it deletes the snapshot AND all of it
 
    `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started (never export or derive it here). Every invocation below must be exactly one Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it. If it is unset, stop and request that this pane/session be relaunched with the correct environment instead of deriving another context store.
 
-2. **Preview** exactly what will be deleted — do NOT pass `--confirmed` yet:
+2. **Validate, then preview** — require `<name>` to match `^[A-Za-z0-9_-]+$` before interpolating it into any path; reject any other value without previewing or removing anything. Then produce a point-in-time preview of exactly what will be deleted — do NOT pass `--confirmed` yet:
    ```
    ls -1 "$SESSION_CONTEXT_HOME/<name>.md" "$SESSION_CONTEXT_HOME/.history/<name>."*.md 2>/dev/null
    ```
-   Tell the user exactly which files (the snapshot + N history versions) will be permanently deleted. If the snapshot doesn't exist, say so, suggest `/context-list`, and stop.
+   Tell the user exactly which files (the snapshot + N history versions) will be permanently deleted. The removal script later revalidates under its writer lock, so a concurrent overwrite may add history after this preview — the script's final removal count is authoritative. If the snapshot doesn't exist, say so, suggest `/context-list`, and stop.
 
 3. Confirm with **AskUserQuestion**, listing **"No, cancel (Recommended)" FIRST as the default**, then "Yes, delete" — any answer other than an explicit "Yes, delete" cancels.
    - On **No/cancel** (or any non-Yes answer): report that removal was cancelled. Do NOT run the removal script.

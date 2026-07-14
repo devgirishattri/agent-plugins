@@ -26,13 +26,17 @@ argument-hint: <snapshot-name>
    Prefer structured `request_user_input` when available in the current mode;
    otherwise ask a direct blocking question. If none exist, suggest
    `$session-context:context-generate` and stop.
-4. Preview exactly what deletion would remove before asking for confirmation.
-   Using read-only filesystem inspection, enumerate the current
+4. Before interpolating `SNAPSHOT_NAME` into any path, require it to match
+   `^[A-Za-z0-9_-]+$`; reject any other value and do not preview or remove it.
+   Then produce a point-in-time preview of exactly the files currently visible
+   to read-only filesystem inspection: enumerate the current
    `$SESSION_CONTEXT_HOME/<snapshot-name>.md` file and every matching
    `$SESSION_CONTEXT_HOME/.history/<snapshot-name>.*.md` file. Show the exact
    paths and history-file count. Do not invoke `remove-context.sh` during the
    preview. If neither current nor archived data exists, suggest
-   `$session-context:context-list` and stop.
+   `$session-context:context-list` and stop. State that the removal helper later
+   revalidates under its writer lock, so a concurrent overwrite may add history
+   after this preview and the helper's final removal count is authoritative.
 5. Show the exact `SNAPSHOT_NAME` and ask a separate Yes/No confirmation. Prefer `request_user_input` when available, with Cancel recommended/default; otherwise ask directly and wait. Anything other than explicit confirmation cancels. Never invoke the removal script before confirmation.
 
 6. After explicit confirmation, run:
