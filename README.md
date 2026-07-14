@@ -182,15 +182,20 @@ provider-specific differences are called out explicitly.
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
-| `SESSION_CONTEXT_HOME` | Yes | Yes | Wrapper-derived | Snapshot store. Command wrappers use `<git-root>/tmp/contexts` (or `<pwd>/tmp/contexts` outside Git). Most direct scripts require it; Claude's direct `context-search` can fall back to the current root, while Codex's currently requires it. |
+| `SESSION_CONTEXT_HOME` | Yes | Yes | Required (inherited) | Snapshot store root. Must already be present in the environment a pane/agent inherits at startup; context commands and skills never export or derive it, and most scripts fail closed when it is unset. Claude's `context-search` uses it only as an override for the current project's store (its cross-project scan runs regardless), while Codex's requires it. The SessionStart detection hook derives a git-root default for its own banner only. |
 | `SESSION_CONTEXT_STALE_DAYS` | Yes | Yes | `7` | Age at which `context-load` warns that a snapshot is stale. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the `session-chat` dependency used by `context-share`. |
 | `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for the `session-chat` dependency. |
 
-The core context-store variable names and normal wrapper defaults are shared,
-but direct `context-search` unset behavior differs as noted above.
+The core context-store variable name and inherited-at-startup contract are
+shared, but `context-search` unset behavior differs as noted above.
 `SESSION_CHAT_PLUGIN_ROOT` is a Codex-only locator; both providers support
-`SESSION_CHAT_ROOT_OVERRIDE`.
+`SESSION_CHAT_ROOT_OVERRIDE`. As with the scheduler homes below,
+launcher/parent-shell configuration establishes `SESSION_CONTEXT_HOME` before
+an agent starts; agent-facing context instructions never combine environment
+setup with helper execution, and `context-share` (which performs nested
+session-chat/tmux transport) follows the same first-attempt scoped-escalation
+rule as the scheduler's transport-bearing helpers.
 
 ### Session scheduler
 

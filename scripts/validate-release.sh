@@ -588,17 +588,57 @@ reject_pattern(
     r"context-search[^.]*is the exception",
     "Codex context search also requires SESSION_CONTEXT_HOME",
 )
-for context_skill in sorted(
-    (root / "codex/plugins/session-context/skills").glob("*/SKILL.md")
+# session-context 0.7.5 inherited-env contract: agent-facing context docs never
+# instruct an executable export/derivation; the store is inherited at agent
+# startup and scripts fail closed with relaunch guidance when it is absent.
+for provider_context in (
+    root / "plugins/session-context",
+    root / "codex/plugins/session-context",
 ):
-    if context_skill.parent.name == "session-context":
-        continue
-    require_tokens(context_skill, "<pwd>/tmp/contexts")
-    reject_pattern(
-        context_skill,
-        r"\bor pwd when not in a git repo\b",
-        "non-git fallback must include tmp/contexts",
+    context_docs = sorted((provider_context / "commands").glob("*.md"))
+    if provider_context == root / "codex/plugins/session-context":
+        context_docs += sorted((provider_context / "skills").glob("*/SKILL.md"))
+    for context_doc in context_docs:
+        reject_pattern(
+            context_doc,
+            r"^\s*export SESSION_CONTEXT_HOME",
+            "agent-facing context docs must not instruct an executable export",
+        )
+        reject_pattern(
+            context_doc,
+            r"(^|\s)env\s+SESSION_CONTEXT_HOME=",
+            "agent-facing context docs must not instruct an env-prefixed helper",
+        )
+        reject_pattern(
+            context_doc,
+            r"SESSION_CONTEXT_HOME=\S*\s+bash(\s|$)",
+            "agent-facing context docs must not instruct an assignment-prefixed helper",
+        )
+        require_phrases(context_doc, "inherited")
+        context_doc_key = (
+            context_doc.stem if context_doc.stem != "SKILL" else context_doc.parent.name
+        )
+        if context_doc_key not in ("context-search", "session-context"):
+            require_phrases(context_doc, "relaunch")
+    require_phrases(
+        provider_context / "skills/session-context/SKILL.md",
+        "inherited when the agent process started",
+        "fail closed",
     )
+    require_phrases(
+        provider_context / "scripts/lib.sh",
+        "inherited from the environment this agent process started with",
+    )
+    require_phrases(
+        provider_context / "commands/context-share.md",
+        "on the first attempt",
+        "one literal Bash segment",
+    )
+require_phrases(
+    root / "codex/plugins/session-context/skills/context-share/SKILL.md",
+    "on the first attempt",
+    "one literal Bash segment",
+)
 require_tokens(
     root / "plugins/session-scheduler/skills/session-scheduler/SKILL.md",
     "inherited when the agent process started",
@@ -658,14 +698,25 @@ require_tokens(
 
 require_tokens(
     root / "plugins/session-context/scripts/share-context.sh",
-    "printf '%q'", "/session-context:context-load", "$session-context:context-load",
+    "/session-context:context-load", "$session-context:context-load",
     '[ -f "$root/scripts/send-message.sh" ]', '[ -r "$root/scripts/send-message.sh" ]', "Queued",
+    "store (provenance):",
 )
 require_tokens(
     root / "codex/plugins/session-context/scripts/share-context.sh",
-    "printf '%q'", "/session-context:context-load", "$session-context:context-load",
+    "/session-context:context-load", "$session-context:context-load",
+    "store (provenance):",
 )
-require_tokens(root / "plugins/session-context/scripts/test-session-context.sh", "chmod 644", "share_export_quoted_special_path")
+for share_script in (
+    root / "plugins/session-context/scripts/share-context.sh",
+    root / "codex/plugins/session-context/scripts/share-context.sh",
+):
+    reject_pattern(
+        share_script,
+        r"export SESSION_CONTEXT_HOME=",
+        "share notification must not instruct an executable export",
+    )
+require_tokens(root / "plugins/session-context/scripts/test-session-context.sh", "chmod 644", "share_provenance_special_path")
 require_tokens(root / "plugins/session-scheduler/scripts/scheduler-doctor.sh", '[ -f "$root/scripts/dispatch-to-session.sh" ]', '[ -r "$root/scripts/dispatch-to-session.sh" ]')
 require_tokens(root / "plugins/session-scheduler/scripts/test-session-scheduler.sh", "chmod 644", "dispatch script: OK")
 

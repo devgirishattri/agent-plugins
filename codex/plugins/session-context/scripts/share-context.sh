@@ -24,7 +24,6 @@ SNAPSHOTS_DIR="$(cd "$SNAPSHOTS_DIR" 2>/dev/null && pwd -P)" || {
   echo "ERROR: Context snapshot store does not exist or cannot be resolved." >&2
   exit 1
 }
-STORE_SHELL=$(printf '%q' "$SNAPSHOTS_DIR")
 SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"
 
 if ! _context_path_exists "$SNAPSHOT"; then
@@ -35,11 +34,12 @@ ensure_context_regular_file "$SNAPSHOT" || exit 1
 
 # Sharing is notification-only. The recipient must already resolve the same
 # canonical SESSION_CONTEXT_HOME; no snapshot bytes are copied by this operation.
-MESSAGE="[context:${PROJECT_NAME}] Context snapshot available. Shared store: ${SNAPSHOTS_DIR}. The file was not copied; export SESSION_CONTEXT_HOME=${STORE_SHELL}. Load with Claude: /session-context:context-load ${PROJECT_NAME}. Load with Codex: \$session-context:context-load ${PROJECT_NAME}."
+MESSAGE="[context:${PROJECT_NAME}] Context snapshot shared from store (provenance): ${SNAPSHOTS_DIR} — your inherited SESSION_CONTEXT_HOME must already match; if it is absent or differs, request a relaunch instead of exporting. The file was not copied. Load it — Claude: /session-context:context-load ${PROJECT_NAME} | Codex: \$session-context:context-load ${PROJECT_NAME}"
 TRANSPORT=$(send_context_notification "$TARGET_SESSION" "$MESSAGE") || exit 1
 
 echo "Shared '$PROJECT_NAME' context with $TARGET_SESSION."
 echo "Transport: $TRANSPORT"
-echo "The snapshot was not copied. Both panes must use SESSION_CONTEXT_HOME=$SNAPSHOTS_DIR"
+echo "The snapshot was not copied. Context store (provenance): $SNAPSHOTS_DIR"
+echo "Relaunch any pane that did not inherit this exact path before its agent started."
 echo "Claude: /session-context:context-load $PROJECT_NAME"
 echo "Codex: \$session-context:context-load $PROJECT_NAME"

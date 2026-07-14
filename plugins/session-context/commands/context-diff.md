@@ -6,10 +6,11 @@ allowed-tools: Bash(bash:*)
 
 ## Context Diff
 
-!`export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"; bash ${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/diff-context.sh" $ARGUMENTS`
 
 ## Instructions
 
+- `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports it is not set, stop and request that this pane/session be relaunched with the correct environment — do not export the variable or derive another context store.
 Usage modes (all handled by the script above):
 - `/context-diff <name>` — unified diff of the newest archived version against the current snapshot
 - `/context-diff <name> --versions` — list available history timestamps (UTC, `YYYYMMDD-HHMMSSZ`)

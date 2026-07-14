@@ -791,13 +791,18 @@ atomic_copy_context_file() {
 # only (no harden sweep, no lock). The caller MUST acquire_context_store_lock and
 # then run harden_existing_contexts_dir while holding it before mutating the store.
 bootstrap_contexts_dir() {
-  # SESSION_CONTEXT_HOME must be provided by the caller. The /context-* commands
-  # (and the SessionStart hook) export it automatically, resolving
-  # <git-root|pwd>/tmp/contexts. Fail closed rather than guessing a location.
+  # SESSION_CONTEXT_HOME must already be present in this process's environment,
+  # inherited when the invoking agent/session started: the pane/session launcher
+  # (or a human's parent shell, for direct script use) establishes it BEFORE the
+  # agent starts. The /context-* commands never export or derive it — fail
+  # closed rather than guessing a location.
   if [ -z "${SESSION_CONTEXT_HOME:-}" ]; then
     echo "ERROR: SESSION_CONTEXT_HOME is not set." >&2
-    echo "Run session-context through its /context-* commands (they set it automatically)," >&2
-    echo "or export SESSION_CONTEXT_HOME=<dir> before invoking the scripts directly." >&2
+    echo "It must be inherited from the environment this agent process started with" >&2
+    echo "(set by the pane/session launcher). Do not export it or wrap this helper in" >&2
+    echo "env/variable assignments — relaunch the pane/session with the correct" >&2
+    echo "environment instead. (A human invoking the script directly may export the" >&2
+    echo "variable in their own parent shell first.)" >&2
     return 1
   fi
   ensure_contexts_dir "$SESSION_CONTEXT_HOME"

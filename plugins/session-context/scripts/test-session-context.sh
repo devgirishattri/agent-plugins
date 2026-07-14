@@ -106,19 +106,24 @@ else
   fail "share_message_has_store_path" "expected store $STORE_ABS in: $out"
 fi
 
-# --- Test 4b: notification body lists BOTH provider forms + exact export ---
+# --- Test 4b: notification body lists BOTH provider forms + provenance contract ---
 # Assert against the actual message the wrapper received (captured by the stub),
-# using the namespaced Claude form /session-context:context-load.
+# using the namespaced Claude form /session-context:context-load. The message
+# must carry the raw canonical store as provenance with inherited/relaunch
+# guidance and NO executable export instruction.
 sent_msg=$(cat "$STUB0/last-msg.txt" 2>/dev/null)
 if printf '%s' "$sent_msg" | grep -qF "/session-context:context-load proj-1" \
    && printf '%s' "$sent_msg" | grep -qF '$session-context:context-load proj-1' \
-   && printf '%s' "$sent_msg" | grep -qF "export SESSION_CONTEXT_HOME=$(printf '%q' "$STORE_ABS")"; then
+   && printf '%s' "$sent_msg" | grep -qF "store (provenance): $STORE_ABS" \
+   && printf '%s' "$sent_msg" | grep -qF "inherited" \
+   && printf '%s' "$sent_msg" | grep -qF "relaunch" \
+   && ! printf '%s' "$sent_msg" | grep -qE 'export SESSION_CONTEXT_HOME='; then
   pass "share_message_dual_provider"
 else
   fail "share_message_dual_provider" "sent=$sent_msg"
 fi
 
-# --- Test 4c: store path with space AND apostrophe -> %q export is copy-paste safe ---
+# --- Test 4c: store path with space AND apostrophe -> raw provenance path intact ---
 WEIRD="$TMP/ctx dir's weird"
 mkdir -p "$WEIRD"; printf '# weird store\n' > "$WEIRD/proj-2.md"
 STUBW=$(make_stub delivered)
@@ -126,13 +131,11 @@ out=$(TMUX="fake,0,0" SESSION_CHAT_ROOT_OVERRIDE="$STUBW" SESSION_CONTEXT_HOME="
   bash "$HERE/share-context.sh" some-peer proj-2 2>&1)
 sentw=$(cat "$STUBW/last-msg.txt" 2>/dev/null)
 weird_abs=$(cd "$WEIRD" && pwd -P)
-expected_q="export SESSION_CONTEXT_HOME=$(printf '%q' "$weird_abs")"
-# Prove copy-paste safety: running the exact export line yields the real path.
-safe=$(bash -c "$expected_q; printf '%s' \"\$SESSION_CONTEXT_HOME\"")
-if printf '%s' "$sentw" | grep -qF "$expected_q" && [ "$safe" = "$weird_abs" ]; then
-  pass "share_export_quoted_special_path"
+if printf '%s' "$sentw" | grep -qF "store (provenance): $weird_abs" \
+   && ! printf '%s' "$sentw" | grep -qE 'export SESSION_CONTEXT_HOME='; then
+  pass "share_provenance_special_path"
 else
-  fail "share_export_quoted_special_path" "sent=$sentw expected_q=$expected_q safe=$safe"
+  fail "share_provenance_special_path" "sent=$sentw expected=$weird_abs"
 fi
 
 # --- Test 5: missing snapshot is rejected before any transport ---
@@ -470,6 +473,37 @@ if [ "$bad_reclaim_rc" -ne 0 ] && echo "$bad_reclaim_out" | grep -q "reclaim cla
   pass "loose_reclaim_claim_rejected"
 else
   fail "loose_reclaim_claim_rejected" "rc=$bad_reclaim_rc out=$bad_reclaim_out"
+fi
+
+# --- Test 20: agent-facing docs carry the inherited-env contract, no executable export ---
+doc_stale=""
+for doc in "$HERE/../commands"/*.md "$HERE/../skills"/*/SKILL.md; do
+  [ -f "$doc" ] || continue
+  if grep -qE '^[[:space:]]*export SESSION_CONTEXT_HOME' "$doc" \
+     || grep -qE '(^|[[:space:]])env[[:space:]]+SESSION_CONTEXT_HOME=' "$doc" \
+     || grep -qE 'SESSION_CONTEXT_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]]|$)' "$doc"; then
+    doc_stale="$doc_stale $(basename "$doc")(executable-export)"
+  fi
+  grep -q "inherited" "$doc" || doc_stale="$doc_stale $(basename "$doc")(missing-inherited)"
+done
+grep -qF "on the first attempt" "$HERE/../commands/context-share.md" \
+  || doc_stale="$doc_stale context-share(escalation)"
+grep -qF "one literal Bash segment" "$HERE/../commands/context-share.md" \
+  || doc_stale="$doc_stale context-share(literal-segment)"
+if [ -z "$doc_stale" ]; then
+  pass "docs_inherited_env_contract"
+else
+  fail "docs_inherited_env_contract" "stale/missing:$doc_stale"
+fi
+
+# --- Test 21: unset SESSION_CONTEXT_HOME fails closed with inherited/relaunch guidance ---
+unset_out=$(env -u SESSION_CONTEXT_HOME bash "$HERE/list-contexts.sh" 2>&1); unset_rc=$?
+if [ "$unset_rc" -ne 0 ] \
+   && echo "$unset_out" | grep -q "inherited" \
+   && echo "$unset_out" | grep -q "relaunch"; then
+  pass "unset_home_fails_closed_with_relaunch_guidance"
+else
+  fail "unset_home_fails_closed_with_relaunch_guidance" "rc=$unset_rc out=$unset_out"
 fi
 
 # --- Summary ---

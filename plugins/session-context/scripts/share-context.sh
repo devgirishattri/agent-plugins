@@ -35,15 +35,13 @@ fi
 # Sharing does NOT copy the snapshot file — it notifies the peer to run
 # /context-load, which resolves the name against the PEER's own contexts store.
 # So this only works when the recipient shares the same store (same repo /
-# SESSION_CONTEXT_HOME). Embed the canonical store path so a peer can confirm
-# it's the same one before loading.
+# SESSION_CONTEXT_HOME). Embed the canonical store path as PROVENANCE so a peer
+# can confirm their inherited SESSION_CONTEXT_HOME matches before loading — the
+# notification never instructs an executable export; a mismatched recipient
+# must request a relaunch with the correct environment instead.
 STORE_ABS=$(cd "$SNAPSHOTS_DIR" 2>/dev/null && pwd -P) || STORE_ABS="$SNAPSHOTS_DIR"
-# List BOTH provider invocations so a Claude or Codex recipient can act, and the
-# exact export in case their project root resolves a different store. Quote the
-# path with printf %q so a store dir containing spaces or apostrophes stays a
-# single, copy-paste-safe shell token (single-quote wrapping breaks on a "'").
-STORE_Q=$(printf '%q' "$STORE_ABS")
-SHARE_MSG="[context:${PROJECT_NAME}] Context snapshot shared from store ${STORE_ABS} (if your project root differs: export SESSION_CONTEXT_HOME=${STORE_Q}). Load it — Claude: /session-context:context-load ${PROJECT_NAME} | Codex: \$session-context:context-load ${PROJECT_NAME}"
+# List BOTH provider invocations so a Claude or Codex recipient can act.
+SHARE_MSG="[context:${PROJECT_NAME}] Context snapshot shared from store (provenance): ${STORE_ABS} — your inherited SESSION_CONTEXT_HOME must already match; if it is absent or differs, request a relaunch instead of exporting. Load it — Claude: /session-context:context-load ${PROJECT_NAME} | Codex: \$session-context:context-load ${PROJECT_NAME}"
 
 # Prefer session-chat's hardened transport (durable inbox: a busy recipient
 # still gets the notice next turn). Fall back to this plugin's basic send only

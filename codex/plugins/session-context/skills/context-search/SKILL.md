@@ -7,9 +7,22 @@ description: "Search the contents of session context snapshots across local proj
 
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
-Resolve `PLUGIN_ROOT` from this selected skill's absolute source path by going up two directories from `<plugin-root>/skills/context-search/SKILL.md`. Never derive it from the project working directory or embed a cache version.
+Resolve the absolute plugin root from this selected skill's installed source
+path: it is the directory two levels above this `SKILL.md`. Substitute that
+absolute path literally for `<PLUGIN_ROOT>` below; never infer it from the
+working directory or hardcode a marketplace cache version.
 
-`SESSION_CONTEXT_HOME` is exported automatically by the command wrapper to `<git-root>/tmp/contexts` (or `<pwd>/tmp/contexts` when not in a git repo) unless already set.
+`SESSION_CONTEXT_HOME` must already be present in this pane's environment,
+inherited when the agent process started (the pane/session launcher sets it —
+never export or derive it here). Invoke the context helper as one literal Bash
+segment, with no `export` beforehand, no `env` or variable-assignment prefix,
+and no other command chained, piped, redirected, or substituted around it.
+
+If the script reports `SESSION_CONTEXT_HOME` is not set, stop and request a
+pane relaunch with the correct environment instead of deriving another context
+store. Search still requires the inherited variable: it overrides only the
+current repository's store while other discoverable project roots use their own
+stores.
 
 If no pattern is provided, tell the user:
 
@@ -17,12 +30,10 @@ If no pattern is provided, tell the user:
 Usage: $session-context:context-search <pattern> [--list]
 ```
 
-Run one of:
+Run the selected form:
 
 ```bash
-export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"
-bash "$PLUGIN_ROOT/scripts/search-contexts.sh" "<pattern>"
-bash "$PLUGIN_ROOT/scripts/search-contexts.sh" "<pattern>" --list
+bash "<PLUGIN_ROOT>/scripts/search-contexts.sh" "<pattern>" [--list]
 ```
 
 Present tab-separated output. Default rows are `ROOT, SNAPSHOT, LINE, TEXT` (up to 3 matching lines per snapshot) — group by project root and render per root:
@@ -37,4 +48,10 @@ With `--list`, rows are `ROOT, SNAPSHOT`:
 | Project Root | Snapshot |
 ```
 
-The search is read-only. Candidate roots are the current git toplevel plus the `cwd` recorded in local Codex session files; roots without `tmp/contexts/` are skipped, so cross-project coverage is best-effort. Suggest `$session-context:context-load <snapshot-name>` for matches in the current project.
+The search does not modify snapshot contents, although resolving a configured
+store may create its directory or harden existing owner-only permissions.
+Candidate roots are the current git toplevel plus the `cwd` recorded in local
+Codex session files; roots without a discoverable store are skipped, so
+cross-project coverage is best-effort. Suggest
+`$session-context:context-load <snapshot-name>` for matches in the current
+project.

@@ -6,10 +6,11 @@ allowed-tools: Bash(bash:*), Read
 
 ## Session Context
 
-!`export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"; bash ${CLAUDE_PLUGIN_ROOT}/scripts/load-context.sh $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/load-context.sh" $ARGUMENTS`
 
 ## Instructions
 
+- `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports it is not set, stop and request that this pane/session be relaunched with the correct environment — do not export the variable or derive another context store.
 - If the context was loaded successfully, internalize it:
   - What was done, what files were changed
   - Key decisions and their reasoning

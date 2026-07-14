@@ -66,6 +66,14 @@ if ! bash -c '
   fail "context metadata helpers did not fall back to BSD stat formatting"
 fi
 
+if env -u SESSION_CONTEXT_HOME bash "$SCRIPT_DIR/list-contexts.sh" \
+  > "$TMP/missing-context-home.out" 2>&1; then
+  fail "context scripts did not fail closed without SESSION_CONTEXT_HOME"
+fi
+assert_contains "$TMP/missing-context-home.out" "inherited from the environment this agent process started with"
+assert_contains "$TMP/missing-context-home.out" "relaunch the pane/session"
+assert_contains "$TMP/missing-context-home.out" "human invoking the script directly"
+
 export SESSION_CONTEXT_HOME="$TMP/contexts"
 export CODEX_HOME="$TMP/codex"
 
@@ -75,7 +83,6 @@ bash "$SCRIPT_DIR/save-context.sh" alpha "$TMP/input.md" > "$TMP/save-1.out"
 assert_mode 700 "$SESSION_CONTEXT_HOME"
 assert_mode 600 "$SESSION_CONTEXT_HOME/alpha.md"
 STORE_ABS=$(cd "$SESSION_CONTEXT_HOME" && pwd -P)
-STORE_SHELL=$(printf '%q' "$STORE_ABS")
 
 bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/list.out"
 assert_contains "$TMP/list.out" $'alpha\t3 lines'
@@ -382,29 +389,32 @@ SESSION_CHAT_CAPTURE="$TMP/session-chat.capture" \
   bash "$SCRIPT_DIR/share-context.sh" target-test alpha > "$TMP/share-chat.out"
 assert_contains "$TMP/share-chat.out" 'Transport: session-chat'
 assert_contains "$TMP/session-chat.capture" 'target-test'
-assert_contains "$TMP/session-chat.capture" "Shared store: $STORE_ABS"
-assert_contains "$TMP/session-chat.capture" "export SESSION_CONTEXT_HOME=$STORE_SHELL"
+assert_contains "$TMP/session-chat.capture" "store (provenance): $STORE_ABS"
+assert_contains "$TMP/session-chat.capture" "inherited SESSION_CONTEXT_HOME must already match"
+assert_contains "$TMP/session-chat.capture" "request a relaunch instead of exporting"
 assert_contains "$TMP/session-chat.capture" '/session-context:context-load alpha'
 assert_contains "$TMP/session-chat.capture" '$session-context:context-load alpha'
+if grep -Fq 'export SESSION_CONTEXT_HOME=' "$TMP/session-chat.capture"; then
+  fail "share notification still instructs an already-running agent to export SESSION_CONTEXT_HOME"
+fi
 
 # A relative override must be canonicalized before it is sent to another pane.
 (cd "$TMP" && SESSION_CHAT_CAPTURE="$TMP/session-chat-relative.capture" \
   TMUX_CAPTURE="$TMP/tmux.capture" PATH="$MOCK_BIN:$PATH" TMUX=mock TMUX_PANE=%1 \
   SESSION_CONTEXT_HOME=contexts SESSION_CHAT_ROOT_OVERRIDE="$CHAT_STUB" \
   bash "$SCRIPT_DIR/share-context.sh" target-test alpha > "$TMP/share-relative.out")
-assert_contains "$TMP/session-chat-relative.capture" "Shared store: $STORE_ABS"
+assert_contains "$TMP/session-chat-relative.capture" "store (provenance): $STORE_ABS"
 
-# Exact export text remains copy/paste safe for spaces and apostrophes.
+# The canonical inherited-home provenance remains exact for spaces and apostrophes.
 SPECIAL_STORE="$TMP/context store's"
 mkdir -p "$SPECIAL_STORE"
 cp "$SESSION_CONTEXT_HOME/alpha.md" "$SPECIAL_STORE/alpha.md"
 SPECIAL_ABS=$(cd "$SPECIAL_STORE" && pwd -P)
-SPECIAL_SHELL=$(printf '%q' "$SPECIAL_ABS")
 SESSION_CHAT_CAPTURE="$TMP/session-chat-special.capture" \
   TMUX_CAPTURE="$TMP/tmux.capture" PATH="$MOCK_BIN:$PATH" TMUX=mock TMUX_PANE=%1 \
   SESSION_CONTEXT_HOME="$SPECIAL_STORE" SESSION_CHAT_ROOT_OVERRIDE="$CHAT_STUB" \
   bash "$SCRIPT_DIR/share-context.sh" target-test alpha > "$TMP/share-special.out"
-assert_contains "$TMP/session-chat-special.capture" "export SESSION_CONTEXT_HOME=$SPECIAL_SHELL"
+assert_contains "$TMP/session-chat-special.capture" "store (provenance): $SPECIAL_ABS"
 
 : > "$TMP/tmux.capture"
 cat > "$CHAT_STUB/scripts/send-message.sh" <<'CHAT_FAIL_SCRIPT'
@@ -494,5 +504,52 @@ rg -q 'trap handle_signal HUP INT TERM' "$SCRIPT_DIR/remove-context.sh" \
   || fail "remove-context signal handler can continue after releasing its lock"
 rg -q 'does \*\*not\*\* copy' "$PLUGIN_ROOT/skills/session-context/SKILL.md" \
   || fail "session-context overview does not document notification-only sharing"
+if grep -Fq 'export SESSION_CONTEXT_HOME=' "$SCRIPT_DIR/share-context.sh"; then
+  fail "share-context runtime still emits executable export guidance"
+fi
+for remove_doc in \
+  "$PLUGIN_ROOT/commands/context-remove.md" \
+  "$PLUGIN_ROOT/skills/context-remove/SKILL.md"; do
+  grep -Fiq 'preview exactly' "$remove_doc" \
+    || fail "context-remove doc omits its exact pre-confirmation preview: $remove_doc"
+done
+
+# Agent-facing context instructions must consume the launcher-provided store
+# home without composing environment setup around a helper. Test-fixture
+# assignments in this suite are intentionally outside this documentation scan.
+for doc in "$PLUGIN_ROOT"/commands/*.md "$PLUGIN_ROOT"/skills/*/SKILL.md; do
+  [ -f "$doc" ] || continue
+  if grep -qE '^[[:space:]]*export[[:space:]]+SESSION_CONTEXT_HOME(=|[[:space:]]|$)' "$doc"; then
+    fail "session-context doc contains an executable SESSION_CONTEXT_HOME export: $doc"
+  fi
+  if grep -qE '(^|[[:space:]`])env[[:space:]]+SESSION_CONTEXT_HOME=' "$doc"; then
+    fail "session-context doc contains an env-prefixed context helper: $doc"
+  fi
+  if grep -qE 'SESSION_CONTEXT_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]`]|$)' "$doc"; then
+    fail "session-context doc contains an assignment-prefixed context helper: $doc"
+  fi
+  grep -Fq 'inherited' "$doc" \
+    || fail "session-context doc omits inherited-environment guidance: $doc"
+  grep -Fq 'relaunch' "$doc" \
+    || fail "session-context doc omits relaunch guidance: $doc"
+done
+
+for share_doc in \
+  "$PLUGIN_ROOT/commands/context-share.md" \
+  "$PLUGIN_ROOT/skills/context-share/SKILL.md"; do
+  grep -Fq 'on the first attempt' "$share_doc" \
+    || fail "context-share doc omits first-attempt escalation guidance: $share_doc"
+  grep -Fq 'one literal Bash segment' "$share_doc" \
+    || fail "context-share doc omits the literal Bash segment contract: $share_doc"
+done
+
+grep -Fq 'inherited when the agent process started' "$PLUGIN_ROOT/skills/session-context/SKILL.md" \
+  || fail "session-context overview omits inherited-at-startup guidance"
+grep -Fq 'fail closed' "$PLUGIN_ROOT/skills/session-context/SKILL.md" \
+  || fail "session-context overview omits fail-closed guidance"
+grep -Fq 'Direct callers of every script must set the variable explicitly' "$PLUGIN_ROOT/skills/session-context/SKILL.md" \
+  || fail "session-context overview lost its direct-caller requirement"
+grep -Fq 'inherited from the environment this agent process started with' "$SCRIPT_DIR/lib.sh" \
+  || fail "session-context lib omits inherited-at-startup guidance"
 
 echo "session-context smoke tests passed"

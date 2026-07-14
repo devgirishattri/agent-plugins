@@ -5,10 +5,11 @@ allowed-tools: Bash(bash:*)
 
 ## Context Snapshots (Current Project)
 
-!`export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"; bash ${CLAUDE_PLUGIN_ROOT}/scripts/list-contexts.sh`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/list-contexts.sh"`
 
 ## Instructions
 
+- `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports it is not set, stop and request that this pane/session be relaunched with the correct environment — do not export the variable or derive another context store.
 Present the tab-separated data above as a markdown table:
 
 | Snapshot | Lines | Last Updated | Versions |

@@ -9,15 +9,15 @@ A snapshot is a markdown summary of a working session — **what you worked on, 
 decisions you made, and where you left off** — written so a *future* session (or a
 peer session) can resume without re-deriving everything from scratch.
 
-Snapshots are stored under `SESSION_CONTEXT_HOME`, which the `/context-*` commands (and the SessionStart hook) export automatically, resolving `<git-root>/tmp/contexts` (or `<pwd>/tmp/contexts` when not in a git repo). Most scripts **require** this variable and refuse to run when it is unset rather than guessing a location (`/context-search`, which scans across projects, is the exception — it uses `SESSION_CONTEXT_HOME` only as an override for the current repo's store); set it yourself only for direct script use or to point at a shared location.
+Snapshots are stored under `SESSION_CONTEXT_HOME`, which must already be present in each pane's environment, **inherited when the agent process started** — the launcher/parent shell establishes it before the agent starts, and every pane that shares snapshots must be launched with the same absolute value. The `/context-*` commands never export or derive it, and most scripts **fail closed** when it is unset rather than guessing a location; the fix is to relaunch the pane/session with the correct environment (`/context-search`, which scans across projects, is the exception — it uses `SESSION_CONTEXT_HOME` only as an override for the current repo's store). Direct human script use may export `SESSION_CONTEXT_HOME=<dir>` in the parent shell beforehand, but agent-facing instructions never combine environment setup with helper execution — each helper is invoked as exactly one literal Bash segment using the inherited value.
 
-Snapshots are stored **project-local** at `<project_root>/tmp/contexts/<name>.md`,
-where the project root resolves via `git rev-parse --show-toplevel` (falling back to
-the current directory). Because storage is project-local, every Claude/Codex pane
-working in the same repo sees the same set of snapshots.
+Snapshots live at `$SESSION_CONTEXT_HOME/<name>.md`. Launching every pane with the
+same shared store means every Claude/Codex pane working in the same project sees
+the same set of snapshots.
 
-A SessionStart hook surfaces existing snapshots automatically, so a resuming session
-is told it can `/context-load` instead of starting cold.
+A SessionStart hook surfaces existing snapshots automatically (using the inherited
+store, with a git-root default only for its own detection banner), so a resuming
+session is told it can `/context-load` instead of starting cold.
 
 ## When to use this plugin
 

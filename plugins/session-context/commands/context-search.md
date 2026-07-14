@@ -8,10 +8,11 @@ allowed-tools: Bash(bash:*)
 
 Searching snapshot contents for: **$ARGUMENTS**
 
-!`export SESSION_CONTEXT_HOME="${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/tmp/contexts}"; bash ${CLAUDE_PLUGIN_ROOT}/scripts/search-contexts.sh $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/search-contexts.sh" $ARGUMENTS`
 
 ## Instructions
 
+- `SESSION_CONTEXT_HOME` is used by this command only as an override for the **current** project's store (the cross-project scan does not need it); it must come from the environment inherited when the agent process started — never export or derive it here.
 The script searches the contents of `tmp/contexts/*.md` snapshots across local projects. Candidate project roots come from the current git toplevel (always included) plus paths decoded from `~/.claude/projects/*` directory names. Path decoding is best-effort: directory names containing hyphens may decode to non-existent paths (e.g. a project at `/Users/foo/ProjectA-app`), in which case that project is silently skipped unless it is the current project.
 
 Present the tab-separated output:
