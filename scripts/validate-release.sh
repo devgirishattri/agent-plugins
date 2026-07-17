@@ -230,9 +230,12 @@ print("OK: fixed Codex cache-root detector fixtures are valid")
 
 
 def command_names(path: pathlib.Path) -> set[str]:
+    # Hook-only plugins (e.g. chronos) legitimately ship no commands; the
+    # cross-provider parity check still fails one-sided absence, and the
+    # at-least-one-component guard rejects plugins with nothing at all.
     commands_dir = path / "commands"
     if not commands_dir.is_dir():
-        fail(f"missing commands directory: {commands_dir}")
+        return set()
     return {item.stem for item in commands_dir.glob("*.md")}
 
 
@@ -427,6 +430,10 @@ for name in sorted(claude_plugins):
 
     claude_commands = command_names(claude_dir)
     codex_commands = command_names(codex_dir)
+    if not (claude_commands or skill_names(claude_dir) or claude_has_hooks or (claude_dir / "agents").is_dir()):
+        fail(f"plugin {name} ships no commands, skills, agents, or hooks on the Claude side")
+    if not (codex_commands or skill_names(codex_dir) or codex_has_hooks):
+        fail(f"plugin {name} ships no commands, skills, or hooks on the Codex side")
     if claude_commands != codex_commands:
         fail(
             f"command parity mismatch for {name}: "

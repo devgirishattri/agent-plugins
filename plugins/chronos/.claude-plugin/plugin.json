@@ -1,0 +1,12 @@
+{
+  "name": "chronos",
+  "version": "0.1.0",
+  "description": "Ambient time/day awareness for agents: injects the current date/time as context with every prompt, and refreshes it during long turns via a throttled PreToolUse hook. No explicit invocation needed.",
+  "author": {
+    "name": "Girish Attri"
+  },
+  "keywords": ["time", "datetime", "clock", "awareness", "context", "hooks"],
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
+  "license": "MIT"
+}

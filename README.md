@@ -11,6 +11,7 @@ This repository contains provider-specific plugins for Claude Code and Codex. Th
 | `session-scheduler` | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `session-context` | Generate, list, load, and share session context snapshots |
 | `creating-docs` | Create and update documentation using structured guidance and validation scripts |
+| `chronos` | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 ## Repository Layout
 
@@ -242,6 +243,18 @@ rerun and `--force` is never a notification repair.
 Session-manager therefore has equivalent provider-home intent but not literal or
 behavioral parity: Codex consistently honors `CODEX_HOME`, while most Claude
 session-manager operations do not honor `CLAUDE_HOME`.
+
+### Chronos
+
+| Variable | Claude | Codex | Default | Purpose |
+|----------|--------|-------|---------|---------|
+| `CHRONOS_INTERVAL_MIN` | Yes | No | `5` | Throttle window in minutes for the Claude-only PreToolUse refresh hook. Within the window, PreToolUse emits nothing; UserPromptSubmit always injects a fresh timestamp regardless. |
+
+Chronos injects a single compact `Current time: …` line (weekday, local time,
+UTC offset, zone, and UTC instant computed from one captured epoch) as model
+context. The Claude implementation injects on every user prompt and refreshes
+mid-turn via the throttled PreToolUse hook; the Codex implementation is
+per-prompt only (UserPromptSubmit), so it has no throttle variable.
 
 ### Creating docs
 

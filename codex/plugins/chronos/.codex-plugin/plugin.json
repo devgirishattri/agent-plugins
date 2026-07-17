@@ -1,0 +1,29 @@
+{
+  "name": "chronos",
+  "version": "0.1.0",
+  "description": "Inject fresh local and UTC date/time context with every submitted Codex prompt.",
+  "author": {
+    "name": "Girish Attri",
+    "email": "dev@girishattri.com"
+  },
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
+  "license": "MIT",
+  "keywords": ["time", "datetime", "clock", "awareness", "context", "hooks"],
+  "interface": {
+    "displayName": "Chronos",
+    "shortDescription": "Keep Codex aware of the current date and time.",
+    "longDescription": "Automatically adds a compact local and UTC timestamp to every submitted prompt so time-sensitive reasoning always starts with a fresh current time.",
+    "developerName": "Girish Attri",
+    "category": "Productivity",
+    "capabilities": ["Interactive"],
+    "websiteURL": "https://github.com/devgirishattri/agent-plugins",
+    "defaultPrompt": [
+      "What is the current date and time?",
+      "Plan this work using today's date.",
+      "Check whether this deadline has passed."
+    ],
+    "brandColor": "#7C3AED",
+    "screenshots": []
+  }
+}
