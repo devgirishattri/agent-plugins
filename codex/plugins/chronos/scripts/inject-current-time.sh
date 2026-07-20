@@ -6,7 +6,7 @@ set -uo pipefail
 # Drain the hook payload even though this hook does not need its fields.
 cat >/dev/null 2>&1 || true
 
-# Capture one epoch so local and UTC renderings cannot cross a boundary apart.
+# Capture one epoch before rendering it in IST.
 epoch=$(date +%s 2>/dev/null || true)
 [ -n "$epoch" ] || exit 0
 
@@ -28,20 +28,9 @@ format_epoch() {
   fi
 }
 
-local_part=$(LC_ALL=C format_epoch '+%a %Y-%m-%d %H:%M:%S %Z' 2>/dev/null) || exit 0
-offset=$(LC_ALL=C format_epoch '+%z' 2>/dev/null) || exit 0
-utc_part=$(TZ=UTC LC_ALL=C format_epoch '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) || exit 0
+ist_part=$(TZ=Asia/Kolkata LC_ALL=C format_epoch '+%a %Y-%m-%d %H:%M:%S IST' 2>/dev/null) || exit 0
 
-case "$offset" in
-  [+-][0-9][0-9][0-9][0-9])
-    offset="${offset:0:3}:${offset:3:2}"
-    ;;
-  *)
-    exit 0
-    ;;
-esac
-
-context="Current time: ${local_part} (UTC${offset}); UTC ${utc_part}."
+context="Current time: ${ist_part} (UTC+05:30)."
 
 json_escape() {
   local value="$1"

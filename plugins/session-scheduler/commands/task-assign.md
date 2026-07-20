@@ -17,7 +17,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/task-assign.sh" "<pane>" "<id>" [flags] "<pr
 If the script reports either variable is not set — or your inherited values differ from the shared homes your panes were launched with — stop and request that this pane/session be relaunched with the correct environment instead of deriving another ledger or context store.
 
 Flags:
-- `--eta MINUTES` — expected completion window; stores `eta_at` (ISO-8601 UTC). Tasks past their ETA show an `OVERDUE` flag in `/task-status` and `/task-board`.
+- `--eta MINUTES` — expected completion window; stores `eta_at` as ISO-8601 IST (`+05:30`). Tasks past their ETA show an `OVERDUE` flag in `/task-status` and `/task-board`.
 - `--stage NAME` — set/overwrite the task's stage label (suggested: `plan`, `dispatch`, `execute`, `audit`, `push`).
 - `--context NAME` — attach a session-context snapshot (`$SESSION_CONTEXT_HOME/NAME.md`). Errors if the snapshot is missing. The generated prompt tells the executor to run `/session-context:context-load NAME` first (with the absolute context home embedded as provenance), and `meta.context` is recorded on the task.
 - `--context auto` — instead of requiring a pre-existing snapshot, generate a private, **immutable** handoff (`auto-<id>-<random>.md`, chmod 400) derived from the approved prompt + ledger state, attach it, and record `meta.context = auto-<id>-<random>` (the exact name is printed in the command output). It is removed automatically if the dispatch rolls back. No live-session summarization — safe to generate from the assignment itself.

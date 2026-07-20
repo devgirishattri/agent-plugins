@@ -109,6 +109,10 @@ created=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Smoke task" --meta area=tes
 echo "$created" | grep 'Created task' >/dev/null || fail "task-new did not create"
 TASK_ID=$(printf '%s\n' "$created" | awk '/^Created task/{print $3}' | sed 's/:$//')
 [ -f "$TEST_HOME/scheduler/tasks/$TASK_ID.json" ] || fail "task file missing"
+[ "$(jq -r '.created_at' "$TEST_HOME/scheduler/tasks/$TASK_ID.json")" != "" ] \
+  || fail "task-new did not record created_at"
+[[ "$(jq -r '.created_at' "$TEST_HOME/scheduler/tasks/$TASK_ID.json")" =~ \+05:30$ ]] \
+  || fail "task-new did not store created_at in IST"
 [ "$(path_mode "$TEST_HOME/scheduler")" = "700" ] || fail "scheduler root is not mode 700"
 [ "$(path_mode "$TEST_HOME/scheduler/tasks")" = "700" ] || fail "tasks directory is not mode 700"
 [ "$(path_mode "$TEST_HOME/scheduler/prompts")" = "700" ] || fail "prompts directory is not mode 700"

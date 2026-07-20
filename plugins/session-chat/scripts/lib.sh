@@ -1454,5 +1454,5 @@ read_pane() {
 # --- Platform-compatible utilities ---
 
 portable_date_iso() {
-  date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+  TZ=Asia/Kolkata date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null
 }

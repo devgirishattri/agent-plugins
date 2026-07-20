@@ -34,20 +34,17 @@ fi
 mkdir -p "$state_dir" 2>/dev/null || true
 printf '%s' "$epoch" > "$state_file" 2>/dev/null || true
 
-# One captured epoch for both local and UTC so a boundary crossing can never
-# make them disagree. BSD date (macOS) uses -r; GNU date (Linux/WSL) uses -d.
+# Format the captured epoch in IST. BSD date (macOS) uses -r; GNU date
+# (Linux/WSL) uses -d.
 if date -r 0 +%s >/dev/null 2>&1; then
   fmt() { date -r "$epoch" "$1"; }
 else
   fmt() { date -d "@$epoch" "$1"; }
 fi
 
-local_part=$(fmt '+%a %Y-%m-%d %H:%M:%S %Z')
-offset=$(fmt '+%z')
-offset="${offset:0:3}:${offset:3:2}"
-utc_part=$(TZ=UTC fmt '+%Y-%m-%dT%H:%M:%SZ')
+ist_part=$(TZ=Asia/Kolkata LC_ALL=C fmt '+%a %Y-%m-%d %H:%M:%S IST')
 
-context="Current time: ${local_part} (UTC${offset}); UTC ${utc_part}."
+context="Current time: ${ist_part} (UTC+05:30)."
 
 if command -v jq >/dev/null 2>&1; then
   jq -cn --arg ev "$event" --arg ctx "$context" \

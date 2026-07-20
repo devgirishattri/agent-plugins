@@ -96,6 +96,7 @@ assert_contains "$TMP/versions.out" "History versions for 'alpha'"
 assert_mode 700 "$SESSION_CONTEXT_HOME/.history"
 alpha_history=$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'alpha.*.md' -print -quit)
 [ -n "$alpha_history" ] || fail "overwrite did not create alpha history"
+[[ "$(basename "$alpha_history")" =~ \+0530\.md$ ]] || fail "new history filename is not in IST"
 assert_mode 600 "$alpha_history"
 
 # Safe legacy stores migrate to owner-only modes. Exact 0400 auto contexts stay

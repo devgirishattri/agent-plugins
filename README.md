@@ -250,8 +250,8 @@ session-manager operations do not honor `CLAUDE_HOME`.
 |----------|--------|-------|---------|---------|
 | `CHRONOS_INTERVAL_MIN` | Yes | No | `5` | Throttle window in minutes for the Claude-only PreToolUse refresh hook. Within the window, PreToolUse emits nothing; UserPromptSubmit always injects a fresh timestamp regardless. |
 
-Chronos injects a single compact `Current time: …` line (weekday, local time,
-UTC offset, zone, and UTC instant computed from one captured epoch) as model
+Chronos injects a single compact `Current time: …` line in IST (weekday, time,
+and fixed `UTC+05:30` offset computed from one captured epoch) as model
 context. The Claude implementation injects on every user prompt and refreshes
 mid-turn via the throttled PreToolUse hook; the Codex implementation is
 per-prompt only (UserPromptSubmit), so it has no throttle variable.

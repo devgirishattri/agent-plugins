@@ -36,7 +36,7 @@ bash "<PLUGIN_ROOT>/scripts/diff-context.sh" "<snapshot-name>" [--versions | "<t
 
 Modes:
 - `<snapshot-name>` only — unified diff of the newest archived version against the current snapshot.
-- `--versions` — list available history timestamps (UTC, `YYYYMMDD-HHMMSSZ`).
+- `--versions` — list available history timestamps (IST, `YYYYMMDD-HHMMSS+0530`; legacy UTC timestamps remain accepted).
 - `<timestamp>` — diff that archived version against the current snapshot.
 
 Present the unified diff in a fenced code block and summarize the change briefly. If the output says "(no differences)", say the snapshot is unchanged. If no history versions exist, explain that history is only created when `$session-context:context-generate` overwrites an existing snapshot. If the snapshot does not exist, suggest `$session-context:context-list`.

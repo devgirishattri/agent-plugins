@@ -3,7 +3,8 @@
 # Usage: diff-context.sh <project-name>              # diff newest history version vs current
 #        diff-context.sh <project-name> --versions   # list available history timestamps
 #        diff-context.sh <project-name> <timestamp>  # diff that version vs current
-# Timestamps use UTC format YYYYMMDD-HHMMSSZ (as listed by --versions).
+# New timestamps use IST format YYYYMMDD-HHMMSS+0530. Legacy UTC timestamps
+# (YYYYMMDD-HHMMSSZ) remain readable.
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
@@ -48,8 +49,8 @@ if [ "$MODE" = "--versions" ]; then
 fi
 
 if [ -n "$MODE" ]; then
-  if ! [[ "$MODE" =~ ^[0-9]{8}-[0-9]{6}Z$ ]]; then
-    echo "ERROR: Invalid timestamp '$MODE'. Expected UTC format YYYYMMDD-HHMMSSZ."
+  if ! [[ "$MODE" =~ ^[0-9]{8}-[0-9]{6}(\+0530|Z)$ ]]; then
+    echo "ERROR: Invalid timestamp '$MODE'. Expected IST format YYYYMMDD-HHMMSS+0530 (or legacy UTC YYYYMMDD-HHMMSSZ)."
     echo "Run: diff-context.sh $PROJECT_NAME --versions to list available timestamps."
     exit 1
   fi

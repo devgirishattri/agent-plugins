@@ -30,7 +30,7 @@ session is told it can `/context-load` instead of starting cold.
   it from the same store).
 
 **Don't use it for** a quick one-line status to another pane — that's
-`/session-chat:send`. Snapshots are for substantial, reusable state.
+`/send`. Snapshots are for substantial, reusable state.
 
 ## Generate runs in the working session — it cannot be delegated
 
@@ -41,8 +41,8 @@ produce the summary — never try to offload generation to a separate agent.
 ## Lifecycle
 
 ```
-/context-generate [name]   → writes <project_root>/tmp/contexts/<name>.md
-                             (overwrite archives the old version to tmp/contexts/.history/)
+/context-generate [name]   → writes $SESSION_CONTEXT_HOME/<name>.md
+                             (overwrite archives the old version to $SESSION_CONTEXT_HOME/.history/)
   ↓
 /context-list              → see what snapshots exist (name, size, last updated, versions)
   ↓
@@ -75,11 +75,12 @@ Snapshot names must contain only letters, numbers, hyphens, and underscores.
 
 1. **You must be inside tmux** — sharing is a tmux-only operation.
 2. **The recipient pane must be named** (via `/whoami <name>` or SessionStart
-   auto-naming); names are how panes are addressed, and the search spans all
-   tmux sessions.
-3. **The recipient should be working in the same repo / context store.** Sharing
-   does *not* copy the snapshot file — it relies on the project-local
-   `tmp/contexts/` dir being shared, then sends the peer a one-line message
+   auto-naming when session-chat is installed); names are how panes
+   are addressed, and the search spans all tmux sessions. The sender also needs
+   a name for fallback transport.
+3. **The recipient must inherit the same context store.** Sharing does *not*
+   copy the snapshot file — it relies on the launcher-selected
+   `$SESSION_CONTEXT_HOME` directory being shared, then sends the peer a one-line message
    (carrying the canonical store path) telling them to run `/context-load
    <name>`, which resolves against the *peer's own* store. A peer in a different
    repo/store won't have the snapshot to load.
@@ -94,12 +95,13 @@ sharing requires it.
 
 ## Conventions
 
-- **Snapshots are project-local, not global.** Switching repos switches the
-  snapshot set; a snapshot generated in repo A is not visible in repo B.
+- **Snapshots are store-local, not global.** The launcher-selected
+  `SESSION_CONTEXT_HOME` determines the snapshot set; a snapshot is visible to
+  every pane that inherits that same absolute store, regardless of cwd.
 - **Regenerate, don't append.** `/context-generate` with an existing name overwrites
   that snapshot with the current state — keep one authoritative snapshot per name
   rather than many stale ones. Overwriting is safe: the previous version is archived
-  to `tmp/contexts/.history/<name>.<UTC timestamp>.md` (10 most recent kept), and
+  to `$SESSION_CONTEXT_HOME/.history/<name>.<IST timestamp>.md` (`YYYYMMDD-HHMMSS+0530`; 10 most recent kept), and
   `/context-diff <name>` shows what changed since the last version.
 - **Watch for staleness.** `/context-load` appends a WARNING when a snapshot's file
   is 7+ days old (threshold configurable via `SESSION_CONTEXT_STALE_DAYS`) — regenerate
@@ -112,6 +114,6 @@ sharing requires it.
 - **"No snapshots found"** — none exist for this project yet; run
   `/context-generate` first.
 - **"No pane named X" on share** — the recipient hasn't run `/whoami`, or you typed
-  the wrong name. Run `/session-chat:panes` to see named panes.
+  the wrong name. Run `/panes all` to see named panes.
 - **Sharing errors about tmux** — you're not inside a tmux session; sharing needs
   tmux. Generate/list/load/remove still work.

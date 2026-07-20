@@ -240,30 +240,39 @@ generate_task_id() {
 }
 
 iso_now() {
-  date -u +%Y-%m-%dT%H:%M:%SZ
+  local raw
+  raw=$(TZ=Asia/Kolkata date +%Y-%m-%dT%H:%M:%S%z) || return 1
+  printf '%s:%s\n' "${raw%??}" "${raw#${raw%??}}"
 }
 
 epoch_now() {
   date +%s
 }
 
-# Convert ISO-8601 UTC -> epoch seconds. Tries BSD date first, then GNU.
+# Convert an ISO-8601 timestamp (IST for new records; UTC for legacy records)
+# -> epoch seconds. Tries BSD date first, then GNU.
 # Echoes 0 on failure so callers can detect and skip time-based logic.
 iso_to_epoch() {
   local iso="$1" epoch=""
-  epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$iso" +%s 2>/dev/null) ||
-    epoch=$(date -u -d "$iso" +%s 2>/dev/null) ||
+  if [[ "$iso" =~ Z$ ]]; then
+    iso="${iso%Z}+0000"
+  elif [[ "$iso" =~ [+-][0-9]{2}:[0-9]{2}$ ]]; then
+    iso="${iso%:*}${iso##*:}"
+  fi
+  epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$iso" +%s 2>/dev/null) ||
+    epoch=$(date -d "$iso" +%s 2>/dev/null) ||
     epoch=""
   printf '%s\n' "${epoch:-0}"
 }
 
-# Convert epoch seconds -> ISO-8601 UTC. BSD (date -r) first, GNU (-d @) fallback.
+# Convert epoch seconds -> ISO-8601 IST. BSD (date -r) first, GNU (-d @) fallback.
 # Echoes empty string on failure.
 epoch_to_iso() {
   local epoch="$1" iso=""
-  iso=$(date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) ||
-    iso=$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) ||
+  iso=$(TZ=Asia/Kolkata date -r "$epoch" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) ||
+    iso=$(TZ=Asia/Kolkata date -d "@$epoch" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) ||
     iso=""
+  [ -n "$iso" ] && iso="$(printf '%s:%s' "${iso%??}" "${iso#${iso%??}}")"
   printf '%s\n' "$iso"
 }
 

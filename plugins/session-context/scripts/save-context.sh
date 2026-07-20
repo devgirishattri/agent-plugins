@@ -64,10 +64,10 @@ if _context_path_exists "$DEST"; then
     }
   fi
   _context_harden_directory "$HISTORY_DIR" || exit 1
-  ts=$(date -u +%Y%m%d-%H%M%SZ)
+  ts=$(TZ=Asia/Kolkata date +%Y%m%d-%H%M%S+0530)
   while _context_path_exists "$HISTORY_DIR/${PROJECT_NAME}.${ts}.md"; do
     sleep 1
-    ts=$(date -u +%Y%m%d-%H%M%SZ)
+    ts=$(TZ=Asia/Kolkata date +%Y%m%d-%H%M%S+0530)
   done
   archive_mode=$(context_safe_file_mode "$DEST") || exit 1
   atomic_copy_context_file "$DEST" "$HISTORY_DIR/${PROJECT_NAME}.${ts}.md" "$archive_mode" || exit 1

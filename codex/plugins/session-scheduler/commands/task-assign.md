@@ -38,7 +38,7 @@ argument-hint: <pane-name> <task-id> [--eta MINUTES] [--stage NAME] [--context N
    Never use --force to repair transport.
 
 4. Flags:
-   - `--eta MINUTES` — stores `eta_at` (ISO-8601 UTC); tasks past it are flagged `OVERDUE` in `task-status`/`task-board`.
+   - `--eta MINUTES` — stores `eta_at` as ISO-8601 IST (`+05:30`); tasks past it are flagged `OVERDUE` in `task-status`/`task-board`.
    - `--stage NAME` — set/overwrite the task's stage label (suggested: `plan`, `dispatch`, `execute`, `audit`, `push`).
    - `--context NAME|auto` — attach an existing snapshot, or create an immutable task-scoped handoff named `task-<id>-<random>`; the exact generated name is printed.
    - `--reviewer PANE` — set or override automatic independent-review routing.

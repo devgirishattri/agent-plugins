@@ -50,7 +50,8 @@ ID=$(echo "$out" | awk '/Created task:/ {print $3}')
 if [ -n "$ID" ] && [ -f "$SESSION_SCHEDULER_HOME/tasks/$ID.json" ]; then
   status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
   meta_foo=$(jq -r '.meta.foo' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
-  if [ "$status" = "created" ] && [ "$meta_foo" = "bar" ]; then pass "task_new"
+  created_at=$(jq -r '.created_at' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
+  if [ "$status" = "created" ] && [ "$meta_foo" = "bar" ] && [[ "$created_at" =~ \+05:30$ ]]; then pass "task_new"
   else fail "task_new" "wrong status/meta: status=$status foo=$meta_foo"; fi
 else
   fail "task_new" "no id parsed or file missing; out=$out"
