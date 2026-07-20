@@ -1454,5 +1454,5 @@ read_pane() {
 # --- Platform-compatible utilities ---
 
 portable_date_iso() {
-  TZ=Asia/Kolkata date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null
+  TZ="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null
 }

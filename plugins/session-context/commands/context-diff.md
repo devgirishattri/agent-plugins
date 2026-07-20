@@ -13,7 +13,7 @@ allowed-tools: Bash(bash:*)
 - `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports it is not set, stop and request that this pane/session be relaunched with the correct environment — do not export the variable or derive another context store.
 Usage modes (all handled by the script above):
 - `/context-diff <name>` — unified diff of the newest archived version against the current snapshot
-- `/context-diff <name> --versions` — list available history timestamps (IST, `YYYYMMDD-HHMMSS+0530`; legacy UTC timestamps remain accepted)
+- `/context-diff <name> --versions` — list available history timestamps (`YYYYMMDD-HHMMSS+HHMM` in `AGENT_PLUGINS_TIME_ZONE`; legacy UTC timestamps remain accepted)
 - `/context-diff <name> <timestamp>` — diff that archived version against the current snapshot
 
 Presenting the output:

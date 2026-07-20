@@ -1,7 +1,7 @@
 {
   "name": "chronos",
   "version": "0.1.0",
-  "description": "Inject a fresh IST date/time context with every submitted Codex prompt.",
+  "description": "Inject a fresh configured-timezone date/time context with every submitted Codex prompt.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Chronos",
     "shortDescription": "Keep Codex aware of the current date and time.",
-    "longDescription": "Automatically adds a compact IST timestamp to every submitted prompt so time-sensitive reasoning always starts with a fresh current time.",
+    "longDescription": "Automatically adds a compact configured-timezone timestamp to every submitted prompt so time-sensitive reasoning always starts with a fresh current time.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": [

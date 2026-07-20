@@ -64,10 +64,11 @@ if _context_path_exists "$DEST"; then
     }
   fi
   _context_harden_directory "$HISTORY_DIR" || exit 1
-  ts=$(TZ=Asia/Kolkata date +%Y%m%d-%H%M%S+0530)
+  timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
+  ts=$(TZ="$timezone" date +%Y%m%d-%H%M%S%z)
   while _context_path_exists "$HISTORY_DIR/${PROJECT_NAME}.${ts}.md"; do
     sleep 1
-    ts=$(TZ=Asia/Kolkata date +%Y%m%d-%H%M%S+0530)
+    ts=$(TZ="$timezone" date +%Y%m%d-%H%M%S%z)
   done
   archive_mode=$(context_safe_file_mode "$DEST") || exit 1
   atomic_copy_context_file "$DEST" "$HISTORY_DIR/${PROJECT_NAME}.${ts}.md" "$archive_mode" || exit 1

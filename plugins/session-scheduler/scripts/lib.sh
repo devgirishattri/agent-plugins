@@ -240,8 +240,8 @@ generate_task_id() {
 }
 
 iso_now() {
-  local raw
-  raw=$(TZ=Asia/Kolkata date +%Y-%m-%dT%H:%M:%S%z) || return 1
+  local raw timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
+  raw=$(TZ="$timezone" date +%Y-%m-%dT%H:%M:%S%z) || return 1
   printf '%s:%s\n' "${raw%??}" "${raw#${raw%??}}"
 }
 
@@ -249,7 +249,7 @@ epoch_now() {
   date +%s
 }
 
-# Convert an ISO-8601 timestamp (IST for new records; UTC for legacy records)
+# Convert an ISO-8601 timestamp (configured timezone for new records; UTC for legacy records)
 # -> epoch seconds. Tries BSD date first, then GNU.
 # Echoes 0 on failure so callers can detect and skip time-based logic.
 iso_to_epoch() {
@@ -265,12 +265,12 @@ iso_to_epoch() {
   printf '%s\n' "${epoch:-0}"
 }
 
-# Convert epoch seconds -> ISO-8601 IST. BSD (date -r) first, GNU (-d @) fallback.
+# Convert epoch seconds -> ISO-8601 in the configured timezone. BSD (date -r) first, GNU (-d @) fallback.
 # Echoes empty string on failure.
 epoch_to_iso() {
-  local epoch="$1" iso=""
-  iso=$(TZ=Asia/Kolkata date -r "$epoch" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) ||
-    iso=$(TZ=Asia/Kolkata date -d "@$epoch" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) ||
+  local epoch="$1" iso="" timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
+  iso=$(TZ="$timezone" date -r "$epoch" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) ||
+    iso=$(TZ="$timezone" date -d "@$epoch" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) ||
     iso=""
   [ -n "$iso" ] && iso="$(printf '%s:%s' "${iso%??}" "${iso#${iso%??}}")"
   printf '%s\n' "$iso"

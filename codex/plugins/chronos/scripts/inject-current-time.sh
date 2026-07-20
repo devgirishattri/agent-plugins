@@ -6,7 +6,7 @@ set -uo pipefail
 # Drain the hook payload even though this hook does not need its fields.
 cat >/dev/null 2>&1 || true
 
-# Capture one epoch before rendering it in IST.
+# Capture one epoch before rendering it in the configured timezone.
 epoch=$(date +%s 2>/dev/null || true)
 [ -n "$epoch" ] || exit 0
 
@@ -28,9 +28,15 @@ format_epoch() {
   fi
 }
 
-ist_part=$(TZ=Asia/Kolkata LC_ALL=C format_epoch '+%a %Y-%m-%d %H:%M:%S IST' 2>/dev/null) || exit 0
+timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
+local_part=$(TZ="$timezone" LC_ALL=C format_epoch '+%a %Y-%m-%d %H:%M:%S %Z' 2>/dev/null) || exit 0
+offset=$(TZ="$timezone" LC_ALL=C format_epoch '+%z' 2>/dev/null) || exit 0
+case "$offset" in
+  [+-][0-9][0-9][0-9][0-9]) offset="${offset:0:3}:${offset:3:2}" ;;
+  *) exit 0 ;;
+esac
 
-context="Current time: ${ist_part} (UTC+05:30)."
+context="Current time: ${local_part} (UTC${offset})."
 
 json_escape() {
   local value="$1"

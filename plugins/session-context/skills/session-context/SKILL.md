@@ -101,7 +101,7 @@ sharing requires it.
 - **Regenerate, don't append.** `/context-generate` with an existing name overwrites
   that snapshot with the current state — keep one authoritative snapshot per name
   rather than many stale ones. Overwriting is safe: the previous version is archived
-  to `$SESSION_CONTEXT_HOME/.history/<name>.<IST timestamp>.md` (`YYYYMMDD-HHMMSS+0530`; 10 most recent kept), and
+  to `$SESSION_CONTEXT_HOME/.history/<name>.<timestamp>.md` (`YYYYMMDD-HHMMSS+HHMM` in `AGENT_PLUGINS_TIME_ZONE`, default `Asia/Kolkata`; 10 most recent kept), and
   `/context-diff <name>` shows what changed since the last version.
 - **Watch for staleness.** `/context-load` appends a WARNING when a snapshot's file
   is 7+ days old (threshold configurable via `SESSION_CONTEXT_STALE_DAYS`) — regenerate

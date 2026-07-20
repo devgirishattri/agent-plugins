@@ -239,6 +239,7 @@ rerun and `--force` is never a notification repair.
 |----------|--------|-------|---------|---------|
 | `CLAUDE_HOME` | Partial | Not applicable | `$HOME/.claude` | Claude `session-stats` uses it, but Claude list, search, and delete scripts currently use `$HOME/.claude` directly. Claude session-context cross-project search also honors it. |
 | `CODEX_HOME` | Not applicable | Yes | `$HOME/.codex` | Codex session-manager uses it for session and state storage. Codex session-context and session-scheduler also use it for session discovery, message storage, and plugin-cache lookup. |
+| `AGENT_PLUGINS_TIME_ZONE` | Yes | Yes | `Asia/Kolkata` | IANA timezone used by Chronos and plugin-generated timestamps. |
 
 Session-manager therefore has equivalent provider-home intent but not literal or
 behavioral parity: Codex consistently honors `CODEX_HOME`, while most Claude
@@ -250,9 +251,9 @@ session-manager operations do not honor `CLAUDE_HOME`.
 |----------|--------|-------|---------|---------|
 | `CHRONOS_INTERVAL_MIN` | Yes | No | `5` | Throttle window in minutes for the Claude-only PreToolUse refresh hook. Within the window, PreToolUse emits nothing; UserPromptSubmit always injects a fresh timestamp regardless. |
 
-Chronos injects a single compact `Current time: …` line in IST (weekday, time,
-and fixed `UTC+05:30` offset computed from one captured epoch) as model
-context. The Claude implementation injects on every user prompt and refreshes
+Chronos injects a single compact `Current time: …` line in the configured
+timezone (weekday, time, zone, and numeric UTC offset computed from one captured
+epoch) as model context. The default is IST (`Asia/Kolkata`). The Claude implementation injects on every user prompt and refreshes
 mid-turn via the throttled PreToolUse hook; the Codex implementation is
 per-prompt only (UserPromptSubmit), so it has no throttle variable.
 

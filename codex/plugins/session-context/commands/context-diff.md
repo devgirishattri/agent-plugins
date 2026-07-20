@@ -28,7 +28,7 @@ argument-hint: <snapshot-name> [--versions | <timestamp>]
 
    Modes:
    - `<snapshot-name>` only — unified diff of the newest archived version against the current snapshot.
-   - `<snapshot-name> --versions` — list available history timestamps (IST, `YYYYMMDD-HHMMSS+0530`; legacy UTC timestamps remain accepted).
+   - `<snapshot-name> --versions` — list available history timestamps (`YYYYMMDD-HHMMSS+HHMM` in `AGENT_PLUGINS_TIME_ZONE`; legacy UTC timestamps remain accepted).
    - `<snapshot-name> <timestamp>` — diff that archived version against the current snapshot.
 
 4. Show the unified diff in a fenced ```diff code block and briefly summarize what changed.
