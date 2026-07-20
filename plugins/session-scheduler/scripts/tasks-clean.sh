@@ -45,11 +45,10 @@ candidates=()
 for f in "${files[@]}"; do
   updated=$(jq -r '.updated_at' "$f" 2>/dev/null) || continue
   status=$(jq -r '.status' "$f" 2>/dev/null) || continue
-  # Convert ISO -> epoch (BSD/GNU date compatible)
-  if command -v gdate >/dev/null 2>&1; then
-    epoch=$(gdate -d "$updated" +%s 2>/dev/null || echo 0)
-  else
-    epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$updated" +%s 2>/dev/null || echo 0)
+  epoch=$(iso_to_epoch "$updated")
+  if [ "$epoch" -le 0 ]; then
+    echo "WARN: skipping $(basename "$f"): invalid updated_at '$updated'." >&2
+    continue
   fi
   [ "$epoch" -ge "$threshold" ] && continue
   if [ -n "$STATUS_FILTER" ] && [ "$status" != "$STATUS_FILTER" ]; then continue; fi

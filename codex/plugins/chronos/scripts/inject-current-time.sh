@@ -28,7 +28,21 @@ format_epoch() {
   fi
 }
 
-timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
+resolve_timezone() {
+  local timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" root
+  case "$timezone" in
+    ""|/*|*..*|*[!A-Za-z0-9_+./-]*) return 1 ;;
+  esac
+  for root in /usr/share/zoneinfo /usr/share/lib/zoneinfo /usr/lib/zoneinfo; do
+    [ -f "$root/$timezone" ] && { printf '%s\n' "$timezone"; return 0; }
+  done
+  return 1
+}
+
+timezone=$(resolve_timezone) || {
+  echo "chronos: invalid AGENT_PLUGINS_TIME_ZONE '${AGENT_PLUGINS_TIME_ZONE:-}'" >&2
+  exit 0
+}
 local_part=$(TZ="$timezone" LC_ALL=C format_epoch '+%a %Y-%m-%d %H:%M:%S %Z' 2>/dev/null) || exit 0
 offset=$(TZ="$timezone" LC_ALL=C format_epoch '+%z' 2>/dev/null) || exit 0
 case "$offset" in

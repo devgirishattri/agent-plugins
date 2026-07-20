@@ -79,6 +79,13 @@ assert_contains "$TMP/missing-context-home.out" "human invoking the script direc
 export SESSION_CONTEXT_HOME="$TMP/contexts"
 export CODEX_HOME="$TMP/codex"
 
+printf 'invalid timezone\n' > "$TMP/invalid-timezone.md"
+if AGENT_PLUGINS_TIME_ZONE=Not/AZone SESSION_CONTEXT_HOME="$TMP/invalid-timezone-store" \
+  bash "$SCRIPT_DIR/save-context.sh" invalid "$TMP/invalid-timezone.md" > "$TMP/invalid-timezone.out" 2>&1; then
+  fail "save-context accepted invalid AGENT_PLUGINS_TIME_ZONE"
+fi
+assert_contains "$TMP/invalid-timezone.out" "unknown IANA timezone"
+
 printf '# Session Context: alpha\n\nfirst version\n' > "$TMP/input.md"
 bash "$SCRIPT_DIR/save-context.sh" alpha "$TMP/input.md" > "$TMP/save-1.out"
 [ -f "$SESSION_CONTEXT_HOME/alpha.md" ] || fail "save did not create alpha.md"
@@ -96,8 +103,19 @@ assert_contains "$TMP/versions.out" "History versions for 'alpha'"
 assert_mode 700 "$SESSION_CONTEXT_HOME/.history"
 alpha_history=$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'alpha.*.md' -print -quit)
 [ -n "$alpha_history" ] || fail "overwrite did not create alpha history"
-[[ "$(basename "$alpha_history")" =~ \+0530\.md$ ]] || fail "new history filename is not in IST"
+expected_offset=$(TZ="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" date +%z)
+[[ "$(basename "$alpha_history")" == *"${expected_offset}.md" ]] || fail "new history filename is not in the configured timezone"
 assert_mode 600 "$alpha_history"
+
+# Numeric-offset ordering must use real instants, not local wall-clock text.
+MIXED_STORE="$TMP/mixed-order-contexts"
+mkdir -p "$MIXED_STORE/.history"
+printf 'current\n' > "$MIXED_STORE/mixed.md"
+printf 'older\n' > "$MIXED_STORE/.history/mixed.20260720-140000Z.md"
+printf 'newer\n' > "$MIXED_STORE/.history/mixed.20260720-100100-0400.md"
+mixed_versions=$(SESSION_CONTEXT_HOME="$MIXED_STORE" bash "$SCRIPT_DIR/diff-context.sh" mixed --versions)
+mixed_first=$(printf '%s\n' "$mixed_versions" | sed -n '2p' | tr -d ' ')
+[ "$mixed_first" = "20260720-100100-0400" ] || fail "history versions are not ordered by instant: $mixed_versions"
 
 # Safe legacy stores migrate to owner-only modes. Exact 0400 auto contexts stay
 # immutable instead of being broadened to 0600.

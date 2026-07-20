@@ -239,7 +239,7 @@ rerun and `--force` is never a notification repair.
 |----------|--------|-------|---------|---------|
 | `CLAUDE_HOME` | Partial | Not applicable | `$HOME/.claude` | Claude `session-stats` uses it, but Claude list, search, and delete scripts currently use `$HOME/.claude` directly. Claude session-context cross-project search also honors it. |
 | `CODEX_HOME` | Not applicable | Yes | `$HOME/.codex` | Codex session-manager uses it for session and state storage. Codex session-context and session-scheduler also use it for session discovery, message storage, and plugin-cache lookup. |
-| `AGENT_PLUGINS_TIME_ZONE` | Yes | Yes | `Asia/Kolkata` | IANA timezone used by Chronos and plugin-generated timestamps. |
+| `AGENT_PLUGINS_TIME_ZONE` | Yes | Yes | `Asia/Kolkata` | Validated IANA timezone used by Chronos and plugin-generated timestamps. `workspace.sh` supplies it to both agent panes and honors a caller override. |
 
 Session-manager therefore has equivalent provider-home intent but not literal or
 behavioral parity: Codex consistently honors `CODEX_HOME`, while most Claude

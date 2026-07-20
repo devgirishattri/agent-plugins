@@ -72,8 +72,13 @@ for file in "$TASKS_DIR"/*.json; do
   [ -f "$file" ] || continue
   status=$(jq -r '.status // ""' "$file")
   [ -n "$STATUS_FILTER" ] && [ "$status" != "$STATUS_FILTER" ] && continue
-  mtime=$(file_mtime "$file")
-  age=$((now - mtime))
+  updated=$(jq -r '.updated_at // ""' "$file" 2>/dev/null)
+  updated_epoch=$(iso_to_epoch "$updated")
+  if [ "$updated_epoch" -le 0 ]; then
+    echo "WARN: skipping $(basename "$file"): invalid updated_at '$updated'." >&2
+    continue
+  fi
+  age=$((now - updated_epoch))
   [ "$age" -lt "$threshold" ] && continue
   id=$(jq -r '.id // ""' "$file" 2>/dev/null)
   count=$((count + 1))

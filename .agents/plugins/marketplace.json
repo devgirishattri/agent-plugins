@@ -32,7 +32,7 @@
     },
     {
       "name": "session-chat",
-      "version": "0.17.5",
+      "version": "0.17.6",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-chat"
@@ -45,7 +45,7 @@
     },
     {
       "name": "session-scheduler",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-scheduler"
@@ -58,7 +58,7 @@
     },
     {
       "name": "session-context",
-      "version": "0.7.6",
+      "version": "0.7.7",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-context"
@@ -71,7 +71,7 @@
     },
     {
       "name": "chronos",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "source": {
         "source": "local",
         "path": "./codex/plugins/chronos"

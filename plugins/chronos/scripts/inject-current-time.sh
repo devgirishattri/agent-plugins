@@ -42,10 +42,27 @@ else
   fmt() { date -d "@$epoch" "$1"; }
 fi
 
-timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
+resolve_timezone() {
+  local timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" root
+  case "$timezone" in
+    ""|/*|*..*|*[!A-Za-z0-9_+./-]*) return 1 ;;
+  esac
+  for root in /usr/share/zoneinfo /usr/share/lib/zoneinfo /usr/lib/zoneinfo; do
+    [ -f "$root/$timezone" ] && { printf '%s\n' "$timezone"; return 0; }
+  done
+  return 1
+}
+
+timezone=$(resolve_timezone) || {
+  echo "chronos: invalid AGENT_PLUGINS_TIME_ZONE '${AGENT_PLUGINS_TIME_ZONE:-}'" >&2
+  exit 0
+}
 local_part=$(TZ="$timezone" LC_ALL=C fmt '+%a %Y-%m-%d %H:%M:%S %Z')
-offset=$(TZ="$timezone" fmt '+%z')
-offset="${offset:0:3}:${offset:3:2}"
+offset=$(TZ="$timezone" LC_ALL=C fmt '+%z')
+case "$offset" in
+  [+-][0-9][0-9][0-9][0-9]) offset="${offset:0:3}:${offset:3:2}" ;;
+  *) exit 0 ;;
+esac
 
 context="Current time: ${local_part} (UTC${offset})."
 

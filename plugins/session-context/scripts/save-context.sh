@@ -15,6 +15,7 @@ if [ -z "$PROJECT_NAME" ] || [ -z "$SNAPSHOT_FILE" ]; then
 fi
 
 validate_label "$PROJECT_NAME" || exit 1
+timezone=$(agent_plugins_timezone) || exit 1
 
 if [ -L "$SNAPSHOT_FILE" ] || [ ! -f "$SNAPSHOT_FILE" ]; then
   echo "ERROR: Snapshot input must be a regular non-symlink file: $SNAPSHOT_FILE"
@@ -64,7 +65,6 @@ if _context_path_exists "$DEST"; then
     }
   fi
   _context_harden_directory "$HISTORY_DIR" || exit 1
-  timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
   ts=$(TZ="$timezone" date +%Y%m%d-%H%M%S%z)
   while _context_path_exists "$HISTORY_DIR/${PROJECT_NAME}.${ts}.md"; do
     sleep 1
@@ -74,7 +74,7 @@ if _context_path_exists "$DEST"; then
   atomic_copy_context_file "$DEST" "$HISTORY_DIR/${PROJECT_NAME}.${ts}.md" "$archive_mode" || exit 1
   echo "Archived previous version to $HISTORY_DIR/${PROJECT_NAME}.${ts}.md"
   # Cap history at MAX_HISTORY versions per name (delete oldest beyond that)
-  excess=$(ls -1 "$HISTORY_DIR/${PROJECT_NAME}."*.md 2>/dev/null | sort -r | tail -n +$((MAX_HISTORY + 1)) || true)
+  excess=$(context_history_versions "$PROJECT_NAME" "$HISTORY_DIR" | tail -n +$((MAX_HISTORY + 1)) || true)
   if [ -n "$excess" ]; then
     echo "$excess" | while IFS= read -r old; do
       ensure_context_regular_file "$old" || exit 1

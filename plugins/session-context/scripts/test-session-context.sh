@@ -32,8 +32,46 @@ fail() { FAIL=$((FAIL + 1)); FAILURES+=("$1: $2"); echo "  FAIL  $1 — $2"; }
 
 echo "=== session-context tests (socket: $SOCKET) ==="
 
+printf 'invalid timezone\n' > "$TMP/invalid-timezone.md"
+if AGENT_PLUGINS_TIME_ZONE=Not/AZone SESSION_CONTEXT_HOME="$TMP/invalid-timezone-store" \
+  bash "$HERE/save-context.sh" invalid "$TMP/invalid-timezone.md" > "$TMP/invalid-timezone.out" 2>&1; then
+  fail "invalid_timezone_rejected" "save-context accepted Not/AZone"
+elif grep -q "unknown IANA timezone" "$TMP/invalid-timezone.out"; then
+  pass "invalid_timezone_rejected"
+else
+  fail "invalid_timezone_rejected" "unexpected output: $(cat "$TMP/invalid-timezone.out")"
+fi
+
 # A snapshot to share.
 printf '# snapshot for ProjectA\nwork summary\n' > "$SESSION_CONTEXT_HOME/proj-1.md"
+
+# New history filenames use the configured timezone on the Claude provider too.
+TZ_STORE="$TMP/timezone-contexts"
+printf 'first\n' > "$TMP/timezone-input.md"
+SESSION_CONTEXT_HOME="$TZ_STORE" bash "$HERE/save-context.sh" timezone "$TMP/timezone-input.md" >/dev/null
+printf 'second\n' > "$TMP/timezone-input.md"
+SESSION_CONTEXT_HOME="$TZ_STORE" bash "$HERE/save-context.sh" timezone "$TMP/timezone-input.md" >/dev/null
+timezone_history=$(find "$TZ_STORE/.history" -type f -name 'timezone.*.md' -print -quit)
+expected_offset=$(TZ="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" date +%z)
+if [ -n "$timezone_history" ] && [[ "$(basename "$timezone_history")" == *"${expected_offset}.md" ]]; then
+  pass "history_uses_configured_timezone"
+else
+  fail "history_uses_configured_timezone" "file=$timezone_history expected_offset=$expected_offset"
+fi
+
+# Numeric-offset ordering must use real instants, not local wall-clock text.
+MIXED_STORE="$TMP/mixed-order-contexts"
+mkdir -p "$MIXED_STORE/.history"
+printf 'current\n' > "$MIXED_STORE/mixed.md"
+printf 'older\n' > "$MIXED_STORE/.history/mixed.20260720-140000Z.md"
+printf 'newer\n' > "$MIXED_STORE/.history/mixed.20260720-100100-0400.md"
+mixed_versions=$(SESSION_CONTEXT_HOME="$MIXED_STORE" bash "$HERE/diff-context.sh" mixed --versions)
+mixed_first=$(printf '%s\n' "$mixed_versions" | sed -n '2p' | tr -d ' ')
+if [ "$mixed_first" = "20260720-100100-0400" ]; then
+  pass "history_orders_by_instant"
+else
+  fail "history_orders_by_instant" "first=$mixed_first output=$mixed_versions"
+fi
 
 # --- session-chat transport stub (no tmux needed for these) -----------------
 # Its send-message.sh echoes its args and exits with a code we control via

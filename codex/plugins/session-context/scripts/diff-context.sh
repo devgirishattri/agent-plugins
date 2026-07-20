@@ -32,7 +32,7 @@ if ! _context_path_exists "$SNAPSHOT"; then
 fi
 ensure_context_regular_file "$SNAPSHOT" || exit 1
 
-versions=$(ls -1 "$HISTORY_DIR/${PROJECT_NAME}."*.md 2>/dev/null | sort -r || true)
+versions=$(context_history_versions "$PROJECT_NAME" "$HISTORY_DIR")
 
 if [ -z "$versions" ]; then
   echo "No history versions exist for '$PROJECT_NAME' yet."

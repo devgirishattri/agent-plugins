@@ -1,6 +1,6 @@
 {
   "name": "session-scheduler",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "File-backed workflows, reviewer routing, and task tracking for multi-pane Codex orchestration over session-chat (>=0.13.0).",
   "author": {
     "name": "Girish Attri",

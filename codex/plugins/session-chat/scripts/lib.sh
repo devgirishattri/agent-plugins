@@ -1418,9 +1418,3 @@ read_pane() {
   local lines="${2:-50}"
   tmux capture-pane -t "$pane_id" -p | tail -"$lines"
 }
-
-# --- Platform-compatible utilities ---
-
-portable_date_iso() {
-  TZ="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null
-}

@@ -105,18 +105,29 @@ tmux set-option -p -t "$RECIPIENT" @name scheduler-executor
 tmux set-option -p -t "$REVIEWER" @name scheduler-reviewer
 TMUX_ENV=$(tmux display-message -p -t "$SENDER" '#{socket_path},#{pid},0')
 
+if AGENT_PLUGINS_TIME_ZONE=Not/AZone run_sender bash "$SCRIPT_DIR/task-new.sh" "Invalid timezone" \
+  > "$TEST_HOME/invalid-timezone.out" 2>&1; then
+  fail "task-new accepted invalid AGENT_PLUGINS_TIME_ZONE"
+fi
+grep 'unknown IANA timezone' "$TEST_HOME/invalid-timezone.out" >/dev/null \
+  || fail "invalid timezone rejection lacked guidance"
+
 created=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Smoke task" --meta area=test)
 echo "$created" | grep 'Created task' >/dev/null || fail "task-new did not create"
 TASK_ID=$(printf '%s\n' "$created" | awk '/^Created task/{print $3}' | sed 's/:$//')
 [ -f "$TEST_HOME/scheduler/tasks/$TASK_ID.json" ] || fail "task file missing"
 [ "$(jq -r '.created_at' "$TEST_HOME/scheduler/tasks/$TASK_ID.json")" != "" ] \
   || fail "task-new did not record created_at"
-[[ "$(jq -r '.created_at' "$TEST_HOME/scheduler/tasks/$TASK_ID.json")" =~ \+05:30$ ]] \
-  || fail "task-new did not store created_at in IST"
+expected_offset=$(TZ="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" date +%z)
+expected_offset="${expected_offset:0:3}:${expected_offset:3:2}"
+[[ "$(jq -r '.created_at' "$TEST_HOME/scheduler/tasks/$TASK_ID.json")" == *"$expected_offset" ]] \
+  || fail "task-new did not store created_at in the configured timezone"
 [ "$(path_mode "$TEST_HOME/scheduler")" = "700" ] || fail "scheduler root is not mode 700"
 [ "$(path_mode "$TEST_HOME/scheduler/tasks")" = "700" ] || fail "tasks directory is not mode 700"
 [ "$(path_mode "$TEST_HOME/scheduler/prompts")" = "700" ] || fail "prompts directory is not mode 700"
 [ "$(path_mode "$TEST_HOME/scheduler/tasks/$TASK_ID.json")" = "600" ] || fail "new task record is not mode 600"
+run_sender bash "$SCRIPT_DIR/tasks-clean.sh" --older-than 30d > "$TEST_HOME/clean-fresh.txt"
+[ -f "$TEST_HOME/scheduler/tasks/$TASK_ID.json" ] || fail "tasks-clean selected a fresh offset-bearing task"
 
 run_sender bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$TASK_ID" "Do the smoke task"
 [ "$(path_mode "$TEST_HOME/scheduler/prompts/$TASK_ID.md")" = "600" ] || fail "assignment prompt is not mode 600"
@@ -180,12 +191,12 @@ printf 'legit prompt\n' > "$TEST_HOME/scheduler/prompts/$LEGIT_ID.md"
 jq -n \
   --arg id "$MALICIOUS_ID" \
   --arg prompt "$OUTSIDE_PROMPT" \
-  '{id:$id,name:"Malicious clean task",status:"done",prompt_file:$prompt}' \
+  '{id:$id,name:"Malicious clean task",status:"done",updated_at:"2020-01-01T00:00:00Z",prompt_file:$prompt}' \
   > "$TEST_HOME/scheduler/tasks/$MALICIOUS_ID.json"
 jq -n \
   --arg id "$LEGIT_ID" \
   --arg prompt "$TEST_HOME/scheduler/prompts/$LEGIT_ID.md" \
-  '{id:$id,name:"Legit clean task",status:"done",prompt_file:$prompt}' \
+  '{id:$id,name:"Legit clean task",status:"done",updated_at:"2020-01-01T00:00:00Z",prompt_file:$prompt}' \
   > "$TEST_HOME/scheduler/tasks/$LEGIT_ID.json"
 run_sender bash "$SCRIPT_DIR/tasks-clean.sh" --older-than 0s --status "done" --apply > "$TEST_HOME/clean-traversal.txt"
 [ -f "$OUTSIDE_PROMPT" ] || fail "tasks-clean deleted an outside prompt_file path"

@@ -1172,8 +1172,53 @@ read_pane() {
   tmux capture-pane -t "$pane_id" -p | tail -"$lines"
 }
 
-# --- Platform-compatible utilities ---
+# Resolve the configured IANA timezone and fail closed on typos instead of
+# letting libc silently fall back to UTC.
+agent_plugins_timezone() {
+  local timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" root
+  case "$timezone" in
+    ""|/*|*..*|*[!A-Za-z0-9_+./-]*)
+      _context_store_error "AGENT_PLUGINS_TIME_ZONE must be a valid IANA timezone, got '$timezone'"
+      return 1
+      ;;
+  esac
+  for root in /usr/share/zoneinfo /usr/share/lib/zoneinfo /usr/lib/zoneinfo; do
+    [ -f "$root/$timezone" ] && { printf '%s\n' "$timezone"; return 0; }
+  done
+  _context_store_error "unknown IANA timezone in AGENT_PLUGINS_TIME_ZONE: '$timezone'"
+  return 1
+}
 
-portable_date_iso() {
-  TZ="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null
+# Convert a history filename stamp to epoch seconds. New stamps carry a numeric
+# offset; legacy stamps end in Z. This makes history ordering correct across
+# negative offsets, DST changes, and configuration changes.
+context_archive_timestamp_to_epoch() {
+  local stamp="$1" zone iso epoch=""
+  case "$stamp" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]Z)
+      epoch=$(date -j -u -f "%Y%m%d-%H%M%SZ" "$stamp" +%s 2>/dev/null) ||
+        epoch=$(date -u -d "${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2}:${stamp:13:2} UTC" +%s 2>/dev/null) ||
+        return 1
+      ;;
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9][+-][0-9][0-9][0-9][0-9])
+      epoch=$(date -j -f "%Y%m%d-%H%M%S%z" "$stamp" +%s 2>/dev/null) || {
+        zone="${stamp:15:5}"
+        iso="${stamp:0:4}-${stamp:4:2}-${stamp:6:2}T${stamp:9:2}:${stamp:11:2}:${stamp:13:2}${zone:0:3}:${zone:3:2}"
+        epoch=$(date -d "$iso" +%s 2>/dev/null) || return 1
+      }
+      ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$epoch"
+}
+
+context_history_versions() {
+  local project_name="$1" history_dir="$2" file base stamp epoch
+  for file in "$history_dir/${project_name}."*.md; do
+    [ -f "$file" ] || continue
+    base=$(basename "$file" .md)
+    stamp=${base#"${project_name}".}
+    epoch=$(context_archive_timestamp_to_epoch "$stamp") || epoch=0
+    printf '%s\t%s\n' "$epoch" "$file"
+  done | sort -t $'\t' -k1,1nr -k2,2r | cut -f2-
 }

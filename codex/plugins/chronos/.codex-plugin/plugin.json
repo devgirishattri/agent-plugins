@@ -1,6 +1,6 @@
 {
   "name": "chronos",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Inject a fresh configured-timezone date/time context with every submitted Codex prompt.",
   "author": {
     "name": "Girish Attri",

@@ -47,7 +47,7 @@
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude (and Codex) sessions via tmux. Durable delivery routes fallback/dispatch into the recipient runtime's messages dir.",
-      "version": "0.17.5",
+      "version": "0.17.6",
       "author": {
         "name": "Girish Attri"
       },
@@ -65,8 +65,8 @@
     },
     {
       "name": "session-context",
-      "description": "Generate, list, load, share, and remove Claude session context snapshots for the current project. Surfaces available snapshots on session start.",
-      "version": "0.7.6",
+      "description": "Generate, list, load, share, and remove Claude session context snapshots from a shared store. Surfaces available snapshots on session start.",
+      "version": "0.7.7",
       "author": {
         "name": "Girish Attri"
       },
@@ -84,7 +84,7 @@
     {
       "name": "chronos",
       "description": "Ambient time/day awareness for agents: injects the current date/time as context with every prompt, and refreshes it during long turns via a throttled PreToolUse hook. No explicit invocation needed.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Girish Attri"
       },
@@ -103,7 +103,7 @@
     {
       "name": "session-scheduler",
       "description": "Thin file-backed task ledger for orchestrator \u2192 executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "author": {
         "name": "Girish Attri"
       },

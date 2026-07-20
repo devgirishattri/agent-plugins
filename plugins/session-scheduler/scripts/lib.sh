@@ -51,6 +51,7 @@ _sched_dir_is_safe() {
 # umask 077 keeps NEW files 0600 / dirs 0700; this migrates pre-existing ones.
 ensure_dirs() {
   local d entry
+  agent_plugins_timezone >/dev/null || return 1
   # Never create or write THROUGH a symlink planted at the root/tasks/prompts.
   for d in "$SCHEDULER_DIR" "$TASKS_DIR" "$PROMPTS_DIR"; do
     if [ -L "$d" ]; then
@@ -239,8 +240,24 @@ generate_task_id() {
   fi
 }
 
+agent_plugins_timezone() {
+  local timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" root
+  case "$timezone" in
+    ""|/*|*..*|*[!A-Za-z0-9_+./-]*)
+      echo "ERROR: AGENT_PLUGINS_TIME_ZONE must be a valid IANA timezone, got '$timezone'." >&2
+      return 1
+      ;;
+  esac
+  for root in /usr/share/zoneinfo /usr/share/lib/zoneinfo /usr/lib/zoneinfo; do
+    [ -f "$root/$timezone" ] && { printf '%s\n' "$timezone"; return 0; }
+  done
+  echo "ERROR: unknown IANA timezone in AGENT_PLUGINS_TIME_ZONE: '$timezone'." >&2
+  return 1
+}
+
 iso_now() {
-  local raw timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
+  local raw timezone
+  timezone=$(agent_plugins_timezone) || return 1
   raw=$(TZ="$timezone" date +%Y-%m-%dT%H:%M:%S%z) || return 1
   printf '%s:%s\n' "${raw%??}" "${raw#${raw%??}}"
 }
@@ -268,7 +285,8 @@ iso_to_epoch() {
 # Convert epoch seconds -> ISO-8601 in the configured timezone. BSD (date -r) first, GNU (-d @) fallback.
 # Echoes empty string on failure.
 epoch_to_iso() {
-  local epoch="$1" iso="" timezone="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}"
+  local epoch="$1" iso="" timezone
+  timezone=$(agent_plugins_timezone) || return 1
   iso=$(TZ="$timezone" date -r "$epoch" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) ||
     iso=$(TZ="$timezone" date -d "@$epoch" +%Y-%m-%dT%H:%M:%S%z 2>/dev/null) ||
     iso=""

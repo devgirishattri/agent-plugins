@@ -1,9 +1,9 @@
 ---
 name: session-context
-description: When and how to capture, restore, and hand off Claude session context snapshots for a project. Use this skill before invoking /context-generate, /context-load, or /context-share so you understand what a snapshot is, where it lives, and the prerequisites for sharing one with another session.
+description: When and how to capture, restore, and hand off Claude session context snapshots from a shared store. Use this skill before invoking /context-generate, /context-load, or /context-share so you understand what a snapshot is, where it lives, and the prerequisites for sharing one with another session.
 ---
 
-# session-context: project-local context snapshots
+# session-context: shared-store context snapshots
 
 A snapshot is a markdown summary of a working session — **what you worked on, the
 decisions you made, and where you left off** — written so a *future* session (or a

@@ -3,7 +3,6 @@ firebase-debug.log
 .claude/dispatch/
 .claude/scheduled_tasks.lock
 tmp/
-workspace.sh
 upgrade.sh
 
 # Local design and implementation plans

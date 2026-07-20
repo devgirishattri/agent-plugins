@@ -31,7 +31,7 @@ if [ ! -f "$SNAPSHOT" ]; then
   exit 1
 fi
 
-versions=$(ls -1 "$HISTORY_DIR/${PROJECT_NAME}."*.md 2>/dev/null | sort -r || true)
+versions=$(context_history_versions "$PROJECT_NAME" "$HISTORY_DIR")
 
 if [ -z "$versions" ]; then
   echo "No history versions exist for '$PROJECT_NAME' yet."

@@ -44,6 +44,16 @@ export SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub"
 
 echo "=== session-scheduler tests (SESSION_SCHEDULER_HOME=$SESSION_SCHEDULER_HOME) ==="
 
+# Invalid IANA timezone names fail closed before touching the ledger.
+if AGENT_PLUGINS_TIME_ZONE=Not/AZone SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" \
+  bash "$HERE/task-new.sh" "invalid-timezone" > "$TMP/invalid-timezone.out" 2>&1; then
+  fail "invalid_timezone_rejected" "task-new accepted Not/AZone"
+elif grep -q "unknown IANA timezone" "$TMP/invalid-timezone.out"; then
+  pass "invalid_timezone_rejected"
+else
+  fail "invalid_timezone_rejected" "unexpected output: $(cat "$TMP/invalid-timezone.out")"
+fi
+
 # --- Test 1: task-new ---
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "smoke-task-1" --meta foo=bar 2>&1)
 ID=$(echo "$out" | awk '/Created task:/ {print $3}')
@@ -51,10 +61,22 @@ if [ -n "$ID" ] && [ -f "$SESSION_SCHEDULER_HOME/tasks/$ID.json" ]; then
   status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
   meta_foo=$(jq -r '.meta.foo' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
   created_at=$(jq -r '.created_at' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
-  if [ "$status" = "created" ] && [ "$meta_foo" = "bar" ] && [[ "$created_at" =~ \+05:30$ ]]; then pass "task_new"
+  if [ "$status" = "created" ] && [ "$meta_foo" = "bar" ]; then pass "task_new"
   else fail "task_new" "wrong status/meta: status=$status foo=$meta_foo"; fi
+  expected_offset=$(TZ="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" date +%z)
+  expected_offset="${expected_offset:0:3}:${expected_offset:3:2}"
+  if [[ "$created_at" == *"$expected_offset" ]]; then pass "task_new_timezone"
+  else fail "task_new_timezone" "created_at=$created_at expected_offset=$expected_offset"; fi
 else
   fail "task_new" "no id parsed or file missing; out=$out"
+fi
+
+# Fresh offset-bearing timestamps must never be treated as ancient by cleanup.
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/tasks-clean.sh" --older-than 30 2>&1)
+if [ -f "$SESSION_SCHEDULER_HOME/tasks/$ID.json" ] && echo "$out" | grep -q "Nothing to clean"; then
+  pass "tasks_clean_preserves_fresh_offset_timestamp"
+else
+  fail "tasks_clean_preserves_fresh_offset_timestamp" "fresh task was selected; out=$out"
 fi
 
 # --- Test 2: task-assign (with stubbed dispatch) ---
@@ -93,6 +115,8 @@ if [ "$status" = "blocked" ]; then pass "task_block"
 else fail "task_block" "status=$status out=$out"; fi
 
 # --- Test 7: tasks-clean dry-run finds done task with --older-than 0 ---
+jq '.updated_at = "2020-01-01T00:00:00Z"' "$SESSION_SCHEDULER_HOME/tasks/$ID.json" > "$SESSION_SCHEDULER_HOME/tasks/$ID.json.tmp" \
+  && mv "$SESSION_SCHEDULER_HOME/tasks/$ID.json.tmp" "$SESSION_SCHEDULER_HOME/tasks/$ID.json"
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/tasks-clean.sh" --older-than 0 --status "done" 2>&1)
 if echo "$out" | grep -q "DRY-RUN" && echo "$out" | grep -qF "$ID"; then pass "tasks_clean_dry_run"
 else fail "tasks_clean_dry_run" "no dry-run match; out=$out"; fi
