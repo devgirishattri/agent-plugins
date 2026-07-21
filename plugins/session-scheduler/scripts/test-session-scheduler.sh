@@ -253,6 +253,24 @@ else
   fail "eta_overdue_flag" "eta_at not stored"
 fi
 
+# --- Test 17b: a blocked task with a past eta must NOT show OVERDUE ---
+# OVERDUE marks work that is late while still actionable; a blocked task is at
+# rest (waiting on an external unblock), so the flag is suppressed until it
+# resumes. Regresses the "terminal blocked tasks marked overdue" report.
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "blocked-eta-task" 2>&1)
+BLK_ETA_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$BLK_ETA_ID" --eta 5 "timed work" >/dev/null 2>&1
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-block.sh" "$BLK_ETA_ID" "waiting on upstream" >/dev/null 2>&1
+jq '.eta_at = "2020-01-01T00:00:00Z"' "$SESSION_SCHEDULER_HOME/tasks/$BLK_ETA_ID.json" > "$SESSION_SCHEDULER_HOME/tasks/$BLK_ETA_ID.json.tmp" \
+  && mv "$SESSION_SCHEDULER_HOME/tasks/$BLK_ETA_ID.json.tmp" "$SESSION_SCHEDULER_HOME/tasks/$BLK_ETA_ID.json"
+blk_status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$BLK_ETA_ID.json")
+blk_row=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-status.sh" --all 2>&1 | grep -F "$BLK_ETA_ID")
+if [ "$blk_status" = "blocked" ] && [ -n "$blk_row" ] && ! echo "$blk_row" | grep -q "OVERDUE"; then
+  pass "blocked_suppresses_overdue"
+else
+  fail "blocked_suppresses_overdue" "status=$blk_status row=$blk_row"
+fi
+
 # --- Test 18: STALE flag for assigned task not updated recently ---
 jq '.updated_at = "2020-01-01T00:00:00Z"' "$SESSION_SCHEDULER_HOME/tasks/$ETA_ID.json" > "$SESSION_SCHEDULER_HOME/tasks/$ETA_ID.json.tmp" \
   && mv "$SESSION_SCHEDULER_HOME/tasks/$ETA_ID.json.tmp" "$SESSION_SCHEDULER_HOME/tasks/$ETA_ID.json"

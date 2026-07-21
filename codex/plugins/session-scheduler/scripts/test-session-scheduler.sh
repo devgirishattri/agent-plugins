@@ -265,6 +265,18 @@ jq '.eta_at = "2020-01-01T00:00:00Z"' "$TEST_HOME/scheduler/tasks/$ETA_ID.json" 
 mv "$TEST_HOME/eta.tmp" "$TEST_HOME/scheduler/tasks/$ETA_ID.json"
 run_sender bash "$SCRIPT_DIR/task-status.sh" | grep "$ETA_ID" | grep 'OVERDUE' >/dev/null || fail "OVERDUE flag missing"
 
+# --- blocked task with a past eta must NOT show OVERDUE ---
+blk=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Blocked eta task")
+BLK_ETA_ID=$(printf '%s\n' "$blk" | awk '/^Created task/{print $3}' | sed 's/:$//')
+run_sender bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$BLK_ETA_ID" --eta 5 "Timed work"
+run_recipient bash "$SCRIPT_DIR/task-block.sh" "$BLK_ETA_ID" "waiting on upstream"
+jq '.eta_at = "2020-01-01T00:00:00Z"' "$TEST_HOME/scheduler/tasks/$BLK_ETA_ID.json" > "$TEST_HOME/blk-eta.tmp"
+mv "$TEST_HOME/blk-eta.tmp" "$TEST_HOME/scheduler/tasks/$BLK_ETA_ID.json"
+[ "$(jq -r '.status' "$TEST_HOME/scheduler/tasks/$BLK_ETA_ID.json")" = "blocked" ] \
+  || fail "blocked-eta task not in blocked state"
+run_sender bash "$SCRIPT_DIR/task-status.sh" --all | grep "$BLK_ETA_ID" | grep 'OVERDUE' >/dev/null \
+  && fail "blocked task incorrectly flagged OVERDUE"
+
 # --- task-board renders groups + totals ---
 run_sender bash "$SCRIPT_DIR/task-board.sh" > "$TEST_HOME/board.txt"
 grep 'Stage: execute' "$TEST_HOME/board.txt" >/dev/null || fail "board missing stage group"

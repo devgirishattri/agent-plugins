@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # task-status.sh — Show scheduler task status
 # Usage: task-status.sh [id|--all|--pending|--mine|--by-stage|--by-workflow|--workflow ID]
-# Flags column: OVERDUE (past eta_at), STALE (assigned/review with no update
-# for SESSION_SCHEDULER_STALE_MINUTES, default 30).
+# Flags column: OVERDUE (past eta_at while still actionable — not done, not
+# blocked), STALE (assigned/review with no update for
+# SESSION_SCHEDULER_STALE_MINUTES, default 30).
 # Supported platforms: macOS, Linux
 set -uo pipefail
 

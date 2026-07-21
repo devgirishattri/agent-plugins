@@ -9,8 +9,9 @@
 #   task-status.sh --by-stage      # non-done tasks grouped by stage
 #   task-status.sh --by-workflow   # tasks grouped by meta.workflow_id
 #   task-status.sh --workflow ID   # tasks in one workflow
-# Flags column: OVERDUE (past eta_at), STALE (assigned/review with no update
-# for SESSION_SCHEDULER_STALE_MINUTES, default 30).
+# Flags column: OVERDUE (past eta_at while still actionable — not done, not
+# blocked), STALE (assigned/review with no update for
+# SESSION_SCHEDULER_STALE_MINUTES, default 30).
 set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"

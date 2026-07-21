@@ -521,8 +521,8 @@ unmet_deps() {
   done <<< "$deps"
 }
 
-# Compute attention flags for a task json file: OVERDUE (past eta_at and not
-# done) and/or STALE (assigned/review with no update for
+# Compute attention flags for a task json file: OVERDUE (past eta_at while the
+# task can still be acted on) and/or STALE (assigned/review with no update for
 # SESSION_SCHEDULER_STALE_MINUTES, default 30). Prints "-" if none.
 task_flags() {
   local file="$1"
@@ -533,12 +533,22 @@ task_flags() {
   status=$(jq -r '.status // ""' "$file" 2>/dev/null)
   eta=$(jq -r '.eta_at // empty' "$file" 2>/dev/null)
   updated=$(jq -r '.updated_at // empty' "$file" 2>/dev/null)
-  if [ -n "$eta" ] && [ "$status" != "done" ]; then
-    eta_epoch=$(iso_to_epoch "$eta")
-    if [ "$eta_epoch" -gt 0 ] && [ "$now" -gt "$eta_epoch" ]; then
-      flags="OVERDUE"
-    fi
-  fi
+  # OVERDUE only makes sense while a task can still be acted on, so suppress it
+  # for terminal/at-rest states: `done` (finished) and `blocked` (paused,
+  # waiting on an external unblock — nobody is currently late). A blocked task
+  # that resumes (-> assigned) with a past eta becomes OVERDUE again naturally.
+  # This mirrors STALE, which likewise only applies to assigned/review.
+  case "$status" in
+    done|blocked) ;;
+    *)
+      if [ -n "$eta" ]; then
+        eta_epoch=$(iso_to_epoch "$eta")
+        if [ "$eta_epoch" -gt 0 ] && [ "$now" -gt "$eta_epoch" ]; then
+          flags="OVERDUE"
+        fi
+      fi
+      ;;
+  esac
   case "$status" in
     assigned|review)
       if [ -n "$updated" ]; then
