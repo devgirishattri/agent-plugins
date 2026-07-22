@@ -7,3 +7,4 @@ upgrade.sh
 
 # Local design and implementation plans
 docs/
+.tmp/
