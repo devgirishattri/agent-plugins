@@ -42,8 +42,8 @@ else
 fi
 
 if ROOT=$(workspace_root 2>/dev/null); then
-  EXPECTED_SCHEDULER="$ROOT/tmp/scheduler"
-  EXPECTED_CONTEXT="$ROOT/tmp/contexts"
+  EXPECTED_SCHEDULER="$ROOT/.tmp/scheduler"
+  EXPECTED_CONTEXT="$ROOT/.tmp/contexts"
   ACTUAL_SCHEDULER=$(absolute_existing_dir "$SCHEDULER_DIR" 2>/dev/null || printf '%s' "$SCHEDULER_DIR")
   if [ "$ACTUAL_SCHEDULER" = "$EXPECTED_SCHEDULER" ]; then
     echo "workspace scheduler home: OK ($ROOT)"

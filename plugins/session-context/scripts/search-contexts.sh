@@ -7,7 +7,7 @@
 #   (a) the current git toplevel (always included)
 #   (b) best-effort decoded ~/.claude/projects/* directory names
 #       (lossy for paths containing hyphens; non-existent roots are skipped)
-# Only roots that exist and contain tmp/contexts/ are searched.
+# Only roots that exist and contain .tmp/contexts/ (or legacy tmp/contexts/) are searched.
 # Output (default): ROOT\tSNAPSHOT\tLINE\tTEXT (first 3 matching lines per file)
 # Output (--list):  ROOT\tSNAPSHOT
 # Supported platforms: macOS, Linux
@@ -64,7 +64,9 @@ while IFS= read -r root; do
     if [ "$root" = "$current_root" ] && [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
         contexts_dir="$SESSION_CONTEXT_HOME"
     else
-        contexts_dir="$root/tmp/contexts"
+        contexts_dir="$root/.tmp/contexts"
+        # Legacy fallback: stores created before the .tmp/ migration.
+        [ -d "$contexts_dir" ] || contexts_dir="$root/tmp/contexts"
     fi
     [ -d "$contexts_dir" ] || continue
     matches=$(grep -il -- "$PATTERN" "$contexts_dir"/*.md 2>/dev/null) || true

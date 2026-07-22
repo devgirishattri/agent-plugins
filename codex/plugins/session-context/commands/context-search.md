@@ -47,9 +47,9 @@ Rules:
   may create its directory or harden existing owner-only permissions.
 - The current git toplevel is always included and uses the inherited
   `SESSION_CONTEXT_HOME`; additional roots come from `cwd` values recorded in
-  local Codex session files and use their own `tmp/contexts/` stores. Roots that
-  no longer exist or have no discoverable store are skipped, so coverage of
-  other projects is best-effort.
+  local Codex session files and use their own `.tmp/contexts/` stores, falling
+  back to legacy `tmp/contexts/` stores. Roots that no longer exist or have no
+  discoverable store are skipped, so coverage of other projects is best-effort.
 - If no matches were found, report that and suggest `$session-context:context-list` to see snapshots for the current project.
 - To load a cross-project match, the pane must have inherited the matching
   project's absolute context-store path as `SESSION_CONTEXT_HOME`. Merely

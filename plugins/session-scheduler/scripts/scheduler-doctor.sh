@@ -62,7 +62,7 @@ echo
 # workspace ledger — but surface it so a misconfigured launcher is caught.
 # task-assign embeds the absolute home in every prompt as provenance.
 gitroot=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-project_home="$(abs_dir "$gitroot")/tmp/scheduler"
+project_home="$(abs_dir "$gitroot")/.tmp/scheduler"
 active_home="$(abs_dir "$SCHEDULER_DIR")"
 echo "ledger home:    $active_home"
 if [ "$active_home" = "$project_home" ]; then

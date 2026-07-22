@@ -549,7 +549,7 @@ fi
 
 # --- Test 20b: exact-root sandbox — release and dead-lock reclaim never write the parent ---
 # Models a child sandbox whose ONLY writable root is the store itself (e.g. a
-# Codex pane granted tmp/contexts but not tmp/): the quarantine used by owner
+# Codex pane granted .tmp/contexts but not .tmp/): the quarantine used by owner
 # release and dead-lock reclaim must stay inside SESSION_CONTEXT_HOME.
 XR_PARENT="$TMP/exact-root"
 XR_STORE="$XR_PARENT/contexts"

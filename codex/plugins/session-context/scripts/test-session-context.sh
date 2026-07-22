@@ -279,8 +279,8 @@ if ! bash -c '
 fi
 
 # Exact-root sandbox regression: with write access to ONLY the store itself
-# (its parent is read-only, like a Codex pane granted tmp/contexts but not
-# tmp/), owner release and dead-lock reclaim must both succeed with zero
+# (its parent is read-only, like a Codex pane granted .tmp/contexts but not
+# .tmp/), owner release and dead-lock reclaim must both succeed with zero
 # parent-directory writes and zero lock/quarantine residue.
 XR_PARENT="$TMP/exact-root"
 XR_STORE="$XR_PARENT/contexts"

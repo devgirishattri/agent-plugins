@@ -98,9 +98,9 @@ Legal status transitions (enforced by every command):
   "meta": {
     "free-form": "key/value",
     "context": "context-snapshot-name",
-    "context_home": "/abs/.../tmp/contexts",
+    "context_home": "/abs/.../.tmp/contexts",
     "workflow_id": "workflow-group-id",
-    "scheduler_home": "/abs/.../tmp/scheduler",
+    "scheduler_home": "/abs/.../.tmp/scheduler",
     "review_...": "reviewer-routing bookkeeping (review_dispatch_status, review_dispatched_at, …)"
   },
   "history": [
