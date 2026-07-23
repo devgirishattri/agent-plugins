@@ -17,12 +17,22 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
 
 store_arg=""
+FIX=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --store)
       [ $# -ge 2 ] || { echo "ERROR: --store requires a value" >&2; exit 2; }
       store_arg="$2"
       shift 2
+      ;;
+    --fix)
+      # Opt-in normalizer: apply the deterministic, low-risk fixes (MEMORY.md
+      # index reconciliation + `status: active` backfill) through the single
+      # writer, then lint the post-fix store. Everything requiring human
+      # content (missing description/Why/How, ambiguous legacy type, dates)
+      # is reported, never fabricated. Default (no --fix) stays read-only.
+      FIX=1
+      shift
       ;;
     *)
       echo "ERROR: memory-lint.sh: unknown argument: $1" >&2
@@ -335,7 +345,159 @@ _km_lint_index_style() {
   fi
 }
 
+# --- normalizer (only runs under --fix; delegates every write to the single
+#     writer memory-write.sh — this script never mutates the store directly) -
+_km_fix_report_writer_failure() {
+  local rc="$1" file="$2" action="$3" errfile="$4" msg=""
+  msg="$(sed -n '1p' "$errfile" 2>/dev/null || true)"
+  case "$rc" in
+    6)
+      [ -n "$msg" ] || msg="reviewer role: memory writes refused"
+      printf '%s\n' "$msg" >&2
+      return 6
+      ;;
+    5)
+      printf 'SKIP\t%s\t%s not applied (store locked)\n' "$file" "$action"
+      ;;
+    4)
+      printf 'SKIP\t%s\t%s not applied (CAS mismatch or store-integrity failure)\n' "$file" "$action"
+      ;;
+    *)
+      printf 'SKIP\t%s\t%s not applied (writer rc %s)\n' "$file" "$action" "$rc"
+      ;;
+  esac
+  return 0
+}
+
+_km_fix_apply_status() {
+  # Canonicalize the `status` field on canonical (schema_version) files.
+  # Retrieval reads TOP-LEVEL `status` (nested `metadata.status` is ignored),
+  # so this: (a) skips files that already have a top-level status; (b) for the
+  # rest, relocates a mis-nested `metadata.status` to top-level PRESERVING its
+  # value (or backfills `active` if status is absent entirely), inserting it
+  # after the top-level `updated:` line. Applies via memory-write.sh apply.
+  # Never touches dates, description, or body — those need human judgement.
+  local store="$1" f staged newmem err ei et desired end_line body_start rc report_rc
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    _km_lint_parse "$store/$f"
+    [ "$KML_UNPARSEABLE" -eq 1 ] && continue
+    _km_lint_has schema_version || continue
+    _km_lint_has metadata.type || continue
+    _km_lint_has status && continue          # top-level status present → already canonical
+    _km_lint_has updated || continue          # no top-level anchor → leave for human
+    desired="$(_km_lint_get metadata.status 2>/dev/null || true)"
+    [ -n "$desired" ] || desired="active"
+    _km_lint_in_list "$desired" "$KM_LINT_ENUM_STATUS" || desired="active"
+    end_line="$(
+      awk '
+        NR == 1 { if ($0 != "---") exit 1; next }
+        $0 == "---" { print NR; exit }
+      ' "$store/$f" 2>/dev/null || true
+    )"
+    case "$end_line" in ''|*[!0-9]*) continue ;; esac
+    body_start=$((end_line + 1))
+    staged="$(mktemp 2>/dev/null)" || continue
+    # Drop any indented (nested) status line; emit top-level `status:` right
+    # after the top-level `updated:` line, preserving the resolved value. The
+    # transform is strictly scoped to the first frontmatter document; the body is
+    # appended via tail so body bytes (including indented status/updated examples)
+    # are left untouched.
+    {
+      awk -v val="$desired" -v end="$end_line" '
+        NR > end { exit }
+        NR == 1 { print; next }
+        NR == end { print; next }
+        /^[[:space:]]+status:[[:space:]]/ { next }
+        { print }
+        /^updated:[[:space:]]/ && ins != 1 { print "status: " val; ins = 1 }
+      ' "$store/$f" 2>/dev/null || exit 1
+      tail -n +"$body_start" "$store/$f" 2>/dev/null || true
+    } > "$staged" 2>/dev/null || { rm -f "$staged"; continue; }
+    _km_lint_parse "$staged"
+    if [ "$KML_UNPARSEABLE" -eq 1 ] || ! _km_lint_has status; then
+      rm -f "$staged"; continue          # no top-level updated: to anchor after → leave for human
+    fi
+    newmem="$(mktemp 2>/dev/null)" || { rm -f "$staged"; continue; }
+    cp "$store/MEMORY.md" "$newmem" 2>/dev/null || { rm -f "$staged" "$newmem"; continue; }
+    et="$(km_sha256_file "$store/$f")"
+    ei="$(km_sha256_file "$store/MEMORY.md")"
+    err="$(mktemp 2>/dev/null)" || { rm -f "$staged" "$newmem"; continue; }
+    if bash "$HERE/memory-write.sh" apply --store "$store" --target "$f" \
+         --staged-target "$staged" --staged-index "$newmem" \
+         --expect-target "$et" --expect-index "$ei" >/dev/null 2>"$err"; then
+      printf 'FIXED\t%s\tstatus canonicalized to top-level (%s)\n' "$f" "$desired"
+    else
+      rc=$?
+      _km_fix_report_writer_failure "$rc" "$f" "status fix" "$err"
+      report_rc=$?
+      rm -f "$staged" "$newmem" "$err"
+      [ "$report_rc" -eq 0 ] || return "$report_rc"
+      continue
+    fi
+    rm -f "$staged" "$newmem" "$err"
+  done < <(km_authoritative_files "$store")
+  return 0
+}
+
+_km_fix_apply_index() {
+  # Add a MEMORY.md row for each authoritative file memory-index.sh reports as
+  # missing an index entry. Delegates the write to memory-write.sh index.
+  local store="$1" tag kind file newidx nm hook stem f err rc report_rc
+  local -a missing=()
+  while IFS=$'\t' read -r tag kind file; do
+    [ "$tag" = "DRIFT" ] || continue
+    [ "$kind" = "missing-entry" ] || continue
+    [ -n "$file" ] && missing+=("$file")
+  done < <(bash "$HERE/memory-index.sh" --store "$store" 2>/dev/null)
+  [ "${#missing[@]}" -gt 0 ] || return 0
+  newidx="$(mktemp 2>/dev/null)" || return 0
+  awk 1 "$store/MEMORY.md" > "$newidx" 2>/dev/null || { rm -f "$newidx"; return 0; }
+  for f in "${missing[@]}"; do
+    _km_lint_parse "$store/$f"
+    stem="${f%.md}"
+    nm="$(_km_lint_get name 2>/dev/null || true)"
+    [ -n "$nm" ] || nm="$(printf '%s' "$stem" | tr '_-' '  ')"
+    hook="$(_km_lint_get description 2>/dev/null || true)"
+    [ -n "$hook" ] || hook="(no description)"
+    printf -- '- [%s](%s) — %s\n' "$nm" "$f" "$hook" >> "$newidx"
+  done
+  ei="$(km_sha256_file "$store/MEMORY.md")"
+  err="$(mktemp 2>/dev/null)" || { rm -f "$newidx"; return 0; }
+  if bash "$HERE/memory-write.sh" index --store "$store" \
+       --staged-index "$newidx" --expect-index "$ei" >/dev/null 2>"$err"; then
+    for f in "${missing[@]}"; do
+      printf 'FIXED\t%s\tadded missing MEMORY.md index row\n' "$f"
+    done
+  else
+    rc=$?
+    _km_fix_report_writer_failure "$rc" "MEMORY.md" "index reconciliation" "$err"
+    report_rc=$?
+    rm -f "$newidx" "$err"
+    [ "$report_rc" -eq 0 ] || return "$report_rc"
+    return 0
+  fi
+  rm -f "$newidx" "$err"
+  return 0
+}
+
+_km_fix_run() {
+  local store="$1" rc
+  _km_fix_apply_status "$store"
+  rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  _km_fix_apply_index "$store"
+  rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  return 0
+}
+
 # --- main -----------------------------------------------------------------
+if [ "$FIX" = 1 ]; then
+  _km_fix_run "$store"
+  fix_rc=$?
+  [ "$fix_rc" -eq 0 ] || exit "$fix_rc"
+fi
 collision_rc=0
 collision_count=0
 while IFS=$'\t' read -r a b; do

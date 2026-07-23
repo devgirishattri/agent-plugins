@@ -2,9 +2,32 @@
   "hooks": {
     "SessionStart": [{
       "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "SESSION_CONTEXT_HOME=\"${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.tmp/contexts}\" bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect-snapshots.sh",
+          "timeout": 5
+        },
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/inject-recall.sh --session-start",
+          "timeout": 5
+        }
+      ]
+    }],
+    "UserPromptSubmit": [{
+      "matcher": "",
       "hooks": [{
         "type": "command",
-        "command": "SESSION_CONTEXT_HOME=\"${SESSION_CONTEXT_HOME:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.tmp/contexts}\" bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect-snapshots.sh",
+        "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/inject-recall.sh --prompt",
+        "timeout": 5
+      }]
+    }],
+    "Stop": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/nudge-consolidate.sh --stop-json",
         "timeout": 5
       }]
     }]

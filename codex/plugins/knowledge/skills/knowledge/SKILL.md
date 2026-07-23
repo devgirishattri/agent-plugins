@@ -78,7 +78,7 @@ bootstraps a new store:**
 |---|---|
 | `$knowledge:init [--store <path>]` | Bootstrap a new `.agents/memory/` store: a reviewable `.gitignore` PLAN, then an APPLY that verifies coverage before creating the store. Run this first if `doctor`/`lint`/etc. report no store found. |
 | `$knowledge:doctor [--store <path>]` | Diagnose knowledge-store health across docs, memory, context, the `AGENTS.md` recall bridge, and provider capability — read-only, cross-store. Start here for an overall health check. |
-| `$knowledge:lint [--store <path>]` | Lint the memory store's frontmatter, schema, and index for defects — read-only. Narrower than `doctor`; use it when iterating on memory-file content directly. |
+| `$knowledge:lint [--store <path>] [--fix]` | Lint the memory store's frontmatter, schema, and index for defects — read-only by default. Narrower than `doctor`; use it when iterating on memory-file content directly. `--fix` is an opt-in normalizer that applies only the deterministic, low-risk repairs (canonicalize a mis-nested/absent top-level `status`; reconcile missing `MEMORY.md` index rows) — every write goes through `memory-write.sh` (reviewer-refused, CAS); anything needing human content (description, **Why:**/**How to apply:**, dates, ambiguous legacy `type`) is reported, never fabricated. |
 | `$knowledge:search [--store <path>] [--limit N] [--json] <query>` | Deterministic lexical ranked search over the memory store — read-only. Use to find a slug or check whether something is already recorded. |
 | `$knowledge:recall [--store <path>] [--limit N] <query>` | The agent-facing wrapper over `search`: slug citations + bounded snippets framed as untrusted context. Use this (not `search`) when informing your own reasoning before a substantive task — see the recall bridge below. |
 | `$knowledge:graph [--store <path>] [neighbors <slug> \| reverse <slug> \| orphans \| components \| --format json\|dot\|mermaid]` | Explicit-`[[slug]]`-link knowledge graph — read-only. Use to explore how memories connect, find orphaned files, or render a diagram. |
@@ -111,8 +111,35 @@ universal funnel or one universal rule:
   hard-requires the preflight; it is not a technical funnel like
   `memory-write.sh`, since docs edits are direct model edits).
 
-`doctor`/`lint`/`search`/`recall`/`graph` are read-only and run anywhere,
-including reviewer panes.
+`doctor`/`search`/`recall`/`graph` are read-only and run anywhere,
+including reviewer panes; `lint` is read-only too EXCEPT `lint --fix`, whose
+repairs are delegated to `memory-write.sh` and therefore inherit its
+reviewer-role refusal (exit 6).
+
+## Automatic recall / capture hooks (0.2 — opt-in, OFF by default)
+
+Beyond the agent-invoked `recall`/`remember` surfaces, the plugin ships
+hook-driven **automatic** recall and capture-nudge. Both are OFF unless you
+opt in with an environment variable (inherited at launch), because prompt-time
+injection still needs latency / false-positive tuning before it is on by
+default (per the spec's 0.2 roadmap gate). All injected content is framed as
+untrusted background context, never instructions/policy, and every hook fails
+silently (never breaks or stalls a session).
+
+- **`KNOWLEDGE_AUTO_RECALL=1`** — SessionStart injects the bounded `MEMORY.md`
+  index as always-on background; UserPromptSubmit extracts salient terms from
+  the prompt, unions per-term scorer hits, and injects the top-N. Tunables:
+  `KNOWLEDGE_AUTO_RECALL_LIMIT` (top-N, default 5),
+  `KNOWLEDGE_AUTO_RECALL_TERMS` (max terms queried, default 4 — bounds
+  per-prompt latency), `KNOWLEDGE_AUTO_RECALL_BUDGET` (output char cap,
+  default 4000). Script: `scripts/inject-recall.sh`.
+- **`KNOWLEDGE_CONSOLIDATE_NUDGE=1`** — a Stop hook that, when the capture
+  inbox has pending candidates, prints ONE reminder to run
+  `$knowledge:consolidate`. Nudge only — it never writes and never
+  auto-consolidates. Script: `scripts/nudge-consolidate.sh`.
+- **Capture bridge** — `assets/capture-snippet.md` is the paste-into-AGENTS.md
+  instruction (companion to the recall bridge) telling the agent to
+  `$knowledge:remember` mid-task and `$knowledge:consolidate` at session end.
 
 The five write-capable agent surfaces — `docs-create`, `init`, `remember`,
 `consolidate`, and `promote` — are explicit-only on both providers. Their Codex

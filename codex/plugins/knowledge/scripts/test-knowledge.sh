@@ -31,12 +31,12 @@
 #
 # NAMES (module suites, in component-inventory order):
 #   context docs-create memory-kernel retrieval capture
-#   consolidate doctor promotion
+#   consolidate doctor promotion auto
 # NAMES (Phase-F-owned checks, run inline by this script):
 #   network-egress privacy
 #
 # Exit: 0 iff every requested suite/check is green (aggregate, when no
-# --suite is given: 0 iff ALL TEN are green); 1 if any is red; 2 usage error.
+# --suite is given: 0 iff ALL ELEVEN are green); 1 if any is red; 2 usage error.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -73,7 +73,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-MODULE_NAMES="context docs-create memory-kernel retrieval capture consolidate doctor promotion"
+MODULE_NAMES="context docs-create memory-kernel retrieval capture consolidate doctor promotion auto"
 CHECK_NAMES="network-egress privacy"
 ALL_NAMES="$MODULE_NAMES $CHECK_NAMES"
 
@@ -105,6 +105,7 @@ module_script_for() {
     consolidate)     echo "test-consolidate.sh" ;;
     doctor)          echo "test-doctor.sh" ;;
     promotion)       echo "test-promotion.sh" ;;
+    auto)            echo "test-auto.sh" ;;
     *) return 1 ;;
   esac
 }
@@ -255,7 +256,7 @@ echo
 for name in $names_to_run; do
   RUN_COUNT=$((RUN_COUNT + 1))
   case "$name" in
-    context|docs-create|memory-kernel|retrieval|capture|consolidate|doctor|promotion)
+    context|docs-create|memory-kernel|retrieval|capture|consolidate|doctor|promotion|auto)
       run_module "$name"
       rc=$?
       ;;
