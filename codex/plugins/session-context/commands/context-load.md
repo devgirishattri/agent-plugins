@@ -1,5 +1,5 @@
 ---
-description: Load a session context summary from another session
+description: "[DEPRECATED — superseded by knowledge] Load a session context summary from another session"
 argument-hint: <snapshot-name>
 ---
 

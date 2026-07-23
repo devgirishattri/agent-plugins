@@ -1,5 +1,5 @@
 ---
-description: Diff a context snapshot against its archived history versions
+description: "[DEPRECATED — superseded by knowledge] Diff a context snapshot against its archived history versions"
 argument-hint: <snapshot-name> [--versions | <timestamp>]
 allowed-tools: Bash(bash:*)
 ---

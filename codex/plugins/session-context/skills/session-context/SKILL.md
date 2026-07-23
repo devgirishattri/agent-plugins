@@ -5,6 +5,21 @@ description: "Understand when and how to capture, restore, search, remove, and h
 
 # Session Context
 
+> **DEPRECATED — superseded by `knowledge`.** This is the final maintenance
+> release of `session-context` (0.7.9). The `knowledge` plugin (>= 0.1.0)
+> absorbs this plugin's full surface with behavior-identical ports; anything
+> pinning `session-context >= 0.7.0` is satisfied by `knowledge >= 0.1.0`.
+> `session-context` is now maintenance-only for a stated deprecation window:
+> install `knowledge` alongside it, run `$knowledge:doctor` to confirm
+> parity, then disable `session-context` and uninstall it after a comfort
+> window. All existing data — every snapshot under `SESSION_CONTEXT_HOME`,
+> including `.history/` — is consumed by `knowledge` IN PLACE; uninstalling
+> this plugin loses zero data. Known bug, fixed only in `knowledge`:
+> `context-remove` crashes when removing a snapshot with zero archived
+> history versions (a bash 3.2 empty-array bug); this plugin will not
+> receive that fix. See `knowledge`'s SKILL.md "Migrating from
+> session-context / creating-docs" section for the full sequence.
+
 A snapshot is a concise Markdown summary of a working session: what changed, key decisions, open issues, and where work stopped. Use it when another Codex session must continue without re-deriving the state.
 
 Snapshots live under `SESSION_CONTEXT_HOME`. It must already be present in the

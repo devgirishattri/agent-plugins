@@ -9,8 +9,9 @@ This repository contains provider-specific plugins for Claude Code and Codex. Th
 | `session-manager` | List, search, and delete local agent session data |
 | `session-chat` | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `session-context` | Generate, list, load, and share session context snapshots |
-| `creating-docs` | Create and update documentation using structured guidance and validation scripts |
+| `knowledge` | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Absorbs `session-context` and `creating-docs` |
+| `session-context` | **DEPRECATED — superseded by `knowledge`.** Final maintenance release; maintenance-only during the deprecation window. (Generate, list, load, and share session context snapshots) |
+| `creating-docs` | **DEPRECATED — superseded by `knowledge`.** Final maintenance release; maintenance-only during the deprecation window. (Create and update documentation using structured guidance and validation scripts) |
 | `chronos` | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 ## Repository Layout

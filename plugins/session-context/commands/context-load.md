@@ -1,5 +1,5 @@
 ---
-description: Load a session context summary to continue where another session left off
+description: "[DEPRECATED — superseded by knowledge] Load a session context summary to continue where another session left off"
 argument-hint: <snapshot-name>
 allowed-tools: Bash(bash:*), Read
 ---

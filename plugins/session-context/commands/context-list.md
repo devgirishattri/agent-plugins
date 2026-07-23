@@ -1,5 +1,5 @@
 ---
-description: List context snapshots for the current project
+description: "[DEPRECATED — superseded by knowledge] List context snapshots for the current project"
 allowed-tools: Bash(bash:*)
 ---
 

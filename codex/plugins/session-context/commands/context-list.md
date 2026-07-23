@@ -1,5 +1,5 @@
 ---
-description: List available context snapshots for the current project
+description: "[DEPRECATED — superseded by knowledge] List available context snapshots for the current project"
 ---
 
 ## Instructions

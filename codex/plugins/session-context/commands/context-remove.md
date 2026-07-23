@@ -1,5 +1,5 @@
 ---
-description: Remove a context snapshot for the current project
+description: "[DEPRECATED — superseded by knowledge] Remove a context snapshot for the current project"
 argument-hint: <snapshot-name>
 ---
 

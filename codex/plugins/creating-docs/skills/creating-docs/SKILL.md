@@ -5,6 +5,20 @@ description: This skill should be used when creating new documentation files or 
 
 # Creating Documentation
 
+> **DEPRECATED — superseded by `knowledge`.** This is the final maintenance
+> release of `creating-docs` (1.1.4). The `knowledge` plugin (>= 0.1.0)
+> absorbs this plugin's full surface with behavior-identical ports. Doc
+> workflows continue as `$knowledge:docs-create` and `$knowledge:docs-review`,
+> with a reviewer-role preflight (`docs-write.sh`) added before any write —
+> the one deliberate behavior change in the port. `creating-docs` is now
+> maintenance-only for a stated deprecation window: install `knowledge`
+> alongside it, run `$knowledge:doctor` to confirm parity, then disable
+> `creating-docs` and uninstall it after a comfort window. All existing
+> data — every doc under `docs/`, including `docs/TODO.md` and
+> `docs/ISSUES.md` — is consumed by `knowledge` IN PLACE; uninstalling this
+> plugin loses zero data. See `knowledge`'s SKILL.md "Migrating from
+> session-context / creating-docs" section for the full sequence.
+
 A structured process for creating and updating project documentation. Documents use **reference-based notation** (function names, table names, file paths) for describing what exists, because references stay accurate as code evolves while line numbers and copied code rot immediately. Use **focused code examples** for showing how to do things — recurring patterns, conventions, and interfaces that developers need to copy and adapt.
 
 ## Process

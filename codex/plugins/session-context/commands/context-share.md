@@ -1,5 +1,5 @@
 ---
-description: Share a session context summary with another named session
+description: "[DEPRECATED — superseded by knowledge] Share a session context summary with another named session"
 argument-hint: <session-name> [snapshot-name]
 ---
 

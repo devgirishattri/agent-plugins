@@ -1,0 +1,5 @@
+# Per-skill Codex invocation policy (KNOWLEDGE_PLUGIN_SPEC.md, Phase A).
+# Twin of Claude's disable-model-invocation: this skill must never be
+# implicitly invoked by the model.
+policy:
+  allow_implicit_invocation: false

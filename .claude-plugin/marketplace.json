@@ -28,8 +28,8 @@
     },
     {
       "name": "creating-docs",
-      "description": "Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks. Includes a doc-reviewer subagent for independent accuracy passes.",
-      "version": "1.1.3",
+      "description": "DEPRECATED — superseded by knowledge (>= 0.1.0), which absorbs this plugin's full surface (doc workflows continue as /knowledge:docs-create and /knowledge:docs-review). Final maintenance release; maintenance-only during the deprecation window. Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks. Includes a doc-reviewer subagent for independent accuracy passes.",
+      "version": "1.1.4",
       "author": {
         "name": "Girish Attri"
       },
@@ -65,8 +65,8 @@
     },
     {
       "name": "session-context",
-      "description": "Generate, list, load, share, and remove Claude session context snapshots from a shared store. Surfaces available snapshots on session start.",
-      "version": "0.7.8",
+      "description": "DEPRECATED — superseded by knowledge (>= 0.1.0), which absorbs this plugin's full surface with behavior-identical ports (anything pinning session-context >= 0.7.0 is satisfied by knowledge >= 0.1.0). Final maintenance release; maintenance-only during the deprecation window. Generate, list, load, share, and remove Claude session context snapshots from a shared store. Surfaces available snapshots on session start.",
+      "version": "0.7.9",
       "author": {
         "name": "Girish Attri"
       },
@@ -77,6 +77,25 @@
         "handoff",
         "snapshot",
         "session",
+        "multi-agent"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "knowledge",
+      "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Absorbs creating-docs and session-context (both superseded — see their DEPRECATED entries) and adds a native memory module with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Girish Attri"
+      },
+      "source": "./plugins/knowledge",
+      "category": "productivity",
+      "keywords": [
+        "knowledge",
+        "memory",
+        "docs",
+        "context",
+        "handoff",
         "multi-agent"
       ],
       "license": "MIT"

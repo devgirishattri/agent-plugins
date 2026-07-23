@@ -1,5 +1,5 @@
 ---
-description: Search context snapshot contents across local projects
+description: "[DEPRECATED — superseded by knowledge] Search context snapshot contents across local projects"
 argument-hint: <pattern> [--list]
 allowed-tools: Bash(bash:*)
 ---

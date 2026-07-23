@@ -1,5 +1,5 @@
 ---
-description: Create or update project documentation using structured templates and validation tools
+description: "[DEPRECATED — superseded by knowledge] Create or update project documentation using structured templates and validation tools"
 argument-hint: "[topic or file to document]"
 ---
 

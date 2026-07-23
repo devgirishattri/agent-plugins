@@ -1,0 +1,32 @@
+{
+  "name": "knowledge",
+  "version": "0.1.0",
+  "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Absorbs session-context and creating-docs.",
+  "author": {
+    "name": "Girish Attri",
+    "email": "dev@girishattri.com"
+  },
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
+  "license": "MIT",
+  "keywords": ["knowledge", "memory", "docs", "context", "handoff", "multi-agent"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Knowledge",
+    "shortDescription": "Docs, memory, and context in one taxonomy for Codex.",
+    "longDescription": "Unified project-knowledge tooling: structured documentation workflows, session context snapshots for handoff, and (in later phases) a deterministic memory store — one taxonomy, one plugin.",
+    "developerName": "Girish Attri",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/devgirishattri/agent-plugins",
+    "defaultPrompt": [
+      "Document this project feature.",
+      "Generate a context snapshot.",
+      "List saved context snapshots."
+    ],
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "brandColor": "#0F766E",
+    "screenshots": []
+  }
+}

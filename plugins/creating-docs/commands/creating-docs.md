@@ -1,5 +1,5 @@
 ---
-description: Create or update project documentation using structured templates, reference-based notation, and validation tools
+description: "[DEPRECATED — superseded by knowledge] Create or update project documentation using structured templates, reference-based notation, and validation tools"
 argument-hint: "[topic or file to document]"
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash(bash:*), Agent
 ---

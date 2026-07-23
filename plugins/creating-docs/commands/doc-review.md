@@ -1,5 +1,5 @@
 ---
-description: Independently verify documentation accuracy against the codebase (report-only, no edits)
+description: "[DEPRECATED — superseded by knowledge] Independently verify documentation accuracy against the codebase (report-only, no edits)"
 argument-hint: "[doc file or directory to review]"
 allowed-tools: Read, Glob, Grep, Bash(bash:*), Agent
 ---

@@ -1,5 +1,5 @@
 ---
-description: Independently verify documentation accuracy against the codebase and run the validation scripts (report-only, no edits)
+description: "[DEPRECATED — superseded by knowledge] Independently verify documentation accuracy against the codebase and run the validation scripts (report-only, no edits)"
 argument-hint: "[doc file or docs directory to review]"
 ---
 

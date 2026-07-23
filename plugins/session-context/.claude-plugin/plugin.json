@@ -1,7 +1,7 @@
 {
   "name": "session-context",
-  "version": "0.7.8",
-  "description": "Generate, list, load, share, and remove Claude session context snapshots from a shared store.",
+  "version": "0.7.9",
+  "description": "DEPRECATED — superseded by the `knowledge` plugin (>= 0.1.0). Final maintenance release. Generate, list, load, share, and remove Claude session context snapshots from a shared store.",
   "author": {
     "name": "Girish Attri"
   },

@@ -1,7 +1,7 @@
 {
   "name": "session-context",
-  "version": "0.7.8",
-  "description": "Generate, list, load, notify peers about, and safely remove shared Codex context snapshots.",
+  "version": "0.7.9",
+  "description": "DEPRECATED — superseded by the `knowledge` plugin (>= 0.1.0). Final maintenance release. Generate, list, load, notify peers about, and safely remove shared Codex context snapshots.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
@@ -13,8 +13,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Session Context",
-    "shortDescription": "Manage Codex context snapshots for session handoff.",
-    "longDescription": "Context snapshot workflows for concise handoffs, history and diffing, shared-store notifications over hardened session-chat, and confirmed removal.",
+    "shortDescription": "DEPRECATED — superseded by `knowledge`. Manage Codex context snapshots for session handoff.",
+    "longDescription": "DEPRECATED — superseded by the `knowledge` plugin (>= 0.1.0), which absorbs this plugin's full surface with behavior-identical ports. This is the final maintenance release; maintenance-only during the deprecation window. Context snapshot workflows for concise handoffs, history and diffing, shared-store notifications over hardened session-chat, and confirmed removal.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],

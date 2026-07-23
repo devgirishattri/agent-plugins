@@ -1,5 +1,5 @@
 ---
-description: Generate a session context summary for handoff to another session
+description: "[DEPRECATED — superseded by knowledge] Generate a session context summary for handoff to another session"
 argument-hint: "[snapshot-name]"
 ---
 
