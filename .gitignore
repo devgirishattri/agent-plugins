@@ -5,6 +5,9 @@ firebase-debug.log
 tmp/
 upgrade.sh
 
+# Local dev-workspace launcher (machine-specific; not part of the marketplace)
+workspace.sh
+
 # Local design and implementation plans
 docs/
 .tmp/
