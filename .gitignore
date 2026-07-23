@@ -16,3 +16,7 @@ AGENTS.md
 docs/
 .tmp/
 .agents/memory/
+
+# Real project/client identifiers for the privacy sweep (machine-local; must
+# never be committed to this public repo)
+.privacy-denylist

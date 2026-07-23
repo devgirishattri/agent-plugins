@@ -191,17 +191,29 @@ check_network_egress() {
 # (b) privacy — real-project-identifier sweep (synthetic content only)
 # ---------------------------------------------------------------------------
 check_privacy() {
-  local pattern='REDACTED|REDACTED|REDACTED|REDACTED|REDACTED'
-  local hits="" f rel n=0 match_out
+  # The real-project-identifier denylist is intentionally kept OUT of this
+  # public repository. Configure it out-of-band to run the sweep:
+  #   - env KNOWLEDGE_PRIVACY_DENYLIST=/abs/path (one identifier per line;
+  #     blank lines and '#' comments are ignored), or
+  #   - a gitignored '.privacy-denylist' at the repository root.
+  # With no denylist configured (a clean public checkout, or CI without the
+  # secret) the sweep is a no-op PASS -- there is nothing to match against.
+  local repo_root denylist_file pattern
+  repo_root="$(git -C "$KNOWLEDGE_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$KNOWLEDGE_DIR")"
+  denylist_file="${KNOWLEDGE_PRIVACY_DENYLIST:-$repo_root/.privacy-denylist}"
+  if [ ! -f "$denylist_file" ]; then
+    printf '  PASS  %-16s skipped (no denylist configured; set KNOWLEDGE_PRIVACY_DENYLIST or add .privacy-denylist)\n' "privacy"
+    return 0
+  fi
+  pattern="$(grep -vE '^[[:space:]]*(#|$)' "$denylist_file" 2>/dev/null | paste -sd'|' -)"
+  if [ -z "$pattern" ]; then
+    printf '  PASS  %-16s skipped (denylist empty)\n' "privacy"
+    return 0
+  fi
 
+  local hits="" f rel n=0 match_out
   while IFS= read -r f; do
     rel="${f#"$KNOWLEDGE_DIR"/}"
-    # test-knowledge.sh itself is excluded from its own sweep: this file's
-    # source necessarily contains the pattern above as literal text (it IS
-    # the check), which would always self-match.
-    case "$rel" in
-      scripts/test-knowledge.sh) continue ;;
-    esac
     n=$((n + 1))
     # -I skips files grep detects as binary (none expected here, but this
     # keeps the sweep from erroring on one); -i for case variants (the
