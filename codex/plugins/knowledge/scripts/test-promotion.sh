@@ -233,7 +233,7 @@ fm_get() {
 # classify_citation <repo-root> <citation> -> unverifiable-ext | verified |
 # stale | malformed. Test-local re-implementation of the ticket-citation
 # grammar documented in skills/promote/SKILL.md step 5 (and
-# KNOWLEDGE_PLUGIN_SPEC.md's tracking-items boundary) -- doctor's own E-tier
+# the tracking-items boundary) -- doctor's own E-tier
 # check is a separate, later addition, not this suite's to ship.
 classify_citation() {
   local repo="$1" citation="$2"

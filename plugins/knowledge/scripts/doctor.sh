@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # doctor.sh — read-only, cross-store health checks for the knowledge plugin
-# (KNOWLEDGE_PLUGIN_SPEC.md "Phase C — Doctor"). One command that aggregates
+# (the doctor contract). One command that aggregates
 # findings across every store this plugin knows about: docs (taxonomy,
 # decision-record naming, stale pointers, link/marker validation), the
 # memory module (Phases B1-B3: lint, index reconciliation, backlinks,
@@ -667,7 +667,7 @@ section_locks() {
 
 # _kd_classify_citation <citation> -> sets KD_CITE_KIND
 # (ext|local-verified|local-stale|malformed) and KD_CITE_DETAIL. Grammar per
-# KNOWLEDGE_PLUGIN_SPEC.md's tracking-items boundary: `ext:<ID>` with ID
+# the tracking-items boundary: `ext:<ID>` with ID
 # matching [A-Z][A-Z0-9]+-[0-9]+; `local:<tracker-path>:<prefix>` split on
 # the SECOND colon (path may not contain ':'), prefix non-empty, path not
 # absolute and containing no '..', naming exactly TODO.md/ISSUES.md at the

@@ -13,8 +13,8 @@
 #       suite happened to list (check-freshness.sh, check-todos.sh,
 #       detect-snapshots.sh, diff-context.sh, docs-write.sh, list-contexts.sh,
 #       load-context.sh, remove-context.sh, search-contexts.sh,
-#       share-context.sh, validate-links.sh). Per
-#       docs/KNOWLEDGE_PLUGIN_SPEC.md "Security and constraint definitions":
+#       share-context.sh, validate-links.sh). Per the security and constraint
+#       contract:
 #       "helper scripts contain no network client invocation ... asserted by
 #       static grep in the test suite, and the suite passes with network
 #       access denied."

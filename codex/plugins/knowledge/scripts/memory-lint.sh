@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # memory-lint.sh — two-tier memory-store schema linter (read-only).
-# KNOWLEDGE_PLUGIN_SPEC.md "Memory schema (v1 canonical + legacy compatibility
+# the memory schema (v1 canonical + legacy compatibility
 # mode)". Validates canonical v1 files (required-field presence + value
 # shapes) and gives field-specific migration advice for legacy files (files
 # without schema_version); never mutates anything.

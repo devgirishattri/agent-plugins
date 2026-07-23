@@ -138,7 +138,7 @@ tree_hash() {
 }
 
 # ===========================================================================
-# 1. golden canonical example (KNOWLEDGE_PLUGIN_SPEC.md worked example)
+# 1. golden canonical example (canonical worked example)
 # ===========================================================================
 echo "--- golden canonical example ---"
 S1=$(new_store "$TMP/repo1")

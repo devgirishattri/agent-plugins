@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # memory-search.sh — deterministic lexical ranked search + recall envelope
-# over the memory store (read-only). KNOWLEDGE_PLUGIN_SPEC.md "Phase B2 —
-# Read-only retrieval": the literal tokenization/query-grammar/field-weight/
-# ordering/output-schema contract lives there; this script implements it
-# exactly, inventing nothing beyond the documented ambiguities (see the
+# over the memory store (read-only). The literal tokenization/query-grammar/
+# field-weight/ordering/output-schema contract lives here; this script
+# implements it exactly, inventing nothing beyond the documented ambiguities (see the
 # executor report for the chosen readings).
 #
 # Usage:
@@ -24,7 +23,7 @@
 # intermediate shell consume them.
 #
 # Output: TSV rows (default), a single JSON object (--json), or the recall
-# envelope (--recall) — see KNOWLEDGE_PLUGIN_SPEC.md for exact byte shapes.
+# envelope (--recall), with exact byte shapes defined by this script and tests.
 # Exit codes: 0 ok (including zero hits); 2 usage/query error; 3 store
 #   resolution failure; 4 store-integrity error (collision, unsafe stem).
 # Supported platforms: macOS, Linux (requires python3).

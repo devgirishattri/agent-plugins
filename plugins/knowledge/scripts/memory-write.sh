@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # memory-write.sh — THE single store-mutation helper for the knowledge
-# plugin's memory module (KNOWLEDGE_PLUGIN_SPEC.md "Single-writer contract").
+# plugin's memory module (the single-writer contract).
 # The ONLY code path that mutates a memory store, its MEMORY.md, or the
 # capture inbox. Every subcommand's argv is exact and exhaustive; anything
 # else is exit 2.

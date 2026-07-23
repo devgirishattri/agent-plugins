@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-capture.sh — hermetic tests for Phase B3 (candidate capture):
 # memory-remember.sh's planner/normalizer contract (--staged and --list
-# modes), the `.inbox/` lifecycle (KNOWLEDGE_PLUGIN_SPEC.md "remember"
+# modes), the `.inbox/` lifecycle (the remember contract
 # bullet + capture grammar), and the remember->list->purge id pipeline
 # through memory-write.sh purge. All fixture content is synthetic
 # (ProjectA/ProjectB-style), never real project names. Uses isolated git

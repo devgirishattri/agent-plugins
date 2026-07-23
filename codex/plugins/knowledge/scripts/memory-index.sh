@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # memory-index.sh — MEMORY.md <-> authoritative-files reconciler (read-only).
-# KNOWLEDGE_PLUGIN_SPEC.md "MEMORY.md index grammar" + "Recognized index row
+# the MEMORY.md index grammar and recognized index row
 # grammar". Detects the store's index style (flat/sectioned, or a degenerate
 # style) and reconciles membership in both directions. Insertion (writing a
 # new index row) happens via `memory-write.sh apply`'s staged-index leg

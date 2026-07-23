@@ -2,7 +2,7 @@
 # save-context.sh — Save a context snapshot for the current project
 # Usage: save-context.sh <project-name> <snapshot-file> [--handoff] [--expires <UTC-ISO>]
 #
-# Phase E (KNOWLEDGE_PLUGIN_SPEC.md "Promotion + handoff lifecycle"): --handoff
+# Phase E (the structured handoff lifecycle): --handoff
 # writes/keeps a `kind: handoff` YAML frontmatter block ahead of the body this
 # script has always copied unchanged. This is the ONLY surface that mutates
 # handoff frontmatter — load/share/diff/list/remove pass the resulting file
@@ -165,8 +165,7 @@ if _context_path_exists "$DEST"; then
   # context-generate without --handoff is byte-identical to the pre-Phase-E
   # behavior on PLAIN snapshots only; regenerating an existing HANDOFF this
   # way would either silently mutate or silently drop its metadata, so it
-  # refuses instead (exact literal stderr line — see KNOWLEDGE_PLUGIN_SPEC.md
-  # Phase E).
+  # refuses instead with the exact literal stderr line below.
   if [ "$HANDOFF" -eq 0 ] && [ "$EXISTING_KIND" = "handoff" ]; then
     echo "handoff exists: re-run with --handoff" >&2
     exit 2

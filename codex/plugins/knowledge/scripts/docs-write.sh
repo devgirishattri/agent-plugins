@@ -2,7 +2,7 @@
 # docs-write.sh — reviewer-role preflight gate for the knowledge plugin's
 # explicitly-invoked docs-authoring workflow (docs-create / TODO-ISSUES
 # maintenance). This is the ONE deliberate behavior change from the absorbed
-# knowledge docs-create surface (KNOWLEDGE_PLUGIN_SPEC.md, "Own vs validate"): the
+# knowledge docs-create surface (the docs write-boundary contract): the
 # docs-create workflow MUST run this helper FIRST, before any doc write or
 # edit, and stop immediately on any non-zero exit.
 #

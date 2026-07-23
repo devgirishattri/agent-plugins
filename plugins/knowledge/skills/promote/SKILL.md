@@ -63,10 +63,9 @@ separate, later request outside this skill's scope.
 Ask the user (or read `$ARGUMENTS`) which of these this run promotes:
 
 - **A context-store item** — a handoff (`kind: handoff` frontmatter) or a
-  plain snapshot, named by its snapshot name. Handoffs are the common case
-  (`docs/KNOWLEDGE_PLUGIN_SPEC.md`'s taxonomy: "promoted then deleted at the
-  end of its arc"), but a plain snapshot with a durable fact worth keeping is
-  equally valid input.
+  plain snapshot, named by its snapshot name. Handoffs are the common case:
+  they are promoted and then deleted at the end of their arc. A plain
+  snapshot with a durable fact worth keeping is equally valid input.
 - **An existing memory file** — a supersession source: a stabilized new memory
   file replaces an existing one (destination gets `supersedes: <old-slug>`;
   source is retired after).
@@ -176,8 +175,8 @@ except restate that nothing was written.
 ## 5. Ticket citations — carry through, surface honestly
 
 If the context source carries `tickets:` (step 3), carry each citation into
-the destination proposal (step 4) using the tracking-boundary grammar
-(`docs/KNOWLEDGE_PLUGIN_SPEC.md` "Ticket citation grammar"). For each entry:
+the destination proposal (step 4) using the tracking-boundary grammar. For
+each entry:
 
 - `ext:<ID>` (`<ID>` matches `[A-Z][A-Z0-9]+-[0-9]+`): always report as
   **"external ticket `<ID>` — unverifiable, never fetched"**. Never attempt to

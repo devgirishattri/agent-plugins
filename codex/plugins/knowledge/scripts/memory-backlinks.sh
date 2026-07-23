@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # memory-backlinks.sh — [[slug]] link graph: resolution report, neighbors,
 # reverse links, orphans, weakly-connected components, and whole-graph
-# JSON/DOT/Mermaid output (read-only). ONE authority for link parsing per
-# KNOWLEDGE_PLUGIN_SPEC.md "Phase B2 — Read-only retrieval" +
-# "Slug normalization" + "Graph output schemas". Implements the `graph`
+# JSON/DOT/Mermaid output (read-only). ONE authority for link parsing,
+# slug normalization, and graph output schemas. Implements the `graph`
 # command surface (commands/graph.md); also exposes a "report" mode (the
 # per-link convention-drift/dangling warning lines) for future callers
 # (e.g. a Phase C doctor) — this mode is this script's own extension of the

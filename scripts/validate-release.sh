@@ -485,7 +485,8 @@ for name in sorted(claude_plugins):
             fail(f"skill name does not match directory for {skill_file}")
 
     if name == "knowledge":
-        # Per-skill Codex invocation policy (KNOWLEDGE_PLUGIN_SPEC.md, Phase A):
+        # Per-skill Codex invocation policy: write-capable knowledge skills are
+        # explicit-only, matching Claude's disable-model-invocation behavior.
         # these five skills must never be implicitly invoked by the model —
         # the twin of Claude's disable-model-invocation.
         for policy_skill in ("consolidate", "promote", "remember", "init", "docs-create"):
@@ -497,8 +498,8 @@ for name in sorted(claude_plugins):
                 fail(f"{policy_path}: must set policy.allow_implicit_invocation: false")
 
         # assets/recall-snippet.md is the single source doctor.sh byte-
-        # compares AGENTS.md against (KNOWLEDGE_PLUGIN_SPEC.md "Provider
-        # reality"); it must be byte-identical across both provider trees.
+        # compares AGENTS.md against; it must be byte-identical across both
+        # provider trees.
         claude_snippet = claude_dir / "assets" / "recall-snippet.md"
         codex_snippet = codex_dir / "assets" / "recall-snippet.md"
         if not claude_snippet.is_file():
@@ -509,15 +510,11 @@ for name in sorted(claude_plugins):
             fail("knowledge: assets/recall-snippet.md differs between provider trees")
 
         # Cross-tree equality above only proves the two shipped copies agree
-        # with EACH OTHER, not that either still matches the spec's own
-        # canonical text -- nothing else in the repo checks that (doctor.sh
-        # only ever compares AGENTS.md against the shipped asset, never
-        # against the spec). Pinned here as a literal, self-contained
-        # contract rather than read from docs/KNOWLEDGE_PLUGIN_SPEC.md at
-        # runtime: docs/ is gitignored in this repo (the spec's own
-        # Durability note), so it is absent on a clean clone and reading it
-        # here would make this check silently skip (or the whole validator
-        # fail to run) exactly where CI needs it most.
+        # with EACH OTHER, not that either still matches the accepted recall
+        # bridge contract -- nothing else in the repo checks that (doctor.sh
+        # only ever compares AGENTS.md against the shipped asset). Pinned
+        # here as a literal, self-contained contract so clean clones and CI
+        # do not depend on ignored planning docs.
         canonical_recall_snippet = (
             "<!-- knowledge:recall:start -->\n"
             "Before starting a substantive task, run `$knowledge:recall <topic>`\n"
@@ -529,9 +526,9 @@ for name in sorted(claude_plugins):
         if claude_snippet.is_file() and claude_snippet.read_text() != canonical_recall_snippet:
             fail(
                 "knowledge: assets/recall-snippet.md no longer byte-matches "
-                "docs/KNOWLEDGE_PLUGIN_SPEC.md's canonical snippet text "
-                "(update the asset, or update this pinned copy if the spec "
-                "itself changed)"
+                "the pinned recall bridge contract "
+                "(update the asset, or update this pinned copy if the "
+                "contract changed)"
             )
 
     for doc_file in sorted([*codex_dir.rglob("*.md"), *codex_dir.rglob("*.json")]):
@@ -645,7 +642,7 @@ reject_pattern(
     r"context-search[^.]*is the exception",
     "Codex context search also requires SESSION_CONTEXT_HOME",
 )
-# Knowledge context inherited-env contract (KNOWLEDGE_PLUGIN_SPEC.md):
+# Knowledge context inherited-env contract:
 # agent-facing context docs never instruct
 # an executable export/derivation; the store is inherited at agent startup and
 # scripts fail closed with relaunch guidance when it is absent. The Codex

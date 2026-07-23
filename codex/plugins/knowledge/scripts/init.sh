@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# init.sh — memory-store bootstrap PLANNER (KNOWLEDGE_PLUGIN_SPEC.md
-# "Zero-config contract"). Two-call protocol, no state carried between
+# init.sh — memory-store bootstrap PLANNER (zero-config contract).
+# Two-call protocol, no state carried between
 # calls: without --apply, prints the resolved target and a reviewable
 # .gitignore diff and writes nothing; with --apply, re-resolves the SAME
 # target (deterministic), verifies the gitignore now covers it, and

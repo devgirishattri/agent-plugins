@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# memory-remember.sh — capture PLANNER/NORMALIZER (KNOWLEDGE_PLUGIN_SPEC.md
-# "remember" bullet under "Recall, capture, and graph surfaces (v1)" + the
-# capture grammar inside the single-writer contract, Phase B3).
+# memory-remember.sh — capture PLANNER/NORMALIZER.
+# Implements the remember surface plus the capture grammar inside the
+# single-writer contract.
 #
 # This script never mutates the store directly. For `--staged`, it validates
 # the staged semantic candidate against the closed lexical subset (for

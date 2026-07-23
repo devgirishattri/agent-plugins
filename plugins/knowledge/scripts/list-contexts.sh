@@ -2,7 +2,7 @@
 # list-contexts.sh — List context snapshots for the current project
 # Usage: list-contexts.sh
 #
-# Phase E (KNOWLEDGE_PLUGIN_SPEC.md "Promotion + handoff lifecycle"): a
+# Phase E (the structured handoff lifecycle): a
 # snapshot carrying `kind: handoff` frontmatter gets exactly one appended
 # column, `\thandoff\t<expires>`. Plain-snapshot rows are byte-unchanged —
 # proven by test-promotion.sh's before/after comparison against this exact

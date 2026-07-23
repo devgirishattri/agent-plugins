@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-consolidate.sh — hermetic tests for Phase D (consolidate skill): the
-# DETERMINISTIC subset of KNOWLEDGE_PLUGIN_SPEC.md's Phase D acceptance,
+# DETERMINISTIC subset of Phase D acceptance,
 # scripted. skills/consolidate/SKILL.md is a user-run, agent-judgment
 # workflow (near-duplicate judgment, which section a new index row belongs
 # under, what counts as a "session learning") that cannot be exercised by a

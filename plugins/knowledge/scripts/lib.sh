@@ -1227,8 +1227,8 @@ context_history_versions() {
 }
 
 # ============================================================================
-# Memory-store kernel (Phase B1, KNOWLEDGE_PLUGIN_SPEC.md "Appendix A" +
-# "Single-writer contract"). Shared by memory-lint.sh, memory-index.sh,
+# Memory-store kernel (Phase B1, single-writer contract).
+# Shared by memory-lint.sh, memory-index.sh,
 # memory-write.sh, and init.sh. Provider-neutral: identical on the Codex
 # mirror's copy of this file. Deliberately independent of the context-store
 # helpers above (`.agents/memory/` is its own store class, never one of the
@@ -1320,8 +1320,7 @@ km_repo_root() {
   km_git_ancestor "$(pwd -P)"
 }
 
-# --- canonical MEMORY-store discovery (KNOWLEDGE_PLUGIN_SPEC.md
-# "Zero-config contract"): the ONLY probed location is
+# --- canonical MEMORY-store discovery: the ONLY probed location is
 # <repo-root>/.agents/memory/. ---
 km_canonical_discovery() {
   local repo_root base d name

@@ -89,8 +89,7 @@ bootstraps a new store:**
 ## Write boundaries and role rules
 
 Three write boundaries exist, each with its own stated role rule — not one
-universal funnel or one universal rule (`docs/KNOWLEDGE_PLUGIN_SPEC.md` "Own
-vs validate"):
+universal funnel or one universal rule:
 
 - **Memory** — the ONLY code path that mutates a memory store, its
   `MEMORY.md`, or the capture inbox is `memory-write.sh`; every planner
