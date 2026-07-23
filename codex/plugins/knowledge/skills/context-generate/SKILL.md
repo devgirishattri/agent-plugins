@@ -10,6 +10,10 @@ When this skill is invoked, follow the workflow below and return the saved snaps
 Resolve `PLUGIN_ROOT` from this selected skill's installed absolute source path: it is the directory two levels above this `SKILL.md`. Substitute that absolute path literally in the helper invocation below; never infer it from the project working directory or hardcode a marketplace cache version.
 
 Generate a concise summary of what THIS session has been working on — for handing off to another session.
+Context is temporary working state, not durable memory: include only what a
+future session needs to continue, keep historical detail only when it explains
+the current state, and expect stabilized knowledge to be promoted later through
+`$knowledge:promote`.
 
 0. **Handoff flags (optional, Phase E)**: the user's arguments may include `--handoff` and/or `--expires <UTC-ISO>` after the snapshot name, in either order (e.g. `foo --handoff`, `foo --handoff --expires 2026-08-15T00:00:00Z`, `foo --expires ... --handoff`). Parse these out of the user's arguments before deriving the snapshot name in step 1 — they are flags for the save step (step 4), not part of the name.
    - `--handoff` marks this snapshot as a **structured handoff**: a running item or resumable endpoint, promoted then deleted at the end of its arc (see `docs/KNOWLEDGE_PLUGIN_SPEC.md` "Handoff" in the taxonomy table), instead of an ordinary point-in-time snapshot. Use it when the session is handing off unfinished, resumable work — not for a routine end-of-session summary.
@@ -17,7 +21,13 @@ Generate a concise summary of what THIS session has been working on — for hand
    - Without `--handoff`, this command's output is byte-identical to its pre-Phase-E behavior on a plain snapshot. Re-running it without `--handoff` against a snapshot name that is **already** a handoff **refuses** (`save-context.sh` exits 2 with the single stderr line `handoff exists: re-run with --handoff`) rather than silently mutating or dropping its metadata — if you hit this, tell the user and re-run with `--handoff`.
    - Regenerating an existing handoff with `--handoff` again is a normal **update**: it keeps the original `created` date, advances `updated` to now, and keeps the existing `expires` unless `--expires` is given this time (which replaces it). Regenerating an existing **plain** snapshot with `--handoff` **upgrades** it (its `created` becomes now, since a plain snapshot carries no prior metadata to preserve).
 
-1. **Determine snapshot name**: Use the user's arguments (with the handoff flags above removed) if provided, otherwise derive from the Codex session name or current directory name.
+1. **Determine snapshot name**: Use the user's arguments (with the handoff
+   flags above removed) if provided, otherwise derive from the Codex session
+   name or current directory name. Snapshot/handoff names are canonical
+   `snake_case` slugs matching `^[a-z0-9]+(_[a-z0-9]+)*$`; reject a
+   user-supplied name that does not match. For a derived default, normalize by
+   lowercasing, replacing non-alphanumeric runs with `_`, and trimming
+   leading/trailing underscores.
 
 2. **Gather session context** by checking:
    - `git diff --stat HEAD` — files currently modified

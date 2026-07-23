@@ -16,6 +16,8 @@ A structured process for creating and updating project documentation. Documents 
    Exit `0` means proceed. Any non-zero exit — including `6` with stderr `reviewer role: docs writes refused`, or an unresolved fleet identity asking to set `KNOWLEDGE_PANE_NAME` — means **stop immediately**: do not create/edit/delete any file (including `TODO.md`/`ISSUES.md`), and relay the script's stderr line as the reason. This applies to every write this skill performs, including the TODO/ISSUES maintenance in step 6.
 1. **Check for project guidelines** — Look for existing documentation guidelines in the project (e.g., `docs/DOCUMENTATION_GUIDELINES.md`, `CONTRIBUTING.md`). If the project has its own doc standards, follow those and use this skill only to fill gaps.
 2. **Gather information** — Read all relevant source files, check for existing docs, and map how components connect. Build a mental inventory of file paths, functions, tables, endpoints, env vars, and external services involved. Do not start writing until the full picture is understood — docs written from partial understanding mislead readers.
+   Docs should be current-facing: keep historical material only when it explains
+   an active decision, constraint, migration, or provenance readers still need.
 3. **Choose document type** — Identify which sections apply (see `references/DOCUMENT_TYPES.md`). Most docs blend categories — pick the sections that serve the reader, not force a single type.
 4. **Write using the template** — Fill in the template structure below. If updating an existing doc, read it first, change only affected sections, and update the Date in metadata.
 5. **Add Key References** — For docs referencing 5+ files/functions/tables, add a summary table at the end (see format below). Short docs that only touch 2-3 files can skip this.
@@ -27,12 +29,17 @@ A structured process for creating and updating project documentation. Documents 
 
 ## Naming Convention
 
-New project-specific documentation filenames should use UPPER_CASE with underscores (e.g., `AUTH_OVERVIEW.md`, `API_REFERENCE.md`, `DATABASE_SCHEMA.md`) unless the project defines another convention. Preserve conventional community filenames such as `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`, and existing repository conventions.
+New project-specific documentation filenames should use semantic `snake_case.md`
+names (e.g., `auth_overview.md`, `api_reference.md`,
+`database_schema.md`) unless the project defines another convention. Keep
+dates and datetimes in document metadata, not in filenames. Preserve
+conventional community filenames such as `README.md`, `CONTRIBUTING.md`,
+`SECURITY.md`, `CHANGELOG.md`, and existing repository conventions.
 
-- Good: `AUTH_OVERVIEW.md`, `API_REFERENCE.md`, `DEPLOYMENT_GUIDE.md`
-- Bad: `auth-overview.md`, `api_reference.md`, `deployment-guide.md`
+- Good: `auth_overview.md`, `api_reference.md`, `deployment_guide.md`
+- Bad: `AUTH_OVERVIEW.md`, `auth-overview.md`, `deployment-2026-07-23.md`
 
-Tracker files follow this convention: `TODO.md`, `ISSUES.md`.
+Tracker files keep their conventional uppercase names: `TODO.md`, `ISSUES.md`.
 
 ## Where to Save
 

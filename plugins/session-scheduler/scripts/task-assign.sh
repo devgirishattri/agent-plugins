@@ -75,7 +75,7 @@ if [ -n "$UNMET" ] && ! scheduler_force_enabled; then
   exit 1
 fi
 
-# Pre-flight: resolve the session-context snapshot before any side effects.
+# Pre-flight: resolve the context snapshot before any side effects.
 # --context auto is a special value: instead of requiring a pre-existing
 # snapshot, the assignment generates a private, immutable handoff derived purely
 # from data this script already holds (the approved prompt + ledger state) — no

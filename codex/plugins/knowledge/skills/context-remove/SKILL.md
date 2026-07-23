@@ -28,7 +28,7 @@ If no snapshot name is provided:
 3. Ask the user to select a snapshot. Use structured `request_user_input` when it is available in the current mode and can represent the choices; otherwise ask one direct blocking question and wait. Do not infer a name.
 
 For either a provided or selected name, require it to match
-`^[A-Za-z0-9_-]+$` before interpolating it into any path; reject any other value
+`^[a-z0-9]+(_[a-z0-9]+)*$` before interpolating it into any path; reject any other value
 without previewing or removing it. Then produce a point-in-time preview of
 exactly the files currently visible to read-only filesystem inspection:
 enumerate the current `$SESSION_CONTEXT_HOME/<snapshot-name>.md` file and every

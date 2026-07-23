@@ -27,7 +27,7 @@ argument-hint: <snapshot-name>
    otherwise ask a direct blocking question. If none exist, suggest
    `$knowledge:context-generate` and stop.
 4. Before interpolating `SNAPSHOT_NAME` into any path, require it to match
-   `^[A-Za-z0-9_-]+$`; reject any other value and do not preview or remove it.
+   `^[a-z0-9]+(_[a-z0-9]+)*$`; reject any other value and do not preview or remove it.
    Then produce a point-in-time preview of exactly the files currently visible
    to read-only filesystem inspection: enumerate the current
    `$SESSION_CONTEXT_HOME/<snapshot-name>.md` file and every matching

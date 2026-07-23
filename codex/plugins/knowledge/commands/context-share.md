@@ -7,7 +7,10 @@ argument-hint: <session-name> [snapshot-name]
 
 1. Parse `$ARGUMENTS`: the first word is the target session, and the second word is the optional snapshot name.
 2. If no target session is provided, tell the user: `Usage: $knowledge:context-share <session-name> [snapshot-name]`.
-3. If no snapshot name is provided, derive it from the current directory name.
+3. If no snapshot name is provided, derive it from the current directory name
+   and normalize it to canonical `snake_case`
+   (`^[a-z0-9]+(_[a-z0-9]+)*$`). If a snapshot name is supplied and it is not
+   canonical `snake_case`, reject it instead of invoking the helper.
 4. Resolve the absolute plugin root from the installed plugin source containing
    this command reference and substitute it literally for `<PLUGIN_ROOT>` below.
    Never infer it from the working directory or hardcode a marketplace cache

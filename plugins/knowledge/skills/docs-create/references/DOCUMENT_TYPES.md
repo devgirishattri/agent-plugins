@@ -71,13 +71,15 @@ For capturing *why* decisions were made — not just what exists. ADRs prevent r
 | Section | Purpose |
 |---------|---------|
 | **Title** | Short decision name (e.g., "Use PostgreSQL for user data") |
-| **Status** | Proposed / Accepted / Deprecated / Superseded by [ADR_NAME.md] |
+| **Status** | Proposed / Accepted / Deprecated / Superseded by [decision_slug.md] |
 | **Context** | What situation or problem prompted this decision |
 | **Decision** | What was decided and why |
 | **Alternatives Considered** | Other options evaluated, with reasons for rejection |
 | **Consequences** | Trade-offs accepted, both positive and negative |
 
-Name ADR files by topic: `ADR_AUTH_JWT.md`, `ADR_DATABASE_CHOICE.md` — not by number.
+Name decision files by semantic snake_case topic under `docs/decisions/`, e.g.
+`auth_jwt.md` or `database_choice.md`. Put the decision date in metadata
+(`decided: YYYY-MM-DD`), not in the filename.
 
 ## Plan / Design
 

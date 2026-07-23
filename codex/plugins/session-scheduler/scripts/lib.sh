@@ -383,8 +383,8 @@ scheduler_force_enabled() {
   [ "${SESSION_SCHEDULER_FORCE:-0}" = "1" ]
 }
 
-# session-context snapshots live under SESSION_CONTEXT_HOME, which must match
-# the same override honored by session-context's own get_contexts_dir(). Like
+# context snapshots live under SESSION_CONTEXT_HOME, which must match
+# the same override honored by the knowledge context store's own get_contexts_dir(). Like
 # SESSION_SCHEDULER_HOME it must be inherited at agent startup — the
 # $session-scheduler:task-assign skill never exports it. Fail closed if it is
 # not set rather than guessing a snapshot location.

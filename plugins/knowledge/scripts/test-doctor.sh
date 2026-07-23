@@ -2,7 +2,7 @@
 # test-doctor.sh — hermetic tests for Phase C (doctor.sh): read-only,
 # cross-store health checks over docs, the memory module (Phases B1-B3),
 # the context store, the AGENTS.md recall bridge, the provider capability
-# matrix, duplicate-enabled-plugin detection, and store hardening. All
+# matrix, and store hardening. All
 # fixture content is synthetic (ProjectA/ProjectB-style), never real project
 # names. Uses isolated git repos AND isolated $HOME/$CODEX_HOME trees under
 # a temp dir; cleans up on exit.
@@ -14,8 +14,7 @@
 # tests that doctor.sh correctly COMPOSES those tools' read-only output into
 # its own finding stream, plus the pieces new in this phase: taxonomy/DEC
 # naming, decay/review-queue reporting, orphaned-lock diagnostics, context
-# mtime staleness, the AGENTS.md snippet check, the capability matrix, and
-# duplicate-enabled-plugin detection.
+# mtime staleness, the AGENTS.md snippet check, and the capability matrix.
 #
 # Usage: bash test-doctor.sh [-v]
 set -uo pipefail
@@ -277,7 +276,12 @@ index_row "$clean_store/MEMORY.md" alpha_feedback "deploy how-to"
 chmod 600 "$clean_store/MEMORY.md"
 
 mkdir -p "$clean_repo/docs/decisions"
-cat > "$clean_repo/docs/decisions/DEC-2020-01-01-adopt-clean-fixtures.md" <<'EOF'
+cat > "$clean_repo/docs/decisions/adopt_clean_fixtures.md" <<'EOF'
+---
+decided: 2020-01-01
+status: accepted
+---
+
 # Use synthetic fixtures in tests
 
 Status: Accepted
@@ -285,7 +289,7 @@ EOF
 cat > "$clean_repo/docs/reference.md" <<'EOF'
 # Reference
 
-Nothing broken here. See [decision](decisions/DEC-2020-01-01-adopt-clean-fixtures.md).
+Nothing broken here. See [decision](decisions/adopt_clean_fixtures.md).
 EOF
 (cd "$clean_repo" && git add -A && GIT_AUTHOR_DATE="2020-01-01T00:00:00" GIT_COMMITTER_DATE="2020-01-01T00:00:00" git commit -q -m "docs") >/dev/null 2>&1
 
@@ -389,11 +393,11 @@ craft_claim "$bad_store" "999999999" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" > /dev/n
 mkdir -p "$bad_store/.journal.tmp.999999999.cccccccccccccccccccccccccccccccc"
 mkdir -p "$bad_store/.staged.999999999.dddddddddddddddddddddddddddddddd"
 
-# -- docs: bad DEC naming, misplaced decision record, broken link, embedded
+# -- docs: bad decision naming, misplaced legacy decision record, broken link, embedded
 # marker, stale doc --
 mkdir -p "$bad_repo/docs/decisions" "$bad_repo/src"
 cat > "$bad_repo/docs/decisions/bad-name.md" <<'EOF'
-# Not DEC-named
+# Not snake_case
 
 Status: Accepted
 EOF
@@ -433,8 +437,7 @@ EOF
 bad_home="$TMP/bad_home"
 mkdir -p "$bad_home/.claude" "$bad_home/.codex"
 json_settings "$bad_home/.claude/settings.json" "/tmp/somewhere-else-entirely" \
-  '    "session-context@girishattri-plugins": true,
-    "knowledge@girishattri-plugins": true'
+  '    "knowledge@girishattri-plugins": true'
 cat > "$bad_home/.codex/config.toml" <<'EOF'
 [features]
 memories = true
@@ -478,8 +481,8 @@ assert_contains "bad_lock_stale_dead_cmd" "$out" "memory-write.sh unlock --store
 assert_contains "bad_lock_orphaned_claim" "$out" "orphaned claim file: $bad_store/.lock.claim.999999999.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 assert_contains "bad_lock_orphaned_journal_tmp" "$out" "orphaned journal temp: $bad_store/.journal.tmp.999999999"
 assert_contains "bad_lock_orphaned_staged" "$out" "orphaned staged directory: $bad_store/.staged.999999999"
-assert_contains "bad_docs_bad_dec_naming" "$out" "bad DEC naming: docs/decisions/bad-name.md"
-assert_contains "bad_docs_misplaced" "$out" "misplaced decision record: docs/DEC-2020-02-02-misplaced.md"
+assert_contains "bad_docs_bad_decision_naming" "$out" "bad decision naming: docs/decisions/bad-name.md"
+assert_contains "bad_docs_misplaced" "$out" "misplaced legacy decision record: docs/DEC-2020-02-02-misplaced.md"
 assert_contains "bad_docs_broken_link" "$out" "reference.md -> nope.md"
 assert_contains "bad_docs_embedded_marker" "$out" "TODO"
 assert_contains "bad_docs_stale" "$out" "old_doc.md"
@@ -487,7 +490,6 @@ assert_contains "bad_agents_md_divergent" "$out" "recall-snippet body diverges f
 assert_contains "bad_agents_md_snippet_pasted" "$out" "snippet> <!-- knowledge:recall:start -->"
 assert_contains "bad_capability_resolver_divergence" "$out" "diverges from the resolved memory store"
 assert_contains "bad_capability_rejected_scope" "$out" "project-local settings"
-assert_contains "bad_duplicate_plugin" "$out" "two SessionStart context-snapshot detector hooks will fire"
 assert_contains "bad_context_stale" "$out" "stale context snapshot 'old'"
 
 echo "--- AGENTS.md variants ---"
@@ -667,27 +669,6 @@ generate_memories = true
 EOF
 out=$(cd "$cap_repo_weak_project_over_strong_user" && HOME="$cap_home_user" CODEX_HOME="$cap_home_user/.codex" bash "$DOCTOR" --store "$cap_store_wpos" 2>&1)
 assert_contains "codex_weak_project_does_not_override_strong_user" "$out" "resolved native-memories: true (source: user)"
-
-echo "--- duplicate-enabled-plugin: single plugin (no warn) / creating-docs pair (INFO) ---"
-
-dup_repo="$TMP/dup_repo"
-dup_store=$(bootstrap_store "$dup_repo")
-
-dup_home_single="$TMP/dup_home_single"
-mkdir -p "$dup_home_single/.claude" "$dup_home_single/.codex"
-json_settings "$dup_home_single/.claude/settings.json" "" '    "knowledge@girishattri-plugins": true'
-out=$(cd "$dup_repo" && HOME="$dup_home_single" CODEX_HOME="$dup_home_single/.codex" bash "$DOCTOR" --store "$dup_store" 2>&1)
-assert_not_contains "duplicate_plugin_single_no_warn" "$out" "duplicate-plugin"
-
-dup_home_docs="$TMP/dup_home_docs"
-mkdir -p "$dup_home_docs/.claude" "$dup_home_docs/.codex"
-json_settings "$dup_home_docs/.claude/settings.json" "" \
-  '    "creating-docs@girishattri-plugins": true,
-    "knowledge@girishattri-plugins": true'
-out=$(cd "$dup_repo" && HOME="$dup_home_docs" CODEX_HOME="$dup_home_docs/.codex" bash "$DOCTOR" --store "$dup_store" 2>&1)
-assert_contains "duplicate_plugin_creating_docs_info" "$out" "both provide docs-authoring workflows"
-info_line=$(printf '%s\n' "$out" | awk -F'\t' '$2=="duplicate-plugin" && $1=="INFO"' | grep -c "creating-docs" || true)
-[ "$info_line" -ge 1 ] && pass "duplicate_plugin_creating_docs_is_info_level" || fail "duplicate_plugin_creating_docs_is_info_level" "$out"
 
 echo "--- review queue ordering: review_after asc, unset last, then slug asc ---"
 
@@ -885,7 +866,7 @@ bash "$WRITER" bootstrap --store "$iso_repo/.agents/memory/roleA" >/dev/null 2>&
 bash "$WRITER" bootstrap --store "$iso_repo/.agents/memory/roleB" >/dev/null 2>&1
 out=$(cd "$iso_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" bash "$DOCTOR" 2>&1)
 assert_contains "section_isolation_memory_still_reports" "$out" "memory store resolution is ambiguous"
-assert_contains "section_isolation_docs_still_runs" "$out" "bad DEC naming: docs/decisions/not-a-dec.md"
+assert_contains "section_isolation_docs_still_runs" "$out" "bad decision naming: docs/decisions/not-a-dec.md"
 assert_contains "section_isolation_agents_md_still_runs" "$out" "AGENTS.md not found"
 assert_contains "section_isolation_capability_still_runs" "$out" "capability-matrix"
 
@@ -893,8 +874,6 @@ echo "--- python3-unavailable graceful degrade (source-level reachability check)
 
 grep -q "python3 is not available on this host -- the JSON-backed autoMemoryDirectory checks are skipped" "$DOCTOR" \
   && pass "python3_degrade_claude_message_present" || fail "python3_degrade_claude_message_present" "message not found in source"
-grep -q "python3 is not available on this host -- the enabledPlugins scan is skipped" "$DOCTOR" \
-  && pass "python3_degrade_duplicate_plugin_message_present" || fail "python3_degrade_duplicate_plugin_message_present" "message not found in source"
 
 echo "--- memory-resolve: store-integrity failure (symlinked store target) ---"
 
@@ -1015,14 +994,6 @@ memories = true
 EOF
 out=$(cd "$recall_repo" && HOME="$recall_home_both" CODEX_HOME="$recall_home_both/.codex" bash "$DOCTOR" --store "$recall_store" 2>&1)
 assert_contains "recall_two_layers_info" "$out" "two recall layers are active"
-
-echo "--- duplicate-enabled-plugin: session-context alone (no warn) ---"
-
-dup_home_sc_only="$TMP/dup_home_sc_only"
-mkdir -p "$dup_home_sc_only/.claude" "$dup_home_sc_only/.codex"
-json_settings "$dup_home_sc_only/.claude/settings.json" "" '    "session-context@girishattri-plugins": true'
-out=$(cd "$dup_repo" && HOME="$dup_home_sc_only" CODEX_HOME="$dup_home_sc_only/.codex" bash "$DOCTOR" --store "$dup_store" 2>&1)
-assert_not_contains "duplicate_plugin_session_context_alone_no_warn" "$out" "duplicate-plugin"
 
 echo "--- --store precedence: explicit > KNOWLEDGE_MEMORY_HOME > canonical discovery ---"
 

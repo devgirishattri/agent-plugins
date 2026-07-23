@@ -16,7 +16,7 @@ if [ -z "$PROJECT_NAME" ] || [ "$CONFIRMATION" != "--confirmed" ] || [ "$#" -ne 
   exit 1
 fi
 
-validate_label "$PROJECT_NAME" || exit 1
+validate_context_name "$PROJECT_NAME" || exit 1
 
 SNAPSHOTS_DIR="$(bootstrap_contexts_dir)" || exit 1
 SNAPSHOT="$SNAPSHOTS_DIR/${PROJECT_NAME}.md"

@@ -7,7 +7,11 @@ allowed-tools: Bash(bash:*)
 ## Instructions
 
 1. Parse $ARGUMENTS: first word is the target session, second word (optional) is the snapshot name.
-   - If no snapshot name given, derive from current directory name.
+   - If no snapshot name given, derive from current directory name and
+     normalize it to canonical `snake_case`
+     (`^[a-z0-9]+(_[a-z0-9]+)*$`).
+   - If a snapshot name is supplied and it is not canonical `snake_case`,
+     reject it instead of invoking the helper.
 
 2. Run the share script. `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started (never export or derive it here). Sharing performs nested session-chat/tmux transport: if the runtime sandboxes tmux/socket access, request scoped escalation/approval for this exact installed helper on the first attempt — the command stays one literal Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it:
    ```

@@ -56,7 +56,7 @@ if [ -n "$EXPIRES_FLAG" ] && ! [[ "$EXPIRES_FLAG" =~ $UTC_RE ]]; then
   exit 2
 fi
 
-validate_label "$PROJECT_NAME" || exit 1
+validate_context_name "$PROJECT_NAME" || exit 1
 timezone=$(agent_plugins_timezone) || exit 1
 
 if [ -L "$SNAPSHOT_FILE" ] || [ ! -f "$SNAPSHOT_FILE" ]; then

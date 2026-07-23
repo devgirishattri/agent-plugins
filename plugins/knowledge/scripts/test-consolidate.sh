@@ -439,7 +439,7 @@ cat > "$proot/TODO.md" <<'EOF'
 - [ ] ProjectA: investigate deploy timeout flakiness
 - [ ] ProjectB: rotate staging credentials
 EOF
-# Simulate the tracked item closing (a human / creating-docs action -- never
+# Simulate the tracked item closing (a human docs-authoring action -- never
 # performed by this plugin).
 sed -i.bak 's/\[ \] ProjectA: investigate deploy timeout flakiness/[x] ProjectA: investigate deploy timeout flakiness/' "$proot/TODO.md"
 rm -f "$proot/TODO.md.bak"

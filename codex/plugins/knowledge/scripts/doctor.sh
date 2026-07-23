@@ -11,7 +11,7 @@
 # both tiers fire independently for the same file — plus Phase E's handoff
 # ticket-citation checks), the AGENTS.md recall-instruction bridge, the
 # provider capability matrix (Claude autoMemoryDirectory + Codex native-
-# memories disk-baseline), and duplicate-enabled-plugin detection.
+# memories disk-baseline).
 #
 # STRICTLY READ-ONLY: every check here reads, stats, or invokes another
 # read-only helper (memory-lint.sh, memory-index.sh, memory-backlinks.sh
@@ -28,7 +28,7 @@
 #                     KNOWLEDGE_MEMORY_HOME > canonical discovery under
 #                     <repo-root>/.agents/memory/). Governs ONLY the memory-
 #                     module + lock-diagnostics sections; docs/context/
-#                     AGENTS.md/capability-matrix/duplicate-plugin sections
+#                     AGENTS.md/capability-matrix sections
 #                     always target the repository root, matching "docs
 #                     commands target the repo root" in the zero-config
 #                     contract, and never take --store.
@@ -52,8 +52,7 @@
 #   the AGENTS.md check have anywhere to look).
 #
 # Supported platforms: macOS, Linux. The provider capability-matrix's
-# JSON-backed checks (Claude autoMemoryDirectory, duplicate-enabled-plugin
-# detection via `enabledPlugins`) use python3 when available (same
+# JSON-backed checks (Claude autoMemoryDirectory) use python3 when available (same
 # established dependency as memory-search.sh) and degrade to a single INFO
 # note — never a hard failure — when it is not; every other section is pure
 # bash/coreutils. The Codex native-memories config.toml scan is pure bash
@@ -230,8 +229,8 @@ _kd_canon_path() {
 }
 
 # ---------------------------------------------------------------------------
-# JSON helpers (python3-backed; used only by the Claude capability-matrix row
-# and duplicate-enabled-plugin detection). Every other section is pure bash.
+# JSON helpers (python3-backed; used only by the Claude capability-matrix
+# row). Every other section is pure bash.
 # ---------------------------------------------------------------------------
 
 # _kd_json_get <file> <dotted.key> -> prints the scalar value on stdout.
@@ -295,23 +294,30 @@ section_docs() {
     return 0
   fi
 
-  # --- decision-record naming: docs/decisions/DEC-YYYY-MM-DD-kebab-slug.md
+  # --- decision-record naming: docs/decisions/<snake_case>.md, with dates in
+  # metadata instead of the filename.
   local dec_dir="$docs_dir/decisions"
-  local dec_re='^DEC-[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(-[a-z0-9]+)*\.md$'
+  local dec_re='^[a-z0-9]+(_[a-z0-9]+)*\.md$'
+  local dec_date_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
   if [ -d "$dec_dir" ] && [ ! -L "$dec_dir" ]; then
-    local f base
+    local f base decided
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       base=$(basename "$f")
       if [[ ! "$base" =~ $dec_re ]]; then
-        emit WARN docs-taxonomy "bad DEC naming: docs/decisions/$base (expected DEC-YYYY-MM-DD-kebab-slug.md)"
+        emit WARN docs-taxonomy "bad decision naming: docs/decisions/$base (expected snake_case.md; put dates in decided: metadata, not the filename)"
+      fi
+      decided=$(_kd_fm_get "$f" decided) || decided=""
+      if [ -z "$decided" ]; then
+        emit WARN docs-taxonomy "decision metadata missing: docs/decisions/$base (expected frontmatter decided: YYYY-MM-DD)"
+      elif [[ ! "$decided" =~ $dec_date_re ]]; then
+        emit WARN docs-taxonomy "decision metadata invalid: docs/decisions/$base (decided is not YYYY-MM-DD: '$decided')"
       fi
     done < <(find "$dec_dir" -mindepth 1 -maxdepth 1 -type f -name '*.md' 2>/dev/null | LC_ALL=C sort)
   fi
 
-  # --- taxonomy placement: a DEC-* file living anywhere in docs/ OTHER than
-  # docs/decisions/ is misplaced (the taxonomy's Decision row is explicitly
-  # `docs/decisions/DEC-*`).
+  # --- taxonomy placement: a legacy DEC-* file living anywhere in docs/ OTHER
+  # than docs/decisions/ is still recognized as a misplaced decision record.
   local f rel base
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -322,7 +328,7 @@ section_docs() {
     base=$(basename "$f")
     case "$base" in
       DEC-*.md)
-        emit WARN docs-taxonomy "misplaced decision record: $rel (decision records belong under docs/decisions/)"
+        emit WARN docs-taxonomy "misplaced legacy decision record: $rel (decision records belong under docs/decisions/<snake_case>.md with decided metadata)"
         ;;
     esac
   done < <(find "$docs_dir" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort)
@@ -853,8 +859,8 @@ section_context() {
     fi
   done < <(find "$ctx_dir" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/null | LC_ALL=C sort)
 
-  if [ -d "$ctx_dir/.session-context.lock" ]; then
-    emit INFO context "an active context-store writer lock is present at $ctx_dir/.session-context.lock (informational -- normal during a concurrent /context-* write; the context-store lock lifecycle is unchanged in this phase)"
+  if [ -d "$ctx_dir/.knowledge-context.lock" ]; then
+    emit INFO context "an active context-store writer lock is present at $ctx_dir/.knowledge-context.lock (informational -- normal during a concurrent /context-* write; the context-store lock lifecycle is unchanged in this phase)"
   fi
 }
 
@@ -1159,55 +1165,6 @@ section_capability_matrix() {
 }
 
 # ---------------------------------------------------------------------------
-# Section: duplicate-enabled-plugin detection.
-#
-# Observability boundary (documented honestly, per the phase brief): this
-# scans `enabledPlugins` in the settings files this plugin can actually read
-# from a repo checkout -- $HOME/.claude/settings.json (user scope) and
-# <repo>/.claude/settings.json + <repo>/.claude/settings.local.json (project
-# scopes). It CANNOT see: managed/enterprise policy plugin lists (no
-# documented on-disk path, same caveat as the Claude capability row);
-# ANOTHER live session's actual runtime-effective plugin set if it was
-# started with a --settings override pointing elsewhere; or marketplace
-# disable state layered on top of enabledPlugins. Detection is also
-# name-pattern based (`session-context@*` / `creating-docs@*` /
-# `knowledge@*`), not a check that the hooks/skills those plugins register
-# actually collide at runtime -- it is the same kind of static, best-effort
-# signal the rest of this plugin favors over unobservable claims.
-# ---------------------------------------------------------------------------
-section_duplicate_plugins() {
-  if ! _kd_have_python3; then
-    emit INFO duplicate-plugin "python3 is not available on this host -- the enabledPlugins scan is skipped"
-    return 0
-  fi
-
-  local scratch="$WORKDIR/enabled_plugins.txt"
-  : > "$scratch"
-  local f
-  for f in "$HOME/.claude/settings.json" "$repo_root/.claude/settings.json" "$repo_root/.claude/settings.local.json"; do
-    [ -f "$f" ] && [ ! -L "$f" ] || continue
-    _kd_json_enabled_plugins "$f" 2>/dev/null >> "$scratch" || true
-  done
-
-  local has_session_context="" has_creating_docs="" has_knowledge="" key
-  while IFS= read -r key; do
-    [ -n "$key" ] || continue
-    case "$key" in
-      session-context@*) [ -z "$has_session_context" ] && has_session_context="$key" ;;
-      creating-docs@*) [ -z "$has_creating_docs" ] && has_creating_docs="$key" ;;
-      knowledge@*) [ -z "$has_knowledge" ] && has_knowledge="$key" ;;
-    esac
-  done < <(LC_ALL=C sort -u "$scratch")
-
-  if [ -n "$has_session_context" ] && [ -n "$has_knowledge" ]; then
-    emit WARN duplicate-plugin "both $has_session_context and $has_knowledge are enabled -- two SessionStart context-snapshot detector hooks will fire; disable session-context during the migration window (see KNOWLEDGE_PLUGIN_SPEC.md Phase G)"
-  fi
-  if [ -n "$has_creating_docs" ] && [ -n "$has_knowledge" ]; then
-    emit INFO duplicate-plugin "both $has_creating_docs and $has_knowledge are enabled -- both provide docs-authoring workflows (no hook conflict); consider disabling creating-docs during the migration window"
-  fi
-}
-
-# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 repo_root=$(km_git_ancestor) || {
@@ -1227,7 +1184,6 @@ section_locks
 section_context
 section_agents_md
 section_capability_matrix
-section_duplicate_plugins
 
 [ "$HAS_FINDING" -eq 0 ] && exit 0
 exit 1

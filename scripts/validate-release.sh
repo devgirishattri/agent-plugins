@@ -579,9 +579,9 @@ require_order(root / "codex/plugins/session-manager/skills/session-delete/SKILL.
 require_tokens(root / "plugins/knowledge/commands/docs-review.md", "doc-reviewer")
 require_tokens(root / "codex/plugins/knowledge/skills/docs-review/SKILL.md", "fresh subagent", "do not edit files")
 require_tokens(root / "plugins/knowledge/commands/docs-create.md", "after ANY docs write/edit")
-require_tokens(root / "plugins/knowledge/skills/creating-docs/SKILL.md", "MANDATORY independent review", "Repeat after fixes")
+require_tokens(root / "plugins/knowledge/skills/docs-create/SKILL.md", "MANDATORY independent review", "Repeat after fixes")
 require_tokens(root / "codex/plugins/knowledge/skills/docs-create/SKILL.md", "Run an independent accuracy review", "actual parent directory")
-require_tokens(root / "plugins/knowledge/skills/session-context/SKILL.md", "SESSION_CONTEXT_HOME")
+require_tokens(root / "plugins/knowledge/skills/context/SKILL.md", "SESSION_CONTEXT_HOME")
 require_tokens(root / "codex/plugins/knowledge/skills/knowledge/SKILL.md", "SESSION_CONTEXT_HOME")
 require_tokens(root / "codex/plugins/knowledge/skills/context-remove/SKILL.md", "request_user_input", "explicit confirmation")
 require_tokens(root / "plugins/knowledge/commands/context-remove.md", "AskUserQuestion", "No, cancel (Recommended)", "--confirmed")
@@ -645,11 +645,11 @@ reject_pattern(
     r"context-search[^.]*is the exception",
     "Codex context search also requires SESSION_CONTEXT_HOME",
 )
-# session-context 0.7.5 inherited-env contract, ported in full to the knowledge
-# plugin (KNOWLEDGE_PLUGIN_SPEC.md): agent-facing context docs never instruct
+# Knowledge context inherited-env contract (KNOWLEDGE_PLUGIN_SPEC.md):
+# agent-facing context docs never instruct
 # an executable export/derivation; the store is inherited at agent startup and
 # scripts fail closed with relaunch guidance when it is absent. The Codex
-# overview skill was renamed session-context -> knowledge, so it is addressed
+# overview skill is the knowledge taxonomy skill, so it is addressed
 # separately per provider below; the command/skill glob is narrowed to the
 # context-* surface since the knowledge commands/skills dirs now also hold
 # unrelated docs/memory commands that never mention this contract.
@@ -684,7 +684,7 @@ for provider_context in (
         if context_doc_key not in ("context-search", "knowledge"):
             require_phrases(context_doc, "relaunch")
     context_overview_skill = (
-        provider_context / "skills/session-context/SKILL.md"
+        provider_context / "skills/context/SKILL.md"
         if provider_context == root / "plugins/knowledge"
         else provider_context / "skills/knowledge/SKILL.md"
     )
@@ -723,7 +723,7 @@ require_tokens(
     "public `/send` and `/dispatch` wrappers translate that to a normal success exit",
 )
 require_tokens(
-    root / "plugins/knowledge/skills/session-context/SKILL.md",
+    root / "plugins/knowledge/skills/context/SKILL.md",
     "not a file copy",
     "via `/whoami <name>` or SessionStart",
 )
@@ -759,8 +759,8 @@ for workflow in sorted((root / ".github/workflows").glob("*.y*ml")):
 require_tokens(
     root / ".github/workflows/validate.yml",
     "plugins/session-manager/scripts/test-session-manager.sh",
-    "plugins/knowledge/scripts/test-creating-docs.sh",
-    "plugins/knowledge/scripts/test-session-context.sh",
+    "plugins/knowledge/scripts/test-docs-create.sh",
+    "plugins/knowledge/scripts/test-context.sh",
     "scripts/test-provider-parity.sh",
 )
 
@@ -784,7 +784,7 @@ for share_script in (
         r"export SESSION_CONTEXT_HOME=",
         "share notification must not instruct an executable export",
     )
-require_tokens(root / "plugins/knowledge/scripts/test-session-context.sh", "chmod 644", "share_provenance_special_path")
+require_tokens(root / "plugins/knowledge/scripts/test-context.sh", "chmod 644", "share_provenance_special_path")
 require_tokens(root / "plugins/session-scheduler/scripts/scheduler-doctor.sh", '[ -f "$root/scripts/dispatch-to-session.sh" ]', '[ -r "$root/scripts/dispatch-to-session.sh" ]')
 require_tokens(root / "plugins/session-scheduler/scripts/test-session-scheduler.sh", "chmod 644", "dispatch script: OK")
 

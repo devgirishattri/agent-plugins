@@ -489,8 +489,8 @@ validate_stage() {
   fi
 }
 
-# session-context snapshots live under SESSION_CONTEXT_HOME, which must match
-# the same override honored by session-context's own get_contexts_dir(). Like
+# context snapshots live under SESSION_CONTEXT_HOME, which must match
+# the same override honored by the knowledge context store's own get_contexts_dir(). Like
 # SESSION_SCHEDULER_HOME it must be inherited at agent startup — never exported
 # by a command. Fail closed if it is not set rather than guessing a location.
 resolve_contexts_dir() {

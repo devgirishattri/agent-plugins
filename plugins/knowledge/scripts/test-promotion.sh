@@ -15,7 +15,7 @@
 # This suite intentionally does not re-test memory-write.sh's own
 # lock/journal/recovery/CAS internals (test-memory-kernel.sh already covers
 # those exhaustively), memory-search.sh's scoring contract (test-retrieval.sh),
-# or the context-store writer-lock/hardening internals (test-session-context.sh,
+# or the context-store writer-lock/hardening internals (test-context.sh,
 # which this suite never modifies or duplicates) -- it tests the Phase E
 # SURFACE: handoff frontmatter mechanics, list/pass-through contracts, and the
 # promote skill's mechanical write/delete sequencing, end to end.
@@ -432,7 +432,7 @@ assert_eq "list_handoff_row_5th_field" "handoff" "$(printf '%s' "$beta_row" | cu
 beta_expires_expected=$(fm_get "$ctx2/beta.md" expires)
 assert_eq "list_handoff_row_6th_field_is_expires" "$beta_expires_expected" "$(printf '%s' "$beta_row" | cut -f6)"
 # Plain row's first four fields are exactly name/lines/modified/versions --
-# same shape as every pre-Phase-E fixture in test-session-context.sh.
+# same shape as every pre-Phase-E fixture in test-context.sh.
 assert_eq "list_plain_row_name_field" "alpha" "$(printf '%s' "$alpha_row" | cut -f1)"
 assert_contains "list_plain_row_lines_field" "$(printf '%s' "$alpha_row" | cut -f2)" "lines"
 assert_contains "list_plain_row_versions_field" "$(printf '%s' "$alpha_row" | cut -f4)" "versions"
@@ -607,16 +607,22 @@ repo_hash_before=$(tree_hash "$docs_repo")
 # Simulate skill step 4's docs leg: compose the complete proposed content as
 # a plain string, never touching the filesystem.
 proposed_dec_content=$(cat <<'EOF'
-# DEC-2026-03-01-adopt-alpha-retry-policy
+---
+decided: 2026-03-01
+status: proposed
+---
+
+# Adopt alpha retry policy
 
 **Status**: Proposed (never written by /knowledge:promote)
 EOF
 )
-assert_contains "docs_proposal_composed_in_memory" "$proposed_dec_content" "DEC-2026-03-01-adopt-alpha-retry-policy"
+assert_contains "docs_proposal_composed_in_memory" "$proposed_dec_content" "Adopt alpha retry policy"
+assert_contains "docs_proposal_date_in_metadata" "$proposed_dec_content" "decided: 2026-03-01"
 
 repo_hash_after=$(tree_hash "$docs_repo")
 assert_eq "docs_proposal_no_write_happened" "$repo_hash_before" "$repo_hash_after"
-assert_file_absent "docs_proposal_dec_file_not_created" "$docs_repo/docs/decisions/DEC-2026-03-01-adopt-alpha-retry-policy.md"
+assert_file_absent "docs_proposal_dec_file_not_created" "$docs_repo/docs/decisions/adopt_alpha_retry_policy.md"
 
 skill_content=$(cat "$PROMOTE_SKILL_MD")
 assert_contains "promote_skill_states_docs_never_written" "$skill_content" "never written by this skill"

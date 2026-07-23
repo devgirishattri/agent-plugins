@@ -30,7 +30,7 @@
 #   bash test-knowledge.sh --suite <name> -v
 #
 # NAMES (module suites, in component-inventory order):
-#   session-context creating-docs memory-kernel retrieval capture
+#   context docs-create memory-kernel retrieval capture
 #   consolidate doctor promotion
 # NAMES (Phase-F-owned checks, run inline by this script):
 #   network-egress privacy
@@ -73,7 +73,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-MODULE_NAMES="session-context creating-docs memory-kernel retrieval capture consolidate doctor promotion"
+MODULE_NAMES="context docs-create memory-kernel retrieval capture consolidate doctor promotion"
 CHECK_NAMES="network-egress privacy"
 ALL_NAMES="$MODULE_NAMES $CHECK_NAMES"
 
@@ -97,8 +97,8 @@ fi
 # ---------------------------------------------------------------------------
 module_script_for() {
   case "$1" in
-    session-context) echo "test-session-context.sh" ;;
-    creating-docs)   echo "test-creating-docs.sh" ;;
+    context)         echo "test-context.sh" ;;
+    docs-create)     echo "test-docs-create.sh" ;;
     memory-kernel)   echo "test-memory-kernel.sh" ;;
     retrieval)       echo "test-retrieval.sh" ;;
     capture)         echo "test-capture.sh" ;;
@@ -243,7 +243,7 @@ echo
 for name in $names_to_run; do
   RUN_COUNT=$((RUN_COUNT + 1))
   case "$name" in
-    session-context|creating-docs|memory-kernel|retrieval|capture|consolidate|doctor|promotion)
+    context|docs-create|memory-kernel|retrieval|capture|consolidate|doctor|promotion)
       run_module "$name"
       rc=$?
       ;;

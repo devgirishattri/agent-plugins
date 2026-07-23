@@ -13,7 +13,7 @@ disable-model-invocation: true
    ```
    - Exit `0`: proceed to step 2.
    - Any non-zero exit (e.g. `6` — `reviewer role: docs writes refused`, or an unresolved fleet identity): **stop immediately.** Do not read the skill, do not write or edit any file. Relay the script's stderr line to the user verbatim as the reason no docs were written.
-2. Read the skill instructions at `${CLAUDE_PLUGIN_ROOT}/skills/creating-docs/SKILL.md` using the Read tool
+2. Read the skill instructions at `${CLAUDE_PLUGIN_ROOT}/skills/docs-create/SKILL.md` using the Read tool
 3. Follow the structured process to create or update documentation
 4. If no topic is provided below, ask the user what they want to document
 5. After writing docs, run the validation scripts using Bash against the **parent directory of each doc you actually created or edited** — a doc may live at the project root, under `docs/`, or module-adjacent (e.g. `src/api/README.md`). Collect the unique parent directories of your changed docs and run each validator **once per unique parent**; use `docs/` only when that is where the docs you touched actually live. The scripts accept any directory argument (default `.`).

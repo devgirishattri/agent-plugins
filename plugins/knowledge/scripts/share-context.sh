@@ -14,7 +14,7 @@ if [ -z "$TARGET_SESSION" ] || [ -z "$PROJECT_NAME" ]; then
   exit 1
 fi
 
-validate_label "$PROJECT_NAME" || exit 1
+validate_context_name "$PROJECT_NAME" || exit 1
 # The target session name enters the notification and is used to resolve the
 # recipient pane; reject an unsafe label up front (both transports validate too).
 if ! validate_label "$TARGET_SESSION" 2>/dev/null; then
@@ -68,12 +68,12 @@ if root=$(session_chat_root) && [ -f "$root/scripts/send-message.sh" ] && [ -r "
     *)        TRANSPORT="session-chat" ;;
   esac
 else
-  # Fallback transport: session-context's own basic send (no durable inbox).
+  # Fallback transport: knowledge context's own basic send (no durable inbox).
   if ! send_message "$TARGET_SESSION" "$SHARE_MSG"; then
     echo "ERROR: failed to notify '$TARGET_SESSION' (fallback transport)." >&2
     exit 1
   fi
-  TRANSPORT="session-context builtin (session-chat not installed)"
+  TRANSPORT="knowledge context builtin (session-chat not installed)"
 fi
 
 echo "Shared '$PROJECT_NAME' context with $TARGET_SESSION."

@@ -15,7 +15,13 @@ Generate a concise summary of what THIS session has been working on — for hand
    - Without `--handoff`, this command's output is byte-identical to its pre-Phase-E behavior on a plain snapshot. Re-running it without `--handoff` against a snapshot name that is **already** a handoff **refuses** (`save-context.sh` exits 2 with the single stderr line `handoff exists: re-run with --handoff`) rather than silently mutating or dropping its metadata — if you hit this, tell the user and re-run with `--handoff`.
    - Regenerating an existing handoff with `--handoff` again is a normal **update**: it keeps the original `created` date, advances `updated` to now, and keeps the existing `expires` unless `--expires` is given this time (which replaces it). Regenerating an existing **plain** snapshot with `--handoff` **upgrades** it (its `created` becomes now, since a plain snapshot carries no prior metadata to preserve).
 
-1. **Determine snapshot name**: Use $ARGUMENTS (with the handoff flags above removed) if provided, otherwise derive from the Codex session name or current directory name.
+1. **Determine snapshot name**: Use $ARGUMENTS (with the handoff flags above
+   removed) if provided, otherwise derive from the Codex session name or
+   current directory name. Snapshot/handoff names are canonical `snake_case`
+   slugs matching `^[a-z0-9]+(_[a-z0-9]+)*$`; reject a user-supplied name
+   that does not match. For a derived default, normalize by lowercasing,
+   replacing non-alphanumeric runs with `_`, and trimming leading/trailing
+   underscores.
 
 2. **Gather session context** by checking:
    - `git diff --stat HEAD` — files currently modified

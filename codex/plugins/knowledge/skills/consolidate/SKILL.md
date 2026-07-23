@@ -124,8 +124,8 @@ file.
 While reading, note the **detected index style**, because you must preserve it
 when you add rows later:
 
-- **flat** — a plain list of rows shaped `- [Name](<basename>.md) — hook text`, no
-  headings.
+- **flat** — a plain list of membership rows: bullet, display name linked to
+  the memory file basename, then hook text; no headings.
 - **sectioned** — the same rows grouped under `#`/`##` headings (commonly by
   `metadata.type` or topic).
 - **multi-link** — some rows carry more than one `](...)` link on the same
@@ -177,6 +177,22 @@ do not.
 
 If the worklist is empty, say so plainly and stop — there is nothing to
 consolidate this run.
+
+## 4.5. Forward-looking retention gate, per item
+
+Before deduping or proposing a file, classify the item:
+
+- **Reusable going forward** — keep it in scope for CREATE/UPDATE.
+- **Only session residue** — do not promote it to durable memory; leave the
+  backing inbox candidate untouched unless the user separately chooses the
+  explicit purge workflow.
+- **Historical but still explanatory** — summarize it as rationale,
+  migration/provenance, or "why this rule exists"; do not store raw chronology
+  or obsolete step-by-step state.
+- **Superseded or obsolete** — prefer an UPDATE to the current memory with
+  `status: superseded|archived|stale`, `supersedes`, and/or `review_after`
+  where appropriate. Do not delete here; `retire` and `purge` are separate
+  explicit actions.
 
 ## 5. Dedup pass, per item
 

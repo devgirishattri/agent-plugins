@@ -1,9 +1,9 @@
 ---
-name: session-context
-description: When and how to capture, restore, and hand off Claude session context snapshots from a shared store. Use this skill before invoking /context-generate, /context-load, or /context-share so you understand what a snapshot is, where it lives, and the prerequisites for sharing one with another session.
+name: context
+description: When and how to capture, restore, and hand off Claude context snapshots from the knowledge plugin's shared store. Use this skill before invoking /context-generate, /context-load, or /context-share so you understand what a snapshot is, where it lives, and the prerequisites for sharing one with another session.
 ---
 
-# session-context (absorbed into knowledge): shared-store context snapshots
+# Context snapshots: knowledge shared store
 
 A snapshot is a markdown summary of a working session — **what you worked on, the
 decisions you made, and where you left off** — written so a *future* session (or a
@@ -11,9 +11,13 @@ peer session) can resume without re-deriving everything from scratch.
 
 Snapshots are stored under `SESSION_CONTEXT_HOME`, which must already be present in each pane's environment, **inherited when the agent process started** — the launcher/parent shell establishes it before the agent starts, and every pane that shares snapshots must be launched with the same absolute value. The `/context-*` commands never export or derive it, and most scripts **fail closed** when it is unset rather than guessing a location; the fix is to relaunch the pane/session with the correct environment (`/context-search`, which scans across projects, is the exception — it uses `SESSION_CONTEXT_HOME` only as an override for the current repo's store). Direct human script use may export `SESSION_CONTEXT_HOME=<dir>` in the parent shell beforehand, but agent-facing instructions never combine environment setup with helper execution — each helper is invoked as exactly one literal Bash segment using the inherited value.
 
-Snapshots live at `$SESSION_CONTEXT_HOME/<name>.md`. Launching every pane with the
-same shared store means every Claude/Codex pane working in the same project sees
-the same set of snapshots.
+Snapshots live at `$SESSION_CONTEXT_HOME/<name>.md`, where `<name>` must be
+canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`). The store hardening
+scanner enforces the same rule for existing snapshot files and
+`.history/<name>.<timestamp>.md` archives; legacy hyphenated or uppercase
+context filenames fail closed until explicitly migrated. Launching every pane
+with the same shared store means every Claude/Codex pane working in the same
+project sees the same set of snapshots.
 
 A SessionStart hook surfaces existing snapshots automatically (using the inherited
 store, with a git-root default only for its own detection banner), so a resuming
@@ -67,7 +71,10 @@ produce the summary — never try to offload generation to a separate agent.
 | `/context-share <session> [name]` | Notify another pane that a shared snapshot is available (same store; not a file copy). |
 | `/context-remove <name>` | Delete a snapshot. |
 
-Snapshot names must contain only letters, numbers, hyphens, and underscores.
+Snapshot and handoff names are canonical knowledge item names: lowercase
+`snake_case` slugs matching `^[a-z0-9]+(_[a-z0-9]+)*$`. If deriving a default
+from a session or directory name, normalize it to that form; do not put dates
+or datetimes in the name.
 
 ## Sharing prerequisites
 
@@ -98,6 +105,10 @@ sharing requires it.
 - **Snapshots are store-local, not global.** The launcher-selected
   `SESSION_CONTEXT_HOME` determines the snapshot set; a snapshot is visible to
   every pane that inherits that same absolute store, regardless of cwd.
+- **Context is temporary working state, not durable memory.** Keep snapshots
+  focused on what a future session needs next. When the information stabilizes,
+  promote it to memory/docs; when it no longer matters, remove it explicitly
+  with `/context-remove`.
 - **Regenerate, don't append.** `/context-generate` with an existing name overwrites
   that snapshot with the current state — keep one authoritative snapshot per name
   rather than many stale ones. Overwriting is safe: the previous version is archived

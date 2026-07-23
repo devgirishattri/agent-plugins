@@ -6,10 +6,9 @@ description: Understand the knowledge plugin's full taxonomy (docs, memory, cont
 # Knowledge
 
 `knowledge` is ONE cohesive, internally modular plugin for durable project
-knowledge. It absorbs `session-context` (context snapshots) and
-`creating-docs` (documentation workflows), and adds a native memory module
-for `.agents/memory/` — consolidation, promotion, deterministic search/
-recall, an explicit-link backlink graph, and a read-only cross-store
+knowledge: documentation workflows, context snapshots, and a native memory
+module for `.agents/memory/` — consolidation, promotion, deterministic
+search/recall, an explicit-link backlink graph, and a read-only cross-store
 doctor. Every command lives under this one plugin; there is no cross-plugin
 composition to reason about. All eighteen commands below are shipped.
 
@@ -17,7 +16,7 @@ composition to reason about. All eighteen commands below are shipped.
 
 | Store | Nature | Owner | Where |
 |---|---|---|---|
-| **Docs** | durable, git-tracked | human-curated | `docs/` (incl. `docs/decisions/DEC-*`) |
+| **Docs** | durable, git-tracked | human-curated | `docs/` (incl. `docs/decisions/<snake_case>.md`) |
 | **Memory** | durable, gitignored | agent-maintained | `.agents/memory/` (a directory containing `MEMORY.md`) |
 | **Context** | ephemeral, expiring | plugin-owned | the inherited `SESSION_CONTEXT_HOME` store |
 
@@ -31,6 +30,16 @@ reference` memory, a handoff's `tickets:` list), never a mirror; the one
 exception is `docs-create`'s explicitly user-invoked TODO/ISSUES
 maintenance (see "Non-goals" below).
 
+## Forward-looking retention principle
+
+Knowledge should be reusable for future work, not a transcript archive. Store
+historical details only when they explain a current decision, active
+constraint, migration path, or provenance a future agent must preserve.
+Otherwise keep the durable memory/doc focused on what remains true going
+forward. Obsolete material is handled by explicit lifecycle actions:
+`status: stale|superseded|archived`, `review_after`, `promote` source
+deletion, `retire`, `purge`, or `context-remove`; nothing is silently deleted.
+
 ## Which command, when
 
 **Docs — see each installed command skill for the full process:**
@@ -40,8 +49,8 @@ maintenance (see "Non-goals" below).
 | `$knowledge:docs-create [topic]` | Create or update project documentation using structured templates, reference-based notation, and validation tools. Runs the `docs-write.sh` reviewer-role preflight first (below). |
 | `$knowledge:docs-review [target]` | Independently verify documentation accuracy against the codebase (report-only, no edits), delegating the installed review procedure to a fresh read-only subagent. |
 
-**Context — absorbed from session-context 0.7.8; each command has a
-same-named installed skill for its full workflow:**
+**Context — each command has a same-named installed skill for its full
+workflow:**
 
 | Command | Purpose |
 |---|---|
@@ -52,6 +61,13 @@ same-named installed skill for its full workflow:**
 | `$knowledge:context-search <pattern> [--list]` | Read-only search of snapshot contents across local projects. |
 | `$knowledge:context-share <session> [name]` | Notify another named pane that a shared snapshot is available (does not copy the file). |
 | `$knowledge:context-remove <name>` | Preview, explicitly confirm, and delete one snapshot (and its history). |
+
+Context snapshot and handoff names are canonical knowledge item names:
+lowercase `snake_case` slugs matching `^[a-z0-9]+(_[a-z0-9]+)*$`. Pane
+names are transport labels and may still use hyphens. The context store
+hardening scanner enforces the same rule for existing snapshot files and
+history stems; legacy hyphenated or uppercase context filenames fail closed
+until explicitly migrated.
 
 **Memory — the durable, agent-maintained store. `doctor`/`lint`/`search`/
 `recall`/`graph` are read-only; `remember` is a low-friction inbox write;
@@ -87,8 +103,7 @@ vs validate"):
   with no name is an unresolved fleet identity and also fails closed (exit
   6) — export `KNOWLEDGE_PANE_NAME` from your project's canonical pane-name
   variable if it differs.
-- **Context** — the absorbed session-context writers are unchanged: context
-  coordination writes are **reviewer-ALLOWED**, per the multi-agent
+- **Context** — context coordination writes are **reviewer-ALLOWED**, per the multi-agent
   baseline's coordination-state exception (session hand-off state is
   fleet-coordination data, not a durable knowledge store).
 - **Docs** — `docs-create` (and its explicitly-invoked TODO/ISSUES
@@ -114,7 +129,7 @@ variable > canonical discovery, whose SOLE probed location is
 `<repo-root>/.agents/memory/` (a `MEMORY.md` directly there, or — if
 absent — exactly one immediate subdirectory containing one; zero or
 multiple candidates fails closed rather than guessing). This never governs
-the other two surfaces: context keeps the absorbed `SESSION_CONTEXT_HOME`
+the other two surfaces: context keeps the inherited `SESSION_CONTEXT_HOME`
 resolution, and docs commands always target the repo root. If no store
 exists yet, every memory command's error message points at
 `$knowledge:init`.
@@ -129,8 +144,8 @@ memory writer above; a `*-reviewer` name refuses (exit 6, stderr `reviewer
 role: docs writes refused`); an unresolved fleet identity inside tmux also
 fails closed (exit 6, stderr `unresolved pane identity: set
 KNOWLEDGE_PANE_NAME`). `docs-review` is report-only and does not go through
-this gate. This is the ONE deliberate behavior change from the absorbed
-`creating-docs` plugin — everything else ported test-identical.
+this gate. This is the ONE deliberate migration behavior change from the
+retired docs workflow — everything else ported test-identical.
 
 ## Context sharing prerequisites
 
@@ -182,91 +197,9 @@ these commands:
 - The seven same-named `skills/context-*/SKILL.md` surfaces — the full
   context-snapshot lifecycle, sharing prerequisites, and staleness rules.
 
-## Migrating from session-context / creating-docs
-
-`session-context` (final release `0.7.9`) and `creating-docs` (final release
-`1.1.4`) are DEPRECATED — superseded by this plugin. `knowledge` (>= 0.1.0)
-absorbs both plugins' full surface with behavior-identical ports, plus the
-one deliberate change already noted above (the `docs-write.sh` reviewer-role
-preflight). Anything pinning `session-context >= 0.7.0` is satisfied by
-`knowledge >= 0.1.0` — the dependency equivalence any consumer should treat
-as met.
-
-**Sequence** (`docs/KNOWLEDGE_PLUGIN_SPEC.md`, "Migration and compatibility
-(non-destructive)"):
-
-1. **Install alongside.** `knowledge` installs next to `session-context`/
-   `creating-docs` — nothing about the old plugins changes yet.
-2. **Confirm parity.** Run `$knowledge:doctor` and review its findings; on
-   Codex, also inspect the installed plugin state because the duplicate-hook
-   WARN below is driven by the provider enabled-plugin metadata `doctor.sh`
-   can read, not by every live Codex config layer.
-3. **Disable the old plugin(s).** Turn off `session-context` and/or
-   `creating-docs` in your plugin config once you're satisfied. Re-run
-   doctor — the duplicate-hook WARN below must clear.
-4. **Deprecation window.** Leave the old plugin(s) installed-but-disabled for
-   a comfort window while you confirm `knowledge` covers your workflow.
-5. **Uninstall.** Remove the old plugin package(s). This deletes nothing
-   from either store (see "Zero data loss" below) — only the plugin code
-   itself goes away.
-
-**Duplicate-hook check.** While `session-context` and `knowledge` are both
-enabled at once in a provider layer `doctor.sh` can read, `doctor`'s
-duplicate-enabled-plugin detector reports exactly (verbatim from
-`doctor.sh`, `section_duplicate_plugins`, reproduced against
-enabled/disabled fixtures during Phase G):
-
-```
-WARN	duplicate-plugin	both session-context@girishattri-plugins and knowledge@girishattri-plugins are enabled -- two SessionStart context-snapshot detector hooks will fire; disable session-context during the migration window (see KNOWLEDGE_PLUGIN_SPEC.md Phase G)
-```
-
-`<name>@<marketplace>` reflects whatever marketplace the plugins were
-installed from — the literal message text and WARN level are fixed.
-`creating-docs` + `knowledge` together produce an INFO instead of a WARN —
-both provide docs-authoring workflows and there is no hook conflict there.
-Disabling `session-context` (step 3) clears this WARN wherever that
-enabled-plugin metadata is the source of truth.
-
-For Codex's installed-plugin config specifically, verify the same migration
-boundary by checking installed state: with both plugins enabled, both
-`knowledge` and `session-context` register a `SessionStart` snapshot detector;
-after setting `session-context` disabled, `session-context:*` skills and its
-hook no longer participate while `knowledge:*` remains enabled.
-
-**Zero data loss.** Both stores are consumed IN PLACE — `knowledge` never
-migrates, copies, or renames existing content, so uninstalling the old
-plugin package(s) touches neither:
-
-- **Context snapshots** live under `SESSION_CONTEXT_HOME` (default
-  `<repo-root>/.tmp/contexts`, including its `.history/` archive) — same
-  path, format, and locking `session-context` always used; `knowledge`'s
-  context commands read and write that exact directory.
-- **Docs** live under `docs/` (including `docs/TODO.md`/`docs/ISSUES.md`) —
-  same path and format `creating-docs` always used; `knowledge`'s docs
-  commands target the same repo-root `docs/` directory.
-- Neither store lives inside `plugins/session-context/`,
-  `plugins/creating-docs/`, or `plugins/knowledge/` — removing a plugin's
-  installed directory never touches durable data, which always lives outside
-  every plugin's own tree.
-
-**Legacy `docs/handoffs`-style files — classify first, never bulk-migrate.**
-Existing ad hoc handoff/resume files are not automatically imported into any
-store. Classify each one by hand:
-
-- A pure resume packet (what changed, where you left off, what's next) →
-  recreate it as a context item with `--handoff` and an explicit
-  `--expires` (`$knowledge:context-generate --handoff --expires <UTC-ISO>`),
-  then delete the legacy file once the handoff is captured.
-- Audit, governance, or externally-referenced material → stays
-  human-curated in `docs/`; it was never working state and does not belong
-  in the ephemeral context store.
-
-When a file's category isn't obvious, leave it in place and ask — never
-guess at bulk-migrating content this plugin can't classify.
-
 ## Non-goals (always)
 
-- Never auto-edit `AGENTS.md`/`CLAUDE.md`/`docs/decisions/DEC-*`/reference
+- Never auto-edit `AGENTS.md`/`CLAUDE.md`/`docs/decisions/`/reference
   docs — report-only, always (`doctor` prints the exact bytes to paste; it
   never writes them).
 - Never call an external memory SaaS, vector DB, or embeddings API — zero

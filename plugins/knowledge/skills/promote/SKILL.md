@@ -74,6 +74,24 @@ Ask the user (or read `$ARGUMENTS`) which of these this run promotes:
 If the user didn't say which, ask before doing anything else — this decision
 shapes every later step.
 
+## 1.5. Forward-looking lifecycle gate
+
+Before proposing a destination, decide whether the source still has durable
+future value:
+
+- Promote only stabilized knowledge: current decisions, reusable learnings,
+  active constraints, migration rationale, or provenance that future sessions
+  must preserve.
+- If a context/handoff is only stale operational residue, do not create memory
+  or docs from it; tell the user the appropriate next step is the separately
+  confirmed `context-remove` flow.
+- If a memory source is being superseded, carry forward only the still-relevant
+  rule/rationale and mark the destination with `supersedes: <old-slug>` when
+  applicable. Do not keep obsolete chronology unless it explains the current
+  state.
+- Deletion remains a separate gate: this classification is not permission to
+  delete the source.
+
 ## 2. Resolve the relevant store(s)
 
 **Context-store source**: run
@@ -145,10 +163,11 @@ user — same discipline as `consolidate` step 6.
 - Fold in ticket citations from step 5 into the proposed body (a short "Cited
   tracking items" note), never into MEMORY.md's index row.
 
-**Docs destination** (decision record — `docs/decisions/DEC-YYYY-MM-DD-kebab-slug.md`,
-matching the naming doctor already checks for, or another `docs/` reference
-file when that's the better fit): compose the **complete** proposed file
-content (new file) or a **complete unified diff** (existing file) as a
+**Docs destination** (decision record —
+`docs/decisions/<snake_case>.md`, matching the naming doctor checks for, with
+decision dates in frontmatter `decided: YYYY-MM-DD`, or another `docs/`
+reference file when that's the better fit): compose the **complete** proposed
+file content (new file) or a **complete unified diff** (existing file) as a
 fenced code block in your response. This is the entire destination write —
 there is no `apply` step for docs; step 6 below shows this to the user as the
 final artifact, and step 7 (write + revalidate) does nothing for this leg

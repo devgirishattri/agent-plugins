@@ -14,10 +14,10 @@ Guide for documenting recurring code patterns, conventions, and architectural de
 Each pattern doc should follow this structure:
 
 ```
-# PATTERN_NAME.md
+# pattern_name.md
 
 **Date**: YYYY-MM-DD
-**Status**: Active | Deprecated | Superseded by [OTHER_PATTERN.md]
+**Status**: Active | Deprecated | Superseded by [other_pattern.md]
 **Related**: [related pattern or module documentation, if any]
 
 ## Overview
@@ -172,11 +172,18 @@ ADRs capture *why* a decision was made. They prevent:
 ### ADR Structure
 
 ```
-# ADR_DECISION_NAME.md
+---
+decided: YYYY-MM-DD
+status: accepted
+deciders:
+  - [who was involved]
+---
 
-**Date**: YYYY-MM-DD
-**Status**: Accepted
-**Deciders**: [who was involved]
+# Decision name
+
+Decision records live under `docs/decisions/` and use semantic
+`snake_case.md` filenames. Keep dates in `decided:` metadata, not in the
+filename.
 
 ## Context
 
@@ -221,14 +228,16 @@ pattern, or approach chosen.]
 
 ### ADR Naming
 
-Follow the UPPER_CASE convention: `ADR_AUTH_JWT.md`, `ADR_DATABASE_POSTGRES.md`, `ADR_MONOREPO_STRUCTURE.md`.
+Follow the canonical decision convention: `docs/decisions/auth_jwt.md`,
+`docs/decisions/database_postgres.md`,
+`docs/decisions/monorepo_structure.md`.
 
 ## Organizing Pattern Docs
 
 Place pattern docs where they make sense:
 
 - `docs/patterns/` — Cross-cutting patterns (error handling, testing, config)
-- `docs/adr/` — Architecture decision records
+- `docs/decisions/` — Architecture decision records
 - `src/module/PATTERNS.md` — Module-specific patterns (alongside the code)
 
 For projects with 10+ patterns, create a `docs/patterns/INDEX.md` that lists all patterns grouped by category.

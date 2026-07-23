@@ -47,8 +47,8 @@
     },
     {
       "name": "knowledge",
-      "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Absorbs creating-docs and session-context (both superseded — see their DEPRECATED entries) and adds a native memory module with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor.",
-      "version": "0.1.0",
+      "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory module with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor.",
+      "version": "0.1.1",
       "author": {
         "name": "Girish Attri"
       },
@@ -86,7 +86,7 @@
     {
       "name": "session-scheduler",
       "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
-      "version": "0.5.8",
+      "version": "0.5.9",
       "author": {
         "name": "Girish Attri"
       },

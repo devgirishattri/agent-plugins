@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # detect-snapshots.sh — SessionStart hook for knowledge's context-store
-# surface (Codex; absorbed from session-context 0.7.8).
+# surface (Codex).
 # Surfaces a short, one-time hint when the current project already has context
 # snapshots, so a resuming session knows it can load one instead of
 # re-deriving state. Stays silent (and exit 0) when there is nothing to surface.

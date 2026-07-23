@@ -28,7 +28,10 @@ Parse the first argument as the target session and the optional second argument 
 Usage: $knowledge:context-share <session-name> [snapshot-name]
 ```
 
-If no snapshot name is provided, derive one from the current directory. Run:
+If no snapshot name is provided, derive one from the current directory and
+normalize it to canonical `snake_case`
+(`^[a-z0-9]+(_[a-z0-9]+)*$`). If a snapshot name is supplied and it is not
+canonical `snake_case`, reject it instead of invoking the helper. Run:
 
 ```bash
 bash "<PLUGIN_ROOT>/scripts/share-context.sh" "<session-name>" "<snapshot-name>"

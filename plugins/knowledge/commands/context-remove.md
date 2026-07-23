@@ -12,7 +12,7 @@ Removing a snapshot is **destructive** — it deletes the snapshot AND all of it
 
    `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started (never export or derive it here). Every invocation below must be exactly one Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it. If it is unset, stop and request that this pane/session be relaunched with the correct environment instead of deriving another context store.
 
-2. **Validate, then preview** — require `<name>` to match `^[A-Za-z0-9_-]+$` before interpolating it into any path; reject any other value without previewing or removing anything. Then produce a point-in-time preview of exactly what will be deleted — do NOT pass `--confirmed` yet:
+2. **Validate, then preview** — require `<name>` to match `^[a-z0-9]+(_[a-z0-9]+)*$` before interpolating it into any path; reject any other value without previewing or removing anything. Then produce a point-in-time preview of exactly what will be deleted — do NOT pass `--confirmed` yet:
    ```
    ls -1 "$SESSION_CONTEXT_HOME/<name>.md" "$SESSION_CONTEXT_HOME/.history/<name>."*.md 2>/dev/null
    ```

@@ -83,7 +83,7 @@ if [ -n "$UNMET" ] && ! scheduler_force_enabled; then
   exit 1
 fi
 
-# Pre-flight: resolve session-chat and the session-context snapshot before
+# Pre-flight: resolve session-chat and the context snapshot before
 # assignment side effects. `--context auto` creates a task-scoped immutable handoff only
 # after all other pre-flight checks pass.
 CHAT_ROOT=$(session_chat_root) || exit 1

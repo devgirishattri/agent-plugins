@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Hermetic smoke tests for session-context lifecycle, hook, and share transport.
+# Hermetic smoke tests for knowledge-context lifecycle, hook, and share transport.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/session-context-test.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/knowledge-context-test.XXXXXX")"
 # The exact-root regression makes a parent directory read-only; restore write
 # permission even when a test failed mid-way so the temp tree is removable.
 trap 'chmod -R u+rwx "$TMP" 2>/dev/null || true; rm -rf "$TMP"' EXIT
@@ -86,6 +86,26 @@ if AGENT_PLUGINS_TIME_ZONE=Not/AZone SESSION_CONTEXT_HOME="$TMP/invalid-timezone
 fi
 assert_contains "$TMP/invalid-timezone.out" "unknown IANA timezone"
 
+printf 'invalid context name\n' > "$TMP/invalid-context-name.md"
+if SESSION_CONTEXT_HOME="$TMP/name-store" bash "$SCRIPT_DIR/save-context.sh" bad-name "$TMP/invalid-context-name.md" > "$TMP/invalid-context-name.out" 2>&1; then
+  fail "save-context accepted a non-canonical context name"
+fi
+assert_contains "$TMP/invalid-context-name.out" "canonical snake_case"
+
+STRICT_NAME_STORE="$TMP/strict-name-contexts"
+mkdir -p "$STRICT_NAME_STORE/.history"
+printf 'legacy hyphen\n' > "$STRICT_NAME_STORE/legacy-name.md"
+if SESSION_CONTEXT_HOME="$STRICT_NAME_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/strict-name-snapshot.out" 2>&1; then
+  fail "context store accepted a legacy hyphenated snapshot filename"
+fi
+assert_contains "$TMP/strict-name-snapshot.out" "canonical snake_case"
+rm -f "$STRICT_NAME_STORE/legacy-name.md"
+printf 'legacy history\n' > "$STRICT_NAME_STORE/.history/Legacy.20260710-000000Z.md"
+if SESSION_CONTEXT_HOME="$STRICT_NAME_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/strict-name-history.out" 2>&1; then
+  fail "context store accepted a legacy uppercase history filename"
+fi
+assert_contains "$TMP/strict-name-history.out" "canonical snake_case"
+
 printf '# Session Context: alpha\n\nfirst version\n' > "$TMP/input.md"
 bash "$SCRIPT_DIR/save-context.sh" alpha "$TMP/input.md" > "$TMP/save-1.out"
 [ -f "$SESSION_CONTEXT_HOME/alpha.md" ] || fail "save did not create alpha.md"
@@ -164,7 +184,7 @@ for race_index in 1 2 3 4 5 6; do
   [ -f "$RACE_STORE/race$race_index.md" ] || fail "race$race_index snapshot is missing"
   assert_mode 600 "$RACE_STORE/race$race_index.md"
 done
-[ -z "$(find "$RACE_STORE" -name '.session-context.tmp.*' -print -quit)" ] \
+[ -z "$(find "$RACE_STORE" -name '.knowledge-context.tmp.*' -print -quit)" ] \
   || fail "atomic save left a temporary file behind"
 
 # Writer lock serializes saves (event-gated, no wall-clock race): while a holder
@@ -206,12 +226,12 @@ if ! bash -c '
   source "$1"
   root="$2"
   acquire_context_store_lock "$root" || exit 1
-  mkdir -m 700 "$root/.session-context.lock/.reclaim"
-  (sleep 0.1; rmdir "$root/.session-context.lock/.reclaim") &
+  mkdir -m 700 "$root/.knowledge-context.lock/.reclaim"
+  (sleep 0.1; rmdir "$root/.knowledge-context.lock/.reclaim") &
   dropper=$!
   release_context_store_lock || exit 1
   wait "$dropper" || exit 1
-  [ ! -e "$root/.session-context.lock" ]
+  [ ! -e "$root/.knowledge-context.lock" ]
 ' _ "$SCRIPT_DIR/lib.sh" "$RELEASE_CLAIM_STORE"; then
   fail "writer release did not wait for a transient generation claim"
 fi
@@ -220,25 +240,25 @@ fi
 # is confirmed dead; the replacement PID file remains owner-only.
 STALE_STORE="$TMP/stale-contexts"
 mkdir -m 700 "$STALE_STORE"
-mkdir -m 700 "$STALE_STORE/.session-context.lock"
+mkdir -m 700 "$STALE_STORE/.knowledge-context.lock"
 dead_pid=999999
 while kill -0 "$dead_pid" 2>/dev/null; do
   dead_pid=$((dead_pid + 1))
 done
-printf '%s\n' "$dead_pid" > "$STALE_STORE/.session-context.lock/pid"
-chmod 600 "$STALE_STORE/.session-context.lock/pid"
+printf '%s\n' "$dead_pid" > "$STALE_STORE/.knowledge-context.lock/pid"
+chmod 600 "$STALE_STORE/.knowledge-context.lock/pid"
 SESSION_CONTEXT_HOME="$STALE_STORE" bash -c '
   source "$1"
   root=$(get_contexts_dir) || exit 1
   acquire_context_store_lock "$root" || exit 1
-  [ "$(sed -n "1p" "$root/.session-context.lock/pid")" = "$$" ] || exit 1
-  [ "$(_context_path_mode "$root/.session-context.lock/pid")" = "600" ] || exit 1
+  [ "$(sed -n "1p" "$root/.knowledge-context.lock/pid")" = "$$" ] || exit 1
+  [ "$(_context_path_mode "$root/.knowledge-context.lock/pid")" = "600" ] || exit 1
   release_context_store_lock
 ' _ "$SCRIPT_DIR/lib.sh" || fail "dead writer lock was not safely reclaimed"
-[ ! -e "$STALE_STORE/.session-context.lock" ] || fail "reclaimed writer lock was left behind"
-[ -z "$(find "$TMP" -maxdepth 1 -name 'stale-contexts.session-context-stale.*' -print -quit)" ] \
+[ ! -e "$STALE_STORE/.knowledge-context.lock" ] || fail "reclaimed writer lock was left behind"
+[ -z "$(find "$TMP" -maxdepth 1 -name 'stale-contexts.knowledge-context-stale.*' -print -quit)" ] \
   || fail "stale-lock quarantine was left behind"
-[ -z "$(find "$STALE_STORE" -mindepth 1 -maxdepth 1 -name '.session-context-stale.*' -print -quit 2>/dev/null)" ] \
+[ -z "$(find "$STALE_STORE" -mindepth 1 -maxdepth 1 -name '.knowledge-context-stale.*' -print -quit 2>/dev/null)" ] \
   || fail "in-store stale-lock quarantine was left behind"
 
 # ABA regression: a waiter may observe a dead generation, get descheduled while
@@ -249,18 +269,18 @@ mkdir -m 700 "$ABA_STORE"
 if ! bash -c '
   source "$1"
   root="$2"
-  mkdir -m 700 "$root/.session-context.lock"
+  mkdir -m 700 "$root/.knowledge-context.lock"
   dead_pid=999999
   while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
-  printf "%s\n" "$dead_pid" > "$root/.session-context.lock/pid"
-  chmod 600 "$root/.session-context.lock/pid"
+  printf "%s\n" "$dead_pid" > "$root/.knowledge-context.lock/pid"
+  chmod 600 "$root/.knowledge-context.lock/pid"
   old_token=$(_context_lock_generation_token "$root") || exit 1
 
-  rm -f "$root/.session-context.lock/pid"
-  rmdir "$root/.session-context.lock"
-  mkdir -m 700 "$root/.session-context.lock"
-  printf "%s\n" "$$" > "$root/.session-context.lock/pid"
-  chmod 600 "$root/.session-context.lock/pid"
+  rm -f "$root/.knowledge-context.lock/pid"
+  rmdir "$root/.knowledge-context.lock"
+  mkdir -m 700 "$root/.knowledge-context.lock"
+  printf "%s\n" "$$" > "$root/.knowledge-context.lock/pid"
+  chmod 600 "$root/.knowledge-context.lock/pid"
   new_token=$(_context_lock_generation_token "$root") || exit 1
   [ "$new_token" != "$old_token" ] || exit 1
 
@@ -271,9 +291,9 @@ if ! bash -c '
   fi
   [ "$rc" -eq 2 ] || exit 1
   [ "$(_context_lock_generation_token "$root")" = "$new_token" ] || exit 1
-  [ ! -e "$root/.session-context.lock/.reclaim" ] || exit 1
-  [ -z "$(find "${root}.session-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] || exit 1
-  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".session-context-stale.*" -print -quit 2>/dev/null)" ] || exit 1
+  [ ! -e "$root/.knowledge-context.lock/.reclaim" ] || exit 1
+  [ -z "$(find "${root}.knowledge-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] || exit 1
+  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".knowledge-context-stale.*" -print -quit 2>/dev/null)" ] || exit 1
 ' _ "$SCRIPT_DIR/lib.sh" "$ABA_STORE"; then
   fail "stale generation token quarantined a replacement writer lock"
 fi
@@ -286,30 +306,30 @@ XR_PARENT="$TMP/exact-root"
 XR_STORE="$XR_PARENT/contexts"
 mkdir -p "$XR_STORE"
 chmod 700 "$XR_STORE"
-printf '# exact-root snapshot\nsurvives lock turnover\n' > "$XR_STORE/proj-xr.md"
-chmod 600 "$XR_STORE/proj-xr.md"
+printf '# exact-root snapshot\nsurvives lock turnover\n' > "$XR_STORE/proj_xr.md"
+chmod 600 "$XR_STORE/proj_xr.md"
 chmod 555 "$XR_PARENT"
 xr_parent_before=$(ls -1a "$XR_PARENT")
 SESSION_CONTEXT_HOME="$XR_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/xr-list-1.out" 2>&1 \
   || { chmod 755 "$XR_PARENT"; fail "exact-root store: normal acquire/release failed: $(cat "$TMP/xr-list-1.out")"; }
-mkdir -m 700 "$XR_STORE/.session-context.lock"
+mkdir -m 700 "$XR_STORE/.knowledge-context.lock"
 xr_dead=999999
 while kill -0 "$xr_dead" 2>/dev/null; do
   xr_dead=$((xr_dead + 1))
 done
-printf '%s\n' "$xr_dead" > "$XR_STORE/.session-context.lock/pid"
-chmod 600 "$XR_STORE/.session-context.lock/pid"
+printf '%s\n' "$xr_dead" > "$XR_STORE/.knowledge-context.lock/pid"
+chmod 600 "$XR_STORE/.knowledge-context.lock/pid"
 SESSION_CONTEXT_HOME="$XR_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/xr-list-2.out" 2>&1 \
   || { chmod 755 "$XR_PARENT"; fail "exact-root store: dead-lock reclaim failed: $(cat "$TMP/xr-list-2.out")"; }
 xr_parent_after=$(ls -1a "$XR_PARENT")
 chmod 755 "$XR_PARENT"
-grep -Fq 'proj-xr' "$TMP/xr-list-1.out" || fail "exact-root store: first listing missed the snapshot"
-grep -Fq 'proj-xr' "$TMP/xr-list-2.out" || fail "exact-root store: reclaim listing missed the snapshot"
-assert_contains "$XR_STORE/proj-xr.md" "survives lock turnover"
+grep -Fq 'proj_xr' "$TMP/xr-list-1.out" || fail "exact-root store: first listing missed the snapshot"
+grep -Fq 'proj_xr' "$TMP/xr-list-2.out" || fail "exact-root store: reclaim listing missed the snapshot"
+assert_contains "$XR_STORE/proj_xr.md" "survives lock turnover"
 [ "$xr_parent_before" = "$xr_parent_after" ] || fail "exact-root store: parent directory contents changed"
-[ -z "$(find "$XR_STORE" -mindepth 1 \( -name '.session-context.lock' -o -name '.session-context-stale.*' -o -name '.session-context.tmp.*' \) -print -quit 2>/dev/null)" ] \
+[ -z "$(find "$XR_STORE" -mindepth 1 \( -name '.knowledge-context.lock' -o -name '.knowledge-context-stale.*' -o -name '.knowledge-context.tmp.*' \) -print -quit 2>/dev/null)" ] \
   || fail "exact-root store: lock/quarantine residue remained"
-[ -z "$(find "${XR_STORE}.session-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] \
+[ -z "$(find "${XR_STORE}.knowledge-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] \
   || fail "exact-root store: sibling quarantine artifact created"
 
 # A quarantine orphaned by a process killed mid-teardown is finished (swept)
@@ -317,43 +337,43 @@ assert_contains "$XR_STORE/proj-xr.md" "survives lock turnover"
 # is rejected rather than followed or removed.
 ORPHAN_STORE="$TMP/orphan-contexts"
 mkdir -m 700 "$ORPHAN_STORE"
-printf '# orphan store\n' > "$ORPHAN_STORE/proj-orphan.md"
-chmod 600 "$ORPHAN_STORE/proj-orphan.md"
+printf '# orphan store\n' > "$ORPHAN_STORE/proj_orphan.md"
+chmod 600 "$ORPHAN_STORE/proj_orphan.md"
 orph_dead=999999
 while kill -0 "$orph_dead" 2>/dev/null; do
   orph_dead=$((orph_dead + 1))
 done
-ORPHAN_Q="$ORPHAN_STORE/.session-context-stale.$orph_dead"
+ORPHAN_Q="$ORPHAN_STORE/.knowledge-context-stale.$orph_dead"
 mkdir -m 700 "$ORPHAN_Q"
 printf '%s\n' "$orph_dead" > "$ORPHAN_Q/pid"
 chmod 600 "$ORPHAN_Q/pid"
 mkdir -m 700 "$ORPHAN_Q/.reclaim"
 SESSION_CONTEXT_HOME="$ORPHAN_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/orphan-list.out" 2>&1 \
   || fail "orphaned quarantine blocked the store: $(cat "$TMP/orphan-list.out")"
-grep -Fq 'proj-orphan' "$TMP/orphan-list.out" || fail "orphan-store listing missed the snapshot"
+grep -Fq 'proj_orphan' "$TMP/orphan-list.out" || fail "orphan-store listing missed the snapshot"
 [ ! -e "$ORPHAN_Q" ] || fail "orphaned quarantine was not swept under the writer lock"
-[ ! -e "$ORPHAN_STORE/.session-context.lock" ] || fail "orphan sweep left an active writer lock"
+[ ! -e "$ORPHAN_STORE/.knowledge-context.lock" ] || fail "orphan sweep left an active writer lock"
 
 EVIL_STORE="$TMP/evil-quarantine-contexts"
 mkdir -m 700 "$EVIL_STORE"
 mkdir -m 700 "$TMP/evil-target"
-ln -s "$TMP/evil-target" "$EVIL_STORE/.session-context-stale.12345"
+ln -s "$TMP/evil-target" "$EVIL_STORE/.knowledge-context-stale.12345"
 if SESSION_CONTEXT_HOME="$EVIL_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/evil-list.out" 2>&1; then
   fail "symlink quarantine was accepted: $(cat "$TMP/evil-list.out")"
 fi
 grep -q 'quarantine cannot be a symbolic link' "$TMP/evil-list.out" \
   || fail "symlink quarantine rejection did not explain itself: $(cat "$TMP/evil-list.out")"
 [ -e "$TMP/evil-target" ] || fail "symlink quarantine target was removed"
-[ -L "$EVIL_STORE/.session-context-stale.12345" ] || fail "symlink quarantine was removed instead of rejected"
+[ -L "$EVIL_STORE/.knowledge-context-stale.12345" ] || fail "symlink quarantine was removed instead of rejected"
 
 # The lock directory permits an owner-only numeric PID plus the transient empty
 # owner-only reclaim claim. Every other entry or claim shape remains rejected.
 BAD_LOCK_STORE="$TMP/bad-lock-contexts"
 mkdir -m 700 "$BAD_LOCK_STORE"
-mkdir -m 700 "$BAD_LOCK_STORE/.session-context.lock"
-printf '%s\n' "$$" > "$BAD_LOCK_STORE/.session-context.lock/pid"
-printf 'unexpected\n' > "$BAD_LOCK_STORE/.session-context.lock/extra"
-chmod 600 "$BAD_LOCK_STORE/.session-context.lock/pid" "$BAD_LOCK_STORE/.session-context.lock/extra"
+mkdir -m 700 "$BAD_LOCK_STORE/.knowledge-context.lock"
+printf '%s\n' "$$" > "$BAD_LOCK_STORE/.knowledge-context.lock/pid"
+printf 'unexpected\n' > "$BAD_LOCK_STORE/.knowledge-context.lock/extra"
+chmod 600 "$BAD_LOCK_STORE/.knowledge-context.lock/pid" "$BAD_LOCK_STORE/.knowledge-context.lock/extra"
 if SESSION_CONTEXT_HOME="$BAD_LOCK_STORE" \
   bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/bad-lock.out" 2>&1; then
   fail "tree validator accepted an extra writer-lock file"
@@ -362,10 +382,10 @@ assert_contains "$TMP/bad-lock.out" "unexpected file in context store"
 
 BAD_RECLAIM_STORE="$TMP/bad-reclaim-contexts"
 mkdir -m 700 "$BAD_RECLAIM_STORE"
-mkdir -m 700 "$BAD_RECLAIM_STORE/.session-context.lock"
-printf '%s\n' "$$" > "$BAD_RECLAIM_STORE/.session-context.lock/pid"
-chmod 600 "$BAD_RECLAIM_STORE/.session-context.lock/pid"
-mkdir -m 755 "$BAD_RECLAIM_STORE/.session-context.lock/.reclaim"
+mkdir -m 700 "$BAD_RECLAIM_STORE/.knowledge-context.lock"
+printf '%s\n' "$$" > "$BAD_RECLAIM_STORE/.knowledge-context.lock/pid"
+chmod 600 "$BAD_RECLAIM_STORE/.knowledge-context.lock/pid"
+mkdir -m 755 "$BAD_RECLAIM_STORE/.knowledge-context.lock/.reclaim"
 if SESSION_CONTEXT_HOME="$BAD_RECLAIM_STORE" \
   bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/bad-reclaim.out" 2>&1; then
   fail "tree validator accepted a loose writer-lock reclaim claim"
@@ -374,9 +394,9 @@ assert_contains "$TMP/bad-reclaim.out" "reclaim claim must be mode 700"
 
 INVALID_PID_STORE="$TMP/invalid-pid-contexts"
 mkdir -m 700 "$INVALID_PID_STORE"
-mkdir -m 700 "$INVALID_PID_STORE/.session-context.lock"
-printf 'not-a-pid\n' > "$INVALID_PID_STORE/.session-context.lock/pid"
-chmod 600 "$INVALID_PID_STORE/.session-context.lock/pid"
+mkdir -m 700 "$INVALID_PID_STORE/.knowledge-context.lock"
+printf 'not-a-pid\n' > "$INVALID_PID_STORE/.knowledge-context.lock/pid"
+chmod 600 "$INVALID_PID_STORE/.knowledge-context.lock/pid"
 if SESSION_CONTEXT_HOME="$INVALID_PID_STORE" \
   bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/invalid-pid.out" 2>&1; then
   fail "tree validator accepted a non-numeric writer-lock PID"
@@ -522,7 +542,7 @@ if TMUX_CAPTURE="$TMP/tmux.capture" \
 fi
 [ ! -s "$TMP/tmux.capture" ] || fail "share bypassed a session-chat failure through raw tmux"
 
-ISOLATED_ROOT="$TMP/session-context-isolated"
+ISOLATED_ROOT="$TMP/knowledge-context-isolated"
 mkdir -p "$ISOLATED_ROOT"
 cp -R "$PLUGIN_ROOT/scripts" "$ISOLATED_ROOT/scripts"
 CACHE_HOME="$TMP/cache-codex"
@@ -579,7 +599,7 @@ if bash "$SCRIPT_DIR/remove-context.sh" missing --confirmed > "$TMP/remove-missi
 fi
 assert_contains "$TMP/remove-missing.out" "No current or archived context snapshot"
 
-if rg -n --glob '!test-session-context.sh' --glob '!test-creating-docs.sh' 'CODEX_PLUGIN_ROOT|plugins/cache/.*/knowledge/[0-9]' "$PLUGIN_ROOT" >/dev/null; then
+if rg -n --glob '!test-context.sh' --glob '!test-docs-create.sh' 'CODEX_PLUGIN_ROOT|plugins/cache/.*/knowledge/[0-9]' "$PLUGIN_ROOT" >/dev/null; then
   fail "knowledge (context surface) still contains a fixed plugin-root or cache-version pin"
 fi
 rg -q 'request_user_input' "$PLUGIN_ROOT/skills/context-remove/SKILL.md" \
@@ -604,7 +624,7 @@ for remove_doc in \
   "$PLUGIN_ROOT/skills/context-remove/SKILL.md"; do
   grep -Fq 'point-in-time preview' "$remove_doc" \
     || fail "context-remove doc omits its point-in-time pre-confirmation preview: $remove_doc"
-  grep -Fq '^[A-Za-z0-9_-]+$' "$remove_doc" \
+  grep -Fq '^[a-z0-9]+(_[a-z0-9]+)*$' "$remove_doc" \
     || fail "context-remove doc omits pre-preview label validation: $remove_doc"
   grep -Fq 'writer lock' "$remove_doc" \
     || fail "context-remove doc omits concurrent-preview guidance: $remove_doc"
@@ -620,18 +640,18 @@ done
 for doc in "$PLUGIN_ROOT"/commands/context-*.md "$PLUGIN_ROOT"/skills/context-*/SKILL.md "$PLUGIN_ROOT/skills/knowledge/SKILL.md"; do
   [ -f "$doc" ] || continue
   if grep -qE '^[[:space:]]*export[[:space:]]+SESSION_CONTEXT_HOME(=|[[:space:]]|$)' "$doc"; then
-    fail "session-context doc contains an executable SESSION_CONTEXT_HOME export: $doc"
+    fail "context doc contains an executable SESSION_CONTEXT_HOME export: $doc"
   fi
   if grep -qE '(^|[[:space:]`])env[[:space:]]+SESSION_CONTEXT_HOME=' "$doc"; then
-    fail "session-context doc contains an env-prefixed context helper: $doc"
+    fail "context doc contains an env-prefixed context helper: $doc"
   fi
   if grep -qE 'SESSION_CONTEXT_HOME=[^[:space:]]*[[:space:]]+bash([[:space:]`]|$)' "$doc"; then
-    fail "session-context doc contains an assignment-prefixed context helper: $doc"
+    fail "context doc contains an assignment-prefixed context helper: $doc"
   fi
   grep -Fq 'inherited' "$doc" \
-    || fail "session-context doc omits inherited-environment guidance: $doc"
+    || fail "context doc omits inherited-environment guidance: $doc"
   grep -Fq 'relaunch' "$doc" \
-    || fail "session-context doc omits relaunch guidance: $doc"
+    || fail "context doc omits relaunch guidance: $doc"
 done
 
 for share_doc in \

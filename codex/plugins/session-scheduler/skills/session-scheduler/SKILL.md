@@ -29,7 +29,7 @@ Legal status transitions (enforced by every command): `created→assigned`, `cre
 - `--eta MINUTES` on assign stores `eta_at`; overdue tasks are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
 - Stages are optional free-form labels (suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`); view grouped output with `task-status --by-stage` or `task-board`.
 - `--depends-on` gates assignment until every dependency is `done`.
-- `--context NAME` attaches an existing session-context snapshot. `--context auto` creates a private immutable task handoff named `task-<id>-<random>` from the approved prompt and current ledger state, then attaches it.
+- `--context NAME` attaches an existing context snapshot. `--context auto` creates a private immutable task handoff named `task-<id>-<random>` from the approved prompt and current ledger state, then attaches it.
 - `--reviewer PANE` stores the independent reviewer route. When the executor calls `task-review`, the scheduler automatically dispatches the audit packet to that pane. A hard delivery failure leaves the task in review and must be retried with `task-review`; there is no one-line send downgrade.
 - `--workflow ID` groups related tasks in canonical `meta.workflow_id`; `--workflow-id` remains an alias. `task-status --by-workflow` shows each complete workflow arc, including done steps, while omitting tasks without a workflow id; `--workflow ID` filters one workflow.
 - Every assignment records and embeds the absolute scheduler/context homes so a child checkout does not silently write to a different ledger.

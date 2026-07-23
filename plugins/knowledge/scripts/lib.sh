@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lib.sh — Shared functions for the knowledge plugin's context-store surface
-# (absorbed from session-context 0.7.8)
+# Knowledge context-store helpers.
 # Source this file: source "$(dirname "$0")/lib.sh"
 # Supported platforms: macOS, Linux
 
@@ -28,6 +28,8 @@ ensure_tmux() {
 
 # --- Input validation ---
 
+KNOWLEDGE_CANONICAL_NAME_REGEX='^[a-z0-9]+(_[a-z0-9]+)*$'
+
 validate_label() {
   local label="$1"
   if [ -z "$label" ]; then
@@ -38,6 +40,22 @@ validate_label() {
     echo "ERROR: Label must contain only alphanumeric characters, hyphens, and underscores." >&2
     return 1
   fi
+}
+
+validate_knowledge_name() {
+  local name="$1" label="${2:-Knowledge item name}"
+  if [ -z "$name" ]; then
+    echo "ERROR: $label cannot be empty." >&2
+    return 1
+  fi
+  if ! [[ "$name" =~ $KNOWLEDGE_CANONICAL_NAME_REGEX ]]; then
+    echo "ERROR: $label must be canonical snake_case: lowercase letters/digits separated by single underscores (regex: $KNOWLEDGE_CANONICAL_NAME_REGEX)." >&2
+    return 1
+  fi
+}
+
+validate_context_name() {
+  validate_knowledge_name "$1" "Context snapshot name"
 }
 
 # --- Message directory ---
@@ -182,7 +200,7 @@ ensure_context_regular_file() {
 }
 
 _context_lock_fingerprint() {
-  local lock_dir="$1/.session-context.lock" lock_id pid_id reclaim_id entry_count
+  local lock_dir="$1/.knowledge-context.lock" lock_id pid_id reclaim_id entry_count
   _context_path_exists "$lock_dir" || return 2
   lock_id=$(_context_path_identity "$lock_dir") || return 2
   if _context_path_exists "$lock_dir/pid"; then
@@ -200,7 +218,7 @@ _context_lock_fingerprint() {
 }
 
 _context_check_lock_generation() {
-  local root="$1" lock_dir="$1/.session-context.lock" path relative holder_pid mode
+  local root="$1" lock_dir="$1/.knowledge-context.lock" path relative holder_pid mode
   local -a traversal_status
   _context_path_exists "$lock_dir" || return 2
   if [ -L "$lock_dir" ]; then
@@ -278,7 +296,7 @@ _context_validate_lock_artifact() {
   # Lock pathnames are intentionally reused by consecutive writers. Validate a
   # single inode generation twice and discard transient errors when turnover is
   # observed; never chmod a pathname that may already name the next writer.
-  local root="$1" lock_dir="$1/.session-context.lock"
+  local root="$1" lock_dir="$1/.knowledge-context.lock"
   local before after error_output check_status attempt=1
   while [ "$attempt" -le 50 ]; do
     _context_path_exists "$lock_dir" || return 0
@@ -325,8 +343,8 @@ _context_validate_tree() {
   _context_validate_directory "$root" || return 1
 
   find -P "$root" -mindepth 1 \
-    \( -path "$root/.session-context.lock" -o -path "$root/.session-context.lock/*" \
-       -o -path "$root/.session-context-stale.*" \) -prune \
+    \( -path "$root/.knowledge-context.lock" -o -path "$root/.knowledge-context.lock/*" \
+       -o -path "$root/.knowledge-context-stale.*" \) -prune \
     -o -print0 2>/dev/null | while IFS= read -r -d '' path; do
     # A concurrent writer may remove its lock between find(1) and inspection.
     if ! _context_path_exists "$path"; then
@@ -353,10 +371,10 @@ _context_validate_tree() {
         _context_path_exists "$path" || continue
         exit 1
       fi
-      if ! [[ "$relative" =~ ^[a-zA-Z0-9_-]+\.md$ ]] \
-        && ! [[ "$relative" =~ ^\.history/[a-zA-Z0-9_-]+\.[0-9]{8}-[0-9]{6}(Z|[+-][0-9]{4})\.md$ ]] \
-        && ! [[ "$relative" =~ ^(\.history/)?\.session-context\.tmp\.[a-zA-Z0-9]+$ ]]; then
-        _context_store_error "unexpected file in context store: $path"
+      if ! [[ "$relative" =~ ^[a-z0-9]+(_[a-z0-9]+)*\.md$ ]] \
+        && ! [[ "$relative" =~ ^\.history/[a-z0-9]+(_[a-z0-9]+)*\.[0-9]{8}-[0-9]{6}(Z|[+-][0-9]{4})\.md$ ]] \
+        && ! [[ "$relative" =~ ^(\.history/)?\.knowledge-context\.tmp\.[a-zA-Z0-9]+$ ]]; then
+        _context_store_error "unexpected file in context store (snapshot names must be canonical snake_case): $path"
         exit 1
       fi
     else
@@ -389,12 +407,12 @@ harden_existing_contexts_dir() {
   # First pass rejects the whole tree without partially migrating it.
   _context_validate_tree "$root" || return 1
 
-  # Second pass performs safe legacy migration. Re-check every entry just
+  # Second pass performs safe legacy mode migration. Re-check every entry just
   # before chmod so a concurrent replacement is rejected rather than followed.
   _context_harden_directory "$root" || return 1
   find -P "$root" -mindepth 1 \
-    \( -path "$root/.session-context.lock" -o -path "$root/.session-context.lock/*" \
-       -o -path "$root/.session-context-stale.*" \) -prune \
+    \( -path "$root/.knowledge-context.lock" -o -path "$root/.knowledge-context.lock/*" \
+       -o -path "$root/.knowledge-context-stale.*" \) -prune \
     -o -print0 2>/dev/null | while IFS= read -r -d '' path; do
     if ! _context_path_exists "$path"; then
       continue
@@ -492,8 +510,8 @@ _context_pid_alive() {
 _context_lock_generation_token() {
   # Return the identity of one exact reusable-path generation. The PID content
   # alone is insufficient: after an owner releases, another writer may reuse
-  # .session-context.lock before a waiter acts on the old PID (the ABA race).
-  local root="$1" lock_dir="$1/.session-context.lock" pid_file
+  # .knowledge-context.lock before a waiter acts on the old PID (the ABA race).
+  local root="$1" lock_dir="$1/.knowledge-context.lock" pid_file
   local lock_id pid_id holder_pid
   _context_path_exists "$lock_dir" || return 2
   lock_id=$(_context_path_identity "$lock_dir") || return 2
@@ -536,10 +554,10 @@ _context_drop_reclaim_claim() {
 
 _context_quarantine_dir_pid() {
   # In-store quarantine names embed the PID of the process performing the
-  # teardown: <root>/.session-context-stale.<pid>. Echo that PID or fail.
+  # teardown: <root>/.knowledge-context-stale.<pid>. Echo that PID or fail.
   local name
   name=$(basename "$1")
-  name=${name#.session-context-stale.}
+  name=${name#.knowledge-context-stale.}
   [[ "$name" =~ ^[0-9]+$ ]] || return 1
   printf '%s\n' "$name"
 }
@@ -605,7 +623,7 @@ _context_remove_quarantine_dir() {
 
 _context_validate_quarantine_artifact() {
   # In-store quarantines are transient: an owner release or dead-lock reclaim
-  # renames the validated lock generation to <root>/.session-context-stale.<pid>
+  # renames the validated lock generation to <root>/.knowledge-context-stale.<pid>
   # (a same-directory rename, so an exact-root sandbox with no parent write
   # access can still release) and dismantles it immediately. Validation accepts
   # only the shapes a compliant teardown can produce, tolerates entries
@@ -683,7 +701,7 @@ _context_validate_quarantine_artifact() {
           ;;
       esac
     done < <(find -P "$stale_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
-  done < <(find -P "$root" -mindepth 1 -maxdepth 1 -name '.session-context-stale.*' -print0 2>/dev/null)
+  done < <(find -P "$root" -mindepth 1 -maxdepth 1 -name '.knowledge-context-stale.*' -print0 2>/dev/null)
 }
 
 _context_sweep_stale_quarantines() {
@@ -702,7 +720,7 @@ _context_sweep_stale_quarantines() {
       continue
     fi
     _context_remove_quarantine_dir "$stale_dir" || return 1
-  done < <(find -P "$root" -mindepth 1 -maxdepth 1 -name '.session-context-stale.*' -print0 2>/dev/null)
+  done < <(find -P "$root" -mindepth 1 -maxdepth 1 -name '.knowledge-context-stale.*' -print0 2>/dev/null)
 }
 
 _context_quarantine_lock_generation() {
@@ -714,7 +732,7 @@ _context_quarantine_lock_generation() {
   # mode=dead  — reclaim only if the recorded PID is still dead.
   # mode=owner — release the generation held by this process.
   local root="$1" expected_token="$2" reclaim_mode="$3"
-  local lock_dir="$1/.session-context.lock" claim_dir claim_id current_token
+  local lock_dir="$1/.knowledge-context.lock" claim_dir claim_id current_token
   local expected_lock_id expected_pid_id expected_holder_pid stale_dir actual_id mode
   IFS='|' read -r expected_lock_id expected_pid_id expected_holder_pid <<< "$expected_token"
   if [ -z "$expected_lock_id" ] || [ -z "$expected_pid_id" ] \
@@ -772,7 +790,7 @@ _context_quarantine_lock_generation() {
   # lives INSIDE the store: a same-directory rename needs write access only to
   # SESSION_CONTEXT_HOME itself, never to its parent, so an exact-root sandbox
   # (writable contexts/ under an unwritable tmp/) can release and reclaim.
-  stale_dir="$root/.session-context-stale.$$"
+  stale_dir="$root/.knowledge-context-stale.$$"
   if _context_path_exists "$stale_dir"; then
     # $$ names the live teardown owner, and this process fully dismantles each
     # quarantine before minting another, so a survivor at our own name is an
@@ -821,7 +839,7 @@ _context_quarantine_lock_generation() {
 }
 
 acquire_context_store_lock() {
-  local root="$1" lock_dir="$1/.session-context.lock" pid_file holder_pid generation_token
+  local root="$1" lock_dir="$1/.knowledge-context.lock" pid_file holder_pid generation_token
   local attempts=0 reclaim_rc
   while ! mkdir -m 700 "$lock_dir" 2>/dev/null; do
     if [ -L "$lock_dir" ] || { _context_path_exists "$lock_dir" && [ ! -d "$lock_dir" ]; }; then
@@ -929,7 +947,7 @@ release_context_store_lock() {
     _context_store_error "writer lock has no recorded generation: $lock_dir"
     return 1
   fi
-  root=${lock_dir%/.session-context.lock}
+  root=${lock_dir%/.knowledge-context.lock}
   while :; do
     if _context_quarantine_lock_generation "$root" "$expected_token" owner; then
       break
@@ -962,7 +980,7 @@ atomic_copy_context_file() {
   fi
   destination_dir=$(dirname "$destination")
   _context_harden_directory "$destination_dir" || return 1
-  temp=$(mktemp "$destination_dir/.session-context.tmp.XXXXXX") || {
+  temp=$(mktemp "$destination_dir/.knowledge-context.tmp.XXXXXX") || {
     _context_store_error "cannot create an atomic snapshot temporary file"
     return 1
   }
@@ -1214,7 +1232,7 @@ context_history_versions() {
 # memory-write.sh, and init.sh. Provider-neutral: identical on the Codex
 # mirror's copy of this file. Deliberately independent of the context-store
 # helpers above (`.agents/memory/` is its own store class, never one of the
-# session-context/session-chat coordination roots).
+# context/session-chat coordination roots).
 # ============================================================================
 
 # --- generic stat/pid helpers (filesystem-generic; reused from the
@@ -1452,7 +1470,7 @@ km_symlinked_md_files() {
 }
 
 # --- slug normalization (one shared resolver; mandatory semantics) ---
-KM_SLUG_REGEX='^[a-z0-9]+(_[a-z0-9]+)*$'
+KM_SLUG_REGEX="$KNOWLEDGE_CANONICAL_NAME_REGEX"
 
 km_is_valid_slug() {
   [[ "$1" =~ $KM_SLUG_REGEX ]]

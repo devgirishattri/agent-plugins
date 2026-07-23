@@ -21,8 +21,8 @@ jobs:
       - name: Run Codex plugin smoke tests
         run: |
           bash codex/plugins/session-manager/scripts/test-session-manager.sh
-          bash codex/plugins/knowledge/scripts/test-creating-docs.sh
-          bash codex/plugins/knowledge/scripts/test-session-context.sh
+          bash codex/plugins/knowledge/scripts/test-docs-create.sh
+          bash codex/plugins/knowledge/scripts/test-context.sh
           mkdir -p "$RUNNER_TEMP/codex-session-chat"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-chat" \
@@ -35,15 +35,15 @@ jobs:
       - name: Run Claude parity smoke tests
         run: |
           bash plugins/session-manager/scripts/test-session-manager.sh
-          bash plugins/knowledge/scripts/test-creating-docs.sh
+          bash plugins/knowledge/scripts/test-docs-create.sh
           mkdir -p "$RUNNER_TEMP/claude-session-chat"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-chat" \
             bash plugins/session-chat/scripts/test-session-chat.sh
-          mkdir -p "$RUNNER_TEMP/claude-session-context"
+          mkdir -p "$RUNNER_TEMP/claude-context"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
-            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-context" \
-            bash plugins/knowledge/scripts/test-session-context.sh
+            TMUX_TMPDIR="$RUNNER_TEMP/claude-context" \
+            bash plugins/knowledge/scripts/test-context.sh
           mkdir -p "$RUNNER_TEMP/claude-session-scheduler"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-scheduler" \

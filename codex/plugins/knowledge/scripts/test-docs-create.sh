@@ -32,7 +32,7 @@ if bash "$SCRIPT_DIR/check-todos.sh" "$TMP/docs" > "$TMP/todos-fail.out" 2>&1; t
 fi
 grep -Fq 'WORK.md' "$TMP/todos-fail.out" || fail "TODO output omitted source file"
 
-if rg -n --glob '!test-creating-docs.sh' --glob '!test-session-context.sh' 'CODEX_PLUGIN_ROOT|plugins/cache/.*/knowledge/[0-9]' "$PLUGIN_ROOT" >/dev/null; then
+if rg -n --glob '!test-docs-create.sh' --glob '!test-context.sh' 'CODEX_PLUGIN_ROOT|plugins/cache/.*/knowledge/[0-9]' "$PLUGIN_ROOT" >/dev/null; then
   fail "knowledge (docs surface) still contains a fixed plugin-root or cache-version pin"
 fi
 rg -q 'fresh subagent' "$PLUGIN_ROOT/skills/docs-review/SKILL.md" \

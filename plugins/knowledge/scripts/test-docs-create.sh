@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-creating-docs.sh — contract test: the validation scripts operate on ANY
+# test-docs-create.sh — contract test: the validation scripts operate on ANY
 # doc parent directory (project root, docs/, or a module-adjacent dir), not a
 # hard-coded docs/. Proves the "run validators once per unique parent" contract.
 set -uo pipefail
@@ -12,7 +12,7 @@ fail() { FAIL=$((FAIL + 1)); FAILURES+=("$1: $2"); echo "  FAIL  $1 — $2"; }
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
-echo "=== creating-docs contract tests ==="
+echo "=== docs-create contract tests ==="
 
 # A module-adjacent docs location — deliberately NOT named docs/.
 MOD="$TMP/src/api"
@@ -61,7 +61,7 @@ fi
 # 6: contract — the user-invocable SKILL mandates an independent review after
 # every docs edit (so a direct skill invocation cannot bypass it), with a safe
 # no-Agent fallback and a repeat-after-fixes rule.
-SKILL="$(cd "$HERE/.." && pwd)/skills/creating-docs/SKILL.md"
+SKILL="$(cd "$HERE/.." && pwd)/skills/docs-create/SKILL.md"
 if grep -qi "MANDATORY independent review" "$SKILL" \
    && grep -q "knowledge:doc-reviewer" "$SKILL" \
    && grep -qi "Fallback" "$SKILL" \
