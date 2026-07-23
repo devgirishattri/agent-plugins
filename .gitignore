@@ -8,6 +8,10 @@ upgrade.sh
 # Local dev-workspace launcher (machine-specific; not part of the marketplace)
 workspace.sh
 
+# Local agent instruction files (machine/user-specific)
+CLAUDE.md
+AGENTS.md
+
 # Local design and implementation plans
 docs/
 .tmp/
