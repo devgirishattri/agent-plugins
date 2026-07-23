@@ -161,7 +161,8 @@ an `AGENTS.md` pointer section against the literal bytes shipped as
 `assets/recall-snippet.md`, and prints the exact snippet to paste when it is
 missing, duplicated, or diverges. Claude additionally auto-recalls via
 `autoMemoryDirectory` when configured from an accepted settings scope (user
-settings, managed policy, or `--settings`); Codex has no equivalent
+settings, project settings, local settings, managed policy, or `--settings`);
+Codex has no equivalent
 auto-recall into this plugin's shared store, so the explicit `recall` command
 is the one surface guaranteed on both providers — see `doctor`'s capability
 matrix for exactly what each provider currently supports.

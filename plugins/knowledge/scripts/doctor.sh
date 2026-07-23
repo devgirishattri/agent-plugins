@@ -930,45 +930,52 @@ section_agents_md() {
 CODEX_MEMORIES_ACTIVE=0
 
 _kd_capability_claude() {
-  local user_settings="$HOME/.claude/settings.json"
-  if [ -f "$user_settings" ] && [ ! -L "$user_settings" ]; then
-    local out rc
-    out=$(_kd_json_get "$user_settings" autoMemoryDirectory); rc=$?
-    case "$rc" in
-      0)
-        emit INFO capability-claude "autoMemoryDirectory (user settings, $user_settings): $out -- caveat: managed-policy/--settings sources are unobservable from disk and may override this value"
-        if [ -n "$STORE" ]; then
-          local canon
-          canon=$(_kd_canon_path "$out" "$repo_root")
-          if [ "$canon" != "$STORE" ]; then
-            emit WARN capability-claude "autoMemoryDirectory ($out -> $canon) diverges from the resolved memory store ($STORE) -- Claude's auto-recall will read a different location than the /knowledge commands"
-          fi
-        fi
-        ;;
-      2)
-        emit INFO capability-claude "autoMemoryDirectory not set in user settings ($user_settings) -- caveat: managed-policy/--settings sources are unobservable from disk and may still set it"
-        ;;
-      *)
-        emit INFO capability-claude "autoMemoryDirectory: user settings file $user_settings is present but unreadable/invalid JSON"
-        ;;
-    esac
-  else
-    emit INFO capability-claude "autoMemoryDirectory: user settings file not found at $user_settings -- caveat: managed-policy/--settings sources are unobservable from disk and may still set it"
-  fi
-
-  # Rejected-scope misconfiguration: Claude accepts autoMemoryDirectory only
-  # from managed policy, user settings, and --settings -- project and local
-  # scopes are READ by Claude but the key is IGNORED there.
-  local pair f label out2 rc2
-  for pair in "$repo_root/.claude/settings.json|project" "$repo_root/.claude/settings.local.json|project-local"; do
+  local found=0 first_canon="" first_label="" first_out=""
+  local pair f label out rc canon
+  for pair in \
+    "$HOME/.claude/settings.json|user" \
+    "$repo_root/.claude/settings.json|project" \
+    "$repo_root/.claude/settings.local.json|project-local"
+  do
     f="${pair%%|*}"
     label="${pair#*|}"
     [ -f "$f" ] && [ ! -L "$f" ] || continue
-    out2=$(_kd_json_get "$f" autoMemoryDirectory); rc2=$?
-    if [ "$rc2" -eq 0 ]; then
-      emit WARN capability-claude "autoMemoryDirectory is set in $label settings ($f: $out2) -- Claude Code accepts this key only from managed policy, user settings, and --settings; the $label value is silently ignored. Remove it or move it to user settings."
-    fi
+
+    out=$(_kd_json_get "$f" autoMemoryDirectory); rc=$?
+    case "$rc" in
+      0)
+        found=1
+        emit INFO capability-claude "autoMemoryDirectory ($label settings, $f): $out -- caveat: managed-policy/--settings sources are unobservable from disk and may override observable settings"
+        case "$out" in
+          /*|\~|\~/*) ;;
+          *)
+            emit WARN capability-claude "autoMemoryDirectory ($label settings, $f: $out) is not an absolute path or ~/ path -- Claude Code requires one of those forms"
+            ;;
+        esac
+        canon=$(_kd_canon_path "$out" "$repo_root")
+        if [ -n "$first_canon" ] && [ "$canon" != "$first_canon" ]; then
+          emit WARN capability-claude "observable autoMemoryDirectory values differ ($first_label settings: $first_out -> $first_canon; $label settings: $out -> $canon) -- Claude settings precedence determines the active value"
+        fi
+        if [ -z "$first_canon" ]; then
+          first_canon="$canon"
+          first_label="$label"
+          first_out="$out"
+        fi
+        if [ -n "$STORE" ] && [ "$canon" != "$STORE" ]; then
+          emit WARN capability-claude "autoMemoryDirectory ($label settings: $out -> $canon) diverges from the resolved memory store ($STORE) -- Claude's auto-recall will read a different location than the /knowledge commands"
+        fi
+        ;;
+      2)
+        ;;
+      *)
+        emit INFO capability-claude "autoMemoryDirectory: $label settings file $f is present but unreadable/invalid JSON"
+        ;;
+    esac
   done
+
+  if [ "$found" -eq 0 ]; then
+    emit INFO capability-claude "autoMemoryDirectory not set in observable settings (user: $HOME/.claude/settings.json; project: $repo_root/.claude/settings.json; project-local: $repo_root/.claude/settings.local.json) -- caveat: managed-policy/--settings sources are unobservable from disk and may still set it"
+  fi
 }
 
 # _kd_codex_layer <path> -> sets KD_LAYER_STATUS (absent|unreadable|ok),

@@ -444,7 +444,7 @@ memories = true
 EOF
 
 mkdir -p "$bad_repo/.claude"
-json_settings "$bad_repo/.claude/settings.local.json" "/tmp/rejected-scope-path" ""
+json_settings "$bad_repo/.claude/settings.local.json" "/tmp/project-local-divergent-path" ""
 
 # -- context store: one stale snapshot --
 bad_ctx="$TMP/bad_ctx"
@@ -489,7 +489,8 @@ assert_contains "bad_docs_stale" "$out" "old_doc.md"
 assert_contains "bad_agents_md_divergent" "$out" "recall-snippet body diverges from the canonical asset"
 assert_contains "bad_agents_md_snippet_pasted" "$out" "snippet> <!-- knowledge:recall:start -->"
 assert_contains "bad_capability_resolver_divergence" "$out" "diverges from the resolved memory store"
-assert_contains "bad_capability_rejected_scope" "$out" "project-local settings"
+assert_contains "bad_capability_project_local_observed" "$out" "autoMemoryDirectory (project-local settings"
+assert_contains "bad_capability_project_local_divergence" "$out" "project-local settings: /tmp/project-local-divergent-path"
 assert_contains "bad_context_stale" "$out" "stale context snapshot 'old'"
 
 echo "--- AGENTS.md variants ---"
@@ -537,6 +538,15 @@ out=$(cd "$cap_repo" && HOME="$cap_home_match" CODEX_HOME="$cap_home_match/.code
 assert_contains "capability_claude_set_matching" "$out" "autoMemoryDirectory (user settings, $cap_home_match/.claude/settings.json): $cap_store"
 assert_not_contains "capability_claude_no_divergence_when_matching" "$out" "diverges from the resolved memory store"
 
+cap_repo_project_local="$TMP/cap_repo_project_local"
+cap_store_project_local=$(bootstrap_store "$cap_repo_project_local")
+cap_home_project_local="$TMP/cap_home_project_local"
+mkdir -p "$cap_home_project_local/.claude" "$cap_home_project_local/.codex" "$cap_repo_project_local/.claude"
+json_settings "$cap_repo_project_local/.claude/settings.local.json" "$cap_store_project_local" ""
+out=$(cd "$cap_repo_project_local" && HOME="$cap_home_project_local" CODEX_HOME="$cap_home_project_local/.codex" bash "$DOCTOR" --store "$cap_store_project_local" 2>&1)
+assert_contains "capability_claude_project_local_set_matching" "$out" "autoMemoryDirectory (project-local settings, $cap_repo_project_local/.claude/settings.local.json): $cap_store_project_local"
+assert_not_contains "capability_claude_project_local_no_divergence_when_matching" "$out" "diverges from the resolved memory store"
+
 cap_home_badjson="$TMP/cap_home_badjson"
 mkdir -p "$cap_home_badjson/.claude" "$cap_home_badjson/.codex"
 echo "{ not valid json" > "$cap_home_badjson/.claude/settings.json"
@@ -547,12 +557,12 @@ cap_home_absent="$TMP/cap_home_absent"
 mkdir -p "$cap_home_absent/.claude" "$cap_home_absent/.codex"
 json_settings "$cap_home_absent/.claude/settings.json" "" ""
 out=$(cd "$cap_repo" && HOME="$cap_home_absent" CODEX_HOME="$cap_home_absent/.codex" bash "$DOCTOR" --store "$cap_store" 2>&1)
-assert_contains "capability_claude_absent" "$out" "autoMemoryDirectory not set in user settings"
+assert_contains "capability_claude_absent" "$out" "autoMemoryDirectory not set in observable settings"
 
 cap_home_nofile="$TMP/cap_home_nofile"
 mkdir -p "$cap_home_nofile/.claude" "$cap_home_nofile/.codex"
 out=$(cd "$cap_repo" && HOME="$cap_home_nofile" CODEX_HOME="$cap_home_nofile/.codex" bash "$DOCTOR" --store "$cap_store" 2>&1)
-assert_contains "capability_claude_no_settings_file" "$out" "user settings file not found at $cap_home_nofile/.claude/settings.json"
+assert_contains "capability_claude_no_settings_file" "$out" "autoMemoryDirectory not set in observable settings"
 
 echo "--- capability matrix: Codex native-memories layer precedence ---"
 
