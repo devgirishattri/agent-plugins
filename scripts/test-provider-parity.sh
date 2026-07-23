@@ -97,9 +97,9 @@ assert_provider_neutral_packet() {
     || fail "$label packet missing Codex block command"
   grep -F '/session-scheduler:task-block' "$packet" >/dev/null \
     || fail "$label packet missing Claude block command"
-  grep -F '$session-context:context-load' "$packet" >/dev/null \
+  grep -F '$knowledge:context-load' "$packet" >/dev/null \
     || fail "$label packet missing Codex context-load command"
-  grep -F '/session-context:context-load' "$packet" >/dev/null \
+  grep -F '/knowledge:context-load' "$packet" >/dev/null \
     || fail "$label packet missing Claude context-load command"
 }
 
@@ -334,8 +334,8 @@ done
 # Both providers must reject a misconfigured project-like root before changing
 # any modes, and confirmed removal must clean legacy orphan history even when
 # the current snapshot has already disappeared.
-CLAUDE_CONTEXT_SCRIPTS="$ROOT/plugins/session-context/scripts"
-CODEX_CONTEXT_SCRIPTS="$ROOT/codex/plugins/session-context/scripts"
+CLAUDE_CONTEXT_SCRIPTS="$ROOT/plugins/knowledge/scripts"
+CODEX_CONTEXT_SCRIPTS="$ROOT/codex/plugins/knowledge/scripts"
 for provider in claude codex; do
   if [ "$provider" = "claude" ]; then
     context_scripts="$CLAUDE_CONTEXT_SCRIPTS"

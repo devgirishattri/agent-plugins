@@ -167,8 +167,8 @@ TRANSPORT_CONTRACT
       printf 'Claude: /session-scheduler:task-block %s <reason>\n' "$ID"
       if [ -n "$CONTEXT_NAME_ARG" ]; then
         printf '\nLoad the shared context with either provider form:\n'
-        printf 'Codex:  $session-context:context-load %s\n' "$CONTEXT_NAME_ARG"
-        printf 'Claude: /session-context:context-load %s\n' "$CONTEXT_NAME_ARG"
+        printf 'Codex:  $knowledge:context-load %s\n' "$CONTEXT_NAME_ARG"
+        printf 'Claude: /knowledge:context-load %s\n' "$CONTEXT_NAME_ARG"
       fi
       if [ -n "$TRUSTED_ORIGINAL_PROMPT" ]; then
         printf '\n## Original assignment\n\n'

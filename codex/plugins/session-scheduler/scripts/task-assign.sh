@@ -134,7 +134,7 @@ if [ -n "$CONTEXT" ]; then
     CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
     if [ ! -f "$CONTEXT_FILE" ]; then
       echo "ERROR: Context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2
-      echo "Generate it first with \$session-context:context-generate $CONTEXT." >&2
+      echo "Generate it first with \$knowledge:context-generate $CONTEXT." >&2
       exit 1
     fi
   fi
@@ -234,8 +234,8 @@ if [ -n "$CONTEXT" ]; then
 
 ## Context
 Load the shared context first with either provider form:
-Codex:  \$session-context:context-load $CONTEXT
-Claude: /session-context:context-load $CONTEXT
+Codex:  \$knowledge:context-load $CONTEXT
+Claude: /knowledge:context-load $CONTEXT
 EOF
 fi
 

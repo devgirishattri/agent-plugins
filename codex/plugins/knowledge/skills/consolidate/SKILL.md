@@ -124,7 +124,7 @@ file.
 While reading, note the **detected index style**, because you must preserve it
 when you add rows later:
 
-- **flat** — a plain list of `- [Name](file.md) — hook text` rows, no
+- **flat** — a plain list of rows shaped `- [Name](<basename>.md) — hook text`, no
   headings.
 - **sectioned** — the same rows grouped under `#`/`##` headings (commonly by
   `metadata.type` or topic).

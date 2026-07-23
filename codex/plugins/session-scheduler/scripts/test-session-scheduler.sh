@@ -309,9 +309,9 @@ grep -F "Shared context home (provenance): $EXPECTED_CONTEXT_HOME" "$TEST_HOME/s
 if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null; then
   fail "context assignment packet contains an executable export line"
 fi
-grep -F '$session-context:context-load ctx-1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
+grep -F '$knowledge:context-load ctx-1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
   || fail "prompt missing Codex context-load form"
-grep -F '/session-context:context-load ctx-1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
+grep -F '/knowledge:context-load ctx-1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
   || fail "prompt missing Claude context-load form"
 meta_ctx=$(jq -r '.meta.context // empty' "$TEST_HOME/scheduler/tasks/$CTX_ID.json")
 [ "$meta_ctx" = "ctx-1" ] || fail "meta.context not recorded"
@@ -377,9 +377,9 @@ grep -F '$session-scheduler:task-block' "$TEST_HOME/routed-review-instructions.t
   || fail "review packet missing Codex rejection command"
 grep -F '/session-scheduler:task-block' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   || fail "review packet missing Claude rejection command"
-grep -F "\$session-context:context-load $AUTO_CONTEXT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+grep -F "\$knowledge:context-load $AUTO_CONTEXT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   || fail "review packet missing Codex context-load command"
-grep -F "/session-context:context-load $AUTO_CONTEXT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+grep -F "/knowledge:context-load $AUTO_CONTEXT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   || fail "review packet missing Claude context-load command"
 run_reviewer bash "$SCRIPT_DIR/task-done.sh" "$ROUTED_ID" "approved independently"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$ROUTED_ID" | grep 'done' >/dev/null || fail "reviewer could not complete routed task"

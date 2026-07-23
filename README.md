@@ -10,8 +10,6 @@ This repository contains provider-specific plugins for Claude Code and Codex. Th
 | `session-chat` | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Absorbs `session-context` and `creating-docs` |
-| `session-context` | **DEPRECATED — superseded by `knowledge`.** Final maintenance release; maintenance-only during the deprecation window. (Generate, list, load, and share session context snapshots) |
-| `creating-docs` | **DEPRECATED — superseded by `knowledge`.** Final maintenance release; maintenance-only during the deprecation window. (Create and update documentation using structured guidance and validation scripts) |
 | `chronos` | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 ## Repository Layout
@@ -238,8 +236,8 @@ rerun and `--force` is never a notification repair.
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
-| `CLAUDE_HOME` | Partial | Not applicable | `$HOME/.claude` | Claude `session-stats` uses it, but Claude list, search, and delete scripts currently use `$HOME/.claude` directly. Claude session-context cross-project search also honors it. |
-| `CODEX_HOME` | Not applicable | Yes | `$HOME/.codex` | Codex session-manager uses it for session and state storage. Codex session-context and session-scheduler also use it for session discovery, message storage, and plugin-cache lookup. |
+| `CLAUDE_HOME` | Partial | Not applicable | `$HOME/.claude` | Claude `session-stats` uses it, but Claude list, search, and delete scripts currently use `$HOME/.claude` directly. Claude knowledge context cross-project search also honors it. |
+| `CODEX_HOME` | Not applicable | Yes | `$HOME/.codex` | Codex session-manager uses it for session and state storage. Codex knowledge (context surfaces) and session-scheduler also use it for session discovery, message storage, and plugin-cache lookup. |
 | `AGENT_PLUGINS_TIME_ZONE` | Yes | Yes | `Asia/Kolkata` | Validated IANA timezone used by Chronos and plugin-generated timestamps. `workspace.sh` supplies it to both agent panes and honors a caller override. |
 
 Session-manager therefore has equivalent provider-home intent but not literal or
@@ -258,11 +256,14 @@ epoch) as model context. The default is IST (`Asia/Kolkata`). The Claude impleme
 mid-turn via the throttled PreToolUse hook; the Codex implementation is
 per-prompt only (UserPromptSubmit), so it has no throttle variable.
 
-### Creating docs
+### Knowledge (docs workflows)
 
-`creating-docs` exposes no plugin-specific user environment variables. Its
+The `knowledge` plugin's docs workflows (absorbed from the retired
+`creating-docs`) expose no plugin-specific user environment variables. Its
 plugin-root values and validator target directories are runtime or command
-inputs rather than persistent configuration.
+inputs rather than persistent configuration. Memory-store surfaces honor
+`KNOWLEDGE_MEMORY_HOME` (explicit store target) and
+`KNOWLEDGE_INBOX_RETENTION_DAYS` (capture-inbox retention, default 30).
 
 Standard shell/runtime inputs such as `HOME`, `TMPDIR`, `TMUX`, `TMUX_PANE`,
 `PLUGIN_ROOT`, and `CLAUDE_PLUGIN_ROOT` are not plugin-specific customization

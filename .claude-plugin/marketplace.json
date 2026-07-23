@@ -27,24 +27,6 @@
       "license": "MIT"
     },
     {
-      "name": "creating-docs",
-      "description": "DEPRECATED — superseded by knowledge (>= 0.1.0), which absorbs this plugin's full surface (doc workflows continue as /knowledge:docs-create and /knowledge:docs-review). Final maintenance release; maintenance-only during the deprecation window. Structured process for creating and updating project documentation with reference-based notation, validation scripts, and quality checks. Includes a doc-reviewer subagent for independent accuracy passes.",
-      "version": "1.1.4",
-      "author": {
-        "name": "Girish Attri"
-      },
-      "source": "./plugins/creating-docs",
-      "category": "productivity",
-      "keywords": [
-        "documentation",
-        "docs",
-        "writing",
-        "markdown",
-        "reference"
-      ],
-      "license": "MIT"
-    },
-    {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude (and Codex) sessions via tmux. Durable delivery routes fallback/dispatch into the recipient runtime's messages dir.",
       "version": "0.17.6",
@@ -60,24 +42,6 @@
         "parallel",
         "multi-agent",
         "peer-to-peer"
-      ],
-      "license": "MIT"
-    },
-    {
-      "name": "session-context",
-      "description": "DEPRECATED — superseded by knowledge (>= 0.1.0), which absorbs this plugin's full surface with behavior-identical ports (anything pinning session-context >= 0.7.0 is satisfied by knowledge >= 0.1.0). Final maintenance release; maintenance-only during the deprecation window. Generate, list, load, share, and remove Claude session context snapshots from a shared store. Surfaces available snapshots on session start.",
-      "version": "0.7.9",
-      "author": {
-        "name": "Girish Attri"
-      },
-      "source": "./plugins/session-context",
-      "category": "productivity",
-      "keywords": [
-        "context",
-        "handoff",
-        "snapshot",
-        "session",
-        "multi-agent"
       ],
       "license": "MIT"
     },
@@ -121,8 +85,8 @@
     },
     {
       "name": "session-scheduler",
-      "description": "Thin file-backed task ledger for orchestrator \u2192 executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
-      "version": "0.5.7",
+      "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
+      "version": "0.5.8",
       "author": {
         "name": "Girish Attri"
       },

@@ -576,23 +576,23 @@ require_tokens(
 )
 require_order(root / "plugins/session-manager/commands/session-delete.md", "No, cancel (Recommended)", "Yes, delete all")
 require_order(root / "codex/plugins/session-manager/skills/session-delete/SKILL.md", "No, cancel (Recommended)", "Yes, delete it")
-require_tokens(root / "plugins/creating-docs/commands/doc-review.md", "doc-reviewer")
-require_tokens(root / "codex/plugins/creating-docs/skills/doc-review/SKILL.md", "fresh subagent", "do not edit files")
-require_tokens(root / "plugins/creating-docs/commands/creating-docs.md", "after ANY docs write/edit")
-require_tokens(root / "plugins/creating-docs/skills/creating-docs/SKILL.md", "MANDATORY independent review", "Repeat after fixes")
-require_tokens(root / "codex/plugins/creating-docs/skills/creating-docs/SKILL.md", "Run an independent accuracy review", "actual parent directory")
-require_tokens(root / "plugins/session-context/skills/session-context/SKILL.md", "SESSION_CONTEXT_HOME")
-require_tokens(root / "codex/plugins/session-context/skills/session-context/SKILL.md", "SESSION_CONTEXT_HOME")
-require_tokens(root / "codex/plugins/session-context/skills/context-remove/SKILL.md", "request_user_input", "explicit confirmation")
-require_tokens(root / "plugins/session-context/commands/context-remove.md", "AskUserQuestion", "No, cancel (Recommended)", "--confirmed")
-require_tokens(root / "plugins/session-context/scripts/remove-context.sh", "--confirmed", "archived history")
-require_tokens(root / "codex/plugins/session-context/scripts/remove-context.sh", "--confirmed", "history file(s)")
+require_tokens(root / "plugins/knowledge/commands/docs-review.md", "doc-reviewer")
+require_tokens(root / "codex/plugins/knowledge/skills/docs-review/SKILL.md", "fresh subagent", "do not edit files")
+require_tokens(root / "plugins/knowledge/commands/docs-create.md", "after ANY docs write/edit")
+require_tokens(root / "plugins/knowledge/skills/creating-docs/SKILL.md", "MANDATORY independent review", "Repeat after fixes")
+require_tokens(root / "codex/plugins/knowledge/skills/docs-create/SKILL.md", "Run an independent accuracy review", "actual parent directory")
+require_tokens(root / "plugins/knowledge/skills/session-context/SKILL.md", "SESSION_CONTEXT_HOME")
+require_tokens(root / "codex/plugins/knowledge/skills/knowledge/SKILL.md", "SESSION_CONTEXT_HOME")
+require_tokens(root / "codex/plugins/knowledge/skills/context-remove/SKILL.md", "request_user_input", "explicit confirmation")
+require_tokens(root / "plugins/knowledge/commands/context-remove.md", "AskUserQuestion", "No, cancel (Recommended)", "--confirmed")
+require_tokens(root / "plugins/knowledge/scripts/remove-context.sh", "--confirmed", "archived history")
+require_tokens(root / "codex/plugins/knowledge/scripts/remove-context.sh", "--confirmed", "history file(s)")
 require_tokens(
-    root / "plugins/session-context/scripts/lib.sh",
+    root / "plugins/knowledge/scripts/lib.sh",
     "unexpected nested directory", "unexpected file", "before changing any permissions",
 )
 require_tokens(
-    root / "plugins/session-context/scripts/remove-context.sh",
+    root / "plugins/knowledge/scripts/remove-context.sh",
     "No current or archived context snapshot", "history file(s)",
 )
 require_tokens(root / "plugins/session-chat/commands/messages-clean.md", "AskUserQuestion", "If (and only if) `--apply` was in")
@@ -633,28 +633,34 @@ require_tokens(
     "task-<id>-<random>",
 )
 require_tokens(
-    root / "codex/plugins/session-context/skills/context-load/SKILL.md",
+    root / "codex/plugins/knowledge/skills/context-load/SKILL.md",
     "7 or more days old",
 )
 require_tokens(
-    root / "codex/plugins/session-context/skills/session-context/SKILL.md",
+    root / "codex/plugins/knowledge/skills/knowledge/SKILL.md",
     "Direct callers of every script must set the variable explicitly",
 )
 reject_pattern(
-    root / "codex/plugins/session-context/skills/session-context/SKILL.md",
+    root / "codex/plugins/knowledge/skills/knowledge/SKILL.md",
     r"context-search[^.]*is the exception",
     "Codex context search also requires SESSION_CONTEXT_HOME",
 )
-# session-context 0.7.5 inherited-env contract: agent-facing context docs never
-# instruct an executable export/derivation; the store is inherited at agent
-# startup and scripts fail closed with relaunch guidance when it is absent.
+# session-context 0.7.5 inherited-env contract, ported in full to the knowledge
+# plugin (KNOWLEDGE_PLUGIN_SPEC.md): agent-facing context docs never instruct
+# an executable export/derivation; the store is inherited at agent startup and
+# scripts fail closed with relaunch guidance when it is absent. The Codex
+# overview skill was renamed session-context -> knowledge, so it is addressed
+# separately per provider below; the command/skill glob is narrowed to the
+# context-* surface since the knowledge commands/skills dirs now also hold
+# unrelated docs/memory commands that never mention this contract.
 for provider_context in (
-    root / "plugins/session-context",
-    root / "codex/plugins/session-context",
+    root / "plugins/knowledge",
+    root / "codex/plugins/knowledge",
 ):
-    context_docs = sorted((provider_context / "commands").glob("*.md"))
-    if provider_context == root / "codex/plugins/session-context":
-        context_docs += sorted((provider_context / "skills").glob("*/SKILL.md"))
+    context_docs = sorted((provider_context / "commands").glob("context-*.md"))
+    if provider_context == root / "codex/plugins/knowledge":
+        context_docs += sorted((provider_context / "skills").glob("context-*/SKILL.md"))
+        context_docs.append(provider_context / "skills/knowledge/SKILL.md")
     for context_doc in context_docs:
         reject_pattern(
             context_doc,
@@ -675,10 +681,15 @@ for provider_context in (
         context_doc_key = (
             context_doc.stem if context_doc.stem != "SKILL" else context_doc.parent.name
         )
-        if context_doc_key not in ("context-search", "session-context"):
+        if context_doc_key not in ("context-search", "knowledge"):
             require_phrases(context_doc, "relaunch")
+    context_overview_skill = (
+        provider_context / "skills/session-context/SKILL.md"
+        if provider_context == root / "plugins/knowledge"
+        else provider_context / "skills/knowledge/SKILL.md"
+    )
     require_phrases(
-        provider_context / "skills/session-context/SKILL.md",
+        context_overview_skill,
         "inherited when the agent process started",
         "fail closed",
     )
@@ -692,7 +703,7 @@ for provider_context in (
         "one literal Bash segment",
     )
 require_phrases(
-    root / "codex/plugins/session-context/skills/context-share/SKILL.md",
+    root / "codex/plugins/knowledge/skills/context-share/SKILL.md",
     "on the first attempt",
     "one literal Bash segment",
 )
@@ -712,7 +723,7 @@ require_tokens(
     "public `/send` and `/dispatch` wrappers translate that to a normal success exit",
 )
 require_tokens(
-    root / "plugins/session-context/skills/session-context/SKILL.md",
+    root / "plugins/knowledge/skills/session-context/SKILL.md",
     "not a file copy",
     "via `/whoami <name>` or SessionStart",
 )
@@ -748,32 +759,32 @@ for workflow in sorted((root / ".github/workflows").glob("*.y*ml")):
 require_tokens(
     root / ".github/workflows/validate.yml",
     "plugins/session-manager/scripts/test-session-manager.sh",
-    "plugins/creating-docs/scripts/test-creating-docs.sh",
-    "plugins/session-context/scripts/test-session-context.sh",
+    "plugins/knowledge/scripts/test-creating-docs.sh",
+    "plugins/knowledge/scripts/test-session-context.sh",
     "scripts/test-provider-parity.sh",
 )
 
 require_tokens(
-    root / "plugins/session-context/scripts/share-context.sh",
-    "/session-context:context-load", "$session-context:context-load",
+    root / "plugins/knowledge/scripts/share-context.sh",
+    "/knowledge:context-load", "$knowledge:context-load",
     '[ -f "$root/scripts/send-message.sh" ]', '[ -r "$root/scripts/send-message.sh" ]', "Queued",
     "store (provenance):",
 )
 require_tokens(
-    root / "codex/plugins/session-context/scripts/share-context.sh",
-    "/session-context:context-load", "$session-context:context-load",
+    root / "codex/plugins/knowledge/scripts/share-context.sh",
+    "/knowledge:context-load", "$knowledge:context-load",
     "store (provenance):",
 )
 for share_script in (
-    root / "plugins/session-context/scripts/share-context.sh",
-    root / "codex/plugins/session-context/scripts/share-context.sh",
+    root / "plugins/knowledge/scripts/share-context.sh",
+    root / "codex/plugins/knowledge/scripts/share-context.sh",
 ):
     reject_pattern(
         share_script,
         r"export SESSION_CONTEXT_HOME=",
         "share notification must not instruct an executable export",
     )
-require_tokens(root / "plugins/session-context/scripts/test-session-context.sh", "chmod 644", "share_provenance_special_path")
+require_tokens(root / "plugins/knowledge/scripts/test-session-context.sh", "chmod 644", "share_provenance_special_path")
 require_tokens(root / "plugins/session-scheduler/scripts/scheduler-doctor.sh", '[ -f "$root/scripts/dispatch-to-session.sh" ]', '[ -r "$root/scripts/dispatch-to-session.sh" ]')
 require_tokens(root / "plugins/session-scheduler/scripts/test-session-scheduler.sh", "chmod 644", "dispatch script: OK")
 
@@ -844,7 +855,7 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
         require_tokens(chat_docs / "session-chat" / "SKILL.md", "$session-chat:reply", "unconfirmed")
         require_tokens(chat / "detect-incoming-message.sh", "$session-chat:reply")
 
-    context = provider_root / "session-context" / "scripts"
+    context = provider_root / "knowledge" / "scripts"
     require_tokens(context / "lib.sh", "umask 077", "chmod 700", "chmod 600", "[ -L")
 
     scheduler = provider_root / "session-scheduler" / "scripts"

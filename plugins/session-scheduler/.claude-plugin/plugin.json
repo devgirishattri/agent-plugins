@@ -1,11 +1,18 @@
 {
   "name": "session-scheduler",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
   "author": {
     "name": "Girish Attri"
   },
-  "keywords": ["scheduler", "orchestration", "tasks", "ledger", "multi-agent", "tmux"],
+  "keywords": [
+    "scheduler",
+    "orchestration",
+    "tasks",
+    "ledger",
+    "multi-agent",
+    "tmux"
+  ],
   "homepage": "https://github.com/devgirishattri/agent-plugins",
   "repository": "https://github.com/devgirishattri/agent-plugins",
   "license": "MIT"
