@@ -126,13 +126,25 @@ default (per the spec's 0.2 roadmap gate). All injected content is framed as
 untrusted background context, never instructions/policy, and every hook fails
 silently (never breaks or stalls a session).
 
-- **`KNOWLEDGE_AUTO_RECALL=1`** — SessionStart injects the bounded `MEMORY.md`
-  index as always-on background; UserPromptSubmit extracts salient terms from
-  the prompt, unions per-term scorer hits, and injects the top-N. Tunables:
+- **`KNOWLEDGE_AUTO_RECALL`** — selects WHICH of the two injections run
+  (case-insensitive): `1`/`yes`/`on`/`true`/`all`/`both` = both;
+  `session`/`session-start`/`index` = the SessionStart bounded `MEMORY.md`
+  index only; `prompt`/`recall`/`user-prompt` = the per-prompt recall only;
+  unset/`0`/`no`/`off`/`false` = nothing. Any other non-empty value means both,
+  so pre-0.2.1 settings keep working. SessionStart injects the bounded index as
+  always-on background; UserPromptSubmit extracts salient terms from the
+  prompt, unions per-term scorer hits, and injects the top-N. Tunables:
   `KNOWLEDGE_AUTO_RECALL_LIMIT` (top-N, default 5),
   `KNOWLEDGE_AUTO_RECALL_TERMS` (max terms queried, default 4 — bounds
   per-prompt latency), `KNOWLEDGE_AUTO_RECALL_BUDGET` (output char cap,
   default 4000). Script: `scripts/inject-recall.sh`.
+
+  **Which value to use.** On Claude, if `autoMemoryDirectory` points at this
+  store the harness already loads `MEMORY.md` every session, so `1` injects a
+  verbatim duplicate index (~691 tokens paid twice) — prefer `prompt`, which
+  keeps the per-turn recall nothing else provides. Codex has no equivalent
+  setting, so `1` is correct there.
+
 - **`KNOWLEDGE_CONSOLIDATE_NUDGE=1`** — a Stop hook that, when the capture
   inbox has pending candidates, prints ONE reminder to run
   `$knowledge:consolidate`. Nudge only — it never writes and never

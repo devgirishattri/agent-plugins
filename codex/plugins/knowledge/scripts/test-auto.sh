@@ -112,6 +112,64 @@ out="$(KNOWLEDGE_MEMORY_HOME="$estore" KNOWLEDGE_AUTO_RECALL=1 bash "$INJECT" --
 assert_empty inject_session_emptyindex_silent "$out"
 
 # ---------------------------------------------------------------------------
+# inject-recall — per-mode gate (0.2.1). One env var selects WHICH injections
+# run, so a provider that already supplies the index itself (Claude with
+# autoMemoryDirectory pointed at the store) can keep per-prompt recall without
+# paying for a duplicate SessionStart index.
+# ---------------------------------------------------------------------------
+gate_probe() { # $1=gate value  $2=mode flag -> prints output
+  if [ "$2" = "--prompt" ]; then
+    mkprompt "how do I run the zephyr calibration on the widget" \
+      | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL="$1" bash "$INJECT" --prompt
+  else
+    KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL="$1" bash "$INJECT" --session-start
+  fi
+}
+
+# session-only tokens: index fires, prompt recall stays silent
+for g in session session-start index SESSION Session-Start; do
+  assert_nonempty "inject_gate_${g}_session_fires"  "$(gate_probe "$g" --session-start)"
+  assert_empty    "inject_gate_${g}_prompt_silent"  "$(gate_probe "$g" --prompt)"
+done
+
+# prompt-only tokens: recall fires, index stays silent
+for g in prompt recall user-prompt PROMPT Recall; do
+  assert_nonempty "inject_gate_${g}_prompt_fires"   "$(gate_probe "$g" --prompt)"
+  assert_empty    "inject_gate_${g}_session_silent" "$(gate_probe "$g" --session-start)"
+done
+
+# both-tokens and OFF-tokens keep their pre-0.2.1 meaning
+for g in 1 yes on true all both; do
+  assert_nonempty "inject_gate_${g}_session_fires" "$(gate_probe "$g" --session-start)"
+  assert_nonempty "inject_gate_${g}_prompt_fires"  "$(gate_probe "$g" --prompt)"
+done
+for g in 0 no off false FALSE Off; do
+  assert_empty "inject_gate_${g}_session_silent" "$(gate_probe "$g" --session-start)"
+  assert_empty "inject_gate_${g}_prompt_silent"  "$(gate_probe "$g" --prompt)"
+done
+
+# BACKWARD COMPATIBILITY: an unrecognized non-empty value must still mean BOTH,
+# so a pre-0.2.1 setting like KNOWLEDGE_AUTO_RECALL=enabled never silently
+# disables recall on upgrade.
+assert_nonempty inject_gate_unknown_session_fires "$(gate_probe enabled --session-start)"
+assert_nonempty inject_gate_unknown_prompt_fires  "$(gate_probe enabled --prompt)"
+
+# WHITESPACE TRIM (0.2.1): a stray leading/trailing space must not flip an OFF
+# value into the unrecognized-means-both branch — a space must never ENABLE
+# recall. Recognized tokens with surrounding whitespace resolve to their mode.
+for g in "off " " off" "0 " " false"; do
+  assert_empty "inject_gate_ws_off_session_silent[$g]" "$(gate_probe "$g" --session-start)"
+  assert_empty "inject_gate_ws_off_prompt_silent[$g]"  "$(gate_probe "$g" --prompt)"
+done
+assert_nonempty inject_gate_ws_session_fires  "$(gate_probe "session " --session-start)"
+assert_empty    inject_gate_ws_session_prompt "$(gate_probe " session" --prompt)"
+assert_nonempty inject_gate_ws_prompt_fires   "$(gate_probe " prompt " --prompt)"
+assert_empty    inject_gate_ws_prompt_session "$(gate_probe "prompt " --session-start)"
+# Internal-space value stays unrecognized => both (never strips down to a token).
+assert_nonempty inject_gate_ws_internal_session "$(gate_probe "yes please" --session-start)"
+assert_nonempty inject_gate_ws_internal_prompt  "$(gate_probe "yes please" --prompt)"
+
+# ---------------------------------------------------------------------------
 # inject-recall — UserPromptSubmit term-union recall mode
 # ---------------------------------------------------------------------------
 out="$(mkprompt "how do I run the zephyr calibration on the widget" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=1 bash "$INJECT" --prompt)"

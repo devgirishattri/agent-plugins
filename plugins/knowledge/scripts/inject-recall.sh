@@ -20,10 +20,25 @@
 # the results gives OR-like recall without changing the core scorer contract.
 #
 # OFF BY DEFAULT (spec: "off by default until latency/context-budget/
-# prompt-injection/false-positive evaluations pass"). Emits nothing unless
-# KNOWLEDGE_AUTO_RECALL is set to a non-empty, non-zero value. Fails SILENTLY
+# prompt-injection/false-positive evaluations pass"). Fails SILENTLY
 # (exit 0, no output, no stderr) on ANY error, or on an absent/unsafe store —
 # a hook must never break a session, stall it, or leak an error banner.
+#
+# KNOWLEDGE_AUTO_RECALL selects WHICH of the two injections run (values are
+# matched case-insensitively):
+#   unset | "" | 0 | no | off | false   nothing at all (the default)
+#   1 | yes | on | true | all | both    BOTH the SessionStart index and the
+#                                       per-prompt recall
+#   session | session-start | index     SessionStart index ONLY
+#   prompt | recall | user-prompt       per-prompt recall ONLY
+# Any other non-empty value means BOTH, so pre-0.2.1 settings keep working.
+#
+# Single-mode selection exists because a provider can already supply one half
+# itself: with Claude's `autoMemoryDirectory` pointed at the store, the harness
+# loads MEMORY.md every session, making the SessionStart index a verbatim
+# duplicate (~691 tokens paid twice). `prompt` keeps the per-turn recall — the
+# part nothing else provides — and drops the duplicate. Codex has no such
+# setting, so `1` is the right value there.
 #
 # Injected content is ALWAYS framed as untrusted background context, never as
 # instructions or policy (memory-poisoning defense, per the spec's store
@@ -36,17 +51,28 @@
 # Supported platforms: macOS, Linux (prompt mode requires python3).
 set -uo pipefail
 
-# ---- opt-in gate (default OFF) --------------------------------------------
-case "${KNOWLEDGE_AUTO_RECALL:-}" in
-  ""|0|no|off|false|FALSE|No|Off) exit 0 ;;
-esac
-
 MODE=""
 case "${1:-}" in
   --session-start) MODE=session ;;
   --prompt)        MODE=prompt ;;
   *)               exit 0 ;;
 esac
+
+# ---- opt-in gate (default OFF), per-mode -----------------------------------
+# Lowercased with tr rather than ${var,,} so this stays bash 3.2 safe (macOS),
+# then leading/trailing whitespace is trimmed so a stray space on an OFF value
+# (`off ` etc.) still reads as OFF rather than falling through to the
+# unrecognized-means-both branch — a space must never silently ENABLE recall.
+_km_gate="$(printf '%s' "${KNOWLEDGE_AUTO_RECALL:-}" | tr '[:upper:]' '[:lower:]')"
+_km_gate="${_km_gate#"${_km_gate%%[![:space:]]*}"}"   # strip leading ws
+_km_gate="${_km_gate%"${_km_gate##*[![:space:]]}"}"   # strip trailing ws
+case "$_km_gate" in
+  ""|0|no|off|false)           exit 0 ;;
+  session|session-start|index) [ "$MODE" = session ] || exit 0 ;;
+  prompt|recall|user-prompt)   [ "$MODE" = prompt ]  || exit 0 ;;
+  *)                           : ;;  # 1/yes/on/true/all/both and anything else: both modes
+esac
+unset _km_gate
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # From here on every failure must be silent.
