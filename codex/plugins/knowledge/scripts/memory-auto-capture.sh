@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # memory-auto-capture.sh — knowledge 0.3 autonomous-capture ENFORCEMENT wrapper
-# (shared, byte-identical across providers). The 0.3 Stop hook asks the AGENT
-# for one bounded capture pass; the agent stages 0-N structured candidates and
-# routes them THROUGH THIS WRAPPER. The wrapper is the single enforcement point:
+# (shared, byte-identical across providers). The capture flow — the Claude opt-in
+# `type:"prompt"` Stop hook (assets/capture-stop-hook.md), or a manual staging
+# pass — asks the AGENT for one bounded capture; the agent stages 0-N structured
+# candidates and routes them THROUGH THIS WRAPPER. The wrapper is the single
+# enforcement point:
 # it caps count/bytes, rejects secrets, does a cheap duplicate check, and then
 # delegates each ACCEPTED candidate to `memory-remember.sh --staged` — the ONLY
 # writer path it ever invokes.
@@ -28,9 +30,12 @@
 #                                       holds >= this many pending candidates (default 20)
 #   KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES    hard per-candidate raw-byte cap (default 4096)
 #
-# NOTE: this wrapper is NOT gated on KNOWLEDGE_AUTO_CAPTURE — that gate governs
-# whether the Stop HOOK requests a capture pass. Invoking this wrapper is an
-# explicit act of capture (exactly like memory-remember.sh), so it always runs.
+# NOTE: this wrapper has no opt-in gate of its own. Whether a capture pass is
+# REQUESTED is decided upstream — on Claude by the presence of the opt-in
+# `type:"prompt"` Stop-hook snippet (assets/capture-stop-hook.md); the retired
+# 0.3.0/0.3.1 KNOWLEDGE_AUTO_CAPTURE env gate no longer governs anything.
+# Invoking this wrapper is an explicit act of capture (like memory-remember.sh),
+# so it always runs when called.
 #
 # Output: accepted candidates print `captured: <capture_id>` to stdout, one per
 # line; all warnings/rejections/summaries go to stderr. Exit codes: 0 ok (incl.

@@ -3,7 +3,9 @@
 #   * inject-recall.sh   — SessionStart index injection + UserPromptSubmit
 #                          salient-term union recall (opt-in, safe-fallback).
 #   * nudge-consolidate.sh — Stop capture-inbox nudge (opt-in, never writes).
-#   * request-capture.sh — Stop autonomous-capture request (opt-in, never writes).
+#   * memory-auto-capture.sh — shared capture ENFORCEMENT wrapper (inbox-only).
+#     (Autonomous Stop-capture is NOT offered on Codex as of 0.3.2 — command-only
+#      hooks cannot return the silent ok:false shape; see the spec's 0.3.2 entry.)
 #   * memory-lint.sh --fix — the delegating status/index normalizer.
 # All fixtures are synthetic (ProjectA/ProjectB, zephyr/quokka/widget) — never
 # real project names. Isolated git repos under a temp dir; cleans up on exit.
@@ -15,7 +17,6 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 INJECT="$HERE/inject-recall.sh"
 NUDGE="$HERE/nudge-consolidate.sh"
 AUTOCAP="$HERE/memory-auto-capture.sh"
-REQCAP="$HERE/request-capture.sh"
 LINT="$HERE/memory-lint.sh"
 WRITER="$HERE/memory-write.sh"
 REMEMBER="$HERE/memory-remember.sh"
@@ -332,8 +333,9 @@ assert_contains fix_reviewer_refusal_msg "$review_out" "reviewer role: memory wr
 assert_eq fix_reviewer_refusal_no_mutation "$rh" "$(sha "$rstore/reviewer_refusal.md")"
 
 # ===========================================================================
-# 0.3 autonomous capture — memory-auto-capture.sh wrapper + request-capture.sh
-# Stop hook. Acceptance matrix A1–A20 (see the spec's "0.3 acceptance matrix").
+# 0.3 autonomous capture — memory-auto-capture.sh wrapper (A4–A19) + the 0.3.2
+# default-hooks.json / no-capture-hook assertions (A1/A15/A20). See the spec's
+# "0.3 acceptance matrix". Autonomous Stop-capture itself is Claude-only.
 # ===========================================================================
 export KNOWLEDGE_PANE_NAME=test-executor   # non-reviewer identity so writes proceed
 
@@ -450,48 +452,42 @@ snap_after="$(snap "$capstore5")"
 assert_eq ac_A14_noninbox_unchanged "$snap_before" "$snap_after"
 assert_eq ac_A14_inbox_got_one 1 "$(bash "$REMEMBER" --store "$capstore5" --list 2>/dev/null | grep -c . || true)"
 
-# ---- A1/A2/A3/A15: request-capture.sh Stop hook (gate + JSON shape + guard)
-reqjson() { printf '%s' "$1" | KNOWLEDGE_AUTO_CAPTURE="$2" bash "$REQCAP" --stop-json 2>/dev/null; }
-for g in "" 0 off false " off "; do
-  assert_empty "ac_A1_gateoff[$g]" "$(cd "$TMP/cap" && reqjson '{"stop_hook_active":false}' "$g")"
-done
-capblock="$(cd "$TMP/cap" && reqjson '{"stop_hook_active":false}' 1)"
-assert_contains ac_A2_block_decision "$capblock" '"decision": "block"'
-assert_not_contains ac_A15_no_hookspecific "$capblock" "hookSpecificOutput"
-assert_contains ac_A2_reason_capture "$capblock" "auto-capture"
-assert_empty ac_A3_reentry_guard "$(cd "$TMP/cap" && reqjson '{"stop_hook_active":true}' 1)"
+# ===========================================================================
+# 0.3.2 Stop-hook red-error fix: autonomous Stop-capture is RETIRED on Codex.
+# Codex plugin hooks are command-only and cannot return the silent ok:false
+# shape, so a capture Stop hook would render a blocked-hook line every turn.
+# The default hooks.json ships no capture hook; there is no prompt-hook asset
+# on Codex (Claude-only). The enforcement wrapper stays as the manual write path.
+# ===========================================================================
 
-# ---- A17: after capture, the nudge sees pending inbox items (combined flow)
-nud="$(cd "$TMP/cap" && KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
-assert_contains ac_A17_nudge_sees_pending "$nud" "pending memory candidate"
-
-# ---- A20: hooks.json Stop ordering — capture BEFORE nudge
+# ---- A1/A20: default hooks.json Stop ships NO autonomous-capture hook --------
 hooks_json="$HERE/../hooks/hooks.json"
-ordering="$(python3 -c '
+stop_cmds="$(python3 -c '
 import json,sys
 d=json.load(open(sys.argv[1]))
-cmds=[h["command"] for h in d["hooks"]["Stop"][0]["hooks"]]
-ri=next(i for i,c in enumerate(cmds) if "request-capture" in c)
-ni=next(i for i,c in enumerate(cmds) if "nudge-consolidate" in c)
-print("ok" if ri<ni else "bad")' "$hooks_json" 2>/dev/null)"
-assert_eq ac_A20_capture_before_nudge ok "$ordering"
+for grp in d["hooks"].get("Stop",[]):
+    for h in grp.get("hooks",[]):
+        print(h.get("type","")+"|"+h.get("command",""))
+' "$hooks_json" 2>/dev/null)"
+assert_not_contains ac_A1_no_capture_in_default "$stop_cmds" "request-capture"
+assert_contains     ac_A20_nudge_is_default     "$stop_cmds" "nudge-consolidate.sh"
+assert_eq           ac_A20_single_stop_hook 1   "$(printf '%s\n' "$stop_cmds" | grep -c .)"
+assert_eq           ac_A20_reqcap_deleted   0   "$([ -e "$HERE/request-capture.sh" ] && echo 1 || echo 0)"
 
-# ---- A21: the capture-request reason must spell out the STRICT envelope so the
-# model reliably produces an ACCEPTED candidate (regression for the live-fire
-# finding: a vague reason let the model emit wrong enums -> wrapper rejected all).
-reason="$(cd "$TMP/cap" && printf '{"stop_hook_active":false}' | KNOWLEDGE_AUTO_CAPTURE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$REQCAP" --stop-json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["reason"])' 2>/dev/null)"
-assert_contains ac_A21_reason_skeleton    "$reason" "source: auto_capture"
-assert_contains ac_A21_reason_sensitivity "$reason" "normal"
-assert_contains ac_A21_reason_type_enums  "$reason" "reference"
-assert_contains ac_A21_reason_tags_sibling "$reason" "sibling of metadata"
+# ---- A15: Codex ships NO prompt-hook capture asset (Claude-only divergence) ---
+assert_eq ac_A15_no_codex_prompt_asset 0 "$([ -e "$HERE/../assets/capture-stop-hook.md" ] && echo 1 || echo 0)"
+
+# ---- A17: the consolidate nudge still surfaces pending inbox items ------------
+nud="$(cd "$TMP/cap" && KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
+assert_contains ac_A17_nudge_sees_pending "$nud" "pending memory candidate"
 
 # ---------------------------------------------------------------------------
 # syntax + zero-egress on the shipped hook scripts
 # ---------------------------------------------------------------------------
-for s in "$INJECT" "$NUDGE" "$AUTOCAP" "$REQCAP" "$LINT"; do
+for s in "$INJECT" "$NUDGE" "$AUTOCAP" "$LINT"; do
   if bash -n "$s" 2>/dev/null; then pass "bash_n_$(basename "$s")"; else fail "bash_n_$(basename "$s")" "syntax error"; fi
 done
-if grep -Eq 'curl|wget|http\.client|urllib|requests\.|socket\.connect' "$INJECT" "$NUDGE" "$AUTOCAP" "$REQCAP"; then
+if grep -Eq 'curl|wget|http\.client|urllib|requests\.|socket\.connect' "$INJECT" "$NUDGE" "$AUTOCAP"; then
   fail egress_clean_hooks "network client invocation found"
 else
   pass egress_clean_hooks

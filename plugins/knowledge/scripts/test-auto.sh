@@ -339,11 +339,12 @@ assert_contains fix_reviewer_refused     "$rout" "refused"
 assert_eq       fix_reviewer_no_mutation "$h_before" "$(sha "$rvstore/needs_status.md")"
 
 # ===========================================================================
-# 0.3 autonomous capture — memory-auto-capture.sh wrapper + request-capture.sh
-# Stop hook. Acceptance matrix A1–A20 (see the spec's "0.3 acceptance matrix").
+# 0.3 autonomous capture — memory-auto-capture.sh wrapper (A4–A19) + the 0.3.2
+# opt-in prompt-hook snippet & default-hooks.json assertions (A1/A2/A3/A15/A20/
+# A21). See the spec's "0.3 acceptance matrix".
 # ===========================================================================
 AUTOCAP="$HERE/memory-auto-capture.sh"
-REQCAP="$HERE/request-capture.sh"
+ASSET="$HERE/../assets/capture-stop-hook.md"   # 0.3.2 Claude opt-in prompt-hook snippet
 export KNOWLEDGE_PANE_NAME=test-executor   # non-reviewer identity so writes proceed
 
 # a fresh capture store + a batch dir of staged candidates
@@ -456,49 +457,80 @@ snap_after="$(snap "$capstore5")"
 assert_eq ac_A14_noninbox_unchanged "$snap_before" "$snap_after"
 assert_eq ac_A14_inbox_got_one 1 "$(bash "$REMEMBER" --store "$capstore5" --list 2>/dev/null | grep -c . || true)"
 
-# ---- A1/A2/A3/A15: request-capture.sh Stop hook (gate + JSON shape + guard)
-reqjson() { printf '%s' "$1" | KNOWLEDGE_AUTO_CAPTURE="$2" bash "$REQCAP" --stop-json 2>/dev/null; }
-for g in "" 0 off false " off "; do
-  assert_empty "ac_A1_gateoff[$g]" "$(cd "$TMP/cap" && reqjson '{"stop_hook_active":false}' "$g")"
-done
-capblock="$(cd "$TMP/cap" && reqjson '{"stop_hook_active":false}' 1)"
-assert_contains ac_A2_block_decision "$capblock" '"decision": "block"'
-assert_not_contains ac_A15_no_hookspecific "$capblock" "hookSpecificOutput"
-assert_contains ac_A2_reason_capture "$capblock" "auto-capture"
-assert_empty ac_A3_reentry_guard "$(cd "$TMP/cap" && reqjson '{"stop_hook_active":true}' 1)"
+# ===========================================================================
+# 0.3.2 Stop-hook red-error fix: the autonomous-capture command hook + its
+# decision:block shape are RETIRED. Default hooks.json ships no capture hook;
+# autonomous capture is a Claude-only opt-in `type:"prompt"` snippet asset.
+# ===========================================================================
 
-# ---- A17: after capture, the nudge sees pending inbox items (combined flow)
-nud="$(cd "$TMP/cap" && KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
-assert_contains ac_A17_nudge_sees_pending "$nud" "pending memory candidate"
-
-# ---- A20: hooks.json Stop ordering — capture BEFORE nudge
+# ---- A1/A20: default hooks.json Stop ships NO autonomous-capture hook --------
 hooks_json="$HERE/../hooks/hooks.json"
-ordering="$(python3 -c '
+stop_cmds="$(python3 -c '
 import json,sys
 d=json.load(open(sys.argv[1]))
-cmds=[h["command"] for h in d["hooks"]["Stop"][0]["hooks"]]
-ri=next(i for i,c in enumerate(cmds) if "request-capture" in c)
-ni=next(i for i,c in enumerate(cmds) if "nudge-consolidate" in c)
-print("ok" if ri<ni else "bad")' "$hooks_json" 2>/dev/null)"
-assert_eq ac_A20_capture_before_nudge ok "$ordering"
+for grp in d["hooks"].get("Stop",[]):
+    for h in grp.get("hooks",[]):
+        print(h.get("type","")+"|"+h.get("command",""))
+' "$hooks_json" 2>/dev/null)"
+assert_not_contains ac_A1_no_capture_in_default "$stop_cmds" "request-capture"
+assert_not_contains ac_A15_no_decision_default  "$stop_cmds" "capture-stop-hook"
+assert_contains     ac_A20_nudge_is_default     "$stop_cmds" "nudge-consolidate.sh"
+assert_eq           ac_A20_single_stop_hook 1   "$(printf '%s\n' "$stop_cmds" | grep -c .)"
+assert_eq           ac_A20_reqcap_deleted   0   "$([ -e "$HERE/request-capture.sh" ] && echo 1 || echo 0)"
 
-# ---- A21: the capture-request reason must spell out the STRICT envelope so the
-# model reliably produces an ACCEPTED candidate (regression for the live-fire
-# finding: a vague reason let the model emit wrong enums -> wrapper rejected all).
-reason="$(cd "$TMP/cap" && printf '{"stop_hook_active":false}' | KNOWLEDGE_AUTO_CAPTURE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$REQCAP" --stop-json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["reason"])' 2>/dev/null)"
-assert_contains ac_A21_reason_skeleton   "$reason" "source: auto_capture"
-assert_contains ac_A21_reason_sensitivity "$reason" "normal"
-assert_contains ac_A21_reason_type_enums  "$reason" "reference"
-assert_contains ac_A21_reason_tags_sibling "$reason" "sibling of metadata"
+# ---- A2/A3/A15/A21: Claude opt-in type:"prompt" capture-stop-hook snippet -----
+assert_eq ac_A2_asset_exists 1 "$([ -f "$ASSET" ] && echo 1 || echo 0)"
+hook_shape="$(python3 - "$ASSET" <<'PY'
+import json,re,sys
+text=open(sys.argv[1]).read()
+m=re.search(r"```json\n(.*?)\n```", text, re.S)
+if not m:
+    print("NO_JSON_BLOCK"); sys.exit(0)
+try:
+    d=json.loads(m.group(1))
+    h=d["hooks"]["Stop"][0]["hooks"][0]
+except Exception as e:
+    print("BAD:%s"%e); sys.exit(0)
+p=h.get("prompt","")
+f=["type="+h.get("type","")]
+f.append("has_ok" if '"ok"' in p else "no_ok")
+f.append("has_reason" if '"reason"' in p else "no_reason")
+f.append("has_decision" if '"decision"' in p else "no_decision")
+f.append("has_guard" if "stop_hook_active" in p else "no_guard")
+f.append("has_envelope" if "source: auto_capture" in p else "no_envelope")
+f.append("has_sensitivity" if "normal" in p else "no_sensitivity")
+f.append("has_type_enum" if "reference" in p else "no_type_enum")
+f.append("has_tags_sibling" if "sibling of metadata" in p else "no_tags_sibling")
+f.append("has_wrapper" if "memory-auto-capture.sh" in p else "no_wrapper")
+print(";".join(f))
+PY
+)"
+assert_contains ac_A2_type_prompt    "$hook_shape" "type=prompt"
+assert_contains ac_A2_ok_shape       "$hook_shape" "has_ok"
+assert_contains ac_A2_reason_shape   "$hook_shape" "has_reason"
+assert_contains ac_A15_no_decision   "$hook_shape" "no_decision"   # NOT decision:block
+assert_contains ac_A3_loop_guard     "$hook_shape" "has_guard"     # stop_hook_active -> ok:true
+assert_contains ac_A21_envelope      "$hook_shape" "has_envelope"
+assert_contains ac_A21_sensitivity   "$hook_shape" "has_sensitivity"
+assert_contains ac_A21_type_enum     "$hook_shape" "has_type_enum"
+assert_contains ac_A21_tags_sibling  "$hook_shape" "has_tags_sibling"
+assert_contains ac_A2_routes_wrapper "$hook_shape" "has_wrapper"
+
+# ---- A17: after capture, the nudge sees pending inbox items (combined flow) ---
+# On Claude the opt-in prompt hook runs the capture pass in the agent's
+# continuation; by the re-entrant Stop the inbox is populated and the (separate,
+# non-blocking) nudge surfaces it — modelled here by staging then nudging.
+nud="$(cd "$TMP/cap" && KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
+assert_contains ac_A17_nudge_sees_pending "$nud" "pending memory candidate"
 
 # ---------------------------------------------------------------------------
 # syntax + zero-egress on the shipped hook scripts
 # ---------------------------------------------------------------------------
-for s in "$INJECT" "$NUDGE" "$LINT" "$AUTOCAP" "$REQCAP"; do
+for s in "$INJECT" "$NUDGE" "$LINT" "$AUTOCAP"; do
   if bash -n "$s" 2>/dev/null; then pass "bash_n_$(basename "$s")"; else fail "bash_n_$(basename "$s")" "syntax error"; fi
 done
-# ---- A16: zero network egress across the new capture scripts too
-if grep -Eq 'curl|wget|http\.client|urllib|requests\.|socket\.connect' "$INJECT" "$NUDGE" "$AUTOCAP" "$REQCAP"; then
+# ---- A16: zero network egress across the capture scripts + opt-in snippet -----
+if grep -Eq 'curl|wget|http\.client|urllib|requests\.|socket\.connect' "$INJECT" "$NUDGE" "$AUTOCAP" "$ASSET"; then
   fail egress_clean_hooks "network client invocation found"
 else
   pass egress_clean_hooks
