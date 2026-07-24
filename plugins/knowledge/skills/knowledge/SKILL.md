@@ -152,6 +152,20 @@ silently (never breaks or stalls a session).
   stdout), guarded on `stop_hook_active` so it can never loop. Nudge only — it
   never writes and never auto-consolidates. Script:
   `scripts/nudge-consolidate.sh` (invoked with `--stop-json`).
+- **`KNOWLEDGE_AUTO_CAPTURE=1`** (0.3) — opt-in autonomous capture. A Stop hook
+  (`scripts/request-capture.sh --stop-json`, sequenced BEFORE the nudge) asks the
+  AGENT for ONE bounded capture pass over its own context via the blocking Claude
+  Stop shape (`{"decision":"block","reason":…}`), guarded on `stop_hook_active`.
+  The agent stages 0–N structured candidates and routes them through the shared
+  enforcement wrapper `scripts/memory-auto-capture.sh`, which caps count/bytes,
+  rejects secrets, does a cheap duplicate check, and delegates each accepted one
+  to `memory-remember.sh --staged` — writing ONLY to the capture inbox.
+  `/consolidate` stays the persist gate; nothing is written to authoritative
+  memory automatically. Gate parsed like `KNOWLEDGE_AUTO_RECALL` (lowercased,
+  whitespace-trimmed; unset/`0`/`no`/`off`/`false` = OFF). Tunables:
+  `KNOWLEDGE_AUTO_CAPTURE_LIMIT` (max accepted per pass, default 3),
+  `KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING` (skip when inbox `>=` this, default 20),
+  `KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES` (per-candidate byte cap, default 4096).
 - **Capture bridge** — `assets/capture-snippet.md` is the paste-into-AGENTS.md
   instruction (companion to the recall bridge) telling the agent to
   `/knowledge:remember` mid-task and `/knowledge:consolidate` at session end.

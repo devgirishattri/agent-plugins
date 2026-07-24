@@ -35,6 +35,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash \"$PLUGIN_ROOT/scripts/request-capture.sh\" --stop-json",
+            "timeout": 15
+          },
+          {
+            "type": "command",
             "command": "bash \"$PLUGIN_ROOT/scripts/nudge-consolidate.sh\" --stop-json",
             "timeout": 5
           }

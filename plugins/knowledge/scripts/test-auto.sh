@@ -338,13 +338,158 @@ assert_rc       fix_reviewer_exit6       6 "$rrc"
 assert_contains fix_reviewer_refused     "$rout" "refused"
 assert_eq       fix_reviewer_no_mutation "$h_before" "$(sha "$rvstore/needs_status.md")"
 
+# ===========================================================================
+# 0.3 autonomous capture — memory-auto-capture.sh wrapper + request-capture.sh
+# Stop hook. Acceptance matrix A1–A20 (see the spec's "0.3 acceptance matrix").
+# ===========================================================================
+AUTOCAP="$HERE/memory-auto-capture.sh"
+REQCAP="$HERE/request-capture.sh"
+export KNOWLEDGE_PANE_NAME=test-executor   # non-reviewer identity so writes proceed
+
+# a fresh capture store + a batch dir of staged candidates
+capstore="$(bootstrap_store "$TMP/cap")"
+inbox_count() { bash "$REMEMBER" --store "$capstore" --list 2>/dev/null | grep -c . || true; }
+mk_batch() { local d="$1"; rm -rf "$d"; mkdir -p "$d"; }
+
+# ---- A4: zero candidates (empty batch dir) → silent success, nothing written
+b="$TMP/b_empty"; mk_batch "$b"
+out="$(bash "$AUTOCAP" --store "$capstore" --batch-dir "$b" 2>/dev/null)"; rc=$?
+assert_rc    ac_A4_zero_rc 0 "$rc"
+assert_empty ac_A4_zero_stdout "$out"
+assert_eq    ac_A4_zero_inbox 0 "$(inbox_count)"
+
+# ---- A5: N ≤ LIMIT valid candidates → all queued to .inbox, none elsewhere
+b="$TMP/b_ok"; mk_batch "$b"
+stage_candidate "$b/1.md" auto_capture "Cap One"   "first durable project invariant here" project
+stage_candidate "$b/2.md" auto_capture "Cap Two"   "second durable project invariant here" project
+before_files="$(find "$capstore" -type f | LC_ALL=C sort | grep -v '/\.inbox/' | wc -l | tr -d ' ')"
+out="$(KNOWLEDGE_AUTO_CAPTURE_LIMIT=3 bash "$AUTOCAP" --store "$capstore" --batch-dir "$b" 2>/dev/null)"; rc=$?
+assert_rc ac_A5_rc 0 "$rc"
+assert_eq ac_A5_two_captured 2 "$(printf '%s\n' "$out" | grep -c '^captured: ')"
+assert_eq ac_A5_inbox_two 2 "$(inbox_count)"
+after_noninbox="$(find "$capstore" -type f | LC_ALL=C sort | grep -v '/\.inbox/' | wc -l | tr -d ' ')"
+assert_eq ac_A5_nothing_outside_inbox "$before_files" "$after_noninbox"
+
+# ---- A18: captured file carries the stable source: auto_capture
+one_inbox="$(find "$capstore/.inbox" -name '*.md' | head -1)"
+assert_contains ac_A18_stable_source "$(cat "$one_inbox" 2>/dev/null)" "source: auto_capture"
+
+# ---- A9: duplicate content-hash → idempotent no-op (re-run same batch)
+out="$(bash "$AUTOCAP" --store "$capstore" --batch-dir "$b" 2>/dev/null)"
+assert_eq ac_A9_idempotent_inbox 2 "$(inbox_count)"
+
+# ---- A10: name/description already pending/indexed → skip/warn
+b2="$TMP/b_dup"; mk_batch "$b2"
+stage_candidate "$b2/x.md" auto_capture "Cap One" "a different body but same name as pending" project
+err="$(bash "$AUTOCAP" --store "$capstore" --batch-dir "$b2" 2>&1 >/dev/null)"
+assert_contains ac_A10_dup_warn "$err" "duplicate"
+assert_eq       ac_A10_no_new_write 2 "$(inbox_count)"
+
+# ---- A6: > LIMIT candidates → exactly LIMIT queued, visible overflow count
+capstore2="$(bootstrap_store "$TMP/cap2")"
+b="$TMP/b_over"; mk_batch "$b"
+for i in 1 2 3 4 5; do stage_candidate "$b/$i.md" auto_capture "Over $i" "overflow durable invariant number $i" project; done
+err="$(KNOWLEDGE_AUTO_CAPTURE_LIMIT=3 bash "$AUTOCAP" --store "$capstore2" --batch-dir "$b" 2>&1 >/dev/null)"
+n2="$(bash "$REMEMBER" --store "$capstore2" --list 2>/dev/null | grep -c . || true)"
+assert_eq       ac_A6_exactly_limit 3 "$n2"
+assert_contains ac_A6_visible_overflow "$err" "received 5 candidate"
+
+# ---- A7: pending inbox ≥ MAX_PENDING → skip whole pass, nothing deleted
+b="$TMP/b_full"; mk_batch "$b"
+stage_candidate "$b/n.md" auto_capture "Would Be New" "should not be captured while inbox full" project
+err="$(KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING=3 bash "$AUTOCAP" --store "$capstore2" --batch-dir "$b" 2>&1 >/dev/null)"; rc=$?
+assert_rc       ac_A7_rc 0 "$rc"
+assert_contains ac_A7_skip_msg "$err" "MAX_PENDING"
+assert_eq       ac_A7_nothing_added 3 "$(bash "$REMEMBER" --store "$capstore2" --list 2>/dev/null | grep -c . || true)"
+
+# ---- A8: candidate exceeds MAX_BYTES → rejected, fail closed
+capstore3="$(bootstrap_store "$TMP/cap3")"
+b="$TMP/b_big"; mk_batch "$b"
+big="$(head -c 5000 < /dev/zero | tr '\0' x)"
+stage_candidate "$b/big.md" auto_capture "Big Cap" "$big" project
+err="$(KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES=4096 bash "$AUTOCAP" --store "$capstore3" --batch-dir "$b" 2>&1 >/dev/null)"
+assert_contains ac_A8_reject_msg "$err" "oversized"
+assert_eq       ac_A8_no_write 0 "$(bash "$REMEMBER" --store "$capstore3" --list 2>/dev/null | grep -c . || true)"
+
+# ---- A11: named secret fixtures → rejected by the deterministic scanner
+for pat in "ghp_abcdefghijklmnopqrstuvwxyz012345" "sk-abcdefghijklmnop01234567" "AKIAABCDEFGHIJKLMNOP"; do
+  b="$TMP/b_sec"; mk_batch "$b"
+  stage_candidate "$b/s.md" auto_capture "Secret Cap" "leaks a secret $pat inline" project
+  err="$(bash "$AUTOCAP" --store "$capstore3" --batch-dir "$b" 2>&1 >/dev/null)"
+  assert_contains "ac_A11_secret_[$pat]" "$err" "secret pattern"
+done
+# PEM block
+b="$TMP/b_pem"; mk_batch "$b"
+{ echo "---"; echo "source: auto_capture"; echo "sensitivity: normal"; echo "proposed:"; echo "  schema_version: \"1\""; echo "  name: Pem Cap"; echo "  description: has a private key"; echo "  metadata:"; echo "    type: project"; echo "---"; echo "-----BEGIN RSA PRIVATE KEY-----"; echo "MIIfake"; echo "-----END RSA PRIVATE KEY-----"; } > "$b/pem.md"
+err="$(bash "$AUTOCAP" --store "$capstore3" --batch-dir "$b" 2>&1 >/dev/null)"
+assert_contains ac_A11_pem "$err" "secret pattern"
+assert_eq       ac_A11_no_write 0 "$(bash "$REMEMBER" --store "$capstore3" --list 2>/dev/null | grep -c . || true)"
+
+# ---- A19: malformed candidate → rejected with NO write
+b="$TMP/b_bad"; mk_batch "$b"
+printf -- '---\nsource: auto_capture\nnot a real envelope\n' > "$b/bad.md"
+err="$(bash "$AUTOCAP" --store "$capstore3" --batch-dir "$b" 2>&1 >/dev/null)"
+assert_contains ac_A19_malformed "$err" "malformed"
+assert_eq       ac_A19_no_write 0 "$(bash "$REMEMBER" --store "$capstore3" --list 2>/dev/null | grep -c . || true)"
+
+# ---- A12: reviewer role → fail closed (exit 6), no write
+capstore4="$(bootstrap_store "$TMP/cap4")"
+b="$TMP/b_rev"; mk_batch "$b"
+stage_candidate "$b/r.md" auto_capture "Rev Cap" "should be refused under reviewer role" project
+out="$(KNOWLEDGE_PANE_NAME=fleet-reviewer bash "$AUTOCAP" --store "$capstore4" --batch-dir "$b" 2>/dev/null)"; rc=$?
+assert_rc ac_A12_exit6 6 "$rc"
+assert_eq ac_A12_no_write 0 "$(bash "$REMEMBER" --store "$capstore4" --list 2>/dev/null | grep -c . || true)"
+
+# ---- A13: unsafe/absent store → fail SAFE (exit 0, no write)
+out="$(bash "$AUTOCAP" --store "$TMP/does-not-exist" --staged "$b/r.md" 2>/dev/null)"; rc=$?
+assert_rc    ac_A13_safe_rc 0 "$rc"
+assert_empty ac_A13_safe_stdout "$out"
+
+# ---- A14: only .inbox/<sha256>.md may change (before/after path+hash snapshot)
+capstore5="$(bootstrap_store "$TMP/cap5")"
+snap() { find "$1" -type f ! -path '*/.inbox/*' -exec shasum -a 256 {} \; 2>/dev/null | LC_ALL=C sort; }
+snap_before="$(snap "$capstore5")"
+b="$TMP/b_a14"; mk_batch "$b"
+stage_candidate "$b/c.md" auto_capture "A14 Cap" "verifies only inbox changes on capture" project
+bash "$AUTOCAP" --store "$capstore5" --batch-dir "$b" >/dev/null 2>&1
+snap_after="$(snap "$capstore5")"
+assert_eq ac_A14_noninbox_unchanged "$snap_before" "$snap_after"
+assert_eq ac_A14_inbox_got_one 1 "$(bash "$REMEMBER" --store "$capstore5" --list 2>/dev/null | grep -c . || true)"
+
+# ---- A1/A2/A3/A15: request-capture.sh Stop hook (gate + JSON shape + guard)
+reqjson() { printf '%s' "$1" | KNOWLEDGE_AUTO_CAPTURE="$2" bash "$REQCAP" --stop-json 2>/dev/null; }
+for g in "" 0 off false " off "; do
+  assert_empty "ac_A1_gateoff[$g]" "$(cd "$TMP/cap" && reqjson '{"stop_hook_active":false}' "$g")"
+done
+capblock="$(cd "$TMP/cap" && reqjson '{"stop_hook_active":false}' 1)"
+assert_contains ac_A2_block_decision "$capblock" '"decision": "block"'
+assert_not_contains ac_A15_no_hookspecific "$capblock" "hookSpecificOutput"
+assert_contains ac_A2_reason_capture "$capblock" "auto-capture"
+assert_empty ac_A3_reentry_guard "$(cd "$TMP/cap" && reqjson '{"stop_hook_active":true}' 1)"
+
+# ---- A17: after capture, the nudge sees pending inbox items (combined flow)
+nud="$(cd "$TMP/cap" && KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
+assert_contains ac_A17_nudge_sees_pending "$nud" "pending memory candidate"
+
+# ---- A20: hooks.json Stop ordering — capture BEFORE nudge
+hooks_json="$HERE/../hooks/hooks.json"
+ordering="$(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+cmds=[h["command"] for h in d["hooks"]["Stop"][0]["hooks"]]
+ri=next(i for i,c in enumerate(cmds) if "request-capture" in c)
+ni=next(i for i,c in enumerate(cmds) if "nudge-consolidate" in c)
+print("ok" if ri<ni else "bad")' "$hooks_json" 2>/dev/null)"
+assert_eq ac_A20_capture_before_nudge ok "$ordering"
+
 # ---------------------------------------------------------------------------
 # syntax + zero-egress on the shipped hook scripts
 # ---------------------------------------------------------------------------
-for s in "$INJECT" "$NUDGE" "$LINT"; do
+for s in "$INJECT" "$NUDGE" "$LINT" "$AUTOCAP" "$REQCAP"; do
   if bash -n "$s" 2>/dev/null; then pass "bash_n_$(basename "$s")"; else fail "bash_n_$(basename "$s")" "syntax error"; fi
 done
-if grep -Eq 'curl|wget|http\.client|urllib|requests\.|socket\.connect' "$INJECT" "$NUDGE"; then
+# ---- A16: zero network egress across the new capture scripts too
+if grep -Eq 'curl|wget|http\.client|urllib|requests\.|socket\.connect' "$INJECT" "$NUDGE" "$AUTOCAP" "$REQCAP"; then
   fail egress_clean_hooks "network client invocation found"
 else
   pass egress_clean_hooks
