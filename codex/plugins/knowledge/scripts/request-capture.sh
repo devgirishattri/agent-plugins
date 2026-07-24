@@ -71,7 +71,30 @@ knowledge auto-capture: before ending, do ONE bounded pass to capture durable, f
 
 Capture ONLY (high-confidence): a user preference or standing instruction; a repo/project invariant, architecture decision, workflow rule, or environment fact; a resolved root cause or reusable fix; feedback that changes future behavior; an external tracker/document pointer. SKIP transcripts/summaries, transient todos, speculation, secrets, and anything already in memory unless this session materially changed it. It is completely fine to capture NOTHING.
 
-To capture: write each item as a staged candidate file (the \$knowledge:remember envelope: frontmatter with source: auto_capture, sensitivity, proposed.schema_version "1", proposed.name, proposed.description, proposed.metadata.type, optional tags; body with **Why:** and **How to apply:**) into a fresh temp directory, then run ONCE:
+To capture: write each item as its own staged candidate file into a fresh temp directory, using EXACTLY this envelope (copy the structure; the enum values are strict and a wrong value makes the whole candidate rejected):
+---
+source: auto_capture
+sensitivity: normal
+proposed:
+  schema_version: "1"
+  name: Short display name (free text, not a slug)
+  description: One-line description of the fact
+  metadata:
+    type: project
+  tags:
+    - optional-tag
+---
+**Why:** why this matters for future work.
+
+**How to apply:** the concrete action to take.
+
+STRICT rules for the fields (a wrong value = rejected):
+- sensitivity: MUST be exactly "normal" or "sensitive" (nothing else).
+- metadata.type: MUST be exactly one of "user", "feedback", "project", "reference" (e.g. use "project" for a repo/project invariant; NOT "project_invariant" or any other value).
+- tags: OPTIONAL, and it is a sibling of metadata under proposed (proposed.tags) — do NOT nest tags under metadata.
+- name is free display text; description is a single line; the body needs both **Why:** and **How to apply:**.
+
+Then run ONCE:
     bash "$WRAPPER" --store "$store" --batch-dir <that-dir>
 The wrapper enforces the limits and writes only to the capture inbox; it does NOT persist. Do not call memory-remember.sh or any writer directly. After the wrapper runs (or if there is nothing to capture), stop.
 EOF

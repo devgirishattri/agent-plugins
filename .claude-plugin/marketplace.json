@@ -48,7 +48,7 @@
     {
       "name": "knowledge",
       "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory module with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Girish Attri"
       },

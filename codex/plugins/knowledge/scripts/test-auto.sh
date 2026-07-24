@@ -476,6 +476,15 @@ ni=next(i for i,c in enumerate(cmds) if "nudge-consolidate" in c)
 print("ok" if ri<ni else "bad")' "$hooks_json" 2>/dev/null)"
 assert_eq ac_A20_capture_before_nudge ok "$ordering"
 
+# ---- A21: the capture-request reason must spell out the STRICT envelope so the
+# model reliably produces an ACCEPTED candidate (regression for the live-fire
+# finding: a vague reason let the model emit wrong enums -> wrapper rejected all).
+reason="$(cd "$TMP/cap" && printf '{"stop_hook_active":false}' | KNOWLEDGE_AUTO_CAPTURE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$REQCAP" --stop-json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["reason"])' 2>/dev/null)"
+assert_contains ac_A21_reason_skeleton    "$reason" "source: auto_capture"
+assert_contains ac_A21_reason_sensitivity "$reason" "normal"
+assert_contains ac_A21_reason_type_enums  "$reason" "reference"
+assert_contains ac_A21_reason_tags_sibling "$reason" "sibling of metadata"
+
 # ---------------------------------------------------------------------------
 # syntax + zero-egress on the shipped hook scripts
 # ---------------------------------------------------------------------------
