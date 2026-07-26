@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: "Understand the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile). Use before invoking any session-workspace skill so you pick the right one and know the safety gates."
+description: "Understand the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install). Use before invoking any session-workspace skill so you pick the right one and know the safety gates."
 ---
 
 # Session Workspace
@@ -26,6 +26,7 @@ argv, pins non-secret coordination env, and runs read-only diagnostics.
 | Tear the workspace down | `$session-workspace:workspace-stop` | Destructive, needs `--confirmed` |
 | Stop then start | `$session-workspace:workspace-restart` | Destructive; stop confirmation is passed internally |
 | Repair drifted tmux state | `$session-workspace:workspace-reconcile` | Only sanctioned adoption path |
+| Install the `workspace` command | `$session-workspace:workspace-install` | Puts the dispatcher on PATH; no config, no tmux, idempotent |
 
 ## Configuration Model
 

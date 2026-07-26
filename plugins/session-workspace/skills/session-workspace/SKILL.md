@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile). Use this before invoking any /workspace-* command so you understand the config model, the real flags, and the safety gates.
+description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install). Use this before invoking any /workspace-* command so you understand the config model, the real flags, and the safety gates.
 ---
 
 # session-workspace: config-driven tmux workspace engine
@@ -27,6 +27,7 @@ is not a scaffold.
 | `/workspace-stop` | Tear down sessions/panes (destructive, needs `--confirmed`) |
 | `/workspace-restart` | Stop then start (destructive, confirmation implicit) |
 | `/workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
+| `/workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
 
 ## Configuration model (enforced)
 

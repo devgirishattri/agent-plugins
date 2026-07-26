@@ -41,6 +41,7 @@ check.
 | `restart` | `workspace-restart [TARGET\|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` | Yes | `stop --confirmed` followed by `start`, for the same target. Unlike the old launchers, `restart` accepts `--no-save`. |
 | `reconcile` | `workspace-reconcile [TARGET\|all] [--config PATH] [--apply] [--adopt --confirmed]` | Only with `--apply` | Dry-run by default; `--apply` repairs missing/misnamed managed resources without respawning healthy panes. `--adopt --confirmed` is the *only* path to claiming an existing unmanaged pane. |
 | `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. |
+| `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical target reports `already current` and writes nothing, so it doubles as the refresh for that copy. Backs up any existing target to `<target>.bak`, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 
 `TARGET` is a `sessions[].id` from the config, or `all` (the default).
 `--json` output on `plan`/`status`/`doctor` is produced from the same
