@@ -27,10 +27,11 @@ all — see "Bootstrap shim" below.
 ## Lifecycle verbs
 
 All verbs are exposed as both a Claude command (`/workspace-doctor`, etc.)
-and, in the Codex tree, a matching skill. They also work directly through
-the dispatcher: `workspace.sh <verb> [args...]`, or `workspace.sh --contract`
-to print the CLI contract string used by the bootstrap shim's compatibility
-check.
+and, in the Codex tree, a matching skill. From a shell they are reached as
+`workspace <verb> [args...]` once the `install` verb has put the dispatcher on
+your `PATH` (or `./workspace.sh <verb>` in a project carrying the older
+per-project shim — see "The two entry points"). `workspace --contract` prints
+the CLI contract string both entry points use for their compatibility check.
 
 | Verb | Signature | Mutates tmux? | Purpose |
 |---|---|---|---|
@@ -127,6 +128,9 @@ that pane's launch outright; `"warn"` starts the pane without it.
 
 ## The bootstrap shim
 
+The per-project alternative to the machine-wide dispatcher (see "The two entry
+points" above for which to choose — usually the dispatcher).
+
 `templates/workspace.sh` is copied verbatim into a project as
 `<project-root>/workspace.sh`. It contains zero project-specific logic —
 all real behavior lives in the plugin's own `scripts/workspace.sh`. On
@@ -151,12 +155,16 @@ every invocation it:
 
 ## Adopting it in a new project
 
+**Once per machine** (not per project):
+
 1. Install the plugin (Claude: `claude plugin install session-workspace@girishattri-plugins`;
    Codex: `codex plugin add session-workspace@girishattri-plugins`).
-2. Copy `templates/workspace.sh` into the project root as `workspace.sh`
-   (or `workspace.sh.new` first, if a hand-maintained launcher already
-   occupies that path — see "known limitations" for why you should keep a
-   backup of anything untracked before overwriting it).
+2. Run `workspace-install` (the `install` verb) to put the machine-wide
+   dispatcher on your `PATH` as `workspace`. From then on `workspace <verb>`
+   works inside **any** configured project — see "The two entry points" below.
+
+**Then, per project:**
+
 3. Create `.agent-workspace/workspace.json` (`schema_version: 1`) describing
    the project's runtimes, roles, stores, sessions/panes, and behavior — see
    `scripts/workspace.schema.json` for the documented shape, or copy one of
@@ -164,11 +172,41 @@ every invocation it:
    "Configuration reference" section below for the full field list.
 4. **Recreate any coordination directories the config expects by hand.**
    The engine does not create them for you — see "known limitations".
-5. Run `./workspace.sh doctor` and fix everything it reports as `ERROR`
+5. Run `workspace doctor` and fix everything it reports as `ERROR`
    (`WARN` is advisory).
-6. Run `./workspace.sh plan` and check it matches the topology you intended
+6. Run `workspace plan` and check it matches the topology you intended
    — this step mutates nothing, so it's safe to iterate on.
-7. Run `./workspace.sh start` to bring the workspace up.
+7. Run `workspace start` to bring the workspace up.
+
+Nothing is copied into the project: adoption is the config file plus whatever
+coordination directories it expects. There is no per-project script to keep in
+sync, and no file to go stale when the engine changes.
+
+## The two entry points
+
+The engine can be reached two ways. Both resolve the plugin identically —
+newest version first, each candidate contract-checked with
+`scripts/workspace.sh --contract` against `session-workspace-cli 1`, no version
+string hardcoded anywhere — and neither ever pins a marketplace name.
+
+| | `templates/workspace-dispatcher.sh` | `templates/workspace.sh` |
+|---|---|---|
+| Installed as | `~/.local/bin/workspace`, once per machine | `<project>/workspace.sh`, once per project |
+| Installed by | the `install` verb | copying it yourself |
+| Serves | every configured project | the project it sits in |
+| Finds the config by | the engine's upward walk from `$PWD` | pinning `SESSION_WORKSPACE_CONFIG` to its own directory |
+| Refresh when the template changes | `install` again (idempotent; `upgrade.sh` can call it unconditionally) | re-copy by hand, per project |
+
+**Prefer the dispatcher.** The shim exists for the case where a project must be
+pinned to its own config regardless of `$PWD`, or where you cannot rely on
+`PATH` — a CI job invoking `./workspace.sh` by relative path, for instance. It
+is not deprecated; it is simply the narrower of the two.
+
+Both are optional. The plugin's own commands and skills (`/workspace-*` on
+Claude, `$session-workspace:workspace-*` on Codex) resolve the config the same
+way, so a project with neither entry point installed still works from inside an
+agent session. What the dispatcher adds is a workspace launchable by a human, a
+shell script, or CI with no provider CLI in the loop.
 
 ## Known limitations
 
