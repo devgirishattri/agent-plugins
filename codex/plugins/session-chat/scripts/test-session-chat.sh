@@ -10,7 +10,10 @@ OTHER_SESSION="${SESSION}-other"
 TEST_HOME="$(mktemp -d "${TMPDIR:-/tmp}/session-chat-test.XXXXXX")"
 PROMPT_FILE="$TEST_HOME/prompt.md"
 ERR_FILE="$TEST_HOME/error.log"
-unset SESSION_CHAT_INCOMING_MODE SESSION_CHAT_DISPATCH_INLINE_MAX SESSION_CHAT_TARGET_MESSAGES_DIR
+# Workspace-launched panes may export these. The smoke harness owns its own
+# mailbox and pane identities, so inherited overrides would make it test the
+# caller's pane or mailbox instead of the throwaway tmux fixture.
+unset SESSION_CHAT_INCOMING_MODE SESSION_CHAT_DISPATCH_INLINE_MAX SESSION_CHAT_TARGET_MESSAGES_DIR SESSION_CHAT_PANE_NAME
 
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true

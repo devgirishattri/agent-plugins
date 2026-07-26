@@ -52,7 +52,7 @@ run_in_pane() {
 
 # Capture-pane helper
 cap() {
-  tmux -L "$SOCKET" capture-pane -t "$1" -p -S -200 2>/dev/null
+  tmux -L "$SOCKET" capture-pane -J -t "$1" -p -S -200 2>/dev/null
 }
 
 # Poll capture-pane until NEEDLE renders in the pane, or TIMEOUT_MS elapses.
@@ -75,10 +75,13 @@ cap_wait() {
 
 # --- Setup ---
 echo "=== session-chat tests (socket: $SOCKET) ==="
-tmux -L "$SOCKET" new-session -d -s "$SESSION" -x 200 -y 50
-tmux -L "$SOCKET" split-window -t "$SESSION" -h
-tmux -L "$SOCKET" split-window -t "$SESSION" -h
-tmux -L "$SOCKET" new-session -d -s "$OTHER_SESSION" -x 120 -y 20
+# Baseline live-send tests assert rendered pane text after Enter. Use neutral
+# cat sinks so the message is echoed as stable output instead of being executed
+# and redrawn by an interactive shell on slow/headless runners.
+tmux -L "$SOCKET" new-session -d -s "$SESSION" -x 200 -y 50 "cat"
+tmux -L "$SOCKET" split-window -t "$SESSION" -h "cat"
+tmux -L "$SOCKET" split-window -t "$SESSION" -h "cat"
+tmux -L "$SOCKET" new-session -d -s "$OTHER_SESSION" -x 120 -y 20 "cat"
 
 # Pane ids
 PANES=$(tmux -L "$SOCKET" list-panes -t "$SESSION" -F '#{pane_id}')
