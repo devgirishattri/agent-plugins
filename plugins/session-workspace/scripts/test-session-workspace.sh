@@ -150,6 +150,16 @@ fail() { FAIL=$((FAIL + 1)); FAILURES+=("$1: $2"); echo "  FAIL  $1 — $2"; }
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/session-workspace-test.XXXXXX")"
 trap 'rm -rf "$TMPROOT"' EXIT
 
+# Guard against the whole class of bug fixed on 2026-07-26: a mutating verb
+# invoked WITHOUT --config falls back to walking up from $PWD, so running this
+# suite from inside a configured project used to drive the engine against that
+# project's real config on the developer's real tmux server. Neutralising
+# discovery here means such a call resolves nothing and errors out loudly,
+# instead of silently finding — and destroying — a live workspace. Any test
+# that wants a config must pass --config explicitly (or set the variable
+# itself for the one discovery test that exercises the walk).
+export SESSION_WORKSPACE_CONFIG="$TMPROOT/no-such-config.json"
+
 echo "== bash -n on every script =="
 for f in "$HERE"/*.sh; do
   if bash -n "$f" 2>"$HERE"/.syntax-err.tmp; then
@@ -197,8 +207,30 @@ check_not_stub "workspace.sh doctor" bash "$HERE/workspace.sh" doctor --config "
 check_not_stub "workspace-doctor.sh" bash "$HERE/workspace-doctor.sh" --config "$HERE/fixtures/valid/project-d.json"
 
 echo "== Phase D verbs are wired (no longer scaffold stubs) =="
+# SAFETY (regression fixed 2026-07-26 — read before editing this loop):
+# these are the real MUTATING verbs. This check previously ran them bare:
+# no --config, no isolated tmux socket, no private state dir. With no
+# --config the engine falls back to walking UP from $PWD for
+# .agent-workspace/workspace.json — so running the suite from anywhere
+# inside a configured project resolved that project's REAL config and
+# operated on the developer's REAL tmux server. `restart` implies stop
+# confirmation, so it killed and recreated the live session. Reproduced
+# twice on a workstation; invisible in CI only because no session of that
+# name exists there.
+#
+# The assertion is trivial (the verb must not print a scaffold message), so
+# it gets a fixture config and a fully private environment. Every verb below
+# is expected to FAIL against that empty private server — failure is fine and
+# irrelevant here; only the absence of the scaffold message is asserted.
+SW_WIRED_DIR="$TMPROOT/verb-wiring"
+mkdir -p "$SW_WIRED_DIR/tmuxtmp" "$SW_WIRED_DIR/state"
+chmod 700 "$SW_WIRED_DIR/tmuxtmp"
 for verb in start status stop reconcile restart; do
-  OUT="$(bash "$HERE/workspace.sh" "$verb" 2>&1)"
+  OUT="$(env -u TMUX -u TMUX_PANE -u SESSION_WORKSPACE_CONFIG \
+    TMUX_TMPDIR="$SW_WIRED_DIR/tmuxtmp" \
+    XDG_STATE_HOME="$SW_WIRED_DIR/state" \
+    SESSION_WORKSPACE_STOP_GRACE_SECONDS=0 \
+    bash "$HERE/workspace.sh" "$verb" --config "$HERE/fixtures/valid/project-d.json" 2>&1)"
   if printf '%s' "$OUT" | grep -q "is not implemented"; then
     fail "workspace.sh $verb — implemented" "still reports an unimplemented-verb message: $OUT"
   else
@@ -392,13 +424,13 @@ DISC_DIR="$TMPROOT/discovery/project-e/nested/deep"
 mkdir -p "$DISC_DIR"
 mkdir -p "$TMPROOT/discovery/project-e/.agent-workspace"
 cp "$HERE/fixtures/valid/project-d.json" "$TMPROOT/discovery/project-e/.agent-workspace/workspace.json"
-(cd "$DISC_DIR" && bash "$HERE/workspace-plan.sh" --json >/dev/null 2>"$TMPROOT/discovery-out.log")
+(cd "$DISC_DIR" && env -u SESSION_WORKSPACE_CONFIG bash "$HERE/workspace-plan.sh" --json >/dev/null 2>"$TMPROOT/discovery-out.log")
 if [ $? -eq 0 ]; then
   pass "config discovery walks upward from a nested cwd"
 else
   fail "config discovery walks upward from a nested cwd" "$(cat "$TMPROOT/discovery-out.log")"
 fi
-(cd "$TMPROOT" && bash "$HERE/workspace-plan.sh" >"$TMPROOT/no-config-out.log" 2>&1)
+(cd "$TMPROOT" && env -u SESSION_WORKSPACE_CONFIG bash "$HERE/workspace-plan.sh" >"$TMPROOT/no-config-out.log" 2>&1)
 NO_CONFIG_STATUS=$?
 if [ "$NO_CONFIG_STATUS" -ne 0 ] && grep -q "no session-workspace config found" "$TMPROOT/no-config-out.log"; then
   pass "config discovery fails with init guidance when nothing is found"
