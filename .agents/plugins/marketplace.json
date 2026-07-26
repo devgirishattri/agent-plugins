@@ -45,7 +45,7 @@
     },
     {
       "name": "knowledge",
-      "version": "0.3.2",
+      "version": "0.3.4",
       "source": {
         "source": "local",
         "path": "./codex/plugins/knowledge"
@@ -62,6 +62,19 @@
       "source": {
         "source": "local",
         "path": "./codex/plugins/chronos"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "session-workspace",
+      "version": "0.1.0",
+      "source": {
+        "source": "local",
+        "path": "./codex/plugins/session-workspace"
       },
       "policy": {
         "installation": "AVAILABLE",

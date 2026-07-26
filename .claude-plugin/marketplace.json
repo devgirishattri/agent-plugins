@@ -48,7 +48,7 @@
     {
       "name": "knowledge",
       "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory module with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor.",
-      "version": "0.3.2",
+      "version": "0.3.4",
       "author": {
         "name": "Girish Attri"
       },
@@ -85,7 +85,7 @@
     },
     {
       "name": "session-scheduler",
-      "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
+      "description": "Thin file-backed task ledger for orchestrator \u2192 executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
       "version": "0.5.9",
       "author": {
         "name": "Girish Attri"
@@ -99,6 +99,25 @@
         "ledger",
         "multi-agent",
         "tmux"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "session-workspace",
+      "description": "Config-driven tmux workspace engine: one shared engine for session/window/pane lifecycle, replacing hand-maintained per-project workspace.sh launchers with a versioned .agent-workspace/workspace.json config.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Girish Attri"
+      },
+      "source": "./plugins/session-workspace",
+      "category": "productivity",
+      "keywords": [
+        "tmux",
+        "workspace",
+        "session",
+        "orchestration",
+        "config",
+        "multi-agent"
       ],
       "license": "MIT"
     }

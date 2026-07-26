@@ -5,8 +5,11 @@ firebase-debug.log
 tmp/
 upgrade.sh
 
-# Local dev-workspace launcher (machine-specific; not part of the marketplace)
+# Local dev-workspace launcher (machine-specific; not part of the marketplace).
+# The .bak is the pre-migration launcher kept as the rollback copy — it can hold
+# uncommitted local edits, so it must never be published.
 workspace.sh
+workspace.sh.bak
 
 # Local agent instruction files (machine/user-specific)
 CLAUDE.md

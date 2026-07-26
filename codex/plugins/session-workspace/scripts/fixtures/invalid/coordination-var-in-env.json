@@ -1,0 +1,4 @@
+{"schema_version":1,"project":{"id":"p","root":"."},"runtimes":{"claude":{"program":"claude"}},
+"roles":{"orchestrator":{"runtime":"claude","env_group":"dev"}},"stores":{"pin":["messages"]},
+"env":{"groups":{"dev":{"values":{"SESSION_CHAT_TARGET_MESSAGES_DIR":"/tmp/x"}}}},
+"sessions":[{"id":"s","name":"s","panes":[{"name":"p1","role":"orchestrator","cwd":"."}]}]}

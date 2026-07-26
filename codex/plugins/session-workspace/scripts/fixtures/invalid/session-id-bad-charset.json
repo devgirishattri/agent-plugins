@@ -1,0 +1,3 @@
+{"schema_version":1,"project":{"id":"p","root":"."},"runtimes":{"claude":{"program":"claude"}},
+"roles":{"orchestrator":{"runtime":"claude","env_group":"dev"}},"stores":{"pin":[]},
+"sessions":[{"id":"s/../escape","name":"s","panes":[{"name":"p1","role":"orchestrator","cwd":"."}]}]}

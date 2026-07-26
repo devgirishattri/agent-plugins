@@ -8,6 +8,23 @@
 # Usage: bash test-retrieval.sh [-v]
 set -uo pipefail
 
+# --- test isolation (do not remove) ---------------------------------------
+# The workspace launcher exports KNOWLEDGE_MEMORY_HOME into every agent pane.
+# Inherited here it outranks the store-discovery these suites exercise, which
+# (a) made discovery/init cases assert against the real repo store instead of
+# their temp fixtures, and (b) let a --store-less write in a discovery case
+# stage a synthetic candidate into the REAL .inbox. Tests must never resolve
+# or write to a live store, so drop it before anything else runs.
+unset KNOWLEDGE_MEMORY_HOME
+unset KNOWLEDGE_AUTO_RECALL KNOWLEDGE_AUTO_RECALL_LIMIT KNOWLEDGE_AUTO_RECALL_TERMS
+unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_CONSOLIDATE_NUDGE
+unset KNOWLEDGE_AUTO_CAPTURE KNOWLEDGE_AUTO_CAPTURE_LIMIT
+unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
+# KNOWLEDGE_PANE_NAME is deliberately NOT unset: it is the writer's role-detection
+# identity, and clearing it pushes role checks onto a tmux probe that fails closed
+# for an unnamed pane. Suites that test role behaviour set it explicitly.
+# ---------------------------------------------------------------------------
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SEARCH="$HERE/memory-search.sh"
 BACKLINKS="$HERE/memory-backlinks.sh"

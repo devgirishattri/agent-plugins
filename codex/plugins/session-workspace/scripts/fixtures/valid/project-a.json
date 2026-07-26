@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "project": {
+    "id": "project-a",
+    "display_name": "Project A",
+    "root": "."
+  },
+  "runtimes": {
+    "claude": {
+      "program": "claude",
+      "args": []
+    },
+    "codex": {
+      "program": "codex",
+      "args": []
+    }
+  },
+  "roles": {
+    "orchestrator": {
+      "runtime": "claude",
+      "agent": {
+        "model": "inherit",
+        "effort": "inherit",
+        "profile": "inherit"
+      },
+      "grants": [],
+      "env_group": "dev"
+    },
+    "executor": {
+      "runtime": "codex",
+      "grants": [
+        "messages",
+        "scheduler",
+        "contexts",
+        "memory"
+      ],
+      "env_group": "dev"
+    },
+    "reviewer": {
+      "runtime": "codex",
+      "grants": [
+        "messages",
+        "scheduler",
+        "contexts"
+      ],
+      "env_group": "dev"
+    },
+    "service": {
+      "runtime": "shell",
+      "env_group": "none"
+    }
+  },
+  "stores": {
+    "base": ".tmp",
+    "pin": [
+      "messages",
+      "scheduler",
+      "contexts"
+    ],
+    "overrides": {},
+    "memory": {
+      "mode": "per-pane",
+      "root": ".agents/memory",
+      "shard": {
+        "strip_prefix": "${PROJECT_ID}-",
+        "strip_suffixes": [
+          "-executor",
+          "-reviewer"
+        ],
+        "fallback": "master"
+      }
+    }
+  },
+  "env": {
+    "groups": {
+      "dev": {
+        "values": {
+          "AGENT_PLUGINS_TIME_ZONE": "Asia/Kolkata"
+        },
+        "pin_to_session": true
+      },
+      "none": {
+        "values": {},
+        "pin_to_session": false
+      }
+    },
+    "pane_name_aliases": [
+      "PROJECT_A_CODEX_PANE_NAME"
+    ]
+  },
+  "sessions": [
+    {
+      "id": "development",
+      "name": "${PROJECT_ID}-development",
+      "window_index": 0,
+      "layout": {
+        "kind": "standard",
+        "name": "tiled"
+      },
+      "retain_layout": true,
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-master",
+          "role": "orchestrator",
+          "cwd": "."
+        },
+        {
+          "name": "${PROJECT_ID}-web-executor",
+          "role": "executor",
+          "cwd": "component-a",
+          "optional": true
+        },
+        {
+          "name": "${PROJECT_ID}-web-reviewer",
+          "role": "reviewer",
+          "cwd": "component-a",
+          "optional": true
+        },
+        {
+          "name": "${PROJECT_ID}-api-executor",
+          "role": "executor",
+          "cwd": "component-b",
+          "optional": true
+        },
+        {
+          "name": "${PROJECT_ID}-api-reviewer",
+          "role": "reviewer",
+          "cwd": "component-b",
+          "optional": true
+        },
+        {
+          "name": "${PROJECT_ID}-worker-executor",
+          "role": "executor",
+          "cwd": "component-c",
+          "optional": true
+        },
+        {
+          "name": "${PROJECT_ID}-worker-reviewer",
+          "role": "reviewer",
+          "cwd": "component-c",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "id": "services",
+      "name": "${PROJECT_ID}-services",
+      "window_index": 0,
+      "retain_layout": true,
+      "layout": {
+        "kind": "split_tree",
+        "only_when_fresh": true,
+        "mask_after_split_hook": true,
+        "nodes": [
+          {
+            "id": "top"
+          },
+          {
+            "id": "bl",
+            "from": "top",
+            "dir": "v",
+            "percent": 66
+          },
+          {
+            "id": "br",
+            "from": "bl",
+            "dir": "h",
+            "percent": 50
+          },
+          {
+            "id": "brb",
+            "from": "br",
+            "dir": "v",
+            "percent": 50
+          }
+        ],
+        "pane_order": [
+          "top",
+          "bl",
+          "br",
+          "brb"
+        ]
+      },
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-shell",
+          "role": "service",
+          "cwd": "."
+        },
+        {
+          "name": "${PROJECT_ID}-web-service",
+          "role": "service",
+          "cwd": "component-a",
+          "command": [
+            "npm",
+            "run",
+            "dev"
+          ],
+          "port": 8000
+        },
+        {
+          "name": "${PROJECT_ID}-api-service",
+          "role": "service",
+          "cwd": "component-b",
+          "command": [
+            "npm",
+            "run",
+            "dev"
+          ],
+          "port": 8001
+        },
+        {
+          "name": "${PROJECT_ID}-worker-service",
+          "role": "service",
+          "cwd": "component-c",
+          "command": [
+            "npm",
+            "run",
+            "worker"
+          ],
+          "port": 8002
+        }
+      ]
+    }
+  ],
+  "behavior": {
+    "default_start_target": "all",
+    "attach": "if_terminal",
+    "stop_scope": "selected",
+    "save_before_stop": true,
+    "session_chat_helper": {
+      "resolve": "always",
+      "on_missing": "fail"
+    }
+  }
+}

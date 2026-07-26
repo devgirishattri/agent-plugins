@@ -39,6 +39,23 @@
 # --suite is given: 0 iff ALL ELEVEN are green); 1 if any is red; 2 usage error.
 set -uo pipefail
 
+# --- test isolation (do not remove) ---------------------------------------
+# The workspace launcher exports KNOWLEDGE_MEMORY_HOME into every agent pane.
+# Inherited here it outranks the store-discovery these suites exercise, which
+# (a) made discovery/init cases assert against the real repo store instead of
+# their temp fixtures, and (b) let a --store-less write in a discovery case
+# stage a synthetic candidate into the REAL .inbox. Tests must never resolve
+# or write to a live store, so drop it before anything else runs.
+unset KNOWLEDGE_MEMORY_HOME
+unset KNOWLEDGE_AUTO_RECALL KNOWLEDGE_AUTO_RECALL_LIMIT KNOWLEDGE_AUTO_RECALL_TERMS
+unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_CONSOLIDATE_NUDGE
+unset KNOWLEDGE_AUTO_CAPTURE KNOWLEDGE_AUTO_CAPTURE_LIMIT
+unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
+# KNOWLEDGE_PANE_NAME is deliberately NOT unset: it is the writer's role-detection
+# identity, and clearing it pushes role checks onto a tmux probe that fails closed
+# for an unnamed pane. Suites that test role behaviour set it explicitly.
+# ---------------------------------------------------------------------------
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 KNOWLEDGE_DIR="$(cd "$HERE/.." && pwd)"
 
@@ -212,23 +229,44 @@ check_privacy() {
     return 0
   fi
 
-  local hits="" f rel n=0 match_out
-  while IFS= read -r f; do
-    rel="${f#"$KNOWLEDGE_DIR"/}"
-    n=$((n + 1))
-    # -I skips files grep detects as binary (none expected here, but this
-    # keeps the sweep from erroring on one); -i for case variants (the
-    # identifiers must never appear regardless of capitalization).
-    match_out="$(grep -IinE "$pattern" "$f" 2>/dev/null || true)"
-    if [ -n "$match_out" ]; then
-      hits="$hits
+  # Scope: everything that would be PUBLISHED, not just this plugin. A real
+  # identifier anywhere in the repo is a leak, and scanning only
+  # $KNOWLEDGE_DIR silently missed one in a sibling plugin's fixture
+  # (2026-07-25). Using git's own view of tracked + untracked-not-ignored
+  # files is self-maintaining: it automatically excludes the gitignored
+  # private stores that legitimately hold real names (.agents/memory,
+  # docs/, .privacy-denylist itself) without hard-coding an exclude list.
+  # Outside a git repo, fall back to the old plugin-local sweep.
+  local hits="" f rel n=0 match_out scan_root
+  if scan_root="$(git -C "$KNOWLEDGE_DIR" rev-parse --show-toplevel 2>/dev/null)"; then
+    while IFS= read -r f; do
+      [ -f "$scan_root/$f" ] || continue
+      rel="$f"
+      n=$((n + 1))
+      # -I skips files grep detects as binary; -i for case variants (the
+      # identifiers must never appear regardless of capitalization).
+      match_out="$(grep -IinE "$pattern" "$scan_root/$f" 2>/dev/null || true)"
+      if [ -n "$match_out" ]; then
+        hits="$hits
     $rel:
 $(printf '%s\n' "$match_out" | sed 's/^/      /')"
-    fi
-  done < <(find "$KNOWLEDGE_DIR" -type f)
+      fi
+    done < <(git -C "$scan_root" ls-files; git -C "$scan_root" ls-files --others --exclude-standard)
+  else
+    while IFS= read -r f; do
+      rel="${f#"$KNOWLEDGE_DIR"/}"
+      n=$((n + 1))
+      match_out="$(grep -IinE "$pattern" "$f" 2>/dev/null || true)"
+      if [ -n "$match_out" ]; then
+        hits="$hits
+    $rel:
+$(printf '%s\n' "$match_out" | sed 's/^/      /')"
+      fi
+    done < <(find "$KNOWLEDGE_DIR" -type f)
+  fi
 
   if [ -z "$hits" ]; then
-    printf '  PASS  %-16s no real-project identifiers found across %d files\n' "privacy" "$n"
+    printf '  PASS  %-16s no real-project identifiers found across %d published files\n' "privacy" "$n"
     return 0
   fi
   printf '  FAIL  %-16s real-project identifier(s) found (investigate -- fixtures must be synthetic, ProjectA/ProjectB style):%s\n' "privacy" "$hits"
