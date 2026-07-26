@@ -438,12 +438,45 @@ _sw_ensure_window() {
 # _sw_split_extra_pane WINDOW_TARGET — splits the last pane in the window to
 # add one more (a plain, unnamed 50/50 split — used only to fill a gap for a
 # missing managed pane; the new pane is then claimed like any fresh split).
-# Prints the new pane id.
+#
+# Deliberately NOT "prints the pane id on stdout" (i.e. never call this as
+# `x="$(_sw_split_extra_pane ...)"`): a command substitution forks a
+# subshell, and any variable this function sets is then thrown away the
+# instant the subshell exits — which is exactly how an earlier version of
+# this fix silently lost the failure reason. Instead: call it as a plain
+# statement, check its exit status, then read SW_LAST_SPLIT_PANE (success) or
+# SW_LAST_SPLIT_ERROR (failure, tmux's own stderr — e.g. "no space for new
+# pane") from the CURRENT shell. Never redirect tmux's stderr to /dev/null
+# here — that reason is the single most useful diagnostic a caller has.
+SW_LAST_SPLIT_PANE=""
+SW_LAST_SPLIT_ERROR=""
 _sw_split_extra_pane() {
   local window_target="$1" last_pane
+  SW_LAST_SPLIT_PANE=""
+  SW_LAST_SPLIT_ERROR=""
   last_pane="$(tmux list-panes -t "$window_target" -F '#{pane_id}' 2>/dev/null | tail -n1)"
-  [ -n "$last_pane" ] || return 1
-  tmux split-window -t "$last_pane" -h -l 50% -P -F '#{pane_id}' 2>/dev/null
+  if [ -z "$last_pane" ]; then
+    SW_LAST_SPLIT_ERROR="window \"$window_target\" has no panes to split from"
+    return 1
+  fi
+  local new_pane err_file status
+  err_file="$(mktemp 2>/dev/null)" || err_file=""
+  if [ -n "$err_file" ]; then
+    new_pane="$(tmux split-window -t "$last_pane" -h -l 50% -P -F '#{pane_id}' 2>"$err_file")"
+    status=$?
+    SW_LAST_SPLIT_ERROR="$(tr -d '\n' < "$err_file" 2>/dev/null)"
+    rm -f "$err_file"
+  else
+    # mktemp unavailable: fall back to an uncaptured stderr rather than
+    # losing the split attempt entirely; status/pane id are still correct.
+    new_pane="$(tmux split-window -t "$last_pane" -h -l 50% -P -F '#{pane_id}')"
+    status=$?
+  fi
+  if [ "$status" -ne 0 ] || [ -z "$new_pane" ]; then
+    [ -n "$SW_LAST_SPLIT_ERROR" ] || SW_LAST_SPLIT_ERROR="tmux split-window failed (no pane id returned)"
+    return 1
+  fi
+  SW_LAST_SPLIT_PANE="$new_pane"
 }
 
 # _sw_process_session SESSION_JSON — the per-session slot-filling loop.
@@ -551,6 +584,7 @@ _sw_process_session() {
       i=$((i + 1))
     done
 
+    local -a SLOT_SPLIT_ERR=()
     local j claimed candidate slot_skip
     i=0
     while [ "$i" -lt "$pane_count" ]; do
@@ -594,7 +628,15 @@ _sw_process_session() {
         break
       done < <(tmux list-panes -t "$window_target" -F "$(printf '#{pane_index}\t#{pane_id}\t#{%s}' "$MARKER_PANE")" 2>/dev/null | sort -n | cut -f2-)
       if [ -z "$candidate" ] && [ "$DRY_RUN" -eq 0 ]; then
-        candidate="$(_sw_split_extra_pane "$window_target")"
+        # Called as a plain statement, NOT `x="$(_sw_split_extra_pane ...)"`
+        # — see the function's header comment for why a command substitution
+        # here would silently discard SW_LAST_SPLIT_ERROR.
+        if _sw_split_extra_pane "$window_target"; then
+          candidate="$SW_LAST_SPLIT_PANE"
+        else
+          SLOT_SPLIT_ERR[$i]="${SW_LAST_SPLIT_ERROR:-tmux split-window failed}"
+          echo "ERROR: could not create pane \"$(printf '%s' "$pane_json" | jq -r '.name')\" in session \"$session_name\": ${SLOT_SPLIT_ERR[$i]}" >&2
+        fi
       fi
       SLOT_PANES[$i]="$candidate"
       i=$((i + 1))
@@ -618,12 +660,13 @@ _sw_process_session() {
   # preview — including the adoption-candidate block for an unmanaged
   # occupant — without ever mutating tmux. See workspace-reconcile.md, which
   # promises exactly this.
-  local i=0 pane_json pane_name pane_id optional
+  local i=0 pane_json pane_name pane_id optional slot_idx
   while [ "$i" -lt "$pane_count" ]; do
     pane_json="$(printf '%s' "$panes_json" | jq -c ".[$i]")"
     pane_name="$(printf '%s' "$pane_json" | jq -r '.name')"
     optional="$(printf '%s' "$pane_json" | jq -r '.optional // false')"
     pane_id="${SLOT_PANES[$i]:-}"
+    slot_idx="$i"
     i=$((i + 1))
 
     # An optional pane whose cwd never resolved (un-cloned child repo) is
@@ -642,13 +685,21 @@ _sw_process_session() {
     fi
 
     if [ -z "$pane_id" ]; then
-      if [ "$optional" = "true" ]; then
-        _sw_report "skipped" "$session_name" "$pane_name" "optional, cwd unavailable"
-      elif [ "$DRY_RUN" -eq 1 ]; then
-        _sw_report "would-fail" "$session_name" "$pane_name" "no pane slot available"
+      # NOTE: this is NOT the "optional pane, cwd unavailable" case — that is
+      # handled and `continue`d above (skip_unresolved="true"). Reaching here
+      # with optional="true" means the cwd resolved just fine; the slot is
+      # simply missing a pane (usually a failed split — see SLOT_SPLIT_ERR),
+      # which is a real failure regardless of the pane's optional flag.
+      # Conflating the two here previously let a failed split on an optional
+      # pane report as a benign "skipped" and never increment
+      # SW_FAILED_SLOTS, so a topology that came up short of its plan could
+      # still print [started] for every pane it DID make and exit 0.
+      local slot_reason="${SLOT_SPLIT_ERR[$slot_idx]:-no pane slot available}"
+      if [ "$DRY_RUN" -eq 1 ]; then
+        _sw_report "would-fail" "$session_name" "$pane_name" "$slot_reason"
         SW_FAILED_SLOTS=$((SW_FAILED_SLOTS + 1))
       else
-        _sw_report "failed" "$session_name" "$pane_name" "no pane slot available"
+        _sw_report "failed" "$session_name" "$pane_name" "$slot_reason"
         SW_FAILED_SLOTS=$((SW_FAILED_SLOTS + 1))
       fi
       continue

@@ -1055,15 +1055,28 @@ echo "== Phase D: tmux lifecycle (isolated tmux server) =="
 
 SWT_REAL_TMUX="$(command -v tmux 2>/dev/null || true)"
 SWT_SOCKET=""
-sw_tmux_teardown() {
-  [ -n "$SWT_SOCKET" ] || return 0
+# A second, fully independent private socket used only by the "forced split
+# failure" regression test below — it needs its own from-scratch server (no
+# pre-existing sessions for a fresh session to inherit geometry from; see
+# that test's comment) and is torn down the same way, through the same
+# hard-guarded helper, immediately after that one test runs (not left for
+# the final EXIT trap, so it never lingers as a second live server for the
+# rest of this file's run).
+SWT_SOCKET2=""
+sw_tmux_teardown_one() {
+  local sock="$1"
+  [ -n "$sock" ] || return 0
   [ -n "$SWT_REAL_TMUX" ] || return 0
   # Hard guard: only ever tear down a socket we created under $TMPROOT.
-  case "$SWT_SOCKET" in
+  case "$sock" in
     "$TMPROOT"/*) ;;
-    *) echo "REFUSING to tear down tmux socket outside \$TMPROOT: $SWT_SOCKET" >&2; return 0 ;;
+    *) echo "REFUSING to tear down tmux socket outside \$TMPROOT: $sock" >&2; return 0 ;;
   esac
-  "$SWT_REAL_TMUX" -S "$SWT_SOCKET" kill-server >/dev/null 2>&1 || true
+  "$SWT_REAL_TMUX" -S "$sock" kill-server >/dev/null 2>&1 || true
+}
+sw_tmux_teardown() {
+  sw_tmux_teardown_one "$SWT_SOCKET"
+  sw_tmux_teardown_one "$SWT_SOCKET2"
 }
 trap 'sw_tmux_teardown; rm -rf "$TMPROOT"' EXIT
 
@@ -1076,13 +1089,33 @@ SWT_BIN="$SWT_ROOT/bin"
 SWT_STATE="$SWT_ROOT/state"
 SWT_TMPDIR="$SWT_ROOT/tmuxtmp"
 SWT_SOCKET="$SWT_ROOT/sock"
+SWT_CONF="$SWT_ROOT/tmux.conf"
 mkdir -p "$SWT_BIN" "$SWT_STATE" "$SWT_TMPDIR"
 chmod 700 "$SWT_TMPDIR"
 
+# A large, explicit default pane geometry — NOT left to the host's terminal
+# size or tmux's own compiled-in fallback. Pane-count assertions below split
+# a real window down to 11 individual panes; on a host/runner whose default
+# is small (or absent entirely, e.g. no controlling tty in CI), some of
+# those splits can fail with "no space for new pane" well before 11 are
+# reached, which is exactly the failure this suite must otherwise catch on
+# purpose (see the "forced split failure" regression test) rather than hit
+# by accident. This goes in a CONFIG FILE, loaded via `-f` on every tmux
+# invocation, rather than a one-time `set-option -g default-size`: tmux's
+# default `exit-empty` behavior kills the server the moment its last session
+# closes (this suite's preflight session is killed below), and the next
+# tmux command then transparently spawns a brand-new server process with
+# none of the previous one's in-memory global options — a `-f`-loaded config
+# file is read fresh on every such spawn, so it survives that restart.
+cat > "$SWT_CONF" <<'EOF'
+set-option -g default-size 200x50
+EOF
+
 cat > "$SWT_BIN/tmux" <<EOF
 #!/usr/bin/env bash
-# Isolation wrapper: pins EVERY tmux call to the test's private socket.
-exec "$SWT_REAL_TMUX" -S "$SWT_SOCKET" "\$@"
+# Isolation wrapper: pins EVERY tmux call to the test's private socket and
+# private config (large deterministic default-size — see SWT_CONF above).
+exec "$SWT_REAL_TMUX" -f "$SWT_CONF" -S "$SWT_SOCKET" "\$@"
 EOF
 chmod +x "$SWT_BIN/tmux"
 # Agent runtimes are never really launched: inert long-lived stubs stand in
@@ -1092,8 +1125,11 @@ for swt_prog in claude codex; do
   chmod +x "$SWT_BIN/$swt_prog"
 done
 
-# Direct tmux access for the TEST's own assertions (same private socket).
-SWT_TMUX() { "$SWT_REAL_TMUX" -S "$SWT_SOCKET" "$@"; }
+# Direct tmux access for the TEST's own assertions (same private socket AND
+# the same -f config, so a test-created session — e.g. swt-preflight, an
+# "unrelated-bystander"/"impostor-session" fixture — gets the same
+# deterministic 200x50 default-size as everything the engine creates).
+SWT_TMUX() { "$SWT_REAL_TMUX" -f "$SWT_CONF" -S "$SWT_SOCKET" "$@"; }
 # Run an engine script inside the sandbox.
 swrun() {
   env -u TMUX \
@@ -1244,6 +1280,96 @@ if [ "$SWT_IDS_AFTER" = "$SWT_IDS_BEFORE" ] && [ -n "$SWT_IDS_BEFORE" ]; then
 else
   fail "start: second run leaves every pane id untouched (no silent respawn)" "before=[$SWT_IDS_BEFORE] after=[$SWT_IDS_AFTER]"
 fi
+
+# --- 4b. a forced split failure is REPORTED, never swallowed (regression) -
+#
+# Root cause this guards: when a planned pane's slot had no existing
+# candidate AND the fallback `tmux split-window` genuinely failed (e.g. "no
+# space for new pane"), the per-slot classifier saw an empty pane id and
+# checked `optional="true"` FIRST -- true for every non-master pane in this
+# fixture -- and reported it "[skipped] ... optional, cwd unavailable"
+# without ever checking whether the cwd had actually resolved (it had; the
+# earlier, correct skip_unresolved check is what "optional, cwd unavailable"
+# is supposed to mean). That mislabeled skip never incremented
+# SW_FAILED_SLOTS, so `start` printed [started] for every pane it DID
+# create, exited 0, and looked completely healthy despite building a
+# strictly incomplete topology. This test must FAIL against the old code.
+#
+# This needs its OWN from-scratch tmux server (a second, independent
+# socket): a brand-new detached session inherits the size of an
+# already-existing session on the same server when one exists, so shrinking
+# `default-size` on the main $SWT_SOCKET (already carrying
+# sample-project-development/-services at 200x50) would not reliably shrink
+# a NEW session created on it. A clean server has no prior session to
+# inherit from, so `default-size` alone (set via -f, the same
+# survives-a-server-restart mechanism documented above) fully determines the
+# geometry of the one session this test creates.
+SWT_SOCKET2="$SWT_ROOT/sock-tiny"
+SWT_TINY_CONF="$SWT_ROOT/tmux-tiny.conf"
+SWT_TINY_BIN="$SWT_ROOT/bin-tiny"
+SWT_TINY_TMPDIR="$SWT_ROOT/tmuxtmp-tiny"
+SWT_TINY_STATE="$SWT_ROOT/state-tiny"
+mkdir -p "$SWT_TINY_BIN" "$SWT_TINY_TMPDIR" "$SWT_TINY_STATE"
+chmod 700 "$SWT_TINY_TMPDIR"
+cat > "$SWT_TINY_CONF" <<'EOF'
+set-option -g default-size 5x24
+EOF
+cat > "$SWT_TINY_BIN/tmux" <<EOF
+#!/usr/bin/env bash
+exec "$SWT_REAL_TMUX" -f "$SWT_TINY_CONF" -S "$SWT_SOCKET2" "\$@"
+EOF
+chmod +x "$SWT_TINY_BIN/tmux"
+for swt_prog in claude codex; do
+  printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$SWT_TINY_BIN/$swt_prog"
+  chmod +x "$SWT_TINY_BIN/$swt_prog"
+done
+
+SWT_TINY_PROJ="$SWT_ROOT/tiny-project"
+mkdir -p "$SWT_TINY_PROJ/.agent-workspace" "$SWT_TINY_PROJ/component-a" "$SWT_TINY_PROJ/component-b" "$SWT_TINY_PROJ/component-c"
+jq '
+  .project.id = "tiny-project"
+  | .project.display_name = "Tiny Project"
+  | .sessions |= map(.panes |= map(if has("command") then .command = ["sleep", "3600"] else . end))
+  | .sessions |= map(select(.id == "development"))
+' "$HERE/fixtures/valid/project-a.json" > "$SWT_TINY_PROJ/.agent-workspace/workspace.json"
+SWT_TINY_CFG="$SWT_TINY_PROJ/.agent-workspace/workspace.json"
+
+SWT_OUT="$(env -u TMUX \
+  TMUX_TMPDIR="$SWT_TINY_TMPDIR" \
+  PATH="$SWT_TINY_BIN:$PATH" \
+  XDG_STATE_HOME="$SWT_TINY_STATE" \
+  SESSION_WORKSPACE_STOP_GRACE_SECONDS=0 \
+  bash "$HERE/workspace-start.sh" --config "$SWT_TINY_CFG" --no-attach 2>&1)"
+SWT_STATUS=$?
+
+if [ "$SWT_STATUS" -ne 0 ]; then
+  pass "start: a genuinely failed split exits non-zero, never looks like success"
+else
+  fail "start: a genuinely failed split exits non-zero, never looks like success" "status=$SWT_STATUS output=$SWT_OUT"
+fi
+if printf '%s' "$SWT_OUT" | grep -Eq '\[failed\] tiny-project-development / tiny-project-[a-zA-Z-]+ — .+'; then
+  pass "start: the specific pane and session that could not be built are named in a [failed] line"
+else
+  fail "start: the specific pane and session that could not be built are named in a [failed] line" "$SWT_OUT"
+fi
+if printf '%s' "$SWT_OUT" | grep -q "failed: 0"; then
+  fail "start: the failed-slot count is non-zero when a split genuinely failed" "$SWT_OUT"
+else
+  pass "start: the failed-slot count is non-zero when a split genuinely failed"
+fi
+if printf '%s' "$SWT_OUT" | grep -qi "no space for new pane"; then
+  pass "start: the reported reason is tmux's own stderr, not a generic placeholder"
+else
+  fail "start: the reported reason is tmux's own stderr, not a generic placeholder" "$SWT_OUT"
+fi
+if printf '%s' "$SWT_OUT" | grep -q "optional, cwd unavailable"; then
+  fail "start: a failed split on an optional pane is never mislabeled as an unresolved-cwd skip" "$SWT_OUT"
+else
+  pass "start: a failed split on an optional pane is never mislabeled as an unresolved-cwd skip"
+fi
+
+sw_tmux_teardown_one "$SWT_SOCKET2"
+SWT_SOCKET2=""
 
 # --- 5. reconcile repairs a missing managed pane, restarts nothing else ---
 SWT_VICTIM="$(SWT_TMUX list-panes -t "$SWT_DEV" -F "#{pane_id}	#{@session_workspace_pane}" 2>/dev/null | awk -F'\t' '$2 == "sample-project-web-reviewer" {print $1}')"
