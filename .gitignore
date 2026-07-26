@@ -8,8 +8,12 @@ upgrade.sh
 # Local dev-workspace launcher (machine-specific; not part of the marketplace).
 # The .bak is the pre-migration launcher kept as the rollback copy — it can hold
 # uncommitted local edits, so it must never be published.
-workspace.sh
-workspace.sh.bak
+# Anchored to the repo root on purpose: an unanchored "workspace.sh" matches at
+# ANY depth and silently swallowed the session-workspace plugin's own CLI
+# dispatcher (scripts/workspace.sh) and bootstrap shim (templates/workspace.sh)
+# in both provider trees, publishing a plugin that could not run.
+/workspace.sh
+/workspace.sh.bak
 
 # Local agent instruction files (machine/user-specific)
 CLAUDE.md
