@@ -27,6 +27,21 @@ decode_project_path() {
     echo "$encoded" | sed 's/^-/\//' | sed 's/-/\//g'
 }
 
+# The transcript records the real working directory on every line, so read it
+# instead of reverse-engineering the directory name. Fixes hyphenated repo
+# names displaying as bogus paths (observed 2026-07-27: a repo named
+# "agent-plugins" listed as "/Users/.../Code/agent/plugins"). Falls back to the
+# lossy decode when a transcript is unreadable or carries no cwd.
+project_path_from_transcript() {
+    local jsonl_file="$1" encoded="$2" cwd=""
+    cwd=$(grep -ao '"cwd":"[^"]*"' "$jsonl_file" 2>/dev/null | head -1 | sed 's/^"cwd":"//; s/"$//')
+    if [ -n "$cwd" ]; then
+        printf '%s' "$cwd"
+    else
+        decode_project_path "$encoded"
+    fi
+}
+
 human_size() {
     local bytes="$1"
     if [ "$bytes" -ge 1073741824 ] 2>/dev/null; then
@@ -93,7 +108,12 @@ session_index=""
 for project_dir in "$PROJECTS_DIR"/*/; do
     [ -d "$project_dir" ] || continue
     encoded=$(basename "$project_dir")
-    project_path=$(decode_project_path "$encoded")
+    sample_jsonl=$(ls -t "$project_dir"*.jsonl 2>/dev/null | head -1)
+    if [ -n "$sample_jsonl" ]; then
+        project_path=$(project_path_from_transcript "$sample_jsonl" "$encoded")
+    else
+        project_path=$(decode_project_path "$encoded")
+    fi
 
     if [ -n "$FILTER_LOWER" ]; then
         project_lower=$(printf '%s' "$project_path" | tr '[:upper:]' '[:lower:]')
