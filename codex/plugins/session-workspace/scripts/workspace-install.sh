@@ -75,7 +75,6 @@ TARGET_DIR="$(dirname "$TARGET")"
 # unconditionally on every run without churn or spurious backups.
 if [ -f "$TARGET" ] && cmp -s "$SOURCE" "$TARGET"; then
   echo "  [ok] already current — nothing to do"
-  INSTALLED=0
 else
   if [ "$DRY_RUN" -eq 1 ]; then
     if [ -e "$TARGET" ]; then
@@ -83,7 +82,6 @@ else
     else
       echo "  [dry-run] would create $TARGET"
     fi
-    INSTALLED=0
   else
     if [ ! -d "$TARGET_DIR" ]; then
       mkdir -p "$TARGET_DIR" || { echo "ERROR: cannot create $TARGET_DIR" >&2; exit 1; }
@@ -98,7 +96,6 @@ else
     cp "$SOURCE" "$TARGET" || { echo "ERROR: cannot write $TARGET" >&2; exit 1; }
     chmod 0755 "$TARGET" || { echo "ERROR: cannot chmod $TARGET" >&2; exit 1; }
     echo "  [installed] $TARGET"
-    INSTALLED=1
   fi
 fi
 
