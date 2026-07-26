@@ -91,7 +91,7 @@
   ],
   "behavior": {
     "default_start_target": "all",
-    "attach": "prompt",
+    "attach": "if_terminal",
     "stop_scope": "selected",
     "save_before_stop": true,
     "session_chat_helper": {
