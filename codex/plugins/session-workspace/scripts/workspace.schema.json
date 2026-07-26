@@ -1,0 +1,223 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/devgirishattri/agent-plugins/session-workspace/workspace.schema.json",
+  "title": "session-workspace configuration",
+  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape (types, enums, additionalProperties) mirrors what validate-config.sh enforces by hand with jq -- there is no bundled JSON Schema validator engine in this toolchain, so this file is not executed directly. validate-config.sh is authoritative and additionally enforces cross-field and filesystem rules this format cannot express (duplicate name resolution, path/symlink escape, secrets.env_file gating, env value charset, grants-vs-pin consistency). roles.*.agent.permission_mode and panes[].agent are schema extensions beyond the original design doc, added per binding decision #2 (extend the schema, not the project) to support a permission-mode allowlist that excludes bypassPermissions.",
+  "type": "object",
+  "required": ["schema_version", "project", "runtimes", "roles", "stores", "sessions"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+
+    "project": {
+      "type": "object",
+      "required": ["id", "root"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "display_name": { "type": "string" },
+        "root": { "type": "string" }
+      }
+    },
+
+    "runtimes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["program"],
+        "additionalProperties": false,
+        "properties": {
+          "program": { "type": "string", "minLength": 1 },
+          "args": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "roles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["runtime"],
+        "additionalProperties": false,
+        "properties": {
+          "runtime": { "type": "string" },
+          "agent": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "model": { "type": "string" },
+              "effort": { "type": "string" },
+              "profile": { "type": "string" },
+              "permission_mode": {
+                "type": "string",
+                "enum": ["inherit", "default", "plan", "acceptEdits", "dontAsk"]
+              }
+            }
+          },
+          "grants": { "type": "array", "items": { "type": "string" } },
+          "env_group": { "type": "string" }
+        }
+      }
+    },
+
+    "stores": {
+      "type": "object",
+      "required": ["pin"],
+      "additionalProperties": false,
+      "properties": {
+        "base": { "type": "string" },
+        "pin": {
+          "type": "array",
+          "items": { "enum": ["messages", "scheduler", "contexts"] },
+          "uniqueItems": true
+        },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["shared", "per-pane"] },
+            "root": { "type": "string" },
+            "shard": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "strip_prefix": { "type": "string" },
+                "strip_suffixes": { "type": "array", "items": { "type": "string" } },
+                "fallback": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["values"],
+            "additionalProperties": false,
+            "properties": {
+              "values": { "type": "object", "additionalProperties": { "type": "string" } },
+              "pin_to_session": {
+                "type": "boolean",
+                "description": "When true, every pane whose role uses this group ALSO gets this group's values -- plus the coordination store vars implied by stores.pin (SESSION_CHAT_TARGET_MESSAGES_DIR, SESSION_SCHEDULER_HOME, SESSION_CONTEXT_HOME) -- mirrored into its tmux SESSION environment with `tmux set-environment`, so panes created later (including ones a user splits by hand, which the engine never manages) inherit the coordination env too. Values are byte-identical to what the pane's own process env receives. Never mirrored: secrets (session env is inherited by every later pane -- secrets stay per-pane via the private-file delivery) and the per-pane identity vars TMUX_PANE / SESSION_CHAT_PANE_NAME / KNOWLEDGE_PANE_NAME and env.pane_name_aliases (a session-scoped identity would be wrong for every pane, and KNOWLEDGE_PANE_NAME is an authorization boundary). `workspace-plan` reports the exact mirrored name set per session as pinned_session_env. Default false: mirror nothing."
+              }
+            }
+          }
+        },
+        "pane_name_aliases": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "env_file": { "type": "string" },
+        "allow": { "type": "array", "items": { "type": "string" } },
+        "visible_to_roles": { "type": "array", "items": { "type": "string" } },
+        "on_missing": { "enum": ["warn", "fail"] }
+      }
+    },
+
+    "sessions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "panes"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "window_index": { "type": "integer", "minimum": 0 },
+          "retain_layout": { "type": "boolean" },
+          "layout": {
+            "type": "object",
+            "required": ["kind"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": { "enum": ["standard", "split_tree"] },
+              "name": { "type": "string" },
+              "only_when_fresh": { "type": "boolean" },
+              "mask_after_split_hook": { "type": "boolean" },
+              "nodes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "from": { "type": "string" },
+                    "dir": { "enum": ["v", "h"] },
+                    "percent": { "type": "integer", "minimum": 1, "maximum": 99 }
+                  }
+                }
+              },
+              "pane_order": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "panes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["name", "role"],
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "role": { "type": "string" },
+                "cwd": { "type": "string" },
+                "optional": { "type": "boolean" },
+                "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                "agent": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "model": { "type": "string" },
+                    "effort": { "type": "string" },
+                    "profile": { "type": "string" },
+                    "permission_mode": {
+                      "type": "string",
+                      "enum": ["inherit", "default", "plan", "acceptEdits", "dontAsk"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_start_target": { "type": "string" },
+        "attach": { "enum": ["if_terminal", "never"] },
+        "stop_scope": { "enum": ["selected", "all"] },
+        "save_before_stop": { "type": "boolean" },
+        "session_chat_helper": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "resolve": { "type": "string" },
+            "on_missing": { "enum": ["warn", "fail"] }
+          }
+        }
+      }
+    }
+  }
+}

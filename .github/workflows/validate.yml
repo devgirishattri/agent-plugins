@@ -31,6 +31,10 @@ jobs:
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-scheduler" \
             bash codex/plugins/session-scheduler/scripts/test-session-scheduler.sh
+          mkdir -p "$RUNNER_TEMP/codex-session-workspace"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/codex-session-workspace" \
+            bash codex/plugins/session-workspace/scripts/test-session-workspace.sh
 
       - name: Run Claude parity smoke tests
         run: |
@@ -48,6 +52,10 @@ jobs:
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-scheduler" \
             bash plugins/session-scheduler/scripts/test-session-scheduler.sh
+          mkdir -p "$RUNNER_TEMP/claude-session-workspace"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-workspace" \
+            bash plugins/session-workspace/scripts/test-session-workspace.sh
 
       - name: Run cross-provider scheduler/context parity test
         run: |

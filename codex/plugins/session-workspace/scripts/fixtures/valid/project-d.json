@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "project": { "id": "project-d", "display_name": "Project D", "root": "." },
+  "runtimes": {
+    "claude": { "program": "claude", "args": [] },
+    "codex": { "program": "codex", "args": [] }
+  },
+  "roles": {
+    "orchestrator": {
+      "runtime": "claude",
+      "agent": { "model": "inherit", "effort": "inherit", "profile": "inherit" },
+      "grants": [],
+      "env_group": "dev"
+    },
+    "executor": {
+      "runtime": "codex",
+      "grants": ["memory"],
+      "env_group": "dev"
+    }
+  },
+  "stores": {
+    "base": ".tmp",
+    "pin": [],
+    "memory": { "mode": "shared", "root": ".agents/memory" }
+  },
+  "env": {
+    "groups": {
+      "dev": { "values": { "AGENT_PLUGINS_TIME_ZONE": "Asia/Kolkata" }, "pin_to_session": true }
+    }
+  },
+  "sessions": [
+    {
+      "id": "development",
+      "name": "${PROJECT_ID}-development",
+      "window_index": 0,
+      "layout": { "kind": "standard", "name": "tiled" },
+      "retain_layout": true,
+      "panes": [
+        { "name": "${PROJECT_ID}-master", "role": "orchestrator", "cwd": "." },
+        { "name": "${PROJECT_ID}-executor", "role": "executor", "cwd": "." }
+      ]
+    }
+  ],
+  "behavior": {
+    "default_start_target": "all",
+    "attach": "if_terminal",
+    "stop_scope": "selected",
+    "save_before_stop": true,
+    "session_chat_helper": { "resolve": "always", "on_missing": "fail" }
+  }
+}

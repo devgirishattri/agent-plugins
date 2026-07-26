@@ -1,0 +1,4 @@
+{"schema_version":1,"project":{"id":"p","root":"."},"runtimes":{"claude":{"program":"claude"}},
+"roles":{"executor":{"runtime":"claude","env_group":"dev","grants":["messages"]}},
+"stores":{"pin":["scheduler"]},
+"sessions":[{"id":"s","name":"s","panes":[{"name":"p1","role":"executor","cwd":"."}]}]}

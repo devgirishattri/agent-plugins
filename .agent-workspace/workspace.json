@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "project": {
+    "id": "agent-plugins",
+    "display_name": "Agent Plugins",
+    "root": "."
+  },
+  "runtimes": {
+    "claude": {
+      "program": "claude",
+      "args": []
+    },
+    "codex": {
+      "program": "codex",
+      "args": []
+    }
+  },
+  "roles": {
+    "claude-agent": {
+      "runtime": "claude",
+      "agent": {
+        "model": "inherit",
+        "effort": "inherit",
+        "profile": "inherit",
+        "permission_mode": "inherit"
+      },
+      "grants": [],
+      "env_group": "dev"
+    },
+    "codex-agent": {
+      "runtime": "codex",
+      "agent": {
+        "model": "inherit",
+        "effort": "inherit",
+        "profile": "inherit",
+        "permission_mode": "inherit"
+      },
+      "grants": [],
+      "env_group": "dev"
+    }
+  },
+  "stores": {
+    "base": ".tmp",
+    "pin": [
+      "messages",
+      "scheduler",
+      "contexts"
+    ],
+    "overrides": {},
+    "memory": {
+      "mode": "shared",
+      "root": ".agents/memory"
+    }
+  },
+  "env": {
+    "groups": {
+      "dev": {
+        "values": {
+          "SESSION_CHAT_INCOMING_MODE": "auto",
+          "KNOWLEDGE_MEMORY_HOME": "${PROJECT_ROOT}/.agents/memory",
+          "AGENT_PLUGINS_TIME_ZONE": "Asia/Kolkata"
+        },
+        "pin_to_session": true
+      }
+    },
+    "pane_name_aliases": []
+  },
+  "sessions": [
+    {
+      "id": "workspace",
+      "name": "${PROJECT_ID}",
+      "window_index": 0,
+      "layout": {
+        "kind": "standard",
+        "name": "even-horizontal"
+      },
+      "retain_layout": true,
+      "panes": [
+        {
+          "name": "agent-claude",
+          "role": "claude-agent",
+          "cwd": "."
+        },
+        {
+          "name": "agent-codex",
+          "role": "codex-agent",
+          "cwd": "."
+        }
+      ]
+    }
+  ],
+  "behavior": {
+    "default_start_target": "all",
+    "attach": "prompt",
+    "stop_scope": "selected",
+    "save_before_stop": true,
+    "session_chat_helper": {
+      "resolve": "always",
+      "on_missing": "warn"
+    }
+  }
+}

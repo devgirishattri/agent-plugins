@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Session Workspace">
+  <rect width="128" height="128" rx="24" fill="#0EA5E9"/>
+  <rect x="24" y="30" width="80" height="20" rx="4" fill="#F0F9FF"/>
+  <rect x="24" y="56" width="36" height="42" rx="4" fill="#F0F9FF"/>
+  <rect x="66" y="56" width="38" height="20" rx="4" fill="#F0F9FF"/>
+  <rect x="66" y="80" width="38" height="18" rx="4" fill="#F0F9FF"/>
+</svg>

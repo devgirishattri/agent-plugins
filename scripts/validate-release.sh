@@ -21,7 +21,18 @@ info() {
 
 [ -f ".claude-plugin/marketplace.json" ] || fail "missing .claude-plugin/marketplace.json"
 [ -f ".agents/plugins/marketplace.json" ] || fail "missing .agents/plugins/marketplace.json"
-[ ! -e "docs/TODO.md" ] || fail "docs/TODO.md should not be published; use GitHub Issues instead"
+# The intent is "docs/TODO.md must never be PUBLISHED", not "must not exist":
+# docs/ is gitignored, so a local working copy is normal and expected. Testing
+# mere existence made every local run fail at line 1 and — because this script
+# exits on first failure — silently masked every downstream check, hiding real
+# errors for as long as a local docs/TODO.md was present. Test tracked-ness
+# instead, which enforces the actual rule on both a dev machine and in CI.
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  git ls-files --error-unmatch "docs/TODO.md" >/dev/null 2>&1 &&
+    fail "docs/TODO.md is git-tracked and must not be published; use GitHub Issues instead"
+else
+  [ ! -e "docs/TODO.md" ] || fail "docs/TODO.md should not be published; use GitHub Issues instead"
+fi
 
 while IFS= read -r json_file; do
   python3 -m json.tool "$json_file" >/dev/null
@@ -759,6 +770,11 @@ require_tokens(
     "plugins/knowledge/scripts/test-docs-create.sh",
     "plugins/knowledge/scripts/test-context.sh",
     "scripts/test-provider-parity.sh",
+    # CI hardcodes every suite path — it does NOT auto-discover plugins the way
+    # this validator does. Assert both session-workspace suites stay wired up so
+    # they cannot be silently dropped from CI while still passing locally.
+    "plugins/session-workspace/scripts/test-session-workspace.sh",
+    "codex/plugins/session-workspace/scripts/test-session-workspace.sh",
 )
 
 require_tokens(
@@ -1011,6 +1027,22 @@ for claude_plugin_dir in plugins/*/; do
   codex_scripts="$(list_runtime_scripts "$plugin_name" codex "$codex_plugin_dir/scripts")"
   require_set_equal "$plugin_name" "scripts" "$claude_scripts" "$codex_scripts"
 done
+
+# ---------------------------------------------------------------------------
+# Real-project-identifier sweep (blocking when a denylist is configured).
+# The sweep lives in the knowledge plugin's test runner but is repo-wide: a
+# leaked identifier in ANY plugin is a release blocker, not just one in
+# plugins/knowledge/. With no denylist configured (clean public checkout, or
+# CI without the secret) it is a no-op PASS, so this stays green in CI.
+# ---------------------------------------------------------------------------
+echo "-- real-project-identifier sweep (blocking when denylist configured) --"
+if [ -f "plugins/knowledge/scripts/test-knowledge.sh" ]; then
+  if ! bash plugins/knowledge/scripts/test-knowledge.sh --suite privacy; then
+    fail "real-project identifier(s) found in published files; see the sweep output above"
+  fi
+else
+  echo "SKIP: plugins/knowledge/scripts/test-knowledge.sh not present"
+fi
 
 echo "DONE: validation passed with provider structural parity intact"
 exit 0

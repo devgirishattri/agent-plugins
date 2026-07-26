@@ -1,0 +1,4 @@
+{"schema_version":1,"project":{"id":"proj","root":"."},"runtimes":{"claude":{"program":"claude"}},
+"roles":{"orchestrator":{"runtime":"claude","env_group":"dev"}},
+"stores":{"pin":[],"memory":{"mode":"per-pane","root":".agents/memory"}},
+"sessions":[{"id":"s","name":"s","panes":[{"name":"wrongprefix","role":"orchestrator","cwd":"."}]}]}
