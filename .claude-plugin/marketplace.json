@@ -12,7 +12,7 @@
     {
       "name": "session-manager",
       "description": "List, search, and delete Claude Code sessions and all related data across projects. Supported platforms: macOS, Linux, Windows (WSL).",
-      "version": "1.7.3",
+      "version": "1.7.4",
       "author": {
         "name": "Girish Attri"
       },
@@ -86,7 +86,7 @@
     {
       "name": "session-scheduler",
       "description": "Thin file-backed task ledger for orchestrator \u2192 executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
-      "version": "0.5.9",
+      "version": "0.5.10",
       "author": {
         "name": "Girish Attri"
       },

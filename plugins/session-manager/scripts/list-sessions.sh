@@ -40,8 +40,25 @@ fi
 decode_project_path() {
     local encoded="$1"
     # Best-effort decode: strip leading -, replace - with /
-    # Note: lossy when directory names contain hyphens
+    # Note: LOSSY when directory names contain hyphens — the encoding uses "-"
+    # as the separator, so "agent-plugins" decodes to "agent/plugins". Only
+    # used as a fallback; prefer project_path_from_transcript below.
     echo "$encoded" | sed 's/^-/\//' | sed 's/-/\//g'
+}
+
+# The transcript records the real working directory on every line, so read it
+# instead of reverse-engineering the directory name. Fixes hyphenated repo
+# names displaying as bogus paths (observed 2026-07-27: a repo named
+# "agent-plugins" listed as "/Users/.../Code/agent/plugins"). Falls back to the
+# lossy decode when a transcript is unreadable or carries no cwd.
+project_path_from_transcript() {
+    local jsonl_file="$1" encoded="$2" cwd=""
+    cwd=$(grep -ao '"cwd":"[^"]*"' "$jsonl_file" 2>/dev/null | head -1 | sed 's/^"cwd":"//; s/"$//')
+    if [ -n "$cwd" ]; then
+        printf '%s' "$cwd"
+    else
+        decode_project_path "$encoded"
+    fi
 }
 
 human_size() {
@@ -65,7 +82,7 @@ find "$SCAN_DIR" -maxdepth 2 -name '*.jsonl' -type f 2>/dev/null | while read -r
     fi
 
     project_dir=$(basename "$(dirname "$jsonl_file")")
-    project_path=$(decode_project_path "$project_dir")
+    project_path=$(project_path_from_transcript "$jsonl_file" "$project_dir")
 
     # Extract last custom-title entry (session can be renamed multiple times)
     custom_title=$(grep -a '"type":"custom-title"' "$jsonl_file" 2>/dev/null | tail -1 | sed -n 's/.*"customTitle":"\([^"]*\)".*/\1/p') || true

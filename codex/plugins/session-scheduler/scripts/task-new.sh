@@ -15,6 +15,20 @@ require_jq || exit 1
 ensure_dirs || exit 1
 
 NAME="$1"
+# The task NAME is positional, so anything flag-shaped in that slot is a
+# mistake, not a name. Without this guard `task-new.sh --help` silently
+# created a task literally named "--help" (observed 2026-07-27), polluting the
+# active board with junk that then had to be hunted down and deleted by hand.
+case "$NAME" in
+  -h|--help)
+    echo "Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--depends-on id1,id2] [--reviewer PANE] [--workflow ID]"
+    exit 0
+    ;;
+  -*)
+    echo "ERROR: task name must not start with '-' (got '$NAME'). Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--depends-on id1,id2] [--reviewer PANE] [--workflow ID]" >&2
+    exit 1
+    ;;
+esac
 shift
 meta_json='{}'
 STAGE=""

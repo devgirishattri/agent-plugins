@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "session-manager",
-      "version": "1.7.3",
+      "version": "1.7.4",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-manager"
@@ -32,7 +32,7 @@
     },
     {
       "name": "session-scheduler",
-      "version": "0.5.9",
+      "version": "0.5.10",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-scheduler"
