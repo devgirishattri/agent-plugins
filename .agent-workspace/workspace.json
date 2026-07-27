@@ -19,8 +19,8 @@
     "claude-agent": {
       "runtime": "claude",
       "agent": {
-        "model": "inherit",
-        "effort": "inherit",
+        "model": "opus",
+        "effort": "high",
         "profile": "inherit",
         "permission_mode": "inherit"
       },
@@ -30,8 +30,8 @@
     "codex-agent": {
       "runtime": "codex",
       "agent": {
-        "model": "inherit",
-        "effort": "inherit",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
         "profile": "inherit",
         "permission_mode": "inherit"
       },
@@ -57,6 +57,7 @@
       "dev": {
         "values": {
           "SESSION_CHAT_INCOMING_MODE": "auto",
+          "KNOWLEDGE_AUTO_RECALL": "prompt",
           "KNOWLEDGE_MEMORY_HOME": "${PROJECT_ROOT}/.agents/memory",
           "AGENT_PLUGINS_TIME_ZONE": "Asia/Kolkata"
         },
