@@ -467,34 +467,6 @@ memory_shard_name() {
 # 5. Secrets
 # ============================================================================
 
-# _parse_env_file_value PATH KEY
-# Parses PATH as literal KEY=value lines (never sourced/eval'd — a malicious
-# "$(rm -rf ~)" value must stay inert text). Only a strict
-# ^[A-Za-z_][A-Za-z0-9_]*=... line shape is recognized; the last matching line
-# wins (shell-like semantics). Prints the value (unquoted, raw) or nothing.
-_parse_env_file_value() {
-  local path="$1" key="$2" line k v found="" matched=0
-  [ -f "$path" ] || return 1
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      ''|'#'*) continue ;;
-    esac
-    case "$line" in
-      [A-Za-z_]*=*)
-        k="${line%%=*}"
-        v="${line#*=}"
-        if [ "$k" = "$key" ]; then
-          found="$v"
-          matched=1
-        fi
-        ;;
-    esac
-  done <"$path"
-  [ "$matched" -eq 1 ] || return 1
-  printf '%s' "$found"
-  return 0
-}
-
 # _is_valid_identifier NAME -> 0 if NAME matches ^[A-Za-z_][A-Za-z0-9_]*$
 # (the shape validate-structural.jq enforces for secrets.allow[] entries),
 # 1 otherwise. Plain case-glob matching, never a regex engine, never eval.

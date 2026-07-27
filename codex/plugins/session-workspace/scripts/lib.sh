@@ -151,3 +151,33 @@ canonicalize_dir() {
   local dir="$1"
   (cd "$dir" 2>/dev/null && pwd -P)
 }
+
+# _parse_env_file_value PATH KEY
+# Parses PATH as literal KEY=value lines (never sourced/eval'd — a malicious
+# "$(rm -rf ~)" value must stay inert text). Only a strict
+# ^[A-Za-z_][A-Za-z0-9_]*=... line shape is recognized; the last matching line
+# wins (shell-like semantics). Prints the value (unquoted, raw) or nothing.
+# Shared by adapters.sh and workspace-doctor.sh so delivery and diagnosis can
+# never disagree about which line supplies a configured key.
+_parse_env_file_value() {
+  local path="$1" key="$2" line k v found="" matched=0
+  [ -f "$path" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    case "$line" in
+      [A-Za-z_]*=*)
+        k="${line%%=*}"
+        v="${line#*=}"
+        if [ "$k" = "$key" ]; then
+          found="$v"
+          matched=1
+        fi
+        ;;
+    esac
+  done <"$path"
+  [ "$matched" -eq 1 ] || return 1
+  printf '%s' "$found"
+  return 0
+}

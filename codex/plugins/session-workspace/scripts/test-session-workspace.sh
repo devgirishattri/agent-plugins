@@ -100,7 +100,7 @@
 #     ERROR/WARN on a fixture that violates it: missing/too-old tmux, missing
 #     jq, missing git, a plugin below its floor or absent, cache-vs-source
 #     drift, a broken pane cwd, a secrets file with the wrong mode / not
-#     git-ignored / symlinked, an unwritable or non-0700 state dir, a runtime
+#     git-ignored / symlinked / unresolvable allowed keys, an unwritable or non-0700 state dir, a runtime
 #     program off PATH, ledger files under a non-configured coordination
 #     base, and an unresolvable session-chat helper under both on_missing
 #     policies
@@ -113,8 +113,9 @@
 #     `tmux -V` (asserted with a logging stub) — no tmux server is contacted
 #   - exit code is non-zero when any check is ERROR, and zero when only WARNs
 #     are present
-#   - a planted secret value never appears in any output, with a positive
-#     control proving that value really was readable in the env file
+#   - the doctor opens the metadata-gated secrets file to resolve allowed key
+#     names with the adapter parser, but no planted secret value ever appears
+#     in output (with a positive control proving the values were readable)
 #
 # Post-review lifecycle fixes are proven alongside the phase suites above:
 #   - a same-named tmux SESSION carrying no managed marker is refused by
@@ -3059,6 +3060,158 @@ fi
 rm -f "$SWF_PROJECT/workspace.local.env"
 mv "$SWF_PROJECT/.real-env" "$SWF_PROJECT/workspace.local.env"
 chmod 600 "$SWF_PROJECT/workspace.local.env"
+
+# The doctor now deliberately opens a metadata-gated secrets file and uses
+# the same literal parser as adapters.sh. Exercise the live failure shapes:
+# shell export syntax, a shell default expansion, a missing line, matching
+# outer quotes, and an inner quote. Command-substitution-looking values remain
+# literal parser output and must never execute. Only key NAMES may be reported.
+SWF_BARE_VALUE="bare-secret-sentinel-7841"
+SWF_EXPORT_VALUE="export-secret-sentinel-7842"
+SWF_DEFAULT_VALUE="default-secret-sentinel-7843"
+SWF_DOUBLE_QUOTED_VALUE="double-quoted-secret-sentinel-7844"
+SWF_SINGLE_QUOTED_VALUE="single-quoted-secret-sentinel-7845"
+SWF_INNER_QUOTE_VALUE='inner"quote-secret-sentinel-7846'
+SWF_INERT_MARKER="$SWF/inert-secret-value-executed"
+rm -f "$SWF_INERT_MARKER"
+{
+  printf '%s\n' "BARE_TOKEN=$SWF_BARE_VALUE"
+  printf '%s\n' "export EXPORT_TOKEN=$SWF_EXPORT_VALUE"
+  printf '%s\n' 'DEFAULT_TOKEN="${DEFAULT_TOKEN:-default-secret-sentinel-7843}"'
+  printf '%s\n' "DOUBLE_QUOTED_TOKEN=\"$SWF_DOUBLE_QUOTED_VALUE\""
+  printf "SINGLE_QUOTED_TOKEN='%s'\n" "$SWF_SINGLE_QUOTED_VALUE"
+  printf '%s\n' "INNER_QUOTE_TOKEN=$SWF_INNER_QUOTE_VALUE"
+  printf 'INERT_TOKEN=$(touch %s)\n' "$SWF_INERT_MARKER"
+} > "$SWF_PROJECT/workspace.local.env"
+chmod 600 "$SWF_PROJECT/workspace.local.env"
+jq '.secrets.allow = ["BARE_TOKEN", "EXPORT_TOKEN", "DEFAULT_TOKEN", "DOUBLE_QUOTED_TOKEN", "SINGLE_QUOTED_TOKEN", "INNER_QUOTE_TOKEN", "MISSING_TOKEN", "INERT_TOKEN"] |
+    .secrets.on_missing = "fail"' "$SWF_CFG_BACKUP" > "$SWF_CONFIG"
+
+if grep -q "$SWF_BARE_VALUE" "$SWF_PROJECT/workspace.local.env" &&
+   grep -q "$SWF_EXPORT_VALUE" "$SWF_PROJECT/workspace.local.env" &&
+   grep -q "$SWF_DEFAULT_VALUE" "$SWF_PROJECT/workspace.local.env" &&
+   grep -q "$SWF_DOUBLE_QUOTED_VALUE" "$SWF_PROJECT/workspace.local.env" &&
+   grep -q "$SWF_SINGLE_QUOTED_VALUE" "$SWF_PROJECT/workspace.local.env" &&
+   grep -q "$SWF_INNER_QUOTE_VALUE" "$SWF_PROJECT/workspace.local.env"; then
+  pass "doctor secrets resolution control: all planted values are readable in the gated file"
+else
+  fail "doctor secrets resolution control: all planted values are readable in the gated file" "fixture is incomplete"
+fi
+
+SWF_SECRETS_FAIL_OUT="$(swf_doctor --json)"
+SWF_SECRETS_FAIL_RC=$?
+if [ "$(swf_status "$SWF_SECRETS_FAIL_OUT" "secrets.env_file")" = "ERROR" ] &&
+   [ "$SWF_SECRETS_FAIL_RC" -ne 0 ] &&
+   printf '%s' "$SWF_SECRETS_FAIL_OUT" | jq -e '.checks[] | select(.id == "secrets.env_file") |
+     .message | contains("3 allowed key(s) do not resolve (secrets.on_missing: fail)")' >/dev/null 2>&1; then
+  pass "doctor secrets resolution: on_missing=fail makes unresolved keys an ERROR with non-zero exit"
+else
+  fail "doctor secrets resolution: on_missing=fail makes unresolved keys an ERROR with non-zero exit" \
+    "rc=$SWF_SECRETS_FAIL_RC output=$SWF_SECRETS_FAIL_OUT"
+fi
+
+SWF_FAIL_UNRESOLVED="$(printf '%s' "$SWF_SECRETS_FAIL_OUT" | jq -r '.checks[] |
+  select(.id == "secrets.env_file") | .details[] | select(startswith("ERROR unresolvable allowed key: ")) |
+  sub("ERROR unresolvable allowed key: "; "")' | sort | tr '\n' ',')"
+if [ "$SWF_FAIL_UNRESOLVED" = "DEFAULT_TOKEN,EXPORT_TOKEN,MISSING_TOKEN," ]; then
+  pass "doctor secrets resolution: export/default/missing shapes report exactly their key names"
+else
+  fail "doctor secrets resolution: export/default/missing shapes report exactly their key names" "$SWF_FAIL_UNRESOLVED"
+fi
+
+SWF_SECRETS_REMEDIATION="$(printf '%s' "$SWF_SECRETS_FAIL_OUT" | jq -r '.checks[] |
+  select(.id == "secrets.env_file") | .remediation')"
+if printf '%s' "$SWF_SECRETS_REMEDIATION" | grep -Fq 'bare KEY=value' &&
+   printf '%s' "$SWF_SECRETS_REMEDIATION" | grep -Fq 'no export prefix' &&
+   printf '%s' "$SWF_SECRETS_REMEDIATION" | grep -Fq 'no ${VAR:-default} expansion' &&
+   printf '%s' "$SWF_SECRETS_REMEDIATION" | grep -Fq 'no surrounding quotes'; then
+  pass "doctor secrets resolution: remediation names the required literal file shape"
+else
+  fail "doctor secrets resolution: remediation names the required literal file shape" "$SWF_SECRETS_REMEDIATION"
+fi
+
+jq '.secrets.on_missing = "warn"' "$SWF_CONFIG" > "$SWF_CONFIG.tmp"
+mv "$SWF_CONFIG.tmp" "$SWF_CONFIG"
+SWF_SECRETS_WARN_OUT="$(swf_doctor --json)"
+SWF_SECRETS_WARN_RC=$?
+SWF_WARN_UNRESOLVED="$(printf '%s' "$SWF_SECRETS_WARN_OUT" | jq -r '.checks[] |
+  select(.id == "secrets.env_file") | .details[] | select(startswith("WARN unresolvable allowed key: ")) |
+  sub("WARN unresolvable allowed key: "; "")' | sort | tr '\n' ',')"
+if [ "$(swf_status "$SWF_SECRETS_WARN_OUT" "secrets.env_file")" = "WARN" ] &&
+   [ "$SWF_SECRETS_WARN_RC" -eq 0 ] &&
+   [ "$SWF_WARN_UNRESOLVED" = "DEFAULT_TOKEN,EXPORT_TOKEN,MISSING_TOKEN," ]; then
+  pass "doctor secrets resolution: on_missing=warn reports the same names as WARN with zero exit"
+else
+  fail "doctor secrets resolution: on_missing=warn reports the same names as WARN with zero exit" \
+    "rc=$SWF_SECRETS_WARN_RC names=$SWF_WARN_UNRESOLVED output=$SWF_SECRETS_WARN_OUT"
+fi
+
+##############################################################################
+# Quote-wrapped values are a WARN even under on_missing=fail: the line is
+# legal literal data, but the adapter will deliver the matching quote bytes.
+##############################################################################
+jq '.secrets.allow = ["DOUBLE_QUOTED_TOKEN", "SINGLE_QUOTED_TOKEN"] |
+    .secrets.on_missing = "fail"' "$SWF_CFG_BACKUP" > "$SWF_CONFIG"
+SWF_QUOTES_OUT="$(swf_doctor --json)"
+SWF_QUOTES_RC=$?
+SWF_QUOTE_WARN_NAMES="$(printf '%s' "$SWF_QUOTES_OUT" | jq -r '.checks[] |
+  select(.id == "secrets.env_file") | .details[] | select(startswith("WARN quote-wrapped allowed key: ")) |
+  sub("WARN quote-wrapped allowed key: "; "")' | sort | tr '\n' ',')"
+if [ "$(swf_status "$SWF_QUOTES_OUT" "secrets.env_file")" = "WARN" ] &&
+   [ "$SWF_QUOTES_RC" -eq 0 ] &&
+   [ "$SWF_QUOTE_WARN_NAMES" = "DOUBLE_QUOTED_TOKEN,SINGLE_QUOTED_TOKEN," ] &&
+   printf '%s' "$SWF_QUOTES_OUT" | jq -e '.checks[] | select(.id == "secrets.env_file") |
+     .message | contains("2 allowed key(s) are quote-wrapped and will be delivered with quote characters")' >/dev/null 2>&1; then
+  pass "doctor secrets resolution: matching outer single/double quotes are named as WARN even under on_missing=fail"
+else
+  fail "doctor secrets resolution: matching outer single/double quotes are named as WARN even under on_missing=fail" \
+    "rc=$SWF_QUOTES_RC names=$SWF_QUOTE_WARN_NAMES output=$SWF_QUOTES_OUT"
+fi
+
+SWF_SECRET_OUTPUTS="$(printf '%s\n%s\n%s' "$SWF_SECRETS_FAIL_OUT" "$SWF_SECRETS_WARN_OUT" "$SWF_QUOTES_OUT")"
+SWF_VALUE_LEAK=""
+for swf_secret_value in "$SWF_BARE_VALUE" "$SWF_EXPORT_VALUE" "$SWF_DEFAULT_VALUE" \
+                        "$SWF_DOUBLE_QUOTED_VALUE" "$SWF_SINGLE_QUOTED_VALUE" "$SWF_INNER_QUOTE_VALUE"; do
+  if printf '%s' "$SWF_SECRET_OUTPUTS" | grep -Fq "$swf_secret_value"; then
+    SWF_VALUE_LEAK="$swf_secret_value"
+  fi
+done
+if [ -z "$SWF_VALUE_LEAK" ]; then
+  pass "doctor secrets resolution: active key-resolution output emits no secret value"
+else
+  fail "doctor secrets resolution: active key-resolution output emits no secret value" "leaked a planted value"
+fi
+
+jq '.secrets.allow = ["BARE_TOKEN", "INNER_QUOTE_TOKEN", "INERT_TOKEN"] |
+    .secrets.on_missing = "fail"' "$SWF_CFG_BACKUP" > "$SWF_CONFIG"
+SWF_SECRETS_VALID_OUT="$(swf_doctor --json)"
+SWF_SECRETS_VALID_RC=$?
+SWF_INNER_QUOTE_PARSED="$( (source "$HERE/lib.sh"; _parse_env_file_value "$SWF_PROJECT/workspace.local.env" "INNER_QUOTE_TOKEN") )"
+SWF_INERT_PARSED="$( (source "$HERE/lib.sh"; _parse_env_file_value "$SWF_PROJECT/workspace.local.env" "INERT_TOKEN") )"
+SWF_INERT_EXPECTED='$(touch '"$SWF_INERT_MARKER"')'
+if [ "$(swf_status "$SWF_SECRETS_VALID_OUT" "secrets.env_file")" = "OK" ] &&
+   [ "$SWF_SECRETS_VALID_RC" -eq 0 ] &&
+   [ "$SWF_INERT_PARSED" = "$SWF_INERT_EXPECTED" ] &&
+   [ ! -e "$SWF_INERT_MARKER" ]; then
+  pass "doctor secrets resolution: bare/inner-quote/inert values resolve and command substitution stays inert"
+else
+  fail "doctor secrets resolution: bare/inner-quote/inert values resolve and command substitution stays inert" \
+    "rc=$SWF_SECRETS_VALID_RC status=$(swf_status "$SWF_SECRETS_VALID_OUT" "secrets.env_file") marker=$([ -e "$SWF_INERT_MARKER" ] && echo yes || echo no)"
+fi
+SWF_INNER_QUOTE_WARN="$(printf '%s' "$SWF_SECRETS_VALID_OUT" | jq -r '.checks[] |
+  select(.id == "secrets.env_file") | .details[] | select(contains("INNER_QUOTE_TOKEN"))')"
+if [ "$SWF_INNER_QUOTE_PARSED" = "$SWF_INNER_QUOTE_VALUE" ] &&
+   [ -z "$SWF_INNER_QUOTE_WARN" ] &&
+   [ "$(swf_status "$SWF_SECRETS_VALID_OUT" "secrets.env_file")" = "OK" ]; then
+  pass "doctor secrets resolution: an inner quote is preserved literally without triggering the outer-quote WARN"
+else
+  fail "doctor secrets resolution: an inner quote is preserved literally without triggering the outer-quote WARN" \
+    "status=$(swf_status "$SWF_SECRETS_VALID_OUT" "secrets.env_file") detail=$SWF_INNER_QUOTE_WARN"
+fi
+
+printf 'SAMPLE_TOKEN=%s\n' "$SWF_SECRET" > "$SWF_PROJECT/workspace.local.env"
+chmod 600 "$SWF_PROJECT/workspace.local.env"
+cp "$SWF_CFG_BACKUP" "$SWF_CONFIG"
 
 # --- F9: state dir ----------------------------------------------------------
 mkdir -p "$SWF_STATE/session-workspace/sample-project"
