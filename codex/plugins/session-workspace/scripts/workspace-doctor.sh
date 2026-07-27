@@ -35,8 +35,11 @@
 #                       knowledge.)
 #   panes.cwd           every configured pane's cwd resolves inside the project
 #                       root; a missing `optional: true` dir is INFO, not ERROR
-#   secrets.env_file    presence, mode 0600, owner, non-symlink, git-ignored.
-#                       NEVER reads or prints a secret VALUE — only metadata.
+#   secrets.env_file    presence, mode 0600, owner, non-symlink, git-ignored,
+#                       then reads literal KEY=value lines to verify that each
+#                       secrets.allow[] name resolves with the adapter parser.
+#                       Secret VALUES are never emitted (not even their length
+#                       or a fragment); only unresolved key names are reported.
 #   state.dir           the project state dir is writable with owner-only perms
 #   runtime.<name>      each configured runtime's program is on PATH
 #   stores.drift        ledger-shaped files under a coordination base OTHER
@@ -375,9 +378,19 @@ check_pane_cwds() {
 }
 
 # ============================================================================
-# 5. Secrets file gates — reads the file's METADATA only. This function never
-#    opens the file, so no secret value can reach the report.
+# 5. Secrets file gates — checks metadata first, then opens the gated file only
+#    to resolve secrets.allow[] names with lib.sh's adapter parser. Values are
+#    held only in local variables for shape checks and are NEVER emitted.
 # ============================================================================
+_doctor_secret_value_is_deliverable() {
+  local value="$1"
+  case "$value" in
+    *'${'*':-'*'}'*) return 1 ;;
+    \"*\"|\'*\') return 2 ;;
+  esac
+  return 0
+}
+
 check_secrets() {
   [ -n "$CONFIG_JSON" ] || return 0
   [ "$CONFIG_VALID" -eq 1 ] || return 0
@@ -473,9 +486,56 @@ WARN git-ignore status unverifiable (project root is not a git repository, or gi
     remediation="${remediation}verify by hand that $env_file can never be committed"
   fi
 
-  local message="all gates pass"
-  [ "$status" = "WARN" ] && message="gates pass, with a caveat"
-  [ "$status" = "ERROR" ] && message="one or more gates FAIL"
+  local message="all gates pass" allow_rows="" key="" value="" value_status
+  local resolved_count=0 missing_count=0 quote_count=0 on_missing key_status
+  if [ "$status" != "ERROR" ]; then
+    on_missing="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.on_missing // "warn"')"
+    key_status="WARN"
+    [ "$on_missing" = "fail" ] && key_status="ERROR"
+    allow_rows="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.allow[]?')"
+    while IFS= read -r key; do
+      [ -n "$key" ] || continue
+      value=""
+      value_status=1
+      if value="$(_parse_env_file_value "$full" "$key")"; then
+        _doctor_secret_value_is_deliverable "$value"
+        value_status=$?
+      fi
+      case "$value_status" in
+        0)
+          resolved_count=$((resolved_count + 1))
+          ;;
+        2)
+          quote_count=$((quote_count + 1))
+          status="$(worse "$status" "WARN")"
+          details="$details
+WARN quote-wrapped allowed key: $key"
+          ;;
+        *)
+          missing_count=$((missing_count + 1))
+          status="$(worse "$status" "$key_status")"
+          details="$details
+$key_status unresolvable allowed key: $key"
+          ;;
+      esac
+    done <<<"$allow_rows"
+
+    if [ "$missing_count" -gt 0 ]; then
+      message="$missing_count allowed key(s) do not resolve (secrets.on_missing: $on_missing)"
+      [ "$quote_count" -gt 0 ] && message="$message; $quote_count quote-wrapped key(s) need review"
+      [ -n "$remediation" ] && remediation="$remediation; "
+      remediation="${remediation}Use one bare KEY=value line per listed key — no export prefix, no \${VAR:-default} expansion, and no surrounding quotes."
+    elif [ "$quote_count" -gt 0 ]; then
+      message="$quote_count allowed key(s) are quote-wrapped and will be delivered with quote characters"
+      [ -n "$remediation" ] && remediation="$remediation; "
+      remediation="${remediation}Use one bare KEY=value line per listed key — remove the matching surrounding quotes unless they are intentional."
+    elif [ "$status" = "WARN" ]; then
+      message="gates pass with a caveat; all $resolved_count allowed key(s) resolve"
+    else
+      message="all gates pass; all $resolved_count allowed key(s) resolve"
+    fi
+  fi
+  [ "$status" = "ERROR" ] && [ "$missing_count" -eq 0 ] && [ "$quote_count" -eq 0 ] && message="one or more gates FAIL"
   add_check "secrets.env_file" "secrets file" "$status" "$env_file: $message" "$remediation" "$details"
 }
 
