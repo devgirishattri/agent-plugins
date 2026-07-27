@@ -23,6 +23,7 @@ jobs:
           bash codex/plugins/session-manager/scripts/test-session-manager.sh
           bash codex/plugins/knowledge/scripts/test-docs-create.sh
           bash codex/plugins/knowledge/scripts/test-context.sh
+          bash codex/plugins/chronos/scripts/test-chronos.sh
           mkdir -p "$RUNNER_TEMP/codex-session-chat"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-chat" \
@@ -40,6 +41,7 @@ jobs:
         run: |
           bash plugins/session-manager/scripts/test-session-manager.sh
           bash plugins/knowledge/scripts/test-docs-create.sh
+          bash plugins/chronos/scripts/test-chronos.sh
           mkdir -p "$RUNNER_TEMP/claude-session-chat"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-chat" \

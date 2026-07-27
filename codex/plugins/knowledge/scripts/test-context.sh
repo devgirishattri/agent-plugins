@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # assertions read `CHECK && ok || fail ...`; ok() always
+# returns 0, so fail can only run when CHECK itself failed.
 # Hermetic smoke tests for knowledge-context lifecycle, hook, and share transport.
 set -euo pipefail
 
@@ -31,9 +33,16 @@ fail() {
   exit 1
 }
 
+# Assertions are fail-fast: fail() exits non-zero on the first failure, so
+# reaching the summary means every assertion below passed. ok() counts the
+# assertions actually exercised, so a suite that quietly stops asserting shows a
+# dropped count instead of an unchanged "PASS" line.
+ASSERTIONS=0
+ok() { ASSERTIONS=$((ASSERTIONS + 1)); }
+
 assert_contains() {
   local file="$1" expected="$2"
-  grep -Fq -- "$expected" "$file" || fail "$file did not contain: $expected"
+  grep -Fq -- "$expected" "$file" && ok || fail "$file did not contain: $expected"
 }
 
 path_mode() {
@@ -43,7 +52,7 @@ path_mode() {
 assert_mode() {
   local expected="$1" path="$2" actual
   actual=$(path_mode "$path")
-  [ "$actual" = "$expected" ] || fail "$path mode was $actual, expected $expected"
+  [ "$actual" = "$expected" ] && ok || fail "$path mode was $actual, expected $expected"
 }
 
 # GNU stat's -f flag reports filesystem details rather than selecting a format.
@@ -125,7 +134,7 @@ assert_contains "$TMP/strict-name-history.out" "canonical snake_case"
 
 printf '# Session Context: alpha\n\nfirst version\n' > "$TMP/input.md"
 bash "$SCRIPT_DIR/save-context.sh" alpha "$TMP/input.md" > "$TMP/save-1.out"
-[ -f "$SESSION_CONTEXT_HOME/alpha.md" ] || fail "save did not create alpha.md"
+[ -f "$SESSION_CONTEXT_HOME/alpha.md" ] && ok || fail "save did not create alpha.md"
 assert_mode 700 "$SESSION_CONTEXT_HOME"
 assert_mode 600 "$SESSION_CONTEXT_HOME/alpha.md"
 STORE_ABS=$(cd "$SESSION_CONTEXT_HOME" && pwd -P)
@@ -139,9 +148,9 @@ bash "$SCRIPT_DIR/diff-context.sh" alpha --versions > "$TMP/versions.out"
 assert_contains "$TMP/versions.out" "History versions for 'alpha'"
 assert_mode 700 "$SESSION_CONTEXT_HOME/.history"
 alpha_history=$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'alpha.*.md' -print -quit)
-[ -n "$alpha_history" ] || fail "overwrite did not create alpha history"
+[ -n "$alpha_history" ] && ok || fail "overwrite did not create alpha history"
 expected_offset=$(TZ="${AGENT_PLUGINS_TIME_ZONE:-Asia/Kolkata}" date +%z)
-[[ "$(basename "$alpha_history")" == *"${expected_offset}.md" ]] || fail "new history filename is not in the configured timezone"
+[[ "$(basename "$alpha_history")" == *"${expected_offset}.md" ]] && ok || fail "new history filename is not in the configured timezone"
 assert_mode 600 "$alpha_history"
 
 # Numeric-offset ordering must use real instants, not local wall-clock text.
@@ -152,7 +161,7 @@ printf 'older\n' > "$MIXED_STORE/.history/mixed.20260720-140000Z.md"
 printf 'newer\n' > "$MIXED_STORE/.history/mixed.20260720-100100-0400.md"
 mixed_versions=$(SESSION_CONTEXT_HOME="$MIXED_STORE" bash "$SCRIPT_DIR/diff-context.sh" mixed --versions)
 mixed_first=$(printf '%s\n' "$mixed_versions" | sed -n '2p' | tr -d ' ')
-[ "$mixed_first" = "20260720-100100-0400" ] || fail "history versions are not ordered by instant: $mixed_versions"
+[ "$mixed_first" = "20260720-100100-0400" ] && ok || fail "history versions are not ordered by instant: $mixed_versions"
 
 # Safe legacy stores migrate to owner-only modes. Exact 0400 auto contexts stay
 # immutable instead of being broadened to 0600.
@@ -198,11 +207,11 @@ if [ "$race_failed" -eq 1 ]; then
 fi
 assert_mode 700 "$RACE_STORE"
 for race_index in 1 2 3 4 5 6; do
-  [ -f "$RACE_STORE/race$race_index.md" ] || fail "race$race_index snapshot is missing"
+  [ -f "$RACE_STORE/race$race_index.md" ] && ok || fail "race$race_index snapshot is missing"
   assert_mode 600 "$RACE_STORE/race$race_index.md"
 done
 [ -z "$(find "$RACE_STORE" -name '.knowledge-context.tmp.*' -print -quit)" ] \
-  || fail "atomic save left a temporary file behind"
+  && ok || fail "atomic save left a temporary file behind"
 
 # Writer lock serializes saves (event-gated, no wall-clock race): while a holder
 # holds the lock, a competing save BLOCKS (never races the holder's tree / temp)
@@ -221,18 +230,18 @@ LS_ACQ="$TMP/ls-acquired"; LS_REL="$TMP/ls-release"; rm -f "$LS_ACQ" "$LS_REL"
 ) &
 ls_holder_pid=$!
 ls_w=0; while [ ! -e "$LS_ACQ" ] && [ "$ls_w" -lt 3000 ]; do sleep 0.05; ls_w=$((ls_w + 50)); done
-[ -e "$LS_ACQ" ] || fail "lock holder never acquired the writer lock"
+[ -e "$LS_ACQ" ] && ok || fail "lock holder never acquired the writer lock"
 printf 'lock probe\n' > "$TMP/ls-probe.md"
 SESSION_CONTEXT_HOME="$LOCK_SERIAL_STORE" bash "$SCRIPT_DIR/save-context.sh" lockprobe "$TMP/ls-probe.md" \
   > "$TMP/ls-probe.out" 2>&1 &
 ls_save_pid=$!
 sleep 0.4   # let the save reach acquire; the holder cannot release until we signal
 { kill -0 "$ls_save_pid" 2>/dev/null && [ ! -f "$LOCK_SERIAL_STORE/lockprobe.md" ]; } \
-  || fail "competing save did not block on the held writer lock"
+  && ok || fail "competing save did not block on the held writer lock"
 : > "$LS_REL"   # signal the holder to release
-wait "$ls_holder_pid" || fail "lock holder exited nonzero"
-wait "$ls_save_pid" || fail "blocked save did not complete after the writer lock was released"
-[ -f "$LOCK_SERIAL_STORE/lockprobe.md" ] || fail "blocked save produced no snapshot after release"
+wait "$ls_holder_pid" && ok || fail "lock holder exited nonzero"
+wait "$ls_save_pid" && ok || fail "blocked save did not complete after the writer lock was released"
+[ -f "$LOCK_SERIAL_STORE/lockprobe.md" ] && ok || fail "blocked save produced no snapshot after release"
 
 # A stale observer may briefly claim the current generation before discovering
 # its token changed. The owner release path waits for that transient claim to be
@@ -271,12 +280,12 @@ SESSION_CONTEXT_HOME="$STALE_STORE" bash -c '
   [ "$(sed -n "1p" "$root/.knowledge-context.lock/pid")" = "$$" ] || exit 1
   [ "$(_context_path_mode "$root/.knowledge-context.lock/pid")" = "600" ] || exit 1
   release_context_store_lock
-' _ "$SCRIPT_DIR/lib.sh" || fail "dead writer lock was not safely reclaimed"
-[ ! -e "$STALE_STORE/.knowledge-context.lock" ] || fail "reclaimed writer lock was left behind"
+' _ "$SCRIPT_DIR/lib.sh" && ok || fail "dead writer lock was not safely reclaimed"
+[ ! -e "$STALE_STORE/.knowledge-context.lock" ] && ok || fail "reclaimed writer lock was left behind"
 [ -z "$(find "$TMP" -maxdepth 1 -name 'stale-contexts.knowledge-context-stale.*' -print -quit)" ] \
-  || fail "stale-lock quarantine was left behind"
+  && ok || fail "stale-lock quarantine was left behind"
 [ -z "$(find "$STALE_STORE" -mindepth 1 -maxdepth 1 -name '.knowledge-context-stale.*' -print -quit 2>/dev/null)" ] \
-  || fail "in-store stale-lock quarantine was left behind"
+  && ok || fail "in-store stale-lock quarantine was left behind"
 
 # ABA regression: a waiter may observe a dead generation, get descheduled while
 # that pathname turns over, then resume against a new live writer. The exact old
@@ -340,14 +349,14 @@ SESSION_CONTEXT_HOME="$XR_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/xr-
   || { chmod 755 "$XR_PARENT"; fail "exact-root store: dead-lock reclaim failed: $(cat "$TMP/xr-list-2.out")"; }
 xr_parent_after=$(ls -1a "$XR_PARENT")
 chmod 755 "$XR_PARENT"
-grep -Fq 'proj_xr' "$TMP/xr-list-1.out" || fail "exact-root store: first listing missed the snapshot"
-grep -Fq 'proj_xr' "$TMP/xr-list-2.out" || fail "exact-root store: reclaim listing missed the snapshot"
+grep -Fq 'proj_xr' "$TMP/xr-list-1.out" && ok || fail "exact-root store: first listing missed the snapshot"
+grep -Fq 'proj_xr' "$TMP/xr-list-2.out" && ok || fail "exact-root store: reclaim listing missed the snapshot"
 assert_contains "$XR_STORE/proj_xr.md" "survives lock turnover"
-[ "$xr_parent_before" = "$xr_parent_after" ] || fail "exact-root store: parent directory contents changed"
+[ "$xr_parent_before" = "$xr_parent_after" ] && ok || fail "exact-root store: parent directory contents changed"
 [ -z "$(find "$XR_STORE" -mindepth 1 \( -name '.knowledge-context.lock' -o -name '.knowledge-context-stale.*' -o -name '.knowledge-context.tmp.*' \) -print -quit 2>/dev/null)" ] \
-  || fail "exact-root store: lock/quarantine residue remained"
+  && ok || fail "exact-root store: lock/quarantine residue remained"
 [ -z "$(find "${XR_STORE}.knowledge-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] \
-  || fail "exact-root store: sibling quarantine artifact created"
+  && ok || fail "exact-root store: sibling quarantine artifact created"
 
 # A quarantine orphaned by a process killed mid-teardown is finished (swept)
 # by the next writer-lock holder, while a planted symlink at a quarantine name
@@ -366,10 +375,10 @@ printf '%s\n' "$orph_dead" > "$ORPHAN_Q/pid"
 chmod 600 "$ORPHAN_Q/pid"
 mkdir -m 700 "$ORPHAN_Q/.reclaim"
 SESSION_CONTEXT_HOME="$ORPHAN_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP/orphan-list.out" 2>&1 \
-  || fail "orphaned quarantine blocked the store: $(cat "$TMP/orphan-list.out")"
-grep -Fq 'proj_orphan' "$TMP/orphan-list.out" || fail "orphan-store listing missed the snapshot"
-[ ! -e "$ORPHAN_Q" ] || fail "orphaned quarantine was not swept under the writer lock"
-[ ! -e "$ORPHAN_STORE/.knowledge-context.lock" ] || fail "orphan sweep left an active writer lock"
+  && ok || fail "orphaned quarantine blocked the store: $(cat "$TMP/orphan-list.out")"
+grep -Fq 'proj_orphan' "$TMP/orphan-list.out" && ok || fail "orphan-store listing missed the snapshot"
+[ ! -e "$ORPHAN_Q" ] && ok || fail "orphaned quarantine was not swept under the writer lock"
+[ ! -e "$ORPHAN_STORE/.knowledge-context.lock" ] && ok || fail "orphan sweep left an active writer lock"
 
 EVIL_STORE="$TMP/evil-quarantine-contexts"
 mkdir -m 700 "$EVIL_STORE"
@@ -379,9 +388,9 @@ if SESSION_CONTEXT_HOME="$EVIL_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TM
   fail "symlink quarantine was accepted: $(cat "$TMP/evil-list.out")"
 fi
 grep -q 'quarantine cannot be a symbolic link' "$TMP/evil-list.out" \
-  || fail "symlink quarantine rejection did not explain itself: $(cat "$TMP/evil-list.out")"
-[ -e "$TMP/evil-target" ] || fail "symlink quarantine target was removed"
-[ -L "$EVIL_STORE/.knowledge-context-stale.12345" ] || fail "symlink quarantine was removed instead of rejected"
+  && ok || fail "symlink quarantine rejection did not explain itself: $(cat "$TMP/evil-list.out")"
+[ -e "$TMP/evil-target" ] && ok || fail "symlink quarantine target was removed"
+[ -L "$EVIL_STORE/.knowledge-context-stale.12345" ] && ok || fail "symlink quarantine was removed instead of rejected"
 
 # The lock directory permits an owner-only numeric PID plus the transient empty
 # owner-only reclaim claim. Every other entry or claim shape remains rejected.
@@ -428,7 +437,7 @@ if SESSION_CONTEXT_HOME="$TMP/symlink-contexts" \
   bash "$SCRIPT_DIR/save-context.sh" escaped "$TMP/input.md" > "$TMP/root-link.out" 2>&1; then
   fail "save accepted a symlinked SESSION_CONTEXT_HOME"
 fi
-[ ! -e "$ROOT_TARGET/escaped.md" ] || fail "save wrote through a symlinked store root"
+[ ! -e "$ROOT_TARGET/escaped.md" ] && ok || fail "save wrote through a symlinked store root"
 assert_contains "$TMP/root-link.out" "cannot be a symbolic link"
 
 # Nested snapshot symlinks and special files are rejected before reads/writes;
@@ -442,7 +451,7 @@ if SESSION_CONTEXT_HOME="$NESTED_STORE" \
   fail "load accepted a nested snapshot symlink"
 fi
 assert_contains "$TMP/nested-link.out" "nested symbolic links are not allowed"
-[ "$(cat "$TMP/outside-context.md")" = "do-not-change" ] || fail "nested symlink target was modified"
+[ "$(cat "$TMP/outside-context.md")" = "do-not-change" ] && ok || fail "nested symlink target was modified"
 rm "$NESTED_STORE/evil.md"
 mkfifo "$NESTED_STORE/special.md"
 if SESSION_CONTEXT_HOME="$NESTED_STORE" \
@@ -469,7 +478,7 @@ printf '%s\n' '{"hook_event_name":"SessionStart"}' \
 assert_contains "$TMP/hook.out" '"hookEventName":"SessionStart"'
 assert_contains "$TMP/hook.out" '$knowledge:context-load'
 grep -Fq 'bash \"$PLUGIN_ROOT/scripts/detect-snapshots.sh\"' "$PLUGIN_ROOT/hooks/hooks.json" \
-  || fail "SessionStart hook does not use the runtime-provided PLUGIN_ROOT"
+  && ok || fail "SessionStart hook does not use the runtime-provided PLUGIN_ROOT"
 
 MOCK_BIN="$TMP/bin"
 mkdir -p "$MOCK_BIN"
@@ -501,7 +510,7 @@ if TMUX_CAPTURE="$TMP/invalid-label.capture" \
     > "$TMP/invalid-target.out" 2>&1; then
   fail "fallback accepted an invalid target label"
 fi
-[ ! -s "$TMP/invalid-label.capture" ] || fail "invalid fallback label emitted tmux keys"
+[ ! -s "$TMP/invalid-label.capture" ] && ok || fail "invalid fallback label emitted tmux keys"
 
 CHAT_STUB="$TMP/session-chat-stub"
 mkdir -p "$CHAT_STUB/scripts"
@@ -557,7 +566,7 @@ if TMUX_CAPTURE="$TMP/tmux.capture" \
   bash "$SCRIPT_DIR/share-context.sh" target-test alpha > "$TMP/share-chat-fail.out" 2>&1; then
   fail "share succeeded after the hardened session-chat transport failed"
 fi
-[ ! -s "$TMP/tmux.capture" ] || fail "share bypassed a session-chat failure through raw tmux"
+[ ! -s "$TMP/tmux.capture" ] && ok || fail "share bypassed a session-chat failure through raw tmux"
 
 ISOLATED_ROOT="$TMP/knowledge-context-isolated"
 mkdir -p "$ISOLATED_ROOT"
@@ -569,7 +578,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$CACHE_HOME/plugins/cache/legacy/sessi
 printf '#!/usr/bin/env bash\nexit 0\n' > "$CACHE_HOME/plugins/cache/current/session-chat/0.16.5/scripts/send-message.sh"
 CACHE_ROOT=$(CODEX_HOME="$CACHE_HOME" bash -c 'source "$1"; session_chat_root' _ "$ISOLATED_ROOT/scripts/lib.sh")
 [ "$CACHE_ROOT" = "$CACHE_HOME/plugins/cache/current/session-chat/0.16.5" ] \
-  || fail "session-chat cache resolver did not select the newest provider-independent version"
+  && ok || fail "session-chat cache resolver did not select the newest provider-independent version"
 
 TMUX_CAPTURE="$TMP/tmux.capture" \
   PATH="$MOCK_BIN:$PATH" TMUX=mock TMUX_PANE=%1 \
@@ -584,20 +593,20 @@ bash "$SCRIPT_DIR/save-context.sh" beta "$TMP/beta.md" > /dev/null
 printf 'beta two\n' > "$TMP/beta.md"
 bash "$SCRIPT_DIR/save-context.sh" beta "$TMP/beta.md" > /dev/null
 beta_history=$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'beta.*.md' -print -quit)
-[ -n "$beta_history" ] || fail "beta history fixture is missing"
+[ -n "$beta_history" ] && ok || fail "beta history fixture is missing"
 
 if bash "$SCRIPT_DIR/remove-context.sh" alpha > "$TMP/remove-guard.out" 2>&1; then
   fail "remove-context bypassed the --confirmed guard"
 fi
 assert_contains "$TMP/remove-guard.out" "--confirmed"
-[ -f "$SESSION_CONTEXT_HOME/alpha.md" ] || fail "unguarded removal deleted alpha"
+[ -f "$SESSION_CONTEXT_HOME/alpha.md" ] && ok || fail "unguarded removal deleted alpha"
 
 bash "$SCRIPT_DIR/remove-context.sh" alpha --confirmed > "$TMP/remove.out"
-[ ! -e "$SESSION_CONTEXT_HOME/alpha.md" ] || fail "remove left alpha.md behind"
+[ ! -e "$SESSION_CONTEXT_HOME/alpha.md" ] && ok || fail "remove left alpha.md behind"
 assert_contains "$TMP/remove.out" "history file(s)"
 [ -z "$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'alpha.*.md' -print -quit)" ] \
-  || fail "remove left alpha history behind"
-[ -f "$beta_history" ] || fail "removing alpha deleted beta history"
+  && ok || fail "remove left alpha history behind"
+[ -f "$beta_history" ] && ok || fail "removing alpha deleted beta history"
 
 # Confirmed cleanup also removes orphan history after the current snapshot has
 # already disappeared, and errors only when neither live nor history data exists.
@@ -607,10 +616,10 @@ printf 'orphan two\n' > "$TMP/orphan.md"
 bash "$SCRIPT_DIR/save-context.sh" orphan "$TMP/orphan.md" > /dev/null
 rm "$SESSION_CONTEXT_HOME/orphan.md"
 orphan_history=$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'orphan.*.md' -print -quit)
-[ -n "$orphan_history" ] || fail "orphan history fixture is missing"
+[ -n "$orphan_history" ] && ok || fail "orphan history fixture is missing"
 bash "$SCRIPT_DIR/remove-context.sh" orphan --confirmed > "$TMP/remove-orphan.out"
 assert_contains "$TMP/remove-orphan.out" "0 current snapshot and 1 history file(s)"
-[ ! -e "$orphan_history" ] || fail "confirmed remove retained orphan history"
+[ ! -e "$orphan_history" ] && ok || fail "confirmed remove retained orphan history"
 if bash "$SCRIPT_DIR/remove-context.sh" missing --confirmed > "$TMP/remove-missing.out" 2>&1; then
   fail "remove succeeded when neither current nor history data existed"
 fi
@@ -620,19 +629,19 @@ if rg -n --glob '!test-context.sh' --glob '!test-docs-create.sh' 'CODEX_PLUGIN_R
   fail "knowledge (context surface) still contains a fixed plugin-root or cache-version pin"
 fi
 rg -q 'request_user_input' "$PLUGIN_ROOT/skills/context-remove/SKILL.md" \
-  || fail "context-remove lacks structured-input guidance"
+  && ok || fail "context-remove lacks structured-input guidance"
 rg -q 'separate Yes/No confirmation' "$PLUGIN_ROOT/skills/context-remove/SKILL.md" \
-  || fail "context-remove lacks an explicit final confirmation"
+  && ok || fail "context-remove lacks an explicit final confirmation"
 rg -q 'remove-context.sh.*--confirmed' "$PLUGIN_ROOT/skills/context-remove/SKILL.md" \
-  || fail "context-remove skill does not pass the post-confirmation script guard"
+  && ok || fail "context-remove skill does not pass the post-confirmation script guard"
 rg -q 'remove-context.sh.*--confirmed' "$PLUGIN_ROOT/commands/context-remove.md" \
-  || fail "context-remove command does not pass the post-confirmation script guard"
+  && ok || fail "context-remove command does not pass the post-confirmation script guard"
 rg -q 'trap handle_signal HUP INT TERM' "$SCRIPT_DIR/save-context.sh" \
-  || fail "save-context signal handler can continue after releasing its lock"
+  && ok || fail "save-context signal handler can continue after releasing its lock"
 rg -q 'trap handle_signal HUP INT TERM' "$SCRIPT_DIR/remove-context.sh" \
-  || fail "remove-context signal handler can continue after releasing its lock"
+  && ok || fail "remove-context signal handler can continue after releasing its lock"
 rg -q 'does \*\*not\*\* copy' "$PLUGIN_ROOT/skills/knowledge/SKILL.md" \
-  || fail "knowledge overview does not document notification-only sharing"
+  && ok || fail "knowledge overview does not document notification-only sharing"
 if grep -Fq 'export SESSION_CONTEXT_HOME=' "$SCRIPT_DIR/share-context.sh"; then
   fail "share-context runtime still emits executable export guidance"
 fi
@@ -640,11 +649,11 @@ for remove_doc in \
   "$PLUGIN_ROOT/commands/context-remove.md" \
   "$PLUGIN_ROOT/skills/context-remove/SKILL.md"; do
   grep -Fq 'point-in-time preview' "$remove_doc" \
-    || fail "context-remove doc omits its point-in-time pre-confirmation preview: $remove_doc"
+    && ok || fail "context-remove doc omits its point-in-time pre-confirmation preview: $remove_doc"
   grep -Fq '^[a-z0-9]+(_[a-z0-9]+)*$' "$remove_doc" \
-    || fail "context-remove doc omits pre-preview label validation: $remove_doc"
+    && ok || fail "context-remove doc omits pre-preview label validation: $remove_doc"
   grep -Fq 'writer lock' "$remove_doc" \
-    || fail "context-remove doc omits concurrent-preview guidance: $remove_doc"
+    && ok || fail "context-remove doc omits concurrent-preview guidance: $remove_doc"
 done
 
 # Agent-facing context instructions must consume the launcher-provided store
@@ -666,27 +675,27 @@ for doc in "$PLUGIN_ROOT"/commands/context-*.md "$PLUGIN_ROOT"/skills/context-*/
     fail "context doc contains an assignment-prefixed context helper: $doc"
   fi
   grep -Fq 'inherited' "$doc" \
-    || fail "context doc omits inherited-environment guidance: $doc"
+    && ok || fail "context doc omits inherited-environment guidance: $doc"
   grep -Fq 'relaunch' "$doc" \
-    || fail "context doc omits relaunch guidance: $doc"
+    && ok || fail "context doc omits relaunch guidance: $doc"
 done
 
 for share_doc in \
   "$PLUGIN_ROOT/commands/context-share.md" \
   "$PLUGIN_ROOT/skills/context-share/SKILL.md"; do
   grep -Fq 'on the first attempt' "$share_doc" \
-    || fail "context-share doc omits first-attempt escalation guidance: $share_doc"
+    && ok || fail "context-share doc omits first-attempt escalation guidance: $share_doc"
   grep -Fq 'one literal Bash segment' "$share_doc" \
-    || fail "context-share doc omits the literal Bash segment contract: $share_doc"
+    && ok || fail "context-share doc omits the literal Bash segment contract: $share_doc"
 done
 
 grep -Fq 'inherited when the agent process started' "$PLUGIN_ROOT/skills/knowledge/SKILL.md" \
-  || fail "knowledge overview omits inherited-at-startup guidance"
+  && ok || fail "knowledge overview omits inherited-at-startup guidance"
 grep -Fq 'fail closed' "$PLUGIN_ROOT/skills/knowledge/SKILL.md" \
-  || fail "knowledge overview omits fail-closed guidance"
+  && ok || fail "knowledge overview omits fail-closed guidance"
 grep -Fq 'Direct callers of every script must set the variable explicitly' "$PLUGIN_ROOT/skills/knowledge/SKILL.md" \
-  || fail "knowledge overview lost its direct-caller requirement"
+  && ok || fail "knowledge overview lost its direct-caller requirement"
 grep -Fq 'inherited from the environment this agent process started with' "$SCRIPT_DIR/lib.sh" \
-  || fail "knowledge lib (context surface) omits inherited-at-startup guidance"
+  && ok || fail "knowledge lib (context surface) omits inherited-at-startup guidance"
 
-echo "knowledge context-surface smoke tests passed"
+echo "knowledge context-surface tests: $ASSERTIONS passed, 0 failed"

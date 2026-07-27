@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # assertions read `CHECK && ok || fail ...`; ok() always
+# returns 0, so fail can only run when CHECK itself failed.
 # test-session-chat.sh — Smoke tests for session-chat scripts
 # Supported platforms: macOS, Linux
 set -euo pipefail
@@ -27,6 +29,13 @@ fail() {
   exit 1
 }
 
+# Assertions are fail-fast: fail() exits non-zero on the first failure, so
+# reaching the summary means every assertion below passed. ok() counts the
+# assertions actually exercised, so a suite that quietly stops asserting shows a
+# dropped count instead of an unchanged "PASS" line.
+ASSERTIONS=0
+ok() { ASSERTIONS=$((ASSERTIONS + 1)); }
+
 path_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
 }
@@ -34,13 +43,13 @@ path_mode() {
 assert_contains() {
   local needle="$1"
   local haystack="$2"
-  printf '%s\n' "$haystack" | grep -F "$needle" >/dev/null || fail "missing expected text: $needle"
+  printf '%s\n' "$haystack" | grep -F "$needle" >/dev/null && ok || fail "missing expected text: $needle"
 }
 
 assert_file_contains() {
   local file="$1"
   local needle="$2"
-  grep -F "$needle" "$file" >/dev/null || fail "missing expected text in $file: $needle"
+  grep -F "$needle" "$file" >/dev/null && ok || fail "missing expected text in $file: $needle"
 }
 
 assert_file_not_contains() {
@@ -65,7 +74,7 @@ done
 assert_empty() {
   local value="$1"
   local label="$2"
-  [ -z "$value" ] || fail "$label was not empty: $value"
+  [ -z "$value" ] && ok || fail "$label was not empty: $value"
 }
 
 require_tmux_env() {
@@ -130,10 +139,10 @@ assert_empty "$QUEUE_OUT" "fresh queued message"
 QUEUE_OUT="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; mark_message_ready recipient-test deadbeef; drain_inbox "" recipient-test' "$SCRIPT_DIR/lib.sh")"
 assert_contains $'deadbeef\tsend\tsender-test\tqueued fallback' "$QUEUE_OUT"
 QUEUE_LOCK="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; queue_lock_path recipient-test' "$SCRIPT_DIR/lib.sh")"
-[ "$QUEUE_LOCK" = "$TEST_HOME/messages/queue/.locks/recipient-test.lock" ] || fail "queue lock path was not messages-dir keyed: $QUEUE_LOCK"
+[ "$QUEUE_LOCK" = "$TEST_HOME/messages/queue/.locks/recipient-test.lock" ] && ok || fail "queue lock path was not messages-dir keyed: $QUEUE_LOCK"
 
 CORRELATED_REPLY="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; correlate_reply deadbeef "[re:deadbeef] [re:deadbeef] reply once"' "$SCRIPT_DIR/lib.sh")"
-[ "$CORRELATED_REPLY" = "[re:deadbeef] reply once" ] || fail "correlate_reply did not normalize the token exactly once: $CORRELATED_REPLY"
+[ "$CORRELATED_REPLY" = "[re:deadbeef] reply once" ] && ok || fail "correlate_reply did not normalize the token exactly once: $CORRELATED_REPLY"
 if CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; correlate_reply deadbeef "[re:cafebabe] conflicting"' "$SCRIPT_DIR/lib.sh" 2>"$ERR_FILE"; then
   fail "correlate_reply accepted a conflicting token"
 fi
@@ -161,9 +170,9 @@ LOCK_TMP_CANONICAL=$(cd "$LOCK_TMP" && pwd -P)
 LOCK_UID=$(id -u)
 LIVE_LOCK=$(TMPDIR="$LOCK_TMP" bash -c 'source "$0"; send_lock_path "%42"' "$SCRIPT_DIR/lib.sh")
 EXPECTED_LIVE_LOCK="$LOCK_TMP_CANONICAL/session-chat-$LOCK_UID/send-locks/_42.lock"
-[ "$LIVE_LOCK" = "$EXPECTED_LIVE_LOCK" ] || fail "send lock did not use the UID-scoped private root: $LIVE_LOCK"
-[ "$(path_mode "$LOCK_TMP_CANONICAL/session-chat-$LOCK_UID")" = "700" ] || fail "send-lock private root is not mode 700"
-[ "$(path_mode "$LOCK_TMP_CANONICAL/session-chat-$LOCK_UID/send-locks")" = "700" ] || fail "send-lock directory is not mode 700"
+[ "$LIVE_LOCK" = "$EXPECTED_LIVE_LOCK" ] && ok || fail "send lock did not use the UID-scoped private root: $LIVE_LOCK"
+[ "$(path_mode "$LOCK_TMP_CANONICAL/session-chat-$LOCK_UID")" = "700" ] && ok || fail "send-lock private root is not mode 700"
+[ "$(path_mode "$LOCK_TMP_CANONICAL/session-chat-$LOCK_UID/send-locks")" = "700" ] && ok || fail "send-lock directory is not mode 700"
 LIVE_LOCK_MODES=$(TMPDIR="$LOCK_TMP" bash -c '
   source "$0"
   lock=$(send_lock_path "%43") || exit 1
@@ -173,7 +182,7 @@ LIVE_LOCK_MODES=$(TMPDIR="$LOCK_TMP" bash -c '
   printf "%s %s\n" "$lock_mode" "$pid_mode"
   release_send_lock "$lock"
 ' "$SCRIPT_DIR/lib.sh")
-[ "$LIVE_LOCK_MODES" = "700 600" ] || fail "live send lock/pid modes are not 700/600: $LIVE_LOCK_MODES"
+[ "$LIVE_LOCK_MODES" = "700 600" ] && ok || fail "live send lock/pid modes are not 700/600: $LIVE_LOCK_MODES"
 
 LOCK_SYMLINK_TMP="$TEST_HOME/lock-symlink-tmp"
 mkdir -p "$LOCK_SYMLINK_TMP/target"
@@ -182,7 +191,7 @@ if TMPDIR="$LOCK_SYMLINK_TMP" bash -c 'source "$0"; send_lock_path "%42"' "$SCRI
   fail "send lock accepted a pre-planted symlink root"
 fi
 grep 'Refusing unsafe session-chat temp root' "$TEST_HOME/lock-symlink.err" >/dev/null \
-  || fail "send-lock symlink rejection did not explain the unsafe root"
+  && ok || fail "send-lock symlink rejection did not explain the unsafe root"
 
 LOCK_LOOSE_TMP="$TEST_HOME/lock-loose-tmp"
 mkdir -p "$LOCK_LOOSE_TMP/session-chat-$LOCK_UID"
@@ -191,7 +200,7 @@ if TMPDIR="$LOCK_LOOSE_TMP" bash -c 'source "$0"; send_lock_path "%42"' "$SCRIPT
   fail "send lock accepted a non-private root"
 fi
 grep 'Refusing non-private session-chat temp root' "$TEST_HOME/lock-loose.err" >/dev/null \
-  || fail "send-lock mode rejection did not explain the unsafe root"
+  && ok || fail "send-lock mode rejection did not explain the unsafe root"
 
 LOCK_RACE_TMP="$TEST_HOME/lock-race-tmp"
 mkdir -p "$LOCK_RACE_TMP"
@@ -202,10 +211,10 @@ for race_i in 1 2 3 4 5 6 7 8; do
   lock_race_pids="$lock_race_pids $!"
 done
 for race_pid in $lock_race_pids; do
-  wait "$race_pid" || fail "concurrent send-lock root initialization failed"
+  wait "$race_pid" && ok || fail "concurrent send-lock root initialization failed"
 done
 [ "$(path_mode "$(cd "$LOCK_RACE_TMP" && pwd -P)/session-chat-$LOCK_UID")" = "700" ] \
-  || fail "concurrently initialized send-lock root is not mode 700"
+  && ok || fail "concurrently initialized send-lock root is not mode 700"
 DUP_OUT="$(printf '%s\n' '[from:sender-test pane:%999 id:deadbeef] queued fallback' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto bash "$SCRIPT_DIR/detect-incoming-message.sh")"
 assert_empty "$DUP_OUT" "recent duplicate live hook output"
 
@@ -225,7 +234,7 @@ STOP_GUARD="$(printf '%s' '{"hook_event_name":"Stop","stop_hook_active":true}' |
 assert_empty "$STOP_GUARD" "stop_hook_active re-entry guard"
 # Guarded row must remain queued for the next UserPromptSubmit, not be lost.
 GUARD_ROWS="$(grep -c cafe0002 "$TEST_HOME/messages/queue/recipient-test.tsv" 2>/dev/null || true)"
-[ "$GUARD_ROWS" = "1" ] || fail "guarded Stop consumed the queued row (rows=$GUARD_ROWS)"
+[ "$GUARD_ROWS" = "1" ] && ok || fail "guarded Stop consumed the queued row (rows=$GUARD_ROWS)"
 CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; dequeue_message_id recipient-test cafe0002' "$SCRIPT_DIR/lib.sh"
 
 run_as_sender bash "$SCRIPT_DIR/list-panes.sh" > "$TEST_HOME/panes-current.txt"
@@ -281,18 +290,18 @@ assert_file_contains "$PERMISSION_ERR" "escalated/approved"
 EMPTY_OUT="$TEST_HOME/empty-list.out"
 EMPTY_ERR="$TEST_HOME/empty-list.err"
 run_with_empty_tmux bash "$SCRIPT_DIR/list-panes.sh" all >"$EMPTY_OUT" 2>"$EMPTY_ERR"
-[ ! -s "$EMPTY_OUT" ] || fail "empty pane listing emitted unexpected rows"
-[ ! -s "$EMPTY_ERR" ] || fail "empty pane listing emitted an unexpected error"
+[ ! -s "$EMPTY_OUT" ] && ok || fail "empty pane listing emitted unexpected rows"
+[ ! -s "$EMPTY_ERR" ] && ok || fail "empty pane listing emitted an unexpected error"
 
 run_with_empty_tmux bash "$SCRIPT_DIR/get-my-name.sh" \
   >"$TEST_HOME/empty-name.out" 2>"$TEST_HOME/empty-name.err"
-[ ! -s "$TEST_HOME/empty-name.out" ] || fail "unnamed pane emitted an unexpected name"
-[ ! -s "$TEST_HOME/empty-name.err" ] || fail "unnamed pane emitted an unexpected error"
+[ ! -s "$TEST_HOME/empty-name.out" ] && ok || fail "unnamed pane emitted an unexpected name"
+[ ! -s "$TEST_HOME/empty-name.err" ] && ok || fail "unnamed pane emitted an unexpected error"
 
 run_with_empty_tmux bash "$SCRIPT_DIR/pane-health.sh" --all \
   >"$TEST_HOME/empty-health.out" 2>"$TEST_HOME/empty-health.err"
 assert_file_contains "$TEST_HOME/empty-health.out" "No named panes found"
-[ ! -s "$TEST_HOME/empty-health.err" ] || fail "empty health check emitted an unexpected error"
+[ ! -s "$TEST_HOME/empty-health.err" ] && ok || fail "empty health check emitted an unexpected error"
 
 run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 \
   bash "$SCRIPT_DIR/send-message.sh" recipient-test "send happy path"
@@ -324,7 +333,7 @@ if run_as_sender bash "$SCRIPT_DIR/send-message.sh" missing-target "hello" 2>"$E
   fail "send to unknown pane unexpectedly succeeded"
 fi
 assert_file_contains "$ERR_FILE" "No pane named 'missing-target'"
-! grep -F "Failed to send message" "$ERR_FILE" >/dev/null || fail "generic send wrapper error leaked"
+! grep -F "Failed to send message" "$ERR_FILE" >/dev/null && ok || fail "generic send wrapper error leaked"
 
 if run_as_sender bash "$SCRIPT_DIR/send-message.sh" recipient-test $'line one\nline two' 2>"$ERR_FILE"; then
   fail "newline guard unexpectedly succeeded"
@@ -343,18 +352,18 @@ CAPTURED="$(capture_recipient)"
 assert_contains "dispatch (2 lines)" "$CAPTURED"
 assert_contains "read msg file for full task" "$CAPTURED"
 MSG_FILE="$(printf '%s\n' "$CAPTURED" | grep -o 'msg:[^ ]*' | tail -1 | sed 's/^msg://')"
-[ -f "$MSG_FILE" ] || fail "dispatch message file not found"
+[ -f "$MSG_FILE" ] && ok || fail "dispatch message file not found"
 assert_file_contains "$MSG_FILE" "dispatch one"
 assert_file_contains "$MSG_FILE" "dispatch two with special chars"
 file_mode=$(stat -c '%a' "$MSG_FILE" 2>/dev/null || stat -f '%Lp' "$MSG_FILE" 2>/dev/null)
-[ "$file_mode" = "600" ] || fail "dispatch message file is not owner-only: $file_mode"
+[ "$file_mode" = "600" ] && ok || fail "dispatch message file is not owner-only: $file_mode"
 
 printf '%s\n' "dispatch reply" "second line" > "$PROMPT_FILE"
 run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=5000 \
   bash "$SCRIPT_DIR/dispatch-to-session.sh" --reply-to cafebabe recipient-test "$PROMPT_FILE"
 REPLY_CAPTURED="$(capture_recipient)"
 REPLY_MSG_FILE="$(printf '%s\n' "$REPLY_CAPTURED" | grep -o 'msg:[^ ]*' | tail -1 | sed 's/^msg://')"
-[ -f "$REPLY_MSG_FILE" ] || fail "reply dispatch message file not found"
+[ -f "$REPLY_MSG_FILE" ] && ok || fail "reply dispatch message file not found"
 assert_file_contains "$REPLY_MSG_FILE" "[re:cafebabe] dispatch reply"
 REPLY_NOTICE="$(printf '%s\n' "$REPLY_CAPTURED" | grep -F "msg:$REPLY_MSG_FILE" | tail -1)"
 printf '%s\n' "$REPLY_NOTICE" | \
@@ -384,7 +393,7 @@ fi
 assert_file_contains "$ERR_FILE" 'Label must contain only'
 tmux set-option -p -t "$RECIPIENT" @name recipient-test
 dispatch_files_after=$(find "$TEST_HOME/messages" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
-[ "$dispatch_files_before" = "$dispatch_files_after" ] || fail "unsafe pane name created a dispatch file"
+[ "$dispatch_files_before" = "$dispatch_files_after" ] && ok || fail "unsafe pane name created a dispatch file"
 
 # Existing loose message data is migrated once to owner-only permissions.
 LOOSE_HOME="$TEST_HOME/loose-codex"
@@ -396,9 +405,9 @@ chmod 644 "$LOOSE_HOME/messages/old.md" "$LOOSE_HOME/messages/queue/old.tsv"
 CODEX_HOME="$LOOSE_HOME" bash -c 'source "$0"; ensure_messages_dir' "$SCRIPT_DIR/lib.sh"
 dir_mode=$(stat -c '%a' "$LOOSE_HOME/messages" 2>/dev/null || stat -f '%Lp' "$LOOSE_HOME/messages" 2>/dev/null)
 old_mode=$(stat -c '%a' "$LOOSE_HOME/messages/old.md" 2>/dev/null || stat -f '%Lp' "$LOOSE_HOME/messages/old.md" 2>/dev/null)
-[ "$dir_mode" = "700" ] || fail "messages directory migration left mode $dir_mode"
-[ "$old_mode" = "600" ] || fail "message migration left file mode $old_mode"
-[ -f "$LOOSE_HOME/messages/.perms-hardened-v1" ] || fail "permissions migration marker missing"
+[ "$dir_mode" = "700" ] && ok || fail "messages directory migration left mode $dir_mode"
+[ "$old_mode" = "600" ] && ok || fail "message migration left file mode $old_mode"
+[ -f "$LOOSE_HOME/messages/.perms-hardened-v1" ] && ok || fail "permissions migration marker missing"
 
 UNSAFE_HOME="$TEST_HOME/unsafe-codex"
 mkdir -p "$UNSAFE_HOME/redirect-target"
@@ -414,7 +423,7 @@ ln -s "$MARKER_HOME/outside-marker" "$MARKER_HOME/messages/.perms-hardened-v1"
 if CODEX_HOME="$MARKER_HOME" bash -c 'source "$0"; ensure_messages_dir' "$SCRIPT_DIR/lib.sh" 2> "$MARKER_HOME/marker.err"; then
   fail "messages directory hardening accepted a dangling marker symlink"
 fi
-[ ! -e "$MARKER_HOME/outside-marker" ] || fail "dangling marker symlink created an outside file"
+[ ! -e "$MARKER_HOME/outside-marker" ] && ok || fail "dangling marker symlink created an outside file"
 
 LOOSE_QUEUE_HOME="$TEST_HOME/loose-queue-codex"
 mkdir -p "$LOOSE_QUEUE_HOME/messages/queue"
@@ -423,7 +432,7 @@ CODEX_HOME="$LOOSE_QUEUE_HOME" bash -c 'source "$0"; ensure_messages_dir' "$SCRI
 chmod 777 "$LOOSE_QUEUE_HOME/messages/queue"
 CODEX_HOME="$LOOSE_QUEUE_HOME" bash -c 'source "$0"; enqueue_message recipient-test aaaa0000 send sender-test payload' "$SCRIPT_DIR/lib.sh"
 loose_queue_mode=$(stat -c '%a' "$LOOSE_QUEUE_HOME/messages/queue" 2>/dev/null || stat -f '%Lp' "$LOOSE_QUEUE_HOME/messages/queue" 2>/dev/null)
-[ "$loose_queue_mode" = "700" ] || fail "post-marker queue directory remained mode $loose_queue_mode"
+[ "$loose_queue_mode" = "700" ] && ok || fail "post-marker queue directory remained mode $loose_queue_mode"
 
 # The migration marker must not bypass validation of nested runtime paths.
 # Queue, lock, archive, and recipient-ledger symlinks must never redirect a
@@ -439,7 +448,7 @@ if CODEX_HOME="$NESTED_HOME" bash -c 'source "$0"; enqueue_message recipient-tes
   fail "message enqueue accepted a symlinked queue directory"
 fi
 assert_file_contains "$NESTED_HOME/queue.err" 'Refusing symbolic-link message directory'
-[ ! -e "$NESTED_HOME/outside-queue/recipient-test.tsv" ] || fail "queue symlink redirected a message write"
+[ ! -e "$NESTED_HOME/outside-queue/recipient-test.tsv" ] && ok || fail "queue symlink redirected a message write"
 
 LOCK_LINK_HOME="$TEST_HOME/lock-symlink-codex"
 mkdir -p "$LOCK_LINK_HOME/messages/queue" "$LOCK_LINK_HOME/outside-locks"
@@ -452,7 +461,7 @@ if CODEX_HOME="$LOCK_LINK_HOME" bash -c 'source "$0"; enqueue_message recipient-
   fail "message enqueue accepted a symlinked queue lock directory"
 fi
 assert_file_contains "$LOCK_LINK_HOME/locks.err" 'Refusing symbolic-link message directory'
-[ -z "$(find "$LOCK_LINK_HOME/outside-locks" -mindepth 1 -print -quit)" ] || fail "lock symlink redirected a lock write"
+[ -z "$(find "$LOCK_LINK_HOME/outside-locks" -mindepth 1 -print -quit)" ] && ok || fail "lock symlink redirected a lock write"
 
 FILE_LINK_HOME="$TEST_HOME/file-symlink-codex"
 mkdir -p "$FILE_LINK_HOME/messages/queue"
@@ -466,7 +475,7 @@ if CODEX_HOME="$FILE_LINK_HOME" bash -c 'source "$0"; enqueue_message recipient-
   fail "message enqueue accepted a symlinked recipient ledger"
 fi
 assert_file_contains "$FILE_LINK_HOME/file.err" 'Refusing symbolic-link message file'
-[ "$(cat "$FILE_LINK_HOME/outside.tsv")" = 'outside sentinel' ] || fail "recipient ledger symlink modified an outside file"
+[ "$(cat "$FILE_LINK_HOME/outside.tsv")" = 'outside sentinel' ] && ok || fail "recipient ledger symlink modified an outside file"
 
 HARDLINK_HOME="$TEST_HOME/hardlink-codex"
 mkdir -p "$HARDLINK_HOME/messages/queue"
@@ -480,7 +489,7 @@ if CODEX_HOME="$HARDLINK_HOME" bash -c 'source "$0"; enqueue_message recipient-t
   fail "message enqueue accepted a multiply-linked recipient ledger"
 fi
 assert_file_contains "$HARDLINK_HOME/hardlink.err" 'Refusing multiply-linked message file'
-[ "$(cat "$HARDLINK_HOME/outside.tsv")" = 'hardlink sentinel' ] || fail "recipient ledger hardlink modified an outside file"
+[ "$(cat "$HARDLINK_HOME/outside.tsv")" = 'hardlink sentinel' ] && ok || fail "recipient ledger hardlink modified an outside file"
 
 NO_CLOBBER_HOME="$TEST_HOME/no-clobber-codex"
 mkdir -p "$NO_CLOBBER_HOME/messages"
@@ -492,7 +501,7 @@ if CODEX_HOME="$NO_CLOBBER_HOME" bash -c 'source "$0"; _write_private_message_fi
   fail "private dispatch writer overwrote a pre-planted file"
 fi
 assert_file_contains "$NO_CLOBBER_HOME/no-clobber.err" 'Refusing to overwrite existing dispatch file'
-[ "$(cat "$NO_CLOBBER_HOME/messages/preplanted.md")" = 'existing dispatch' ] || fail "private dispatch writer changed a pre-planted file"
+[ "$(cat "$NO_CLOBBER_HOME/messages/preplanted.md")" = 'existing dispatch' ] && ok || fail "private dispatch writer changed a pre-planted file"
 
 LOG_LINK_HOME="$TEST_HOME/log-symlink-codex"
 mkdir -p "$LOG_LINK_HOME/messages"
@@ -504,7 +513,7 @@ ln -s "$LOG_LINK_HOME/outside-log.tsv" "$LOG_LINK_HOME/messages/sent-log.tsv"
 CODEX_HOME="$LOG_LINK_HOME" bash -c 'source "$0"; log_sent_message aaaa0005 sender-test peer send queued payload' \
   "$SCRIPT_DIR/lib.sh" 2> "$LOG_LINK_HOME/log.err"
 assert_file_contains "$LOG_LINK_HOME/log.err" 'Refusing symbolic-link message file'
-[ "$(cat "$LOG_LINK_HOME/outside-log.tsv")" = 'log sentinel' ] || fail "sent-log symlink modified an outside file"
+[ "$(cat "$LOG_LINK_HOME/outside-log.tsv")" = 'log sentinel' ] && ok || fail "sent-log symlink modified an outside file"
 
 ARCHIVE_LINK_HOME="$TEST_HOME/archive-symlink-codex"
 mkdir -p "$ARCHIVE_LINK_HOME/messages" "$ARCHIVE_LINK_HOME/outside-archive"
@@ -515,7 +524,7 @@ ln -s "$ARCHIVE_LINK_HOME/outside-archive" "$ARCHIVE_LINK_HOME/messages/archive"
 CODEX_HOME="$ARCHIVE_LINK_HOME" bash -c 'source "$0"; archive_message out peer send aaaa0004 payload' \
   "$SCRIPT_DIR/lib.sh" 2> "$ARCHIVE_LINK_HOME/archive.err"
 assert_file_contains "$ARCHIVE_LINK_HOME/archive.err" 'Refusing symbolic-link message directory'
-[ -z "$(find "$ARCHIVE_LINK_HOME/outside-archive" -mindepth 1 -print -quit)" ] || fail "archive symlink redirected a history write"
+[ -z "$(find "$ARCHIVE_LINK_HOME/outside-archive" -mindepth 1 -print -quit)" ] && ok || fail "archive symlink redirected a history write"
 
 detect_dispatch() {
   local mode="$1" file="$2" id="$3" root="$4" inline_max="${5:-6000}"
@@ -630,7 +639,7 @@ context = json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]
 assert "🙂" in context
 assert "\ufffd" not in context
 assert len(context) <= 10000
-' || fail "UTF-8 boundary output was not valid, bounded JSON"
+' && ok || fail "UTF-8 boundary output was not valid, bounded JSON"
 
 # A live dispatch path may contain spaces (for example CODEX_HOME under a
 # workspace directory). Parse through the explicit ` id:<uid>]` delimiter,
@@ -671,7 +680,7 @@ printf '%s' "$FAN_OUT" | python3 -c '
 import json, sys
 context = json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]
 assert len(context) <= 10000
-' || fail "fan-in hook emitted invalid or oversized JSON"
+' && ok || fail "fan-in hook emitted invalid or oversized JSON"
 assert_file_contains "$TEST_HOME/messages/queue/recipient-test.tsv" 'bbbb0003'
 if grep -E 'bbbb0001|bbbb0002' "$TEST_HOME/messages/queue/recipient-test.tsv" >/dev/null; then
   fail "fan-in hook retained a row it displayed"
@@ -697,7 +706,7 @@ TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" \
   >&- 2> "$TEST_HOME/emit-failure.err"
 EMIT_FAILURE_RC=$?
 set -e
-[ "$EMIT_FAILURE_RC" -ne 0 ] || fail "closed stdout did not fail the incoming hook emit"
+[ "$EMIT_FAILURE_RC" -ne 0 ] && ok || fail "closed stdout did not fail the incoming hook emit"
 assert_file_contains "$TEST_HOME/messages/queue/recipient-test.tsv" 'cccc0001'
 if grep -F 'cccc0001' "$TEST_HOME/messages/queue/.recent-recipient-test.tsv" 2>/dev/null; then
   fail "failed hook emit marked the retained row recent"
@@ -753,7 +762,7 @@ RETRY_PANE="$(tmux list-panes -t "$SESSION:retry" -F '#{pane_id}' | sed -n '1p')
 tmux set-option -p -t "$RETRY_PANE" @name retry-recipient
 run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=100 SESSION_CHAT_SEND_RETRIES=4 SESSION_CHAT_RETRY_BACKOFF_MS=200 \
   bash "$SCRIPT_DIR/send-message.sh" retry-recipient "retry happy path"
-tmux capture-pane -J -t "$RETRY_PANE" -p -S -200 | grep -F "retry happy path" >/dev/null || fail "retry send did not land"
+tmux capture-pane -J -t "$RETRY_PANE" -p -S -200 | grep -F "retry happy path" >/dev/null && ok || fail "retry send did not land"
 
 CROSS_DIR="$TEST_HOME/recipient-runtime/messages"
 CROSS_PANE="$(tmux new-window -t "$SESSION" -n cross-runtime -P -F '#{pane_id}' "sh -c 'stty -echo; sleep 2; stty echo; cat'")"
@@ -763,7 +772,7 @@ run_as_sender env SESSION_CHAT_TARGET_MESSAGES_DIR="$CROSS_DIR" SESSION_CHAT_SET
 assert_file_contains "$TEST_HOME/cross-runtime.txt" "Queued to cross-runtime-recipient"
 assert_file_contains "$CROSS_DIR/queue/cross-runtime-recipient.tsv" "cross runtime fallback"
 CROSS_LOCK="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; queue_lock_path cross-runtime-recipient "$1"' "$SCRIPT_DIR/lib.sh" "$CROSS_DIR")"
-[ "$CROSS_LOCK" = "$CROSS_DIR/queue/.locks/cross-runtime-recipient.lock" ] || fail "cross-runtime queue lock path was not target-dir keyed: $CROSS_LOCK"
+[ "$CROSS_LOCK" = "$CROSS_DIR/queue/.locks/cross-runtime-recipient.lock" ] && ok || fail "cross-runtime queue lock path was not target-dir keyed: $CROSS_LOCK"
 if [ -e "$TEST_HOME/messages/queue/cross-runtime-recipient.tsv" ]; then
   fail "cross-runtime fallback wrote to sender CODEX_HOME queue"
 fi
@@ -792,7 +801,7 @@ NODE_ROUTE="$(CODEX_HOME="$TEST_HOME" CLAUDE_HOME="$TEST_HOME/claude-rt" bash -c
   export -f tmux
   target_messages_dir_for_pane %999
 ' "$SCRIPT_DIR/lib.sh")"
-[ "$NODE_ROUTE" = "$TEST_HOME/claude-rt/messages" ] || fail "node-reporting pane must route to Claude dir, got: $NODE_ROUTE"
+[ "$NODE_ROUTE" = "$TEST_HOME/claude-rt/messages" ] && ok || fail "node-reporting pane must route to Claude dir, got: $NODE_ROUTE"
 
 # Enter (submit) failure must queue, not drop: a failed `send-keys Enter` must
 # NOT be reported as live delivery (which would dequeue the durable copy and
@@ -817,4 +826,4 @@ ENTER_FAIL_OUT="$(TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" \
 assert_contains "RC=3" "$ENTER_FAIL_OUT"
 assert_file_contains "$TEST_HOME/messages/queue/recipient-test.tsv" "enter-fail-probe"
 
-echo "session-chat smoke tests passed"
+echo "session-chat smoke tests: $ASSERTIONS passed, 0 failed"
