@@ -775,6 +775,11 @@ require_tokens(
     # they cannot be silently dropped from CI while still passing locally.
     "plugins/session-workspace/scripts/test-session-workspace.sh",
     "codex/plugins/session-workspace/scripts/test-session-workspace.sh",
+    # chronos is hook-only, so for a long time it had no suite at all and a
+    # `test-*.sh` glob reported success by finding nothing. Pin both suites here
+    # so that failure mode cannot come back.
+    "plugins/chronos/scripts/test-chronos.sh",
+    "codex/plugins/chronos/scripts/test-chronos.sh",
 )
 
 require_tokens(

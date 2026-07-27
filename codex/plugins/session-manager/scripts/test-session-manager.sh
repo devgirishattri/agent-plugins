@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # assertions read `CHECK && ok || fail ...`; ok() always
+# returns 0, so fail can only run when CHECK itself failed.
 # Hermetic smoke tests for guarded native Codex session deletion.
 set -euo pipefail
 
@@ -27,11 +29,18 @@ fail() {
     exit 1
 }
 
+# Assertions are fail-fast: fail() exits non-zero on the first failure, so
+# reaching the summary means every assertion below passed. ok() counts the
+# assertions actually exercised, so a suite that quietly stops asserting shows a
+# dropped count instead of an unchanged "PASS" line.
+ASSERTIONS=0
+ok() { ASSERTIONS=$((ASSERTIONS + 1)); }
+
 assert_eq() {
     local expected="$1"
     local actual="$2"
     local label="$3"
-    [ "$actual" = "$expected" ] || fail "$label (expected '$expected', got '$actual')"
+    [ "$actual" = "$expected" ] && ok || fail "$label (expected '$expected', got '$actual')"
 }
 
 assert_contains() {
@@ -45,12 +54,12 @@ assert_contains() {
 }
 
 assert_log_empty() {
-    [ ! -s "$SESSION_MANAGER_TEST_LOG" ] || fail "$1 invoked native Codex unexpectedly"
+    [ ! -s "$SESSION_MANAGER_TEST_LOG" ] && ok || fail "$1 invoked native Codex unexpectedly"
 }
 
 assert_session_file_exists() {
     local session_id="$1"
-    [ -f "$CODEX_HOME/sessions/2026/07/10/rollout-$session_id.jsonl" ] || fail "$2 removed rollout data directly"
+    [ -f "$CODEX_HOME/sessions/2026/07/10/rollout-$session_id.jsonl" ] && ok || fail "$2 removed rollout data directly"
 }
 
 write_session() {
@@ -129,10 +138,10 @@ output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/delete-all-sessions.sh" --confirmed)
 assert_contains "$output" "Sessions: 2 processed | 2 fully deleted | 0 with failures" "confirmed bulk summary"
 call_count=$(wc -l < "$SESSION_MANAGER_TEST_LOG" | tr -d ' ')
 assert_eq "2" "$call_count" "bulk native invocation count"
-grep -qF "$(printf '\tdelete\t--force\t%s' "$UUID_ONE")" "$SESSION_MANAGER_TEST_LOG" || fail "bulk delete missed first project UUID"
-grep -qF "$(printf '\tdelete\t--force\t%s' "$UUID_TWO")" "$SESSION_MANAGER_TEST_LOG" || fail "bulk delete missed second project UUID"
+grep -qF "$(printf '\tdelete\t--force\t%s' "$UUID_ONE")" "$SESSION_MANAGER_TEST_LOG" && ok || fail "bulk delete missed first project UUID"
+grep -qF "$(printf '\tdelete\t--force\t%s' "$UUID_TWO")" "$SESSION_MANAGER_TEST_LOG" && ok || fail "bulk delete missed second project UUID"
 if grep -qF "$UUID_OTHER" "$SESSION_MANAGER_TEST_LOG"; then
     fail "bulk delete crossed the current-project boundary"
 fi
 
-echo "session-manager smoke tests: PASS"
+echo "session-manager smoke tests: $ASSERTIONS passed, 0 failed"
