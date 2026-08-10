@@ -133,11 +133,17 @@ silently (never breaks or stalls a session).
   unset/`0`/`no`/`off`/`false` = nothing. Any other non-empty value means both,
   so pre-0.2.1 settings keep working. SessionStart injects the bounded index as
   always-on background; UserPromptSubmit extracts salient terms from the
-  prompt, unions per-term scorer hits, and injects the top-N. Tunables:
+  prompt, qualifies aggregate lexical hits (a strong field score or two
+  distinct prompt terms), and injects the top-N. Tunables:
   `KNOWLEDGE_AUTO_RECALL_LIMIT` (top-N, default 5),
   `KNOWLEDGE_AUTO_RECALL_TERMS` (max terms queried, default 4 — bounds
   per-prompt latency), `KNOWLEDGE_AUTO_RECALL_BUDGET` (output char cap,
-  default 4000). Script: `scripts/inject-recall.sh`.
+  default 4000), and `KNOWLEDGE_AUTO_RECALL_GRAPH` (strict opt-in: `1`,
+  `yes`, `on`, or `true`; all other values are OFF). When enabled, at most
+  two direct seeds add at most two active/stale-demoted inbound or outbound
+  `[[slug]]` neighbors at depth one, within the same result and budget caps.
+  Related rows include concise `related via [[seed]]` provenance. Script:
+  `scripts/inject-recall.sh`.
 
   **Which value to use.** On Claude, if `autoMemoryDirectory` points at this
   store the harness already loads `MEMORY.md` every session, so `1` injects a

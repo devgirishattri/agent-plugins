@@ -12,6 +12,7 @@
 # Usage:
 #   memory-backlinks.sh [--store <path>] report
 #   memory-backlinks.sh [--store <path>] neighbors <slug>
+#   memory-backlinks.sh [--store <path>] expand <slug> [<slug> ...]
 #   memory-backlinks.sh [--store <path>] reverse <slug>
 #   memory-backlinks.sh [--store <path>] orphans
 #   memory-backlinks.sh [--store <path>] components
@@ -26,7 +27,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
 
-USAGE="usage: memory-backlinks.sh [--store <path>] {report|neighbors <slug>|reverse <slug>|orphans|components|graph [--format json|dot|mermaid]}"
+USAGE="usage: memory-backlinks.sh [--store <path>] {report|neighbors <slug>|expand <slug> [<slug> ...]|reverse <slug>|orphans|components|graph [--format json|dot|mermaid]}"
 
 store_arg=""
 declare -a args=()
@@ -54,6 +55,9 @@ case "$mode" in
   neighbors|reverse)
     [ "${#args[@]}" -eq 2 ] || { echo "$USAGE" >&2; exit 2; }
     slug_arg="${args[1]}"
+    ;;
+  expand)
+    [ "${#args[@]}" -ge 2 ] || { echo "$USAGE" >&2; exit 2; }
     ;;
   graph)
     if [ "${#args[@]}" -eq 1 ]; then
@@ -97,10 +101,11 @@ if [ -n "$unsafe" ]; then
   exit 4
 fi
 
-declare -a all_stems=()
+declare -a all_stems=() all_norms=()
 if [ "${#auth_files[@]}" -gt 0 ]; then
   for f in "${auth_files[@]}"; do
     all_stems+=("${f%.md}")
+    all_norms+=("$(km_normalize_slug "${f%.md}")")
   done
 fi
 n=${#all_stems[@]}
@@ -137,20 +142,27 @@ if [ "${#auth_files[@]}" -gt 0 ]; then
   done
 fi
 
-# --- link resolution (uses lib.sh's shared km_resolve_slug directly; a
-# helper is needed only to smuggle its KM_RESOLVE_KIND side-effect out of a
-# stdout capture without losing it to a command-substitution subshell) ---
-_KM_BL_RESOLVE_TMP="$WORKDIR/resolve.out"
+# --- link resolution (same km_* normalization semantics, with the already
+# scanned authoritative stems reused for every edge; this avoids a find/sort
+# subprocess for every link in the prompt-hook path) ---
 _km_bl_resolve() {
-  local store="$1" link="$2"
-  if km_resolve_slug "$store" "$link" > "$_KM_BL_RESOLVE_TMP" 2>/dev/null; then
-    _KM_BL_LAST_KIND="$KM_RESOLVE_KIND"
-    _KM_BL_LAST_RESOLVED=$(cat "$_KM_BL_RESOLVE_TMP")
-    return 0
+  local link="$2" norm target matches=0 s i
+  for s in "${all_stems[@]}"; do
+    if [ "$s" = "$link" ]; then
+      _KM_BL_LAST_KIND=exact; _KM_BL_LAST_RESOLVED="$s"; return 0
+    fi
+  done
+  norm=$(km_normalize_slug "$link")
+  target=""
+  for ((i = 0; i < ${#all_stems[@]}; i++)); do
+    if [ "${all_norms[i]}" = "$norm" ]; then
+      target="${all_stems[i]}"; matches=$((matches + 1))
+    fi
+  done
+  if [ "$matches" -eq 1 ]; then
+    _KM_BL_LAST_KIND=drift; _KM_BL_LAST_RESOLVED="$target"; return 0
   fi
-  _KM_BL_LAST_KIND="$KM_RESOLVE_KIND"
-  _KM_BL_LAST_RESOLVED=""
-  return 1
+  _KM_BL_LAST_KIND=dangling; _KM_BL_LAST_RESOLVED=""; return 1
 }
 
 edges_resolved="$WORKDIR/edges_resolved.tsv"   # from<TAB>to (resolved; may repeat)
@@ -208,6 +220,24 @@ if [ "$mode" = "neighbors" ] || [ "$mode" = "reverse" ]; then
     echo "unknown slug: $slug_arg" >&2
     exit 2
   fi
+fi
+
+# Batched one-hop expansion for callers that need several seeds. This keeps
+# link extraction and normalization in this authoritative resolver and scans
+# the store only once (rather than rebuilding the graph once per seed).
+if [ "$mode" = "expand" ]; then
+  wanted_file="$WORKDIR/wanted.tsv"
+  : > "$wanted_file"
+  for ((i = 1; i < ${#args[@]}; i++)); do
+    if _km_bl_resolve "$store" "${args[i]}"; then
+      printf '%s\t%s\n' "$_KM_BL_LAST_RESOLVED" "${args[i]}" >> "$wanted_file"
+    fi
+  done
+  awk -F '\t' '
+    NR==FNR { seed[$1]=$2; next }
+    { if ($1 in seed) print "out\t" $2 "\t" seed[$1]; if ($2 in seed) print "in\t" $1 "\t" seed[$2] }
+  ' "$wanted_file" "$edges_dedup" | LC_ALL=C sort -t "$(printf '\t')" -k1,1 -k2,2 -k3,3 -u
+  exit 0
 fi
 
 case "$mode" in

@@ -17,7 +17,7 @@ set -uo pipefail
 # or write to a live store, so drop it before anything else runs.
 unset KNOWLEDGE_MEMORY_HOME
 unset KNOWLEDGE_AUTO_RECALL KNOWLEDGE_AUTO_RECALL_LIMIT KNOWLEDGE_AUTO_RECALL_TERMS
-unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_CONSOLIDATE_NUDGE
+unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_AUTO_RECALL_GRAPH KNOWLEDGE_CONSOLIDATE_NUDGE
 unset KNOWLEDGE_AUTO_CAPTURE KNOWLEDGE_AUTO_CAPTURE_LIMIT
 unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
 # KNOWLEDGE_PANE_NAME is deliberately NOT unset: it is the writer's role-detection
@@ -656,7 +656,23 @@ else
 fi
 
 # ===========================================================================
-# 19. shell syntax sanity
+# 19. batched expansion regression
+mk_canonical "$S1" expand_out "Expand Out" "outbound fixture" user <<'EOF'
+[[redis_tls_incident]]
+[[redis_tls_incident]]
+EOF
+mk_canonical "$S1" expand_depth2 "Expand Depth2" "depth two fixture" user <<'EOF'
+[[expand_out]]
+EOF
+printf '\n[[expand_out]]\n' >> "$S1/redis_tls_incident.md"
+run_bl "$S1" expand redis_tls_incident
+assert_rc expand_batch_rc 0 "$RB_RC"
+assert_contains expand_outbound "$(cat "$RB_OUT")" $'out\texpand_out\tredis_tls_incident'
+assert_contains expand_inbound "$(cat "$RB_OUT")" $'in\texpand_out\tredis_tls_incident'
+assert_eq expand_depth_exactly_one 2 "$(grep -c 'expand_out' "$RB_OUT" || true)"
+assert_not_contains expand_excludes_depth2 "$(cat "$RB_OUT")" expand_depth2
+
+# 20. shell syntax sanity
 # ===========================================================================
 echo "--- shell syntax ---"
 if bash -n "$SEARCH" 2>/dev/null; then pass bash_n_search; else fail bash_n_search "syntax error"; fi

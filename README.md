@@ -270,6 +270,15 @@ Standard shell/runtime inputs such as `HOME`, `TMPDIR`, `TMUX`, `TMUX_PANE`,
 variables. Test-only fault-injection variables and shell-local implementation
 variables are intentionally omitted.
 
+Knowledge automatic recall is opt-in and independent of Claude/Codex native
+memory. `KNOWLEDGE_AUTO_RECALL` selects session and/or prompt injection;
+prompt seeds need a strong lexical field score or two distinct prompt terms.
+`KNOWLEDGE_AUTO_RECALL_GRAPH` is a separate strict gate (only `1`, `yes`,
+`on`, or `true`) and adds at most two inbound/outbound depth-one `[[slug]]`
+neighbors from the top two direct seeds, within the overall result and output
+budget caps. Output labels direct lexical versus related-via-seed results;
+invalid graph values and helper failures fail closed without breaking hooks.
+
 ## Development Notes
 
 - Keep provider-specific manifests separate.

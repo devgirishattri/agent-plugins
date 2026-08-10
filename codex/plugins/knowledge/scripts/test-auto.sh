@@ -22,7 +22,7 @@ set -uo pipefail
 # or write to a live store, so drop it before anything else runs.
 unset KNOWLEDGE_MEMORY_HOME
 unset KNOWLEDGE_AUTO_RECALL KNOWLEDGE_AUTO_RECALL_LIMIT KNOWLEDGE_AUTO_RECALL_TERMS
-unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_CONSOLIDATE_NUDGE
+unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_AUTO_RECALL_GRAPH KNOWLEDGE_CONSOLIDATE_NUDGE
 unset KNOWLEDGE_AUTO_CAPTURE KNOWLEDGE_AUTO_CAPTURE_LIMIT
 unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
 # KNOWLEDGE_PANE_NAME is deliberately NOT unset: it is the writer's role-detection
@@ -212,6 +212,57 @@ assert_empty inject_prompt_trivial_short "$out"
 
 out="$(printf '' | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=1 bash "$INJECT" --prompt)"
 assert_empty inject_prompt_empty_stdin "$out"
+
+# A single weak body-only hit is noise; two distinct weak terms qualify.
+write_canonical "$store/body_noise.md" project "Body Noise" "unrelated description"
+printf '\nnoiseonly\n' >> "$store/body_noise.md"
+write_canonical "$store/weak_pair.md" project "Weak Pair" "unrelated description"
+printf '\nweakalpha weakbeta\n' >> "$store/weak_pair.md"
+out="$(mkprompt "noiseonly" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
+assert_not_contains inject_body_one_term_noise_suppressed "$out" "body_noise"
+out="$(mkprompt "weakalpha weakbeta" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
+assert_contains inject_two_weak_terms_retained "$out" "weak_pair"
+
+# lexical qualification + bounded explicit-link expansion controls
+cat >> "$store/alpha_zephyr.md" <<'EOF'
+
+[[gamma_linked]] [[zeta_stale]] [[alpha_zephyr]]
+EOF
+write_canonical "$store/gamma_linked.md" project "Gamma Linked" "linked active memory"
+write_canonical "$store/delta_inbound.md" project "Delta Inbound" "inbound active memory"
+printf '\n[[alpha_zephyr]]\n' >> "$store/delta_inbound.md"
+write_canonical "$store/epsilon_depth2.md" project "Epsilon Depth2" "depth two memory"
+printf '\n[[epsilon_depth2]]\n' >> "$store/gamma_linked.md"
+printf '\n[[alpha_zephyr]]\n' >> "$store/gamma_linked.md"
+write_canonical "$store/zeta_stale.md" project "Zeta Stale" "stale linked memory"
+awk '{ if ($0 == "status: active") print "status: stale"; else print }' "$store/zeta_stale.md" > "$store/.zeta_stale.tmp" && mv "$store/.zeta_stale.tmp" "$store/zeta_stale.md"
+graph_prompt() {
+  mkprompt "zephyr calibration" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt KNOWLEDGE_AUTO_RECALL_GRAPH="$1" KNOWLEDGE_AUTO_RECALL_LIMIT="${2:-5}" KNOWLEDGE_AUTO_RECALL_BUDGET="${3:-4000}" bash "$INJECT" --prompt
+}
+out="$(graph_prompt '')"
+assert_not_contains inject_graph_gateoff_no_related "$out" "related via [[gamma_linked]]"
+out="$(graph_prompt true 3)"
+assert_contains inject_graph_inbound "$out" "delta_inbound"
+assert_contains inject_graph_outbound "$out" "gamma_linked"
+assert_eq inject_graph_seed_once 1 "$(printf '%s\n' "$out" | grep -c '^- \[alpha_zephyr\]' || true)" # self/cycle never emits the seed itself
+assert_eq inject_graph_gamma_once 1 "$(printf '%s\n' "$out" | grep -c '^- \[gamma_linked\]' || true)"
+assert_not_contains inject_graph_depth2 "$out" "epsilon_depth2"
+assert_not_contains inject_graph_stale_under_limit "$out" "zeta_stale"
+assert_contains inject_graph_provenance "$out" "related via [[alpha_zephyr]]"
+rows="$(printf '%s\n' "$out" | grep -c '^- \[' || true)"
+assert_eq inject_graph_total_limit 3 "$rows"
+out="$(graph_prompt true 5 100)"
+if [ "$(printf '%s' "$out" | wc -c | tr -d ' ')" -le 100 ]; then pass inject_graph_budget_bytes; else fail inject_graph_budget_bytes "output exceeds 100 bytes"; fi
+for bad in '' false 0 invalid; do
+  out="$(graph_prompt "$bad" 5)"
+  assert_not_contains "inject_graph_gate_invalid_$bad" "$out" "related via [["
+done
+fallback="$TMP/recall-fallback"; mkdir -p "$fallback"
+cp "$INJECT" "$HERE/lib.sh" "$HERE/memory-search.sh" "$fallback/"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$fallback/memory-backlinks.sh"; chmod +x "$fallback/memory-backlinks.sh"
+out="$(mkprompt "zephyr calibration" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt KNOWLEDGE_AUTO_RECALL_GRAPH=true bash "$fallback/inject-recall.sh" --prompt)"
+assert_contains inject_graph_helper_failure_direct "$out" "alpha_zephyr"
+assert_not_contains inject_graph_helper_failure_no_related "$out" "related via [["
 
 # ---------------------------------------------------------------------------
 # nudge-consolidate — Stop capture nudge
