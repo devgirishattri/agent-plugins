@@ -15,6 +15,9 @@ upgrade.sh
 /workspace.sh
 /workspace.sh.bak
 
+# Local dev-workspace config (machine-specific; not part of the marketplace)
+.agent-workspace/
+
 # Local agent instruction files (machine/user-specific)
 CLAUDE.md
 AGENTS.md
