@@ -7,12 +7,12 @@
           {
             "type": "command",
             "command": "[ -n \"$TMUX\" ] && tmux source-file \"$PLUGIN_ROOT/scripts/dispatch-tmux.conf\" 2>/dev/null; exit 0",
-            "timeout": 5
+            "timeout": 60
           },
           {
             "type": "command",
             "command": "bash \"$PLUGIN_ROOT/scripts/auto-name-pane.sh\"",
-            "timeout": 5
+            "timeout": 60
           }
         ]
       }
@@ -24,7 +24,7 @@
           {
             "type": "command",
             "command": "bash \"$PLUGIN_ROOT/scripts/detect-incoming-message.sh\"",
-            "timeout": 5
+            "timeout": 60
           }
         ]
       }
@@ -36,7 +36,7 @@
           {
             "type": "command",
             "command": "bash \"$PLUGIN_ROOT/scripts/detect-incoming-message.sh\"",
-            "timeout": 10
+            "timeout": 60
           }
         ]
       }

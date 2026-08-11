@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "bash \"$PLUGIN_ROOT/scripts/inject-current-time.sh\"",
-            "timeout": 5
+            "timeout": 60
           }
         ]
       }

@@ -5,11 +5,11 @@
       "hooks": [{
         "type": "command",
         "command": "[ -n \"$TMUX\" ] && tmux source-file ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-tmux.conf 2>/dev/null; exit 0",
-        "timeout": 5
+        "timeout": 60
       }, {
         "type": "command",
         "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/auto-name-pane.sh",
-        "timeout": 5
+        "timeout": 60
       }]
     }],
     "UserPromptSubmit": [{
@@ -17,7 +17,7 @@
       "hooks": [{
         "type": "command",
         "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect-incoming-message.sh",
-        "timeout": 5
+        "timeout": 60
       }]
     }],
     "Stop": [{
@@ -25,7 +25,7 @@
       "hooks": [{
         "type": "command",
         "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect-incoming-message.sh",
-        "timeout": 10
+        "timeout": 60
       }]
     }]
   }

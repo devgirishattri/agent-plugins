@@ -29,7 +29,7 @@
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude (and Codex) sessions via tmux. Durable delivery routes fallback/dispatch into the recipient runtime's messages dir.",
-      "version": "0.17.7",
+      "version": "0.17.8",
       "author": {
         "name": "Girish Attri"
       },
@@ -48,7 +48,7 @@
     {
       "name": "knowledge",
       "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory module with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor.",
-      "version": "0.3.7",
+      "version": "0.3.8",
       "author": {
         "name": "Girish Attri"
       },
@@ -67,7 +67,7 @@
     {
       "name": "chronos",
       "description": "Ambient time/day awareness for agents: injects the current date/time as context with every prompt, and refreshes it during long turns via a throttled PreToolUse hook. No explicit invocation needed.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": {
         "name": "Girish Attri"
       },
