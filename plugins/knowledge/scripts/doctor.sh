@@ -851,15 +851,17 @@ section_context() {
   # for reads AND writes. Doctor has to run the same guard or it cannot observe
   # that condition at all: the per-file tiers below scan
   # -maxdepth 1 -name '*.md', so the offending directory is invisible to them
-  # and the section falls silent on a store no command can use.
+  # and the section falls silent on a store no lifecycle command can use.
   #
-  # The message deliberately does not enumerate context-search: that command
-  # diverges by provider (the Claude copy globs *.md without validating, the
-  # Codex copy resolves through get_contexts_dir and aborts), and this file is
-  # shipped byte-identical to both trees.
+  # "Lifecycle" is load-bearing wording, not hedging: the message and this
+  # rationale deliberately exclude context-search, which diverges by provider
+  # (the Claude copy globs *.md without validating and still returns hits, the
+  # Codex copy resolves through get_contexts_dir and aborts). This file is
+  # shipped byte-identical to both trees, so any claim about "every command"
+  # would be false in one of them.
   #
   # Report and stop -- once the tree is rejected, snapshot-level staleness and
-  # expiry findings are noise about files no command can currently read.
+  # expiry findings are metadata no lifecycle command can act on.
   #
   # Retry before reporting. A concurrent /context-* writer creates and removes
   # $ctx_dir/.knowledge-context.lock; if that pathname vanishes between find(1)
@@ -868,6 +870,13 @@ section_context() {
   # commands hit the same race, but they are one-shot and user-initiated --
   # doctor is the surface where a spurious ERROR would be read as a standing
   # defect. Only a stable, repeated failure is reported.
+  #
+  # Measured, not theoretical: ~1-3 spurious failures per 800 validations
+  # against a store driven by one tight acquire/release writer loop. Note for
+  # anyone re-testing -- an EMPTY store reproduces it, a store holding even one
+  # snapshot did not across ~4000 validations, so a payload file masks the
+  # window. The underlying race lives in _context_validate_tree and still
+  # affects the commands; this retry only stops doctor from reporting it.
   local ctx_err="" ctx_rc=0 ctx_attempt
   for ctx_attempt in 1 2 3; do
     ctx_rc=0
