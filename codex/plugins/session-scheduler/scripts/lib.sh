@@ -218,6 +218,43 @@ validate_stage() {
   fi
 }
 
+# Context snapshot names are owned by the knowledge context store. Scheduler
+# attachments must use the same canonical snake_case contract so every
+# generated handoff can be loaded by either provider.
+SESSION_SCHEDULER_CANONICAL_NAME_REGEX='^[a-z0-9]+(_[a-z0-9]+)*$'
+
+validate_context_name() {
+  local name="$1"
+  if [ -z "$name" ]; then
+    echo "ERROR: context snapshot name required." >&2
+    return 1
+  fi
+  if ! [[ "$name" =~ $SESSION_SCHEDULER_CANONICAL_NAME_REGEX ]]; then
+    echo "ERROR: Invalid context name '$name' — context snapshot names must be canonical snake_case: lowercase letters/digits separated by single underscores (regex: $SESSION_SCHEDULER_CANONICAL_NAME_REGEX)." >&2
+    echo "  No hyphens, uppercase, leading/trailing underscores, or repeated underscores." >&2
+    return 1
+  fi
+}
+
+# Generate the entropy-only nonce used in automatic context filenames. Never
+# derive context names from task ids, clocks, or formatted dates: knowledge
+# treats filenames as opaque canonical names and keeps dates in metadata.
+generate_context_nonce() {
+  local nonce=""
+  if command -v od >/dev/null 2>&1 && [ -r /dev/urandom ]; then
+    nonce=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+  fi
+  if ! [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] && command -v openssl >/dev/null 2>&1; then
+    nonce=$(openssl rand -hex 16 2>/dev/null)
+  fi
+  if [[ "$nonce" =~ ^[0-9a-f]{32}$ ]]; then
+    printf '%s\n' "$nonce"
+    return 0
+  fi
+  echo "ERROR: Could not obtain 16 bytes of OS randomness for an auto context." >&2
+  return 1
+}
+
 validate_route_name() {
   local label="$1" value="$2"
   if [ -z "$value" ] || ! [[ "$value" =~ ^[a-zA-Z0-9_.-]+$ ]]; then

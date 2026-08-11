@@ -489,6 +489,53 @@ validate_stage() {
   fi
 }
 
+# Context snapshot names are owned by the knowledge context store, not by this
+# plugin: it only accepts canonical snake_case slugs (lowercase alphanumerics
+# joined by single underscores) and rejects anything else in the store — so a
+# name the scheduler attaches must satisfy the same contract or the executor
+# could never load it. Kept byte-identical to knowledge's
+# KNOWLEDGE_CANONICAL_NAME_REGEX.
+SESSION_SCHEDULER_CANONICAL_NAME_REGEX='^[a-z0-9]+(_[a-z0-9]+)*$'
+
+validate_context_name() {
+  local name="$1"
+  if [ -z "$name" ]; then
+    echo "ERROR: context snapshot name required." >&2
+    return 1
+  fi
+  if ! [[ "$name" =~ $SESSION_SCHEDULER_CANONICAL_NAME_REGEX ]]; then
+    echo "ERROR: invalid context name '$name' — context snapshot names must be canonical snake_case: lowercase letters/digits separated by single underscores (regex: $SESSION_SCHEDULER_CANONICAL_NAME_REGEX)." >&2
+    echo "  No hyphens, uppercase, leading/trailing underscores, or repeated underscores." >&2
+    return 1
+  fi
+}
+
+# Unique component for an auto-handoff snapshot name. Knowledge's naming
+# contract keeps dates/datetimes in metadata, never in a current snapshot
+# filename — and a task id can itself carry a date or epoch stamp — so this is
+# pure OS entropy: never a task id, a timestamp, or anything derived from
+# either. 16 bytes rendered as 32 lowercase hex digits, from /dev/urandom or
+# openssl only — no weaker fallback; fails closed if neither is available. Task
+# association lives in the handoff body and the ledger's meta.context, not in
+# the filename.
+generate_context_nonce() {
+  local nonce=""
+  if command -v od >/dev/null 2>&1 && [ -r /dev/urandom ]; then
+    nonce=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+  fi
+  if ! [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] && command -v openssl >/dev/null 2>&1; then
+    nonce=$(openssl rand -hex 16 2>/dev/null)
+  fi
+  if [[ "$nonce" =~ ^[0-9a-f]{32}$ ]]; then
+    printf '%s\n' "$nonce"
+    return 0
+  fi
+  # No weaker source: a predictable nonce would make the "immutable, unique
+  # handoff" guarantee a lie, so fail closed instead.
+  echo "ERROR: could not obtain 16 bytes of OS randomness for an auto context." >&2
+  return 1
+}
+
 # context snapshots live under SESSION_CONTEXT_HOME, which must match
 # the same override honored by the knowledge context store's own get_contexts_dir(). Like
 # SESSION_SCHEDULER_HOME it must be inherited at agent startup — never exported

@@ -304,27 +304,48 @@ fi
 # --- Test 21: --context attaches snapshot to prompt + meta ---
 CTX_DIR="$TMP/contexts"
 mkdir -p "$CTX_DIR"
-echo "# shared context for ProjectA" > "$CTX_DIR/ctx-1.md"
+echo "# shared context for ProjectA" > "$CTX_DIR/ctx_1.md"
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "ctx-task" 2>&1)
 CTX_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
-out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$CTX_ID" --context ctx-1 "context work" 2>&1)
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$CTX_ID" --context ctx_1 "context work" 2>&1)
 prompt_file="$SESSION_SCHEDULER_HOME/prompts/$CTX_ID.md"
 meta_ctx=$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$CTX_ID.json")
 if grep -q "## Context" "$prompt_file" 2>/dev/null \
-  && grep -q "context-load ctx-1" "$prompt_file" 2>/dev/null \
-  && [ "$meta_ctx" = "ctx-1" ]; then
+  && grep -q "context-load ctx_1" "$prompt_file" 2>/dev/null \
+  && [ "$meta_ctx" = "ctx_1" ]; then
   pass "context_attach"
 else
   fail "context_attach" "meta=$meta_ctx out=$out"
 fi
 
 # --- Test 22: --context with missing snapshot errors before any side effects ---
-out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$ID3" --force --context no-such-ctx "work" 2>&1)
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$ID3" --force --context no_such_ctx "work" 2>&1)
 rc=$?
 if [ "$rc" -ne 0 ] && echo "$out" | grep -q "not found"; then
   pass "context_missing_rejected"
 else
   fail "context_missing_rejected" "rc=$rc out=$out"
+fi
+
+# --- Test 22b: explicit --context names must be canonical snake_case ---
+# The knowledge context store only accepts ^[a-z0-9]+(_[a-z0-9]+)*$, so a name
+# it would refuse must be rejected here — before any side effect — rather than
+# attached and handed to an executor that can never load it.
+ctx_reject_ok=yes
+ctx_reject_detail=""
+for bad in ctx-1 Ctx_1 _ctx1 ctx1_ ctx__1; do
+  out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$ID3" --force --context "$bad" "work" 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] || ! echo "$out" | grep -q "canonical snake_case"; then
+    ctx_reject_ok=no
+    ctx_reject_detail="$ctx_reject_detail [$bad rc=$rc out=$out]"
+  fi
+done
+# ... and rejection happens before the prompt file is (re)written or dispatched.
+if [ "$ctx_reject_ok" = "yes" ] && [ ! -f "$SESSION_SCHEDULER_HOME/prompts/$ID3.md" ]; then
+  pass "context_name_requires_snake_case"
+else
+  fail "context_name_requires_snake_case" "ok=$ctx_reject_ok$ctx_reject_detail"
 fi
 
 # --- Test 23: dispatch failure rolls back a NEW prompt file + ledger untouched ---
@@ -447,24 +468,59 @@ mkdir -p "$AUTO_CTX_DIR"
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "auto-ctx" 2>&1)
 AC_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
 SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$AC_ID" --context auto "auto handoff work" >/dev/null 2>&1
-# Name is unique per assignment (auto-<id>-<rand>) for true immutability — derive
-# the actual file from the recorded meta.context rather than assuming it.
+# Name is unique per assignment (auto_handoff_<random-hex>) for true
+# immutability — derive the actual file from the recorded meta.context rather
+# than assuming it. The stem must be canonical snake_case, or the knowledge
+# context store would reject the very file we told the executor to load.
 meta_ctx=$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$AC_ID.json")
 auto_file="$AUTO_CTX_DIR/$meta_ctx.md"
 perms_ok=""
 [ -f "$auto_file" ] && perms_ok=$(stat -c '%a' "$auto_file" 2>/dev/null || stat -f '%Lp' "$auto_file" 2>/dev/null)
-name_ok=$(printf '%s' "$meta_ctx" | grep -qE "^auto-$AC_ID-[0-9a-f]+$" && echo yes || echo no)
-# rollback: a dispatch failure must remove the auto handoff (none left for AC_RB)
+name_ok=$(printf '%s' "$meta_ctx" | grep -qE '^auto_handoff_[0-9a-f]{32}$' && echo yes || echo no)
+canon_ok=$(printf '%s' "$meta_ctx" | grep -qE '^[a-z0-9]+(_[a-z0-9]+)*$' && echo yes || echo no)
+# rollback: a dispatch failure must remove the auto handoff. The name carries no
+# task id, so assert that the failed assignment left no new snapshot behind.
+pre_rb_count=$(find "$AUTO_CTX_DIR" -name 'auto_handoff_*.md' 2>/dev/null | wc -l | tr -d ' ')
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "auto-ctx-rb" 2>&1)
 AC_RB=$(echo "$out" | awk '/Created task:/ {print $3}')
 SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX_DIR" SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-failstub" bash "$HERE/task-assign.sh" worker-1 "$AC_RB" --context auto "doomed" >/dev/null 2>&1
-rb_count=$(find "$AUTO_CTX_DIR" -name "auto-$AC_RB-*.md" 2>/dev/null | wc -l | tr -d ' ')
-if [ -f "$auto_file" ] && [ "$name_ok" = "yes" ] && [ "$perms_ok" = "400" ] \
+post_rb_count=$(find "$AUTO_CTX_DIR" -name 'auto_handoff_*.md' 2>/dev/null | wc -l | tr -d ' ')
+rb_count=$((post_rb_count - pre_rb_count))
+if [ -f "$auto_file" ] && [ "$name_ok" = "yes" ] && [ "$canon_ok" = "yes" ] && [ "$perms_ok" = "400" ] \
    && grep -q "Auto handoff" "$auto_file" && grep -q "auto handoff work" "$auto_file" \
    && [ "$rb_count" = "0" ]; then
   pass "context_auto_immutable"
 else
-  fail "context_auto_immutable" "file=$([ -f "$auto_file" ] && echo yes || echo no) name_ok=$name_ok perms=$perms_ok meta=$meta_ctx rb_count=$rb_count"
+  fail "context_auto_immutable" "file=$([ -f "$auto_file" ] && echo yes || echo no) name_ok=$name_ok canon_ok=$canon_ok perms=$perms_ok meta=$meta_ctx rb_count=$rb_count"
+fi
+
+# --- Test 30b: auto name is canonical, date-free, and id-free ---
+# A ledger shared with another provider can hold task ids carrying dates or
+# epoch stamps. Knowledge keeps dates in metadata, never in a current snapshot
+# filename, so none of the id (or any part of it) may leak into the name — the
+# task association lives in the handoff body and meta.context instead.
+ODD_ID="Report-2026-08-11_1786421913"
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "odd-id-task" 2>&1)
+SEED_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+jq --arg id "$ODD_ID" '.id = $id' "$SESSION_SCHEDULER_HOME/tasks/$SEED_ID.json" \
+  > "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json"
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$ODD_ID" --context auto "odd id work" >/dev/null 2>&1
+odd_ctx=$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")
+odd_exact=$(printf '%s' "$odd_ctx" | grep -qE '^auto_handoff_[0-9a-f]{32}$' && echo yes || echo no)
+# No date, epoch, or id token anywhere in the filename. (The exact-pattern
+# assertion above already fixes every character outside the hex nonce; these
+# checks state the intent directly, without matching hex digits by accident.)
+odd_datefree=$(printf '%s' "$odd_ctx" | grep -qiE 'report|1786421913|2026[-_]?08[-_]?11' && echo no || echo yes)
+# Two assignments must not collide on the entropy-only nonce.
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$ODD_ID" --force --context auto "odd id work again" >/dev/null 2>&1
+odd_ctx2=$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")
+# The handoff still carries the task association in its body.
+odd_assoc=$(grep -q "id: $ODD_ID" "$AUTO_CTX_DIR/$odd_ctx.md" 2>/dev/null && echo yes || echo no)
+if [ "$odd_exact" = "yes" ] && [ "$odd_datefree" = "yes" ] && [ "$odd_assoc" = "yes" ] \
+   && [ -f "$AUTO_CTX_DIR/$odd_ctx.md" ] && [ -n "$odd_ctx2" ] && [ "$odd_ctx2" != "$odd_ctx" ]; then
+  pass "context_auto_name_date_free"
+else
+  fail "context_auto_name_date_free" "ctx=$odd_ctx exact=$odd_exact datefree=$odd_datefree assoc=$odd_assoc ctx2=$odd_ctx2"
 fi
 
 # --- Test 31: reviewer dispatch failure — NO /send downgrade, stays in review ---

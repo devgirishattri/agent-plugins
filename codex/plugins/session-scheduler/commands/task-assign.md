@@ -40,7 +40,7 @@ argument-hint: <pane-name> <task-id> [--eta MINUTES] [--stage NAME] [--context N
 4. Flags:
    - `--eta MINUTES` — stores `eta_at` as ISO-8601 in `AGENT_PLUGINS_TIME_ZONE` (default `Asia/Kolkata`, `+05:30`); tasks past it are flagged `OVERDUE` in `task-status`/`task-board`.
    - `--stage NAME` — set/overwrite the task's stage label (suggested: `plan`, `dispatch`, `execute`, `audit`, `push`).
-   - `--context NAME|auto` — attach an existing snapshot, or create an immutable task-scoped handoff named `task-<id>-<random>`; the exact generated name is printed.
+   - `--context NAME|auto` — attach an existing canonical snapshot (`^[a-z0-9]+(_[a-z0-9]+)*$`), or create an immutable task-scoped handoff named `auto_handoff_<random-hex>` (exactly 32 lowercase hex characters from OS randomness); the exact generated name is printed and is independent of task ids and dates.
    - `--reviewer PANE` — set or override automatic independent-review routing.
    - `--workflow ID` — set or override the workflow group; `--workflow-id` is an alias.
    - `--force` — bypass the status-transition check and unmet-dependency gate; an illegal-transition override records "forced" in history, while bypassing only the dependency gate does not.

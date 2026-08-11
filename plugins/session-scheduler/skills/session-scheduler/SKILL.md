@@ -43,7 +43,7 @@ Legal status transitions (enforced by every command):
 - **Stages** are optional free-form labels (`--stage` on `/task-new` or `/task-assign`). Suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`. View grouped output with `/task-status --by-stage` or `/task-board`.
 - **ETAs**: `/task-assign --eta MINUTES` stores `eta_at`; tasks past it are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
 - **Dependencies**: `/task-new --depends-on id1,id2` stores `depends_on`. `/task-assign` refuses to dispatch until every dependency is `done` (the error names the unmet deps) unless `--force`.
-- **Context attach**: `/task-assign --context NAME` resolves the context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`, records `meta.context`, and tells the executor to `/knowledge:context-load NAME` before starting.
+- **Context attach**: `/task-assign --context NAME` resolves the context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`, records `meta.context`, and tells the executor to `/knowledge:context-load NAME` before starting. Snapshot names follow the knowledge context store's contract — canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`); a non-canonical `NAME` is rejected before any side effect, and `--context auto` mints a canonical, date-free `auto_handoff_<random-hex>` name (semantic prefix + entropy-only nonce, never a task id or timestamp) so the executor can always load what was attached; the task association stays in the handoff body and `meta.context`.
 
 ## Nested transport and escalation
 
@@ -97,7 +97,7 @@ Legal status transitions (enforced by every command):
   "duration_seconds": 1234,
   "meta": {
     "free-form": "key/value",
-    "context": "context-snapshot-name",
+    "context": "context_snapshot_name",
     "context_home": "/abs/.../.tmp/contexts",
     "workflow_id": "workflow-group-id",
     "scheduler_home": "/abs/.../.tmp/scheduler",

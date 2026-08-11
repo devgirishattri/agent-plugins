@@ -87,6 +87,12 @@ AUTO_CONTEXT=0
 CONTEXT_NAME="$CONTEXT"
 CONTEXT_DIR=""
 if [ -n "$CONTEXT" ]; then
+  # Validate an explicit name before resolving the store, so a name the context
+  # store could never hold is reported as such. `auto` is the sole
+  # scheduler-owned sentinel, not a snapshot name.
+  if [ "$CONTEXT" != "auto" ]; then
+    validate_context_name "$CONTEXT" || exit 1
+  fi
   CONTEXT_DIR="$(resolve_contexts_dir)" || exit 1
   if [ "$CONTEXT" = "auto" ]; then
     AUTO_CONTEXT=1
@@ -94,17 +100,24 @@ if [ -n "$CONTEXT" ]; then
     # (re)assignment mints a NEW file rather than overwriting a prior one that a
     # reviewer/executor may still be reading. The random suffix also means we
     # never clobber an existing snapshot.
-    CONTEXT_NAME="auto-$ID-$(generate_task_id)"
+    # The stem must be canonical snake_case or the knowledge context store will
+    # refuse to load (and will flag) the file we just wrote. It must also be
+    # date-free — knowledge keeps dates/datetimes in metadata, never in a
+    # current snapshot filename — so the name is a fixed semantic prefix plus an
+    # entropy-only nonce, with no task id, timestamp, or value derived from
+    # either. The task association lives in the handoff body and meta.context.
+    CONTEXT_NONCE=$(generate_context_nonce) || exit 1
+    CONTEXT_NAME="auto_handoff_${CONTEXT_NONCE}"
+    if ! validate_context_name "$CONTEXT_NAME"; then
+      echo "  (generated auto-handoff name; report this as a session-scheduler bug)" >&2
+      exit 1
+    fi
     CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT_NAME.md"
     if [ -e "$CONTEXT_FILE" ]; then
       echo "ERROR: auto-context file $CONTEXT_FILE already exists; refusing to overwrite an immutable handoff." >&2
       exit 1
     fi
   else
-    if ! [[ "$CONTEXT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-      echo "ERROR: invalid context name '$CONTEXT' (alphanumeric, _, - only)." >&2
-      exit 1
-    fi
     CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
     if [ ! -f "$CONTEXT_FILE" ]; then
       echo "ERROR: context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2

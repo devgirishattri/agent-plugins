@@ -307,10 +307,10 @@ awk -F '\t' -v id="$ETA_ID" '
 
 # --- --context attach + missing context rejected ---
 mkdir -p "$TEST_HOME/contexts"
-echo "# shared context for ProjectA" > "$TEST_HOME/contexts/ctx-1.md"
+echo "# shared context for ProjectA" > "$TEST_HOME/contexts/ctx_1.md"
 ctx=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Context task")
 CTX_ID=$(printf '%s\n' "$ctx" | awk '/^Created task/{print $3}' | sed 's/:$//')
-run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$CTX_ID" --context ctx-1 "Context work"
+run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$CTX_ID" --context ctx_1 "Context work"
 grep '## Context' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null && ok || fail "prompt missing context section"
 EXPECTED_CONTEXT_HOME=$(cd "$TEST_HOME/contexts" && pwd -P)
 grep -F "Shared context home (provenance): $EXPECTED_CONTEXT_HOME" "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
@@ -318,16 +318,36 @@ grep -F "Shared context home (provenance): $EXPECTED_CONTEXT_HOME" "$TEST_HOME/s
 if grep -E '^[[:space:]]*export SESSION_(SCHEDULER|CONTEXT)_HOME' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null; then
   fail "context assignment packet contains an executable export line"
 fi
-grep -F '$knowledge:context-load ctx-1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
+grep -F '$knowledge:context-load ctx_1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
   && ok || fail "prompt missing Codex context-load form"
-grep -F '/knowledge:context-load ctx-1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
+grep -F '/knowledge:context-load ctx_1' "$TEST_HOME/scheduler/prompts/$CTX_ID.md" >/dev/null \
   && ok || fail "prompt missing Claude context-load form"
 meta_ctx=$(jq -r '.meta.context // empty' "$TEST_HOME/scheduler/tasks/$CTX_ID.json")
-[ "$meta_ctx" = "ctx-1" ] && ok || fail "meta.context not recorded"
-if run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$CTX_ID" --context no-such-ctx "More work" 2> "$TEST_HOME/ctxmiss.txt"; then
+[ "$meta_ctx" = "ctx_1" ] && ok || fail "meta.context not recorded"
+if run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$CTX_ID" --context no_such_ctx "More work" 2> "$TEST_HOME/ctxmiss.txt"; then
   fail "assign with missing context was not refused"
 fi
 grep 'not found' "$TEST_HOME/ctxmiss.txt" >/dev/null && ok || fail "missing-context error missing"
+
+# --- explicit context names reject non-canonical forms before side effects ---
+INVALID_CTX_OUT="$TEST_HOME/invalid-context.out"
+invalid_ctx=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Invalid context name task")
+INVALID_CTX_ID=$(printf '%s\n' "$invalid_ctx" | awk '/^Created task/{print $3}' | sed 's/:$//')
+for invalid_context in 'bad-name' 'Bad_name' '_bad' 'bad_' 'bad__name'; do
+  if run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task-assign.sh" \
+    scheduler-executor "$INVALID_CTX_ID" --context "$invalid_context" "Must reject invalid context" \
+    > "$INVALID_CTX_OUT" 2>&1; then
+    fail "invalid explicit context name was accepted: $invalid_context"
+  fi
+  grep -F 'canonical snake_case' "$INVALID_CTX_OUT" >/dev/null \
+    || fail "invalid context error was not clear: $invalid_context"
+done
+[ "$(jq -r '.status' "$TEST_HOME/scheduler/tasks/$INVALID_CTX_ID.json")" = "created" ] \
+  && ok || fail "invalid context validation changed ledger state"
+[ ! -f "$TEST_HOME/scheduler/prompts/$INVALID_CTX_ID.md" ] \
+  && ok || fail "invalid context validation created a prompt"
+[ "$(jq -r '.meta.context // empty' "$TEST_HOME/scheduler/tasks/$INVALID_CTX_ID.json")" = "" ] \
+  && ok || fail "invalid context validation recorded metadata"
 
 # --- workflow grouping + automatic context + independent reviewer routing ---
 routed=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Routed workflow task" --reviewer scheduler-reviewer --workflow release-42)
@@ -338,8 +358,32 @@ ROUTED_FILE="$TEST_HOME/scheduler/tasks/$ROUTED_ID.json"
 [ "$(jq -r '.meta.workflow_id' "$ROUTED_FILE")" = "release-42" ] && ok || fail "workflow id not recorded"
 AUTO_CONTEXT=$(jq -r '.meta.context' "$ROUTED_FILE")
 [ -f "$TEST_HOME/contexts/$AUTO_CONTEXT.md" ] && ok || fail "automatic context snapshot missing"
+printf '%s\n' "$AUTO_CONTEXT" | grep -Eq '^auto_handoff_[0-9a-f]{32}$' \
+  && ok || fail "automatic context name is not an entropy-only nonce: $AUTO_CONTEXT"
 AUTO_CONTEXT_MODE=$(stat -c '%a' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null || stat -f '%Lp' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null)
 [ "$AUTO_CONTEXT_MODE" = "400" ] && ok || fail "automatic context is not owner read-only: $AUTO_CONTEXT_MODE"
+
+# Cross-provider task ids may contain dots, hyphens, uppercase letters, and
+# obvious date/epoch tokens; auto context filenames must contain none of them.
+cross_created=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Cross-provider id context task")
+cross_source_id=$(printf '%s\n' "$cross_created" | awk '/^Created task/{print $3}' | sed 's/:$//')
+CROSS_PROVIDER_ID='Claude.Task-ABC_20260811T123456Z_1786421169'
+mv "$TEST_HOME/scheduler/tasks/$cross_source_id.json" "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json"
+jq --arg id "$CROSS_PROVIDER_ID" '.id = $id' "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json" \
+  > "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json.tmp"
+mv "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json.tmp" "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json"
+run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task-assign.sh" \
+  scheduler-executor "$CROSS_PROVIDER_ID" --context auto "Cross-provider auto context"
+CROSS_AUTO_CONTEXT=$(jq -r '.meta.context' "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json")
+printf '%s\n' "$CROSS_AUTO_CONTEXT" | grep -Eq '^auto_handoff_[0-9a-f]{32}$' \
+  && ok || fail "cross-provider auto context name is not an entropy-only nonce: $CROSS_AUTO_CONTEXT"
+if printf '%s\n' "$CROSS_AUTO_CONTEXT" | grep -Eq '20260811|1786421169'; then
+  fail "cross-provider auto context leaked a date/epoch token: $CROSS_AUTO_CONTEXT"
+else
+  ok
+fi
+[ -f "$TEST_HOME/contexts/$CROSS_AUTO_CONTEXT.md" ] && ok \
+  || fail "cross-provider auto context snapshot missing"
 grep 'Shared scheduler home (provenance):' "$TEST_HOME/scheduler/prompts/$ROUTED_ID.md" >/dev/null && ok || fail "assignment prompt missing shared scheduler home provenance"
 run_sender bash "$SCRIPT_DIR/task-status.sh" --by-workflow | grep 'Workflow: release-42' >/dev/null && ok || fail "workflow grouping missing"
 run_sender bash "$SCRIPT_DIR/task-status.sh" --workflow release-42 | grep "$ROUTED_ID" >/dev/null && ok || fail "workflow filter missing routed task"
@@ -650,12 +694,12 @@ run_sender bash "$SCRIPT_DIR/task-status.sh" "$RB_ID" | grep 'created' >/dev/nul
 
 auto_rb=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Auto-context rollback task")
 AUTO_RB_ID=$(printf '%s\n' "$auto_rb" | awk '/^Created task/{print $3}' | sed 's/:$//')
-before_auto=$(find "$TEST_HOME/contexts" -maxdepth 1 -type f -name "*${AUTO_RB_ID}*" | wc -l | tr -d ' ')
+before_auto=$(find "$TEST_HOME/contexts" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
 if run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" SESSION_CHAT_ROOT_OVERRIDE="$TEST_HOME/failstub" \
   bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$AUTO_RB_ID" --context auto "Doomed handoff" 2>/dev/null; then
   fail "auto-context assignment with failing dispatch did not fail"
 fi
-after_auto=$(find "$TEST_HOME/contexts" -maxdepth 1 -type f -name "*${AUTO_RB_ID}*" | wc -l | tr -d ' ')
+after_auto=$(find "$TEST_HOME/contexts" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
 [ "$before_auto" = "$after_auto" ] && ok || fail "failed dispatch left an automatic context snapshot"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$AUTO_RB_ID" | grep 'created' >/dev/null && ok || fail "auto-context rollback changed ledger"
 

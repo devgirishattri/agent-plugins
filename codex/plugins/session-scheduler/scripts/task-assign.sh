@@ -91,9 +91,10 @@ TASK_NAME=$(jq -r '.name' "$FILE")
 CONTEXT_FILE=""
 AUTO_CONTEXT_FILE=""
 if [ -n "$CONTEXT" ]; then
-  if [ "$CONTEXT" != "auto" ] && ! [[ "$CONTEXT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "ERROR: Invalid context name: $CONTEXT (alphanumeric, _, - only)." >&2
-    exit 1
+  # Validate an explicit name before resolving the store or creating any
+  # assignment artifacts. `auto` is the sole scheduler-owned sentinel.
+  if [ "$CONTEXT" != "auto" ]; then
+    validate_context_name "$CONTEXT" || exit 1
   fi
   CONTEXT_DIR="$(resolve_contexts_dir)" || exit 1
   if [ "$CONTEXT" = "auto" ]; then
@@ -104,9 +105,12 @@ if [ -n "$CONTEXT" ]; then
     # an unlikely collision retry instead of overwriting an immutable snapshot.
     AUTO_CONTEXT_ATTEMPTS=0
     while [ "$AUTO_CONTEXT_ATTEMPTS" -lt 100 ]; do
-      AUTO_CONTEXT_SUFFIX=$(generate_id)
-      AUTO_CONTEXT_SUFFIX=${AUTO_CONTEXT_SUFFIX#task-}
-      CONTEXT="task-${ID}-${AUTO_CONTEXT_SUFFIX}"
+      AUTO_CONTEXT_NONCE=$(generate_context_nonce) || exit 1
+      CONTEXT="auto_handoff_$AUTO_CONTEXT_NONCE"
+      validate_context_name "$CONTEXT" || {
+        echo "  (generated from OS randomness; report this as a session-scheduler bug)" >&2
+        exit 1
+      }
       CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
       if (set -o noclobber; : > "$CONTEXT_FILE") 2>/dev/null; then
         break

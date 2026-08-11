@@ -44,8 +44,8 @@ removed. Fix the hard transport cause and retry the same legal assignment.
 
 - `--eta MINUTES` — stores `eta_at`; overdue tasks are flagged `OVERDUE` in status/board views.
 - `--stage NAME` — set/overwrite the stage label.
-- `--context NAME` — attach an existing snapshot under `SESSION_CONTEXT_HOME`.
-- `--context auto` — create a private immutable task handoff from the approved prompt and current ledger state, then attach it.
+- `--context NAME` — attach an existing canonical snapshot under `SESSION_CONTEXT_HOME`; names must match `^[a-z0-9]+(_[a-z0-9]+)*$` (lowercase snake_case only).
+- `--context auto` — create a private immutable task handoff named `auto_handoff_<random-hex>` from the approved prompt and current ledger state, then attach it. The nonce is exactly 32 lowercase hex characters from OS randomness and is independent of cross-provider task ids and dates.
 - `--reviewer PANE` — set or override the independent reviewer route.
 - `--workflow ID` — set or override the workflow group; `--workflow-id` is an alias.
 - `--force` — bypass the status-transition check and unmet-dependency gate; an illegal-transition override records "forced" in history, while bypassing only the dependency gate does not.

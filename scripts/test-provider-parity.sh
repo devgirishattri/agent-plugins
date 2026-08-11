@@ -103,6 +103,33 @@ assert_provider_neutral_packet() {
     || fail "$label packet missing Claude context-load command"
 }
 
+# Scheduler-generated handoffs are consumed through the shared knowledge store,
+# so verify the producer's recorded dynamic name with both provider helpers.
+assert_scheduler_auto_context_consumable() {
+  local task_file="$1" label="$2" context listed
+  context=$(jq -r '.meta.context // empty' "$task_file")
+  [ -n "$context" ] || fail "$label did not record meta.context"
+  printf '%s\n' "$context" | grep -Eq '^auto_handoff_[0-9a-f]{32}$' \
+    || fail "$label generated context name outside auto_handoff_<32-hex> contract: $context"
+  [ -f "$SESSION_CONTEXT_HOME/$context.md" ] \
+    || fail "$label generated context file is missing: $context"
+
+  for provider in claude codex; do
+    if [ "$provider" = "claude" ]; then
+      knowledge_scripts="$ROOT/plugins/knowledge/scripts"
+    else
+      knowledge_scripts="$ROOT/codex/plugins/knowledge/scripts"
+    fi
+    listed=$(SESSION_CONTEXT_HOME="$SESSION_CONTEXT_HOME" bash "$knowledge_scripts/list-contexts.sh") \
+      || fail "$label: $provider knowledge list failed for $context"
+    printf '%s\n' "$listed" | grep -Eq "^${context}[[:space:]]" \
+      || fail "$label: $provider knowledge list omitted $context"
+    SESSION_CONTEXT_HOME="$SESSION_CONTEXT_HOME" bash "$knowledge_scripts/load-context.sh" "$context" \
+      > "$TMP/${label//[^a-zA-Z0-9]/_}-${provider}-load.out" \
+      || fail "$label: $provider knowledge load failed for $context"
+  done
+}
+
 # Spaces and an apostrophe prove both providers record the raw canonical paths
 # as provenance without shell-quoting games (packets carry no executable
 # export/env lines at all).
@@ -132,6 +159,7 @@ CLAUDE_ID=$(printf '%s\n' "$claude_created" | grep -oE '[a-f0-9]{8}' | head -1)
 [ -n "$CLAUDE_ID" ] || fail "could not parse Claude-created task id"
 bash "$CODEX_SCRIPTS/task-assign.sh" parity-worker "$CLAUDE_ID" --reviewer parity-reviewer --context auto "Codex assigns Claude task" >/dev/null
 CLAUDE_FILE="$SESSION_SCHEDULER_HOME/tasks/$CLAUDE_ID.json"
+assert_scheduler_auto_context_consumable "$CLAUDE_FILE" "Codex auto context"
 jq -e '.meta.workflow_id == "shared-claude" and .meta.scheduler_home != null and .reviewer == "parity-reviewer"' "$CLAUDE_FILE" >/dev/null \
   || fail "Codex did not preserve canonical schema on Claude-created task"
 assert_provider_neutral_packet "$SESSION_SCHEDULER_HOME/prompts/$CLAUDE_ID.md" "Codex assignment"
@@ -163,6 +191,7 @@ CODEX_ID=$(printf '%s\n' "$codex_created" | grep -oE 'task-[a-zA-Z0-9_.-]+' | he
 [ -n "$CODEX_ID" ] || fail "could not parse Codex-created task id"
 bash "$CLAUDE_SCRIPTS/task-assign.sh" parity-worker "$CODEX_ID" --context auto "Claude assigns Codex task" >/dev/null
 CODEX_FILE="$SESSION_SCHEDULER_HOME/tasks/$CODEX_ID.json"
+assert_scheduler_auto_context_consumable "$CODEX_FILE" "Claude auto context"
 jq -e '.meta.workflow_id == "shared-codex" and .meta.scheduler_home != null and .reviewer == "parity-reviewer"' "$CODEX_FILE" >/dev/null \
   || fail "Claude did not preserve canonical schema on Codex-created task"
 assert_provider_neutral_packet "$SESSION_SCHEDULER_HOME/prompts/$CODEX_ID.md" "Claude assignment"
@@ -196,6 +225,7 @@ assert_provider_neutral_packet "$SESSION_SCHEDULER_HOME/prompts/${CODEX_ID}-revi
 bash "$CLAUDE_SCRIPTS/task-block.sh" "$CODEX_ID" "changes requested after retry" >/dev/null
 bash "$CODEX_SCRIPTS/task-assign.sh" parity-worker "$CODEX_ID" --context auto \
   "Codex reassigns after Claude review retry" >/dev/null
+assert_scheduler_auto_context_consumable "$CODEX_FILE" "Codex reassignment auto context"
 jq -e '
   .status == "assigned"
 ' "$CODEX_FILE" >/dev/null || fail "Codex did not reassign the Claude-reviewed task"
@@ -227,6 +257,7 @@ mv "$TMP/codex-review-with-legacy.tmp" "$CODEX_FILE"
 bash "$CODEX_SCRIPTS/task-block.sh" "$CODEX_ID" "rework before Claude reassignment" >/dev/null
 bash "$CLAUDE_SCRIPTS/task-assign.sh" parity-worker "$CODEX_ID" --context auto \
   "Claude reassigns after Codex review metadata" >/dev/null
+assert_scheduler_auto_context_consumable "$CODEX_FILE" "Claude reassignment auto context"
 jq -e '.status == "assigned"' "$CODEX_FILE" >/dev/null \
   || fail "Claude did not reassign the Codex-reviewed task"
 assert_review_cycle_cleared "$CODEX_FILE" "Claude reassignment after Codex review"

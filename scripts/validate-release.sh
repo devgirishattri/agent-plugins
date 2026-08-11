@@ -634,11 +634,15 @@ require_tokens(
 )
 require_tokens(
     root / "codex/plugins/session-scheduler/commands/task-assign.md",
-    "task-<id>-<random>",
+    "auto_handoff_<random-hex>",
+    "32 lowercase hex",
+    "^[a-z0-9]+(_[a-z0-9]+)*$",
 )
 require_tokens(
     root / "codex/plugins/session-scheduler/skills/session-scheduler/SKILL.md",
-    "task-<id>-<random>",
+    "auto_handoff_<random-hex>",
+    "32-character lowercase-hex nonce",
+    "^[a-z0-9]+(_[a-z0-9]+)*$",
 )
 require_tokens(
     root / "codex/plugins/knowledge/skills/context-load/SKILL.md",
