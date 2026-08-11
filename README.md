@@ -25,19 +25,26 @@ step with each plugin manifest.
 ## Requirements
 
 Supported platforms are macOS and Linux; `session-manager` also runs on Windows
-under WSL. The scripts target bash 3.2 so they work with the bash macOS ships.
+under WSL. Most scripts are written to run on the bash 3.2 that macOS ships.
+`session-scheduler` documents a bash 4+ requirement in a header comment, but
+nothing in its code enforces it and it uses no bash 4 syntax.
 
 | Dependency | Needed by | Hard or optional |
 |------------|-----------|------------------|
-| `bash` 3.2+ | All | Hard |
 | `jq` | `session-scheduler`, `session-workspace` | Hard. Both refuse to run without it. |
-| `jq` | `chronos` | Optional. Falls back to hand-built JSON when absent. |
-| `tmux` | `session-chat`, `session-scheduler`, `session-workspace` | Hard. These coordinate real panes. |
+| `jq` | `chronos` | Optional. Claude falls back to hand-built JSON; the Codex build never uses jq. |
+| `tmux` | `session-chat`, `session-workspace` | Hard. `session-chat` additionally requires that the agent itself be running inside a tmux pane, not merely that tmux be installed. |
+| `tmux` | `session-scheduler` | Hard in practice. The ledger itself does not touch tmux, but every notify path goes through `session-chat`. |
 | `tmux` | `knowledge` | Optional. Only for pane-identity provenance; `KNOWLEDGE_PANE_NAME` substitutes. |
-| `git` | `knowledge` | Hard. Store resolution and `init` require a repository. |
+| `git` | `knowledge` | Hard. Store resolution and `init` both require a repository. |
+| `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
 | `python3` | `knowledge` doctor, `session-chat` message surfacing | Optional. Both degrade rather than fail. |
+| `codex` CLI | `session-manager` on Codex | Hard for deletion only. Its delete path execs the native CLI and exits 127 without it. |
+| GNU or BSD `date` plus a zoneinfo tree | `chronos` | Hard. It validates `AGENT_PLUGINS_TIME_ZONE` against the system zoneinfo. |
 
-`session-manager` and `chronos` need nothing beyond bash.
+`ripgrep` and `ruby` appear in CI but are test-only, and are not runtime
+prerequisites. On Claude, `session-manager` and `chronos` need nothing beyond
+bash and the system `date`.
 
 ## Installation
 
@@ -126,7 +133,11 @@ what each one needs after installation. Full variable reference is in
 
 Two variables must be exported **before** an agent process starts, because the
 panes and agents inherit them and the scripts never derive or export them
-themselves:
+themselves. They are scoped, not universal: `SESSION_SCHEDULER_HOME` is required
+for every scheduler operation, while `SESSION_CONTEXT_HOME` is required only by
+the `/knowledge:context-*` family and by attaching a context to a task. The rest
+of `knowledge` works without it, and `/knowledge:doctor` falls back to
+`<repo-root>/.tmp/contexts` rather than failing.
 
 ```bash
 export SESSION_CONTEXT_HOME="$HOME/.agent-context"     # knowledge context snapshots
@@ -148,7 +159,8 @@ three names are rejected if written directly into an `env.groups` block, so
 
 ### session-manager
 
-No setup. It reads the session data your runtime already writes.
+No setup. It reads the session data your runtime already writes. On Codex,
+deletion execs the native `codex` CLI, so that binary must be on `PATH`.
 
 ### chronos
 
@@ -184,7 +196,9 @@ enabled by different mechanisms:
   variable governs nothing. On Claude you enable capture by adding the opt-in
   `type: "prompt"` Stop-hook snippet from
   `plugins/knowledge/assets/capture-stop-hook.md` to your user or project
-  `settings.json`. The hook's presence is the opt-in.
+  `settings.json`. The hook's presence is the opt-in. This is **Claude only**:
+  Codex plugin hooks support only `type: "command"`, so Codex users capture
+  manually with `$knowledge:remember` and `$knowledge:consolidate`.
 
 `plugins/knowledge/assets/recall-snippet.md` holds a short instruction block you
 can paste into `CLAUDE.md` or `AGENTS.md` so agents query the store before
@@ -192,14 +206,19 @@ substantive work.
 
 ### session-chat
 
-Needs tmux. A pane must have a name before it can send or receive, since names
-are the addresses:
+The agent must be running **inside** a tmux pane; having tmux installed is not
+enough, and the scripts exit with an error when `TMUX` is unset. Both ends of a
+conversation need names, since names are the addresses: an unnamed sender is
+refused, and an unnamed recipient cannot be resolved.
+
+A `SessionStart` hook names a pane automatically from the session's custom
+title, but only when the pane has no name yet. Set or change one explicitly with:
 
 ```
 /whoami <name>
 ```
 
-Each participating pane sets its own. Delivery behavior on the receiving side is
+Delivery behavior on the receiving side is
 controlled by `SESSION_CHAT_INCOMING_MODE`, which defaults to `notify`;
 orchestration setups normally want `auto` or `assist`. All panes that need to
 exchange messages must agree on one mailbox root, so if you override
@@ -208,11 +227,21 @@ before its agent starts.
 
 ### session-scheduler
 
-Needs tmux, `jq`, `SESSION_SCHEDULER_HOME`, and a working `session-chat` at
-**0.13.0 or newer**, which it enforces at runtime. It layers a file-backed
-ledger on that transport, so set up `session-chat` first and confirm panes can
-actually message each other before assigning tasks. Attaching a context to a
-task also requires `SESSION_CONTEXT_HOME`.
+Needs `jq`, `SESSION_SCHEDULER_HOME`, and a working `session-chat` at **0.13.0
+or newer**, which it enforces at runtime and which exists so a dispatch to a
+busy pane is recovered from the durable inbox instead of lost. It layers a
+file-backed ledger on that transport, so set up `session-chat` first and confirm
+panes can actually message each other before assigning tasks.
+
+The ledger itself does not touch tmux, so creating and querying tasks works
+outside it. Assigning, reviewing, completing, and blocking all notify through
+`session-chat`, which does require tmux. Attaching a context to a task
+additionally requires `SESSION_CONTEXT_HOME`.
+
+Run `/scheduler-doctor` first. It checks jq, tmux, the session-chat install and
+its version, ledger-home drift, and the current pane's incoming mode, and it
+warns when an executor sits in the default `notify` mode, where it will not act
+on dispatched tasks.
 
 ### session-workspace
 
@@ -238,6 +267,23 @@ Per project, create two things at the repository root:
    `SESSION_WORKSPACE_PLUGIN_ROOT` and execs the engine. It holds no project
    logic, and project-specific behavior belongs in the JSON rather than here.
 
+Create the coordination directories yourself. The engine deliberately does not:
+the only directories it creates are its own state directory and the tmux lock
+directory, so on a fresh clone the `messages`, `scheduler`, and `contexts`
+directories under `stores.base` (and the memory root) must already exist or the
+first agent to write to one can fail.
+
+```bash
+mkdir -p "$STORES_BASE"/{messages,scheduler,contexts}
+chmod 700 "$STORES_BASE"/{messages,scheduler,contexts}
+```
+
+One asymmetry to know about: `stores.pin` exports the three coordination
+variables, but `stores.memory.root` exports nothing. If panes should write to
+that memory root, restate the same path as `KNOWLEDGE_MEMORY_HOME` in an
+`env.groups` block. Nothing keeps the two in sync, so changing one alone makes
+them diverge silently.
+
 Then check the config and preview the plan before touching tmux. Both are
 read-only:
 
@@ -253,12 +299,21 @@ in `plugins/session-workspace/README.md`.
 
 ### Hooks and restarts
 
-`chronos`, `knowledge`, and `session-chat` register lifecycle hooks
-(`UserPromptSubmit` and `PreToolUse` for chronos; `SessionStart`,
-`UserPromptSubmit`, and `Stop` for the other two). Codex prompts for trust
-before running a plugin's hooks, and installing or enabling a plugin does not
-grant that trust on its own. Restart the session after installing or updating a
-plugin so the runtime loads the new code and hooks.
+`chronos`, `knowledge`, and `session-chat` register lifecycle hooks;
+`session-manager`, `session-scheduler`, and `session-workspace` register none.
+`knowledge` and `session-chat` use `SessionStart`, `UserPromptSubmit`, and
+`Stop` on both providers. `chronos` differs by provider: Claude registers
+`UserPromptSubmit` plus a throttled `PreToolUse` refresh, while Codex registers
+only `UserPromptSubmit`, so `CHRONOS_INTERVAL_MIN` has no effect there.
+
+Registering a hook is not the same as turning a feature on. All three of
+`knowledge`'s hooks are gated off internally, so a fresh install injects and
+captures nothing until you opt in.
+
+Codex prompts for trust before running a plugin's hooks, and installing or
+enabling a plugin does not grant that trust on its own. Restart the session
+after installing or updating a plugin so the runtime loads the new code and
+hooks.
 
 ## Session Chat Configuration
 
