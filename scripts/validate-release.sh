@@ -561,6 +561,85 @@ for name in sorted(claude_plugins):
         if slash_guidance.search(runtime_script_text):
             fail(f"{script_file}: runtime guidance uses a Claude-style slash command")
 
+# ---------------------------------------------------------------------------
+# README plugin-table version parity: the fifth version site.
+# The bump rule covers four sites (both plugin manifests, both marketplaces),
+# and every check above compares those four against each other. The README's
+# plugin table publishes the same versions to readers, but nothing else in this
+# repo reads it, so a stale row there stays green while telling users a version
+# that does not exist. Two failure modes are treated as blocking: a row that
+# disagrees with the marketplace, and the table (or its version column) going
+# missing entirely — without the second, deleting the column would silently
+# demote this check to a no-op, which is the exact shape of bug it exists to
+# prevent.
+# ---------------------------------------------------------------------------
+
+readme_plugin_row = re.compile(
+    r"^\|\s*`([a-z0-9][a-z0-9-]*)`\s*\|\s*([0-9][^|]*?)\s*\|",
+    re.MULTILINE,
+)
+
+
+def readme_plugin_table(readme_text: str) -> dict[str, str]:
+    section = re.search(r"^## Plugins\s*$(.*?)(?=^## )", readme_text, re.S | re.M)
+    if section is None:
+        fail("README.md: no '## Plugins' section for the version check to read")
+    rows = readme_plugin_row.findall(section.group(1))
+    if not rows:
+        fail(
+            "README.md: the '## Plugins' table has no '`name` | version' rows. "
+            "The version column must stay, or this check silently passes."
+        )
+    table: dict[str, str] = {}
+    for plugin_name, version in rows:
+        if plugin_name in table:
+            fail(f"README.md: plugin {plugin_name} listed twice in the plugin table")
+        table[plugin_name] = version
+    return table
+
+
+def readme_version_problems(table: dict, expected: dict) -> list[str]:
+    problems = []
+    for plugin_name in sorted(set(expected) - set(table)):
+        problems.append(f"{plugin_name} is missing from the README plugin table")
+    for plugin_name in sorted(set(table) - set(expected)):
+        problems.append(f"{plugin_name} is in the README plugin table but not the marketplace")
+    for plugin_name in sorted(set(table) & set(expected)):
+        if table[plugin_name] != expected[plugin_name]:
+            problems.append(
+                f"{plugin_name}: README says {table[plugin_name]}, "
+                f"marketplace says {expected[plugin_name]}"
+            )
+    return problems
+
+
+# Executable evidence that the comparison can actually fail. A drift check that
+# only ever runs against correct input proves nothing about its own detection.
+_readme_fixture = {"alpha": "1.2.3", "beta": "0.1.0"}
+if readme_version_problems(dict(_readme_fixture), _readme_fixture):
+    fail("internal README version checker rejected a table that matches the marketplace")
+for _bad_table, _label in (
+    ({"alpha": "1.2.2", "beta": "0.1.0"}, "a stale version"),
+    ({"alpha": "1.2.3"}, "a missing row"),
+    ({"alpha": "1.2.3", "beta": "0.1.0", "gamma": "9.9.9"}, "an unknown plugin"),
+):
+    if not readme_version_problems(_bad_table, _readme_fixture):
+        fail(f"internal README version checker missed {_label}")
+if readme_plugin_row.search("| `session-manager` | 1.7.4 | List, search |") is None:
+    fail("internal README row parser failed to match a well-formed table row")
+if readme_plugin_row.search("| Plugin | Version | Purpose |") is not None:
+    fail("internal README row parser matched the table header")
+print("OK: README version-table checker fixtures are valid")
+
+readme_problems = readme_version_problems(
+    readme_plugin_table((root / "README.md").read_text()),
+    {entry_name: entry["version"] for entry_name, entry in claude_plugins.items()},
+)
+if readme_problems:
+    fail("README plugin table is out of sync: " + "; ".join(readme_problems))
+print("OK: README plugin table versions match the marketplaces")
+
+
 # High-risk semantic contracts that basename parity cannot prove.
 require_tokens(root / "plugins/session-manager/commands/session-delete.md", "AskUserQuestion", "final confirmation")
 require_tokens(root / "codex/plugins/session-manager/skills/session-delete/SKILL.md", "request_user_input", "--confirmed", "codex delete --force")
