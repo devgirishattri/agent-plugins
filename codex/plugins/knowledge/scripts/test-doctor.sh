@@ -783,25 +783,52 @@ printf '# Session Context: sample\nbody\n' > "$broken_ctx/sample.md"
 chmod 600 "$broken_ctx/sample.md"
 mkdir "$broken_ctx/.git"
 
-out=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$broken_ctx" bash "$DOCTOR" 2>&1)
+ctx_out_file="$TMP/broken_ctx.stdout"
+ctx_err_file="$TMP/broken_ctx.stderr"
+(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$broken_ctx" bash "$DOCTOR") \
+  > "$ctx_out_file" 2> "$ctx_err_file"
 rc=$?
+out=$(cat "$ctx_out_file")
 assert_contains "context_unsafe_tree_reports_error" "$out" "context store is unusable"
 assert_contains "context_unsafe_tree_names_path" "$out" "unexpected nested directory: $broken_ctx/.git"
 assert_contains "context_unsafe_tree_error_level" "$out" "ERROR	context	"
 assert_rc "context_unsafe_tree_sets_finding_rc" 1 "$rc"
 
-# The finding must stay on one stdout line: the validator emits two stderr
-# lines and _kd_oneline collapses them into the single-finding-per-line format.
-ctx_finding_lines=$(printf '%s\n' "$out" | grep -c 'context store is unusable' || true)
-if [ "$ctx_finding_lines" = "1" ]; then
+# rc alone is not load-bearing (the fixture repo carries an unrelated AGENTS.md
+# WARN, so doctor exits 1 either way). Pin the finding count for THIS section so
+# the assertion fails if the gate stops emitting.
+ctx_section_findings=$(awk -F'\t' '$1=="ERROR" && $2=="context"' "$ctx_out_file" | grep -c . || true)
+if [ "$ctx_section_findings" = "1" ]; then
+  pass "context_unsafe_tree_exactly_one_error"
+else
+  fail "context_unsafe_tree_exactly_one_error" "expected 1 ERROR/context finding, got $ctx_section_findings"
+fi
+
+# The validator emits TWO stderr lines; _kd_oneline must flatten them into one
+# finding. Counting the phrase alone is vacuous (the second raw line does not
+# contain it), so assert the real contract instead: every stdout line carries
+# the LEVEL<TAB>section<TAB> shape, and nothing leaks to stderr.
+ctx_malformed=$(awk -F'\t' 'NF<3 || $1 !~ /^(INFO|WARN|ERROR)$/' "$ctx_out_file" | grep -c . || true)
+if [ "$ctx_malformed" = "0" ]; then
   pass "context_unsafe_tree_single_line"
 else
-  fail "context_unsafe_tree_single_line" "expected exactly 1 finding line, got $ctx_finding_lines"
+  fail "context_unsafe_tree_single_line" "found $ctx_malformed stdout line(s) violating LEVEL<TAB>section<TAB>msg: $(awk -F'\t' 'NF<3 || $1 !~ /^(INFO|WARN|ERROR)$/' "$ctx_out_file" | head -2)"
+fi
+if [ ! -s "$ctx_err_file" ]; then
+  pass "context_unsafe_tree_no_stderr_leak"
+else
+  fail "context_unsafe_tree_no_stderr_leak" "validator stderr leaked: $(head -2 "$ctx_err_file")"
 fi
 
 # Once the tree is rejected, per-file staleness is noise about files no command
-# can read -- the section reports the gate and stops.
-assert_not_contains "context_unsafe_tree_suppresses_file_tier" "$out" "stale context snapshot 'sample'"
+# can read -- the section reports the gate and stops. sample.md is fresh, so
+# force the stale tier on with a 0-day threshold; without the early return this
+# store would emit a stale-snapshot WARN.
+out_stale=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_STALE_DAYS=0 SESSION_CONTEXT_HOME="$broken_ctx" bash "$DOCTOR" 2>&1)
+assert_not_contains "context_unsafe_tree_suppresses_file_tier" "$out_stale" "stale context snapshot 'sample'"
+# Same threshold on a healthy store proves the tier really would have fired.
+out_stale_ok=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_STALE_DAYS=0 SESSION_CONTEXT_HOME="$fresh_ctx" bash "$DOCTOR" 2>&1)
+assert_contains "context_stale_tier_fires_when_tree_ok" "$out_stale_ok" "stale context snapshot 'recent'"
 
 # A well-formed store (canonical snapshot + the one permitted .history dir)
 # must NOT trip the gate. Guards against the check firing on healthy stores.
@@ -811,8 +838,11 @@ printf '# Session Context: sample\nbody\n' > "$ok_ctx/sample.md"
 out=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$ok_ctx" bash "$DOCTOR" 2>&1)
 assert_not_contains "context_healthy_tree_no_error" "$out" "context store is unusable"
 
-# The gate is ownership/shape based, not mode based: mode normalization happens
-# in the hardening pass, so a permissive-but-owned store stays clean here.
+# For ordinary store entries the gate is ownership/shape based, not mode based:
+# mode normalization happens in the hardening pass, so a permissive-but-owned
+# store stays clean here. (Scoped deliberately -- the validator DOES enforce
+# 0700/0600 on live lock and quarantine artifacts, which are not exercised
+# by this fixture.)
 chmod 755 "$ok_ctx"
 out=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$ok_ctx" bash "$DOCTOR" 2>&1)
 assert_not_contains "context_permissive_mode_no_error" "$out" "context store is unusable"

@@ -844,22 +844,58 @@ section_context() {
     return 0
   fi
 
-  # Store-integrity gate. Every context command except context-search reaches
-  # the store through get_contexts_dir()/bootstrap_contexts_dir(), which run
+  # Store-integrity gate. The context write/read commands reach the store
+  # through get_contexts_dir()/bootstrap_contexts_dir(), which run
   # _context_validate_tree() first; a single unexpected nested directory (a
-  # stray .git, a sandbox-created sentinel) therefore takes the whole store
-  # offline for reads AND writes. Doctor has to run the same guard or it cannot
-  # observe that condition at all: the per-file tiers below scan
+  # stray .git, a sandbox-created sentinel) therefore takes the store offline
+  # for reads AND writes. Doctor has to run the same guard or it cannot observe
+  # that condition at all: the per-file tiers below scan
   # -maxdepth 1 -name '*.md', so the offending directory is invisible to them
-  # and the section falls silent on a store that is 100% unusable.
+  # and the section falls silent on a store no command can use.
+  #
+  # The message deliberately does not enumerate context-search: that command
+  # diverges by provider (the Claude copy globs *.md without validating, the
+  # Codex copy resolves through get_contexts_dir and aborts), and this file is
+  # shipped byte-identical to both trees.
   #
   # Report and stop -- once the tree is rejected, snapshot-level staleness and
   # expiry findings are noise about files no command can currently read.
-  local ctx_err ctx_rc=0
-  ctx_err=$(_context_validate_tree "$ctx_dir" 2>&1 >/dev/null) || ctx_rc=$?
+  #
+  # Retry before reporting. A concurrent /context-* writer creates and removes
+  # $ctx_dir/.knowledge-context.lock; if that pathname vanishes between find(1)
+  # enumerating it and stat'ing it, BSD find exits nonzero and the validator
+  # reports "cannot safely traverse" for a store that is actually fine. The
+  # commands hit the same race, but they are one-shot and user-initiated --
+  # doctor is the surface where a spurious ERROR would be read as a standing
+  # defect. Only a stable, repeated failure is reported.
+  local ctx_err="" ctx_rc=0 ctx_attempt
+  for ctx_attempt in 1 2 3; do
+    ctx_rc=0
+    ctx_err=$(_context_validate_tree "$ctx_dir" 2>&1 >/dev/null) || ctx_rc=$?
+    [ "$ctx_rc" -eq 0 ] && break
+    # A structural violation is deterministic and needs no retry. Note that a
+    # structural failure ALSO emits the traversal line (the walker's exit
+    # propagates through PIPESTATUS), so "contains traverse" cannot be the
+    # test -- retry only when the traversal line is the ONLY thing reported.
+    # Done in pure bash: no grep/awk dependency, so the decision cannot be
+    # perturbed by whatever grep resolves to in the caller's environment.
+    local ctx_line ctx_transient=0
+    if [ -n "$ctx_err" ]; then
+      ctx_transient=1
+      while IFS= read -r ctx_line; do
+        [ -n "$ctx_line" ] || continue
+        case "$ctx_line" in
+          *"cannot safely traverse context store"*) ;;
+          *) ctx_transient=0 ;;
+        esac
+      done <<< "$ctx_err"
+    fi
+    [ "$ctx_transient" -eq 1 ] || break
+    [ "$ctx_attempt" -lt 3 ] && sleep 1
+  done
   if [ "$ctx_rc" -ne 0 ]; then
     [ -n "$ctx_err" ] || ctx_err="context store failed validation"
-    emit ERROR context "context store is unusable -- /knowledge:context-generate, -list, -load, -remove, -diff, and -share will all abort: $(_kd_oneline "$ctx_err")"
+    emit ERROR context "context store is unusable -- context-generate, -list, -load, -remove, -diff and -share will abort: $(_kd_oneline "$ctx_err")"
     return 0
   fi
 
