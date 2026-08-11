@@ -209,7 +209,7 @@ output_rows="$(mktemp 2>/dev/null)" || exit 0
 trap 'rm -f "$output_rows" 2>/dev/null || true' EXIT
 printf '%s\n' "$ranked" | awk -F'\t' '{print "0\t" $0}' > "$output_rows"
 if [ "$GRAPH" -eq 1 ] && [ -n "$related" ]; then
-  printf '%s\n' "$related" | awk -F '\t' '!seen[$2]++' | while IFS="$TAB" read -r direction slug seed; do
+  printf '%s\n' "$related" | awk -F '\t' '!seen[$2]++' | while IFS="$TAB" read -r _ slug seed; do
     [ -n "$slug" ] || continue
     grep -F -x -q "$slug" <(printf '%s\n' "$ranked" | cut -f2) && continue
     [ -f "$store/$slug.md" ] || continue
@@ -225,7 +225,7 @@ if [ "$GRAPH" -eq 1 ] && [ -n "$related" ]; then
       }
       END { gsub(/[\t\r\n]/, " ", name); gsub(/[\t\r\n]/, " ", desc); gsub(/[\t\r\n]/, " ", typ); gsub(/[\t\r\n]/, " ", st); gsub(/^"|"$/, "", name); gsub(/^"|"$/, "", desc); gsub(/^"|"$/, "", typ); gsub(/^"|"$/, "", st); printf "%s\t%s\t%s\t%s", name, desc, st, typ }
     ' "$store/$slug.md")"
-    IFS="$TAB" read -r name desc st typ <<EOF
+    IFS="$TAB" read -r _ desc st typ <<EOF
 $meta
 EOF
     [ -n "$st" ] || st=active
