@@ -675,6 +675,175 @@ else
   fail "unset_home_fails_closed_with_relaunch_guidance" "rc=$unset_rc out=$unset_out"
 fi
 
+# --- validator: the retry contract, deterministically ----------------------
+# The race test below is realistic but probabilistic -- at this fixture size it
+# only catches a regression about one run in three. THIS is the actual guard:
+# it pins the three-valued walk contract that makes the retry possible, with no
+# timing involved. _context_validate_tree must retry status 2 (transient walk
+# failure) and must NOT retry status 1 (structural violation).
+echo
+echo "--- validator: retry contract (deterministic) ---"
+
+retry_probe() {
+  # $1 = statuses the stubbed walk returns, in order (space separated)
+  local statuses="$1"
+  (
+    source "$HERE/lib.sh"
+    # shellcheck disable=SC2317
+    _context_validate_tree_walk() {
+      local -a queue
+      read -r -a queue <<< "$STUB_STATUSES"
+      local idx="${STUB_CALLS:-0}"
+      STUB_CALLS=$((idx + 1))
+      printf '%s' "$STUB_CALLS" > "$STUB_COUNT_FILE"
+      local st="${queue[$idx]:-${queue[${#queue[@]}-1]}}"
+      return "$st"
+    }
+    # Neutralize the post-walk artifact checks: this probe is about the retry
+    # loop alone, and both are separately covered above.
+    # shellcheck disable=SC2317
+    _context_validate_quarantine_artifact() { return 0; }
+    # shellcheck disable=SC2317
+    _context_validate_lock_artifact() { return 0; }
+    export STUB_STATUSES="$statuses"
+    STUB_COUNT_FILE="$TMP/stub_calls"
+    export STUB_COUNT_FILE
+    printf '0' > "$STUB_COUNT_FILE"
+    STUB_CALLS=0
+    _context_validate_tree "$retry_dir" >/dev/null 2>&1
+    printf '%s:%s' "$?" "$(cat "$STUB_COUNT_FILE")"
+  )
+}
+
+retry_dir="$TMP/retry_probe"
+mkdir -p "$retry_dir"
+chmod 700 "$retry_dir"
+
+# transient twice then clean -> overall success, and it really did re-walk
+probe=$(retry_probe "2 2 0")
+case "$probe" in
+  0:3) pass "validator_retries_transient_walk_failure" ;;
+  *) fail "validator_retries_transient_walk_failure" "expected rc=0 after 3 walks, got rc:calls=$probe" ;;
+esac
+
+# structural violation -> reported immediately, exactly one walk, no retry
+probe=$(retry_probe "1 0 0")
+case "$probe" in
+  1:1) pass "validator_does_not_retry_structural_violation" ;;
+  *) fail "validator_does_not_retry_structural_violation" "expected rc=1 after 1 walk, got rc:calls=$probe" ;;
+esac
+
+# never stabilizes -> bounded, fails closed rather than looping forever
+probe=$(retry_probe "2")
+case "$probe" in
+  1:*) pass "validator_bounded_when_walk_never_stabilizes" ;;
+  *) fail "validator_bounded_when_walk_never_stabilizes" "expected rc=1, got rc:calls=$probe" ;;
+esac
+
+# --- validator: transient traversal failure is retried, not reported -------
+# A concurrent writer creates and removes .knowledge-context.lock constantly.
+# When that pathname vanished between find(1) enumerating and stat'ing it, BSD
+# find exited nonzero and _context_validate_tree condemned a healthy store
+# (~1-3 per 800 validations against an EMPTY store; a single snapshot masks the
+# window, so this fixture is deliberately empty apart from .history).
+echo
+echo "--- validator: bounded revalidation under a concurrent writer ---"
+
+race_store="$TMP/race_store"
+mkdir -p "$race_store/.history"
+chmod 700 "$race_store" "$race_store/.history"
+(
+  # shellcheck source=lib.sh
+  source "$HERE/lib.sh"
+  (
+    for _ in $(seq 1 200); do
+      acquire_context_store_lock "$race_store" >/dev/null 2>&1 || exit 11
+      release_context_store_lock >/dev/null 2>&1 || exit 12
+    done
+  ) &
+  race_writer=$!
+  race_fail=0
+  race_checks=0
+  while kill -0 "$race_writer" 2>/dev/null; do
+    _context_validate_tree "$race_store" >/dev/null 2>&1 || race_fail=$((race_fail + 1))
+    race_checks=$((race_checks + 1))
+  done
+  wait "$race_writer"
+  printf '%s %s\n' "$race_checks" "$race_fail"
+) > "$TMP/race_result" 2>/dev/null
+race_checks=$(cut -d' ' -f1 < "$TMP/race_result")
+race_fail=$(cut -d' ' -f2 < "$TMP/race_result")
+if [ "${race_fail:-1}" = "0" ] && [ "${race_checks:-0}" -gt 50 ]; then
+  pass "validator_no_spurious_failure_under_writer_churn"
+else
+  fail "validator_no_spurious_failure_under_writer_churn" \
+    "$race_fail spurious rejection(s) of a healthy store across $race_checks validations"
+fi
+
+# The retry must not soften a real violation: a structural problem is
+# deterministic and has to be reported on the first pass.
+race_bad="$TMP/race_bad"
+mkdir -p "$race_bad/.history"
+mkdir "$race_bad/.git"
+race_bad_out=$( (source "$HERE/lib.sh"; _context_validate_tree "$race_bad") 2>&1 >/dev/null )
+race_bad_rc=$?
+if [ "$race_bad_rc" -ne 0 ]; then
+  case "$race_bad_out" in
+    *"unexpected nested directory"*) pass "validator_still_rejects_structural_violation" ;;
+    *) fail "validator_still_rejects_structural_violation" "wrong error: $(printf '%s' "$race_bad_out" | head -1)" ;;
+  esac
+else
+  fail "validator_still_rejects_structural_violation" "retry masked a real violation (rc=0)"
+fi
+
+# --- context-search: read-only integrity gate ------------------------------
+# search was the one reader that ignored the safety contract every other
+# context command enforces: it globbed *.md directly and returned hits from a
+# store /context-list refuses to open. It must now skip such a store -- and
+# must still never mutate one, since it reads OTHER projects' stores.
+echo
+echo "--- context-search: integrity gate + read-only guarantee ---"
+
+search_bad="$TMP/search_bad"
+mkdir -p "$search_bad/.history"
+printf '# Session Context: sample\nneedle here\n' > "$search_bad/sample.md"
+mkdir "$search_bad/.git"
+search_out=$(SESSION_CONTEXT_HOME="$search_bad" bash "$HERE/search-contexts.sh" needle 2>&1)
+case "$search_out" in
+  *needle\ here*) fail "search_skips_condemned_store" "returned hits from a store the validator rejects" ;;
+  *) pass "search_skips_condemned_store" ;;
+esac
+case "$search_out" in
+  *"skipping unsafe context store"*) pass "search_warns_on_condemned_store" ;;
+  *) fail "search_warns_on_condemned_store" "expected a skip warning, got: $(printf '%s' "$search_out" | head -1)" ;;
+esac
+
+# A healthy store must still be searched -- the gate must not silence search.
+search_ok="$TMP/search_ok"
+mkdir -p "$search_ok/.history"
+printf '# Session Context: sample\nneedle here\n' > "$search_ok/sample.md"
+search_ok_out=$(SESSION_CONTEXT_HOME="$search_ok" bash "$HERE/search-contexts.sh" needle 2>&1)
+case "$search_ok_out" in
+  *needle\ here*) pass "search_still_finds_in_healthy_store" ;;
+  *) fail "search_still_finds_in_healthy_store" "expected a hit, got: $(printf '%s' "$search_ok_out" | head -1)" ;;
+esac
+
+# Read-only guarantee: this command reads other projects' stores, so it must
+# not normalize their permissions the way the write path does.
+search_ro="$TMP/search_ro"
+mkdir -p "$search_ro/.history"
+printf '# Session Context: sample\nneedle here\n' > "$search_ro/sample.md"
+chmod 755 "$search_ro"
+chmod 644 "$search_ro/sample.md"
+SESSION_CONTEXT_HOME="$search_ro" bash "$HERE/search-contexts.sh" needle >/dev/null 2>&1
+search_dir_mode=$(stat -c '%a' "$search_ro" 2>/dev/null || stat -f '%Lp' "$search_ro")
+search_file_mode=$(stat -c '%a' "$search_ro/sample.md" 2>/dev/null || stat -f '%Lp' "$search_ro/sample.md")
+if [ "$search_dir_mode" = "755" ] && [ "$search_file_mode" = "644" ]; then
+  pass "search_never_chmods_the_store"
+else
+  fail "search_never_chmods_the_store" "modes changed: dir=$search_dir_mode file=$search_file_mode (expected 755/644)"
+fi
+
 # --- Summary ---
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="

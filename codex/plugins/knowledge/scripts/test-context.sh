@@ -698,4 +698,76 @@ grep -Fq 'Direct callers of every script must set the variable explicitly' "$PLU
 grep -Fq 'inherited from the environment this agent process started with' "$SCRIPT_DIR/lib.sh" \
   && ok || fail "knowledge lib (context surface) omits inherited-at-startup guidance"
 
+# --- context-search: read-only integrity gate ------------------------------
+# search used to resolve the current store through get_contexts_dir (which
+# bootstraps and chmods) and harden other projects' stores outright -- a
+# cross-project read-only command must never mutate what it reads, and one bad
+# store must not abort the whole sweep. It now validates read-only and skips.
+search_bad="$TMP/search_bad"
+mkdir -p "$search_bad/.history"
+printf '# Session Context: sample\nneedle here\n' > "$search_bad/sample.md"
+mkdir "$search_bad/.git"
+search_out="$TMP/search_bad.out"
+SESSION_CONTEXT_HOME="$search_bad" bash "$SCRIPT_DIR/search-contexts.sh" needle > "$search_out" 2>&1 || true
+grep -Fq 'skipping unsafe context store' "$search_out" \
+  && ok || fail "context-search did not skip a store the validator rejects"
+grep -Fq 'needle here' "$search_out" \
+  && fail "context-search returned hits from a condemned store" || ok
+
+search_ok="$TMP/search_ok"
+mkdir -p "$search_ok/.history"
+printf '# Session Context: sample\nneedle here\n' > "$search_ok/sample.md"
+chmod 755 "$search_ok"
+chmod 644 "$search_ok/sample.md"
+search_ok_out="$TMP/search_ok.out"
+SESSION_CONTEXT_HOME="$search_ok" bash "$SCRIPT_DIR/search-contexts.sh" needle > "$search_ok_out" 2>&1 || true
+grep -Fq 'needle here' "$search_ok_out" \
+  && ok || fail "context-search stopped finding hits in a healthy store"
+search_dir_mode=$(stat -c '%a' "$search_ok" 2>/dev/null || stat -f '%Lp' "$search_ok")
+search_file_mode=$(stat -c '%a' "$search_ok/sample.md" 2>/dev/null || stat -f '%Lp' "$search_ok/sample.md")
+[ "$search_dir_mode" = "755" ] && [ "$search_file_mode" = "644" ] \
+  && ok || fail "context-search mutated store permissions (dir=$search_dir_mode file=$search_file_mode, expected 755/644)"
+
+# --- validator: the retry contract that makes a concurrent writer safe -----
+# _context_validate_tree_walk is three-valued so _context_validate_tree can
+# retry a transient walk failure (a lock pathname vanishing mid-find) without
+# ever retrying a structural violation. Deterministic: the walk is stubbed.
+retry_dir="$TMP/retry_probe"
+mkdir -p "$retry_dir"
+chmod 700 "$retry_dir"
+retry_probe() {
+  (
+    set +e
+    source "$SCRIPT_DIR/lib.sh"
+    export STUB_STATUSES="$1"
+    STUB_COUNT_FILE="$TMP/stub_calls"
+    export STUB_COUNT_FILE
+    printf '0' > "$STUB_COUNT_FILE"
+    STUB_CALLS=0
+    # shellcheck disable=SC2317
+    _context_validate_tree_walk() {
+      local -a queue
+      read -r -a queue <<< "$STUB_STATUSES"
+      local idx="${STUB_CALLS:-0}"
+      STUB_CALLS=$((idx + 1))
+      printf '%s' "$STUB_CALLS" > "$STUB_COUNT_FILE"
+      return "${queue[$idx]:-${queue[${#queue[@]}-1]}}"
+    }
+    # shellcheck disable=SC2317
+    _context_validate_quarantine_artifact() { return 0; }
+    # shellcheck disable=SC2317
+    _context_validate_lock_artifact() { return 0; }
+    _context_validate_tree "$retry_dir" >/dev/null 2>&1
+    printf '%s:%s' "$?" "$(cat "$STUB_COUNT_FILE")"
+  )
+}
+[ "$(retry_probe '2 2 0')" = "0:3" ] \
+  && ok || fail "validator did not retry a transient walk failure"
+[ "$(retry_probe '1 0 0')" = "1:1" ] \
+  && ok || fail "validator retried a structural violation instead of reporting it"
+case "$(retry_probe '2')" in
+  1:*) ok ;;
+  *) fail "validator did not fail closed when the walk never stabilized" ;;
+esac
+
 echo "knowledge context-surface tests: $ASSERTIONS passed, 0 failed"

@@ -863,45 +863,18 @@ section_context() {
   # Report and stop -- once the tree is rejected, snapshot-level staleness and
   # expiry findings are metadata no lifecycle command can act on.
   #
-  # Retry before reporting. A concurrent /context-* writer creates and removes
-  # $ctx_dir/.knowledge-context.lock; if that pathname vanishes between find(1)
-  # enumerating it and stat'ing it, BSD find exits nonzero and the validator
-  # reports "cannot safely traverse" for a store that is actually fine. The
-  # commands hit the same race, but they are one-shot and user-initiated --
-  # doctor is the surface where a spurious ERROR would be read as a standing
-  # defect. Only a stable, repeated failure is reported.
-  #
-  # Measured, not theoretical: ~1-3 spurious failures per 800 validations
-  # against a store driven by one tight acquire/release writer loop. Note for
-  # anyone re-testing -- an EMPTY store reproduces it, a store holding even one
-  # snapshot did not across ~4000 validations, so a payload file masks the
-  # window. The underlying race lives in _context_validate_tree and still
-  # affects the commands; this retry only stops doctor from reporting it.
-  local ctx_err="" ctx_rc=0 ctx_attempt
-  for ctx_attempt in 1 2 3; do
-    ctx_rc=0
-    ctx_err=$(_context_validate_tree "$ctx_dir" 2>&1 >/dev/null) || ctx_rc=$?
-    [ "$ctx_rc" -eq 0 ] && break
-    # A structural violation is deterministic and needs no retry. Note that a
-    # structural failure ALSO emits the traversal line (the walker's exit
-    # propagates through PIPESTATUS), so "contains traverse" cannot be the
-    # test -- retry only when the traversal line is the ONLY thing reported.
-    # Done in pure bash: no grep/awk dependency, so the decision cannot be
-    # perturbed by whatever grep resolves to in the caller's environment.
-    local ctx_line ctx_transient=0
-    if [ -n "$ctx_err" ]; then
-      ctx_transient=1
-      while IFS= read -r ctx_line; do
-        [ -n "$ctx_line" ] || continue
-        case "$ctx_line" in
-          *"cannot safely traverse context store"*) ;;
-          *) ctx_transient=0 ;;
-        esac
-      done <<< "$ctx_err"
-    fi
-    [ "$ctx_transient" -eq 1 ] || break
-    [ "$ctx_attempt" -lt 3 ] && sleep 1
-  done
+  # No retry here on purpose. A concurrent /context-* writer creates and
+  # removes $ctx_dir/.knowledge-context.lock constantly, and a pathname
+  # vanishing mid-walk used to make find(1) exit nonzero and condemn a healthy
+  # store (~1-3 per 800 validations against an EMPTY store -- a single snapshot
+  # masks the window, so re-test with an empty one). That is now absorbed by
+  # the bounded revalidation inside _context_validate_tree, which retries only
+  # the transient walk failure and still fails fast on a structural violation.
+  # Doctor deliberately does not layer a second retry on top: one mechanism,
+  # in the place every caller shares, rather than a diagnostic that papers over
+  # what the lifecycle commands would still hit.
+  local ctx_err="" ctx_rc=0
+  ctx_err=$(_context_validate_tree "$ctx_dir" 2>&1 >/dev/null) || ctx_rc=$?
   if [ "$ctx_rc" -ne 0 ]; then
     [ -n "$ctx_err" ] || ctx_err="context store failed validation"
     emit ERROR context "context store is unusable -- context-generate, -list, -load, -remove, -diff and -share will abort: $(_kd_oneline "$ctx_err")"

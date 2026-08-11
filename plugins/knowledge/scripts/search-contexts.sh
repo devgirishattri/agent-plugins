@@ -8,10 +8,18 @@
 #   (b) best-effort decoded ~/.claude/projects/* directory names
 #       (lossy for paths containing hyphens; non-existent roots are skipped)
 # Only roots that exist and contain .tmp/contexts/ (or legacy tmp/contexts/) are searched.
+# Each candidate store is validated READ-ONLY before it is read: a store the
+# lifecycle commands would reject is skipped with a warning rather than silently
+# searched. Validation deliberately does not go through get_contexts_dir --
+# that bootstraps and chmods, which this command must never do to another
+# project. One bad store skips that store only; the sweep continues.
 # Output (default): ROOT\tSNAPSHOT\tLINE\tTEXT (first 3 matching lines per file)
 # Output (--list):  ROOT\tSNAPSHOT
 # Supported platforms: macOS, Linux
 set -uo pipefail
+
+# shellcheck source=lib.sh
+source "$(dirname "$0")/lib.sh"
 
 LIST_MODE=0
 PATTERN=""
@@ -69,6 +77,14 @@ while IFS= read -r root; do
         [ -d "$contexts_dir" ] || contexts_dir="$root/tmp/contexts"
     fi
     [ -d "$contexts_dir" ] || continue
+    # Read-only integrity gate. Without this, search was the one reader that
+    # ignored the safety contract every other context command enforces, happily
+    # returning hits from a store /context-list refuses to open.
+    if ! _context_validate_tree "$contexts_dir" 2>/dev/null; then
+        printf 'WARNING: skipping unsafe context store (run /knowledge:doctor): %s\n' \
+            "$contexts_dir" >&2
+        continue
+    fi
     matches=$(grep -il -- "$PATTERN" "$contexts_dir"/*.md 2>/dev/null) || true
     [ -n "$matches" ] || continue
     while IFS= read -r snapshot_file; do

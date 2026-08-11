@@ -396,14 +396,23 @@ _context_harden_lock_artifact() {
   _context_validate_lock_artifact "$1"
 }
 
-_context_validate_tree() {
-  # Validate the complete tree before changing any permissions. The store has
-  # only one supported nested directory plus an ephemeral writer lock; refusing
-  # other directories prevents a misconfigured SESSION_CONTEXT_HOME (such as a
-  # repository root) from being recursively chmodded.
+_context_validate_tree_walk() {
+  # One pass over the tree. Split out from _context_validate_tree so a walk
+  # that failed only because a pruned pathname vanished can be retried without
+  # re-running the caller's directory checks.
+  #
+  # Exit status is three-valued, and the distinction matters:
+  #   0  tree is clean
+  #   1  structural violation -- deterministic, the specific error has already
+  #      been written to stderr by the subshell below
+  #   2  the walk itself failed -- transient, nothing is wrong with the store
+  #
+  # PIPESTATUS separates these exactly, so no stderr string matching is needed:
+  # a violation makes the `while` subshell exit 1 (PIPESTATUS[1]), whereas a
+  # vanished pathname makes find(1) itself exit nonzero (PIPESTATUS[0]) while
+  # the loop completes normally.
   local root="$1" path relative
   local -a traversal_status
-  _context_validate_directory "$root" || return 1
 
   find -P "$root" -mindepth 1 \
     \( -path "$root/.knowledge-context.lock" -o -path "$root/.knowledge-context.lock/*" \
@@ -447,8 +456,53 @@ _context_validate_tree() {
     fi
   done
   traversal_status=("${PIPESTATUS[@]}")
-  if [ "${traversal_status[0]}" -ne 0 ] || [ "${traversal_status[1]}" -ne 0 ]; then
-    _context_store_error "cannot safely traverse context store: $root"
+  # Full `if` blocks, not `[ ... ] && return N`: a bare AND-list whose test is
+  # false leaves the statement non-zero, which aborts any caller running under
+  # `set -e`. Several callers do.
+  if [ "${traversal_status[1]}" -ne 0 ]; then
+    return 1
+  fi
+  if [ "${traversal_status[0]}" -ne 0 ]; then
+    return 2
+  fi
+  return 0
+}
+
+_context_validate_tree() {
+  # Validate the complete tree before changing any permissions. The store has
+  # only one supported nested directory plus an ephemeral writer lock; refusing
+  # other directories prevents a misconfigured SESSION_CONTEXT_HOME (such as a
+  # repository root) from being recursively chmodded.
+  #
+  # The walk is retried on transient failure, mirroring the bounded
+  # revalidation _context_validate_lock_artifact already performs. A concurrent
+  # writer creates and removes $root/.knowledge-context.lock constantly; if
+  # that pathname disappears between find(1) enumerating and stat'ing it, BSD
+  # find exits nonzero and a perfectly healthy store used to be reported as
+  # unsafe. Measured at ~1-3 spurious failures per 800 validations against an
+  # empty store under one tight acquire/release writer loop -- enough that a
+  # user running $knowledge:context-list beside an active writer could see it.
+  # A store holding even one snapshot did not reproduce it, so re-testing this
+  # needs an EMPTY store.
+  #
+  # Only status 2 is retried; a structural violation is deterministic and
+  # returns immediately so a genuinely unsafe store still fails fast.
+  local root="$1" walk_status=0 attempt=1
+  _context_validate_directory "$root" || return 1
+
+  while [ "$attempt" -le 50 ]; do
+    _context_validate_tree_walk "$root"
+    walk_status=$?
+    [ "$walk_status" -eq 2 ] || break
+    sleep 0.002
+    attempt=$((attempt + 1))
+  done
+
+  if [ "$walk_status" -eq 2 ]; then
+    _context_store_error "context store did not stabilize after bounded revalidation: $root"
+    return 1
+  fi
+  if [ "$walk_status" -ne 0 ]; then
     return 1
   fi
   _context_validate_quarantine_artifact "$root" || return 1

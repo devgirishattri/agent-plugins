@@ -54,7 +54,10 @@ json_field() {
 
 # Candidate roots: current git toplevel (always) + cwd of each Codex session
 current_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-current_contexts_dir=$(get_contexts_dir) || exit 1
+# Deliberately NOT get_contexts_dir: that bootstraps and chmods the current
+# store, and a bad current store aborted the whole cross-project sweep before
+# any other project was searched. The loop below resolves and validates every
+# candidate uniformly, read-only.
 roots="$current_root"$'\n'
 if [ -d "$SESSIONS_DIR" ]; then
     while IFS= read -r jsonl_file; do
@@ -72,19 +75,30 @@ found=0
 while IFS= read -r root; do
     [ -n "$root" ] || continue
     if [ "$root" = "$current_root" ] && [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
-        contexts_dir="$current_contexts_dir"
+        contexts_dir="$SESSION_CONTEXT_HOME"
     else
         contexts_dir="$root/.tmp/contexts"
         # Legacy fallback: stores created before the .tmp/ migration.
         [ -d "$contexts_dir" ] || contexts_dir="$root/tmp/contexts"
     fi
     _context_path_exists "$contexts_dir" || continue
-    if [ "$contexts_dir" != "$current_contexts_dir" ]; then
-        contexts_dir=$(harden_existing_contexts_dir "$contexts_dir") || exit 1
+    # Read-only integrity gate, matching the Claude copy. Previously this called
+    # harden_existing_contexts_dir, which chmods -- a cross-project read-only
+    # search must never mutate another project's store -- and its `exit 1`
+    # aborted the entire sweep because one unrelated project had a bad store.
+    # Validate without mutating, and skip only the offending store.
+    if ! _context_validate_tree "$contexts_dir" 2>/dev/null; then
+        printf 'WARNING: skipping unsafe context store (run $knowledge:doctor): %s\n' \
+            "$contexts_dir" >&2
+        continue
     fi
     for snapshot_file in "$contexts_dir"/*.md; do
         _context_path_exists "$snapshot_file" || continue
-        ensure_context_regular_file "$snapshot_file" || exit 1
+        # Read-only regular-file check. ensure_context_regular_file would
+        # normalize the mode (chmod), which this command must not do to another
+        # project's snapshots; _context_validate_tree above already covered
+        # ownership and naming for the whole store.
+        { [ -f "$snapshot_file" ] && [ ! -L "$snapshot_file" ]; } || continue
         grep -qi -- "$PATTERN" "$snapshot_file" 2>/dev/null || continue
         name=$(basename "$snapshot_file" .md)
         found=1
