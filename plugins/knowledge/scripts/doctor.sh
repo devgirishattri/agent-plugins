@@ -824,8 +824,14 @@ _kd_check_handoff() {
 # frontmatter, or without that key, is a plain snapshot and gets the mtime
 # check only, per the spec's own discriminator). Both tiers run
 # independently per file -- a handoff can be mtime-stale, expired, both, or
-# neither. Read-only throughout: unlike get_contexts_dir(), this never
-# hardens/chmods the tree, and _kd_check_handoff only ever reads.
+# neither. Both tiers are preceded by the store-integrity gate that decides
+# whether either tier means anything at all.
+#
+# Read-only throughout: unlike get_contexts_dir(), this never hardens/chmods
+# the tree, and _kd_check_handoff only ever reads. Note that the integrity gate
+# below does NOT weaken that stance -- _context_validate_tree() only inspects;
+# every chmod lives in the separate hardening pass that
+# harden_existing_contexts_dir() runs *after* validation.
 # ---------------------------------------------------------------------------
 section_context() {
   local ctx_dir="${SESSION_CONTEXT_HOME:-$repo_root/.tmp/contexts}"
@@ -835,6 +841,25 @@ section_context() {
   fi
   if [ -L "$ctx_dir" ] || [ ! -d "$ctx_dir" ]; then
     emit WARN context "context store path is unsafe (symlink or not a directory): $ctx_dir"
+    return 0
+  fi
+
+  # Store-integrity gate. Every context command except context-search reaches
+  # the store through get_contexts_dir()/bootstrap_contexts_dir(), which run
+  # _context_validate_tree() first; a single unexpected nested directory (a
+  # stray .git, a sandbox-created sentinel) therefore takes the whole store
+  # offline for reads AND writes. Doctor has to run the same guard or it cannot
+  # observe that condition at all: the per-file tiers below scan
+  # -maxdepth 1 -name '*.md', so the offending directory is invisible to them
+  # and the section falls silent on a store that is 100% unusable.
+  #
+  # Report and stop -- once the tree is rejected, snapshot-level staleness and
+  # expiry findings are noise about files no command can currently read.
+  local ctx_err ctx_rc=0
+  ctx_err=$(_context_validate_tree "$ctx_dir" 2>&1 >/dev/null) || ctx_rc=$?
+  if [ "$ctx_rc" -ne 0 ]; then
+    [ -n "$ctx_err" ] || ctx_err="context store failed validation"
+    emit ERROR context "context store is unusable -- /knowledge:context-generate, -list, -load, -remove, -diff, and -share will all abort: $(_kd_oneline "$ctx_err")"
     return 0
   fi
 

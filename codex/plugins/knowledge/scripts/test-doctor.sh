@@ -769,6 +769,54 @@ assert_not_contains "context_fresh_snapshot_no_warn" "$out" "stale context snaps
 out=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" env -u SESSION_CONTEXT_HOME bash "$DOCTOR" 2>&1)
 assert_contains "context_fallback_default_path" "$out" "no context store found at $ctx_repo/.tmp/contexts"
 
+echo "--- context store: integrity gate (unexpected nested directory) ---"
+
+# Regression for the silent-healthy-store bug: an unexpected nested directory
+# makes get_contexts_dir() reject the tree, so every context command except
+# context-search aborts. Doctor resolves the store on its own path and used to
+# stay completely silent here (rc=0, zero findings) because its per-file scan
+# is -maxdepth 1 -name '*.md' and never sees the directory.
+broken_ctx="$TMP/broken_ctx"
+mkdir -p "$broken_ctx/.history"
+chmod 700 "$broken_ctx" "$broken_ctx/.history"
+printf '# Session Context: sample\nbody\n' > "$broken_ctx/sample.md"
+chmod 600 "$broken_ctx/sample.md"
+mkdir "$broken_ctx/.git"
+
+out=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$broken_ctx" bash "$DOCTOR" 2>&1)
+rc=$?
+assert_contains "context_unsafe_tree_reports_error" "$out" "context store is unusable"
+assert_contains "context_unsafe_tree_names_path" "$out" "unexpected nested directory: $broken_ctx/.git"
+assert_contains "context_unsafe_tree_error_level" "$out" "ERROR	context	"
+assert_rc "context_unsafe_tree_sets_finding_rc" 1 "$rc"
+
+# The finding must stay on one stdout line: the validator emits two stderr
+# lines and _kd_oneline collapses them into the single-finding-per-line format.
+ctx_finding_lines=$(printf '%s\n' "$out" | grep -c 'context store is unusable' || true)
+if [ "$ctx_finding_lines" = "1" ]; then
+  pass "context_unsafe_tree_single_line"
+else
+  fail "context_unsafe_tree_single_line" "expected exactly 1 finding line, got $ctx_finding_lines"
+fi
+
+# Once the tree is rejected, per-file staleness is noise about files no command
+# can read -- the section reports the gate and stops.
+assert_not_contains "context_unsafe_tree_suppresses_file_tier" "$out" "stale context snapshot 'sample'"
+
+# A well-formed store (canonical snapshot + the one permitted .history dir)
+# must NOT trip the gate. Guards against the check firing on healthy stores.
+ok_ctx="$TMP/ok_ctx"
+mkdir -p "$ok_ctx/.history"
+printf '# Session Context: sample\nbody\n' > "$ok_ctx/sample.md"
+out=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$ok_ctx" bash "$DOCTOR" 2>&1)
+assert_not_contains "context_healthy_tree_no_error" "$out" "context store is unusable"
+
+# The gate is ownership/shape based, not mode based: mode normalization happens
+# in the hardening pass, so a permissive-but-owned store stays clean here.
+chmod 755 "$ok_ctx"
+out=$(cd "$ctx_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$ok_ctx" bash "$DOCTOR" 2>&1)
+assert_not_contains "context_permissive_mode_no_error" "$out" "context store is unusable"
+
 echo "--- context store: Phase E handoff tier (expires-metadata + ticket citations) ---"
 
 ho_repo="$TMP/ho_repo"
