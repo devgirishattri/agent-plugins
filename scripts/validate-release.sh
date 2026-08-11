@@ -562,6 +562,46 @@ for name in sorted(claude_plugins):
             fail(f"{script_file}: runtime guidance uses a Claude-style slash command")
 
 # ---------------------------------------------------------------------------
+# License declaration parity.
+# The repo ships one LICENSE, and every published manifest should agree with it.
+# The Codex marketplace was for a long time the single site that declared no
+# license at all, which is invisible precisely because the Codex CLI ignores
+# unrecognized keys and would equally have ignored a wrong one. Pin the SPDX id
+# once here and require all four manifest sites to match it.
+# ---------------------------------------------------------------------------
+
+EXPECTED_LICENSE = "MIT"
+
+if not (root / "LICENSE").is_file():
+    fail("missing LICENSE at the repository root")
+
+license_sites: list[tuple[str, str | None]] = []
+for entry_name, entry in claude_plugins.items():
+    license_sites.append((f"claude marketplace: {entry_name}", entry.get("license")))
+for entry_name, entry in codex_plugins.items():
+    license_sites.append((f"codex marketplace: {entry_name}", entry.get("license")))
+for entry_name, entry in claude_plugins.items():
+    manifest = load_json(root / entry["source"] / ".claude-plugin" / "plugin.json")
+    license_sites.append((f"claude manifest: {entry_name}", manifest.get("license")))
+for entry_name, entry in codex_plugins.items():
+    manifest = load_json(root / entry["source"]["path"] / ".codex-plugin" / "plugin.json")
+    license_sites.append((f"codex manifest: {entry_name}", manifest.get("license")))
+
+if not license_sites:
+    fail("license check found no manifest sites to inspect")
+license_problems = [
+    f"{label} declares {declared!r}" for label, declared in license_sites
+    if declared != EXPECTED_LICENSE
+]
+if license_problems:
+    fail(
+        f"license declarations must all be {EXPECTED_LICENSE!r}: "
+        + "; ".join(license_problems)
+    )
+print(f"OK: all {len(license_sites)} manifest sites declare {EXPECTED_LICENSE}")
+
+
+# ---------------------------------------------------------------------------
 # README plugin-table version parity: the fifth version site.
 # The bump rule covers four sites (both plugin manifests, both marketplaces),
 # and every check above compares those four against each other. The README's

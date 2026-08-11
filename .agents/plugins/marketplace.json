@@ -15,7 +15,8 @@
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
-      "category": "Productivity"
+      "category": "Productivity",
+      "license": "MIT"
     },
     {
       "name": "session-chat",
@@ -28,11 +29,12 @@
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
-      "category": "Productivity"
+      "category": "Productivity",
+      "license": "MIT"
     },
     {
       "name": "session-scheduler",
-      "version": "0.5.11",
+      "version": "0.5.12",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-scheduler"
@@ -41,7 +43,8 @@
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
-      "category": "Productivity"
+      "category": "Productivity",
+      "license": "MIT"
     },
     {
       "name": "knowledge",
@@ -54,7 +57,8 @@
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
-      "category": "Productivity"
+      "category": "Productivity",
+      "license": "MIT"
     },
     {
       "name": "chronos",
@@ -67,7 +71,8 @@
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
-      "category": "Productivity"
+      "category": "Productivity",
+      "license": "MIT"
     },
     {
       "name": "session-workspace",
@@ -80,7 +85,8 @@
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
-      "category": "Productivity"
+      "category": "Productivity",
+      "license": "MIT"
     }
   ]
 }

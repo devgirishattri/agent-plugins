@@ -4,7 +4,8 @@
 #   codex side, so claude and codex panes launched with the same value share a
 #   ledger).
 # One JSON file per task. Atomic writes (tmp + mv).
-# Requires: jq, bash 4+. Depends on session-chat lib.sh for /send.
+# Requires: jq, bash 3.2+ (macOS stock bash runs the suite green; nothing here
+#   uses bash 4 syntax). Depends on session-chat lib.sh for /send.
 
 # SESSION_SCHEDULER_HOME must already be present in this process's environment,
 # inherited when the invoking agent/session started: the pane/session launcher

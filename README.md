@@ -13,7 +13,7 @@ Every plugin below ships for both providers at the same version number.
 |--------|---------|---------|
 | `session-manager` | 1.7.4 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.7 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.5.11 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `session-scheduler` | 0.5.12 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.1.5 | Config-driven tmux workspace engine: one shared engine for session, window, and pane lifecycle, replacing per-project `workspace.sh` launchers with a versioned `.agent-workspace/workspace.json` |
 | `chronos` | 0.1.1 | Inject fresh current date/time context with every prompt for time/day-aware agents |
@@ -26,9 +26,8 @@ version here along with the other four.
 ## Requirements
 
 Supported platforms are macOS and Linux; `session-manager` also runs on Windows
-under WSL. Most scripts are written to run on the bash 3.2 that macOS ships.
-`session-scheduler` documents a bash 4+ requirement in a header comment, but
-nothing in its code enforces it and it uses no bash 4 syntax.
+under WSL. The scripts run on the bash 3.2 that macOS ships, which is verified
+rather than assumed: the `session-scheduler` suite passes 58/58 under 3.2.57.
 
 | Dependency | Needed by | Hard or optional |
 |------------|-----------|------------------|
