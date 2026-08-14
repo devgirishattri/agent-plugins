@@ -26,11 +26,11 @@ Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executo
   ↓
 /task-assign     → status=assigned (stamps started_at), dispatched via session-chat
   ↓ (executor works)
-/task-review     → status=review, /send ack to assigner (optional review gate)
+/task-review     → status=review, durable ack to assigner (optional review gate)
   ↓ (reviewer audits)
-/task-done       → status=done (records duration_seconds), /send ack to assigner
+/task-done       → status=done (records duration_seconds), durable ack to assigner
   or
-/task-block      → status=blocked, /send ack to assigner
+/task-block      → status=blocked, durable ack to assigner
 ```
 
 Legal status transitions (enforced by every command):
@@ -70,8 +70,8 @@ Legal status transitions (enforced by every command):
 | `/task-new <name> [--meta k=v] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id. |
 | `/task-assign <pane> <id> [--eta MIN] [--stage NAME] [--context NAME] [--reviewer PANE] [--workflow ID] [--force] <prompt>` | Dispatch the task to an executor and update the ledger. |
 | `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage\|--by-workflow\|--workflow ID]` | Read-only view. Default = active (created+assigned+review). Shows OVERDUE/STALE flags. |
-| `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); acks the assigner. |
-| `/task-done <id> [--force] [note]` | Executor or reviewer calls this; records duration; auto-acks the assigner via `/send`. |
+| `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); durably acks the assigner. |
+| `/task-done <id> [--force] [note]` | Executor or reviewer calls this; records duration; durably acks the assigner. |
 | `/task-block <id> [--force] <reason>` | Executor or reviewer calls this when blocked/rejecting; reason required. |
 | `/task-board` | Stage-grouped dashboard: id, name, status, assignee, age, flags, unmet deps + totals. |
 | `/tasks-clean [--older-than DAYS] [--status S] [--apply]` | Dry-run by default. |
@@ -101,7 +101,8 @@ Legal status transitions (enforced by every command):
     "context_home": "/abs/.../.tmp/contexts",
     "workflow_id": "workflow-group-id",
     "scheduler_home": "/abs/.../.tmp/scheduler",
-    "review_...": "reviewer-routing bookkeeping (review_dispatch_status, review_dispatched_at, …)"
+    "review_...": "reviewer-routing bookkeeping (review_dispatch_status, review_dispatched_at, …)",
+    "last_ack": {"event": "done|blocked|review", "target": "assigner-pane", "status": "dispatched|inline-fallback|failed", "at": "ISO-8601", "file": "/abs/.../prompts/<id>-ack-<event>.md|null"}
   },
   "history": [
     { "ts": "...", "event": "created|assigned|review|done|blocked", "actor": "...", "note": "..." }
@@ -115,13 +116,13 @@ Atomic writes (tmp + mv) — concurrent executors updating different tasks won't
 
 ## Conventions
 
-- **Status updates flow executor → ledger → ack to assigner**. The orchestrator never polls executor panes; it polls the ledger via `/task-status`.
+- **Status updates flow executor → ledger → durable ack to assigner**. The orchestrator never polls executor panes; it polls the ledger via `/task-status`.
 - **Assigner is recorded at `/task-new` time**, derived from the current pane's `@name`. If you create tasks from an unnamed pane, assigner = `?` and the ack will be skipped.
 - **Reassign isn't automatic**. If an executor goes silent, run `/task-status <id>` to inspect, then `/task-assign <new-pane> <id> <prompt>` — the prompt file will be regenerated and history will record the reassignment.
 
 ## Failure modes
 
 - **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — only happens on a hard failure (no name, unknown/ambiguous target). A *busy* executor is no longer a failure: with session-chat ≥ 0.13.0 the dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. For a hard failure, fix it (run `/session-chat:panes`, ensure the executor has a name), then retry `/task-assign`.
-- **Done/block acks are best-effort** — `/task-done` and `/task-block` always update the ledger first, then send the ack via session-chat. With ≥ 0.13.0 the ack is durably delivered (recovered on the assigner's next turn); if session-chat is missing the ledger is still updated and the ack is skipped with a warning. A failed ack is a **partial success**: the transition already happened, so never rerun the helper and never use --force to repair the notification — follow the transport contract above.
+- **Lifecycle acks are durable, not best-effort transport** — `/task-done`, `/task-block`, and `/task-review`'s assigner ack always update the ledger first, then ack via a delivery ladder: file-backed dispatch (queued to the assigner's durable inbox when busy, recovered on their next turn), falling back to inline `/send` only if dispatch fails, falling back to a recorded failure only if both fail. `meta.last_ack` records `status` (`dispatched`/`inline-fallback`/`failed`) and `file` for every attempt. A `failed` ack is a **partial success**: the transition already happened, so never rerun the helper and never use --force to repair the notification — follow the transport contract above.
 - **Tasks are `assigned` but executor never acts** — almost always `INCOMING_MODE=notify` on the executor side. Run `/session-chat:incoming-mode auto` in the executor's shell.
 - **`jq` missing** — `brew install jq`. The ledger is JSON; jq is a hard dependency.

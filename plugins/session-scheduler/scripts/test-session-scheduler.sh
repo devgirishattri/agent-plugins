@@ -42,6 +42,28 @@ printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$TMP/session-chat-
 
 export SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub"
 
+# make_session_chat_stub <dir> <dispatch_rc> <send_rc> <actor_name> [send_sentinel_file]
+# Builds a session-chat stub tree at <dir> (version manifest included, so it
+# satisfies the floor check) for the lifecycle-ack delivery-ladder tests:
+# dispatch-to-session.sh and send-message.sh exit with the given rcs, and
+# get-my-name.sh reports <actor_name> (deliberately different from the
+# assigner recorded at task-new time, so the ack is actually attempted rather
+# than self-skipped). When a sentinel path is given, send-message.sh touches
+# it on every invocation, so a test can assert the inline fallback never ran.
+make_session_chat_stub() {
+  local dir="$1" dispatch_rc="$2" send_rc="$3" actor="$4" sentinel="${5:-}"
+  mkdir -p "$dir/scripts" "$dir/.claude-plugin"
+  printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$dir/.claude-plugin/plugin.json"
+  printf '%s\n' '#!/usr/bin/env bash' 'echo "stub-dispatched to $1 with $2"' "exit $dispatch_rc" > "$dir/scripts/dispatch-to-session.sh"
+  if [ -n "$sentinel" ]; then
+    printf '%s\n' '#!/usr/bin/env bash' "touch \"$sentinel\"" 'echo "stub-sent to $1: $2"' "exit $send_rc" > "$dir/scripts/send-message.sh"
+  else
+    printf '%s\n' '#!/usr/bin/env bash' 'echo "stub-sent to $1: $2"' "exit $send_rc" > "$dir/scripts/send-message.sh"
+  fi
+  printf '%s\n' '#!/usr/bin/env bash' "echo \"$actor\"" > "$dir/scripts/get-my-name.sh"
+  chmod 644 "$dir/scripts"/*.sh
+}
+
 echo "=== session-scheduler tests (SESSION_SCHEDULER_HOME=$SESSION_SCHEDULER_HOME) ==="
 
 # Invalid IANA timezone names fail closed before touching the ledger.
@@ -99,20 +121,73 @@ out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-status.s
 if echo "$out" | grep -qF "$ID"; then pass "task_status_active"
 else fail "task_status_active" "id not in active view: $out"; fi
 
-# --- Test 5: task-done updates ledger + tries to ack ---
-out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-done.sh" "$ID" "all done" 2>&1)
+# --- Test 5: task-done updates ledger + durably acks the assigner via dispatch (happy path) ---
+# Stub identity differs from the assigner so the ack is actually attempted.
+DONE_ACK_STUB="$TMP/session-chat-doneack"
+DONE_ACK_SEND_SENTINEL="$TMP/done-ack-send-called"
+make_session_chat_stub "$DONE_ACK_STUB" 0 0 "worker-actor" "$DONE_ACK_SEND_SENTINEL"
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$DONE_ACK_STUB" bash "$HERE/task-done.sh" "$ID" "all done" 2>&1)
 status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
 hist_last=$(jq -r '.history[-1].event' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
-if [ "$status" = "done" ] && [ "$hist_last" = "done" ]; then pass "task_done"
-else fail "task_done" "status=$status hist=$hist_last out=$out"; fi
+ack_status=$(jq -r '.meta.last_ack.status // empty' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
+ack_event=$(jq -r '.meta.last_ack.event // empty' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
+ack_target=$(jq -r '.meta.last_ack.target // empty' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
+ack_file=$(jq -r '.meta.last_ack.file // empty' "$SESSION_SCHEDULER_HOME/tasks/$ID.json")
+expected_ack_file="$SESSION_SCHEDULER_HOME/prompts/$ID-ack-done.md"
+if [ "$status" = "done" ] && [ "$hist_last" = "done" ] \
+   && [ "$ack_status" = "dispatched" ] && [ "$ack_event" = "done" ] && [ "$ack_target" = "test-orchestrator" ] \
+   && [ "$ack_file" = "$expected_ack_file" ] && [ -f "$expected_ack_file" ] \
+   && grep -qF "task $ID (smoke-task-1) done by worker-actor — all done" "$expected_ack_file" \
+   && grep -qF "Claude: /session-scheduler:task-status $ID" "$expected_ack_file" \
+   && grep -qF "Codex:  \$session-scheduler:task-status $ID" "$expected_ack_file" \
+   && [ ! -f "$DONE_ACK_SEND_SENTINEL" ]; then
+  pass "task_done"
+else
+  fail "task_done" "status=$status hist=$hist_last ack_status=$ack_status ack_file=$ack_file out=$out"
+fi
 
-# --- Test 6: task-block on a fresh task ---
+# --- Test 6: task-block on a fresh task + durably acks the assigner via dispatch (blocked event) ---
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "smoke-task-2" 2>&1)
 ID2=$(echo "$out" | awk '/Created task:/ {print $3}')
-out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-block.sh" "$ID2" "waiting on upstream" 2>&1)
+BLOCK_ACK_STUB="$TMP/session-chat-blockack"
+BLOCK_ACK_SEND_SENTINEL="$TMP/block-ack-send-called"
+make_session_chat_stub "$BLOCK_ACK_STUB" 0 0 "worker-actor" "$BLOCK_ACK_SEND_SENTINEL"
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$BLOCK_ACK_STUB" bash "$HERE/task-block.sh" "$ID2" "waiting on upstream" 2>&1)
 status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$ID2.json")
-if [ "$status" = "blocked" ]; then pass "task_block"
-else fail "task_block" "status=$status out=$out"; fi
+ack_status=$(jq -r '.meta.last_ack.status // empty' "$SESSION_SCHEDULER_HOME/tasks/$ID2.json")
+ack_event=$(jq -r '.meta.last_ack.event // empty' "$SESSION_SCHEDULER_HOME/tasks/$ID2.json")
+ack_file=$(jq -r '.meta.last_ack.file // empty' "$SESSION_SCHEDULER_HOME/tasks/$ID2.json")
+expected_ack_file="$SESSION_SCHEDULER_HOME/prompts/$ID2-ack-blocked.md"
+if [ "$status" = "blocked" ] && [ "$ack_status" = "dispatched" ] && [ "$ack_event" = "blocked" ] \
+   && [ "$ack_file" = "$expected_ack_file" ] && [ -f "$expected_ack_file" ] \
+   && grep -qF "task $ID2 (smoke-task-2) BLOCKED by worker-actor: waiting on upstream" "$expected_ack_file" \
+   && [ ! -f "$BLOCK_ACK_SEND_SENTINEL" ]; then
+  pass "task_block"
+else
+  fail "task_block" "status=$status ack_status=$ack_status ack_file=$ack_file out=$out"
+fi
+
+# --- Test 6b: durable dispatch fails, inline send succeeds — ack status inline-fallback + single WARN ---
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "inline-fallback-task" 2>&1)
+IF_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$IF_ID" "inline fallback work" >/dev/null 2>&1
+INLINE_STUB="$TMP/session-chat-inlineack"
+make_session_chat_stub "$INLINE_STUB" 1 0 "worker-actor"
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$INLINE_STUB" bash "$HERE/task-done.sh" "$IF_ID" "finished" 2>&1)
+rc=$?
+status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$IF_ID.json")
+ack_status=$(jq -r '.meta.last_ack.status // empty' "$SESSION_SCHEDULER_HOME/tasks/$IF_ID.json")
+ack_file=$(jq -r '.meta.last_ack.file // empty' "$SESSION_SCHEDULER_HOME/tasks/$IF_ID.json")
+expected_ack_file="$SESSION_SCHEDULER_HOME/prompts/$IF_ID-ack-done.md"
+warn_count=$(echo "$out" | grep -cF "WARN: durable ack dispatch to 'test-orchestrator' failed; ack delivered inline instead.")
+if [ "$rc" -eq 0 ] && [ "$status" = "done" ] && [ "$ack_status" = "inline-fallback" ] \
+   && [ "$ack_file" = "$expected_ack_file" ] && [ -f "$expected_ack_file" ] \
+   && [ "$warn_count" = "1" ] \
+   && ! echo "$out" | grep -qF "partial success"; then
+  pass "ack_inline_fallback"
+else
+  fail "ack_inline_fallback" "rc=$rc status=$status ack_status=$ack_status warn_count=$warn_count out=$out"
+fi
 
 # --- Test 7: tasks-clean dry-run finds done task with --older-than 0 ---
 jq '.updated_at = "2020-01-01T00:00:00Z"' "$SESSION_SCHEDULER_HOME/tasks/$ID.json" > "$SESSION_SCHEDULER_HOME/tasks/$ID.json.tmp" \
@@ -581,6 +656,49 @@ else
   fail "reviewer_dispatch_retry" "st1=$st1 st2=$st2 out2=$out2"
 fi
 
+# --- Test 32b: task-review's assigner ack — durable dispatch happy path (review event) ---
+# No --reviewer here, so this isolates the assigner-ack ladder from reviewer routing.
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "review-ack-ok" 2>&1)
+RAO_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+REVIEW_ACK_OK="$TMP/session-chat-reviewackok"
+REVIEW_ACK_OK_SEND_SENTINEL="$TMP/review-ack-ok-send-called"
+make_session_chat_stub "$REVIEW_ACK_OK" 0 0 "worker-actor" "$REVIEW_ACK_OK_SEND_SENTINEL"
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$REVIEW_ACK_OK" bash "$HERE/task-assign.sh" worker-1 "$RAO_ID" "review ack work" >/dev/null 2>&1
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$REVIEW_ACK_OK" bash "$HERE/task-review.sh" "$RAO_ID" "commit reviewack1" 2>&1)
+rao_status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$RAO_ID.json")
+rao_ack_status=$(jq -r '.meta.last_ack.status // empty' "$SESSION_SCHEDULER_HOME/tasks/$RAO_ID.json")
+rao_ack_event=$(jq -r '.meta.last_ack.event // empty' "$SESSION_SCHEDULER_HOME/tasks/$RAO_ID.json")
+rao_ack_file=$(jq -r '.meta.last_ack.file // empty' "$SESSION_SCHEDULER_HOME/tasks/$RAO_ID.json")
+expected_ack_file="$SESSION_SCHEDULER_HOME/prompts/$RAO_ID-ack-review.md"
+if [ "$rao_status" = "review" ] && [ "$rao_ack_status" = "dispatched" ] && [ "$rao_ack_event" = "review" ] \
+   && [ "$rao_ack_file" = "$expected_ack_file" ] && [ -f "$expected_ack_file" ] \
+   && grep -qF "task $RAO_ID (review-ack-ok) ready for REVIEW by worker-actor: commit reviewack1" "$expected_ack_file" \
+   && [ ! -f "$REVIEW_ACK_OK_SEND_SENTINEL" ]; then
+  pass "review_ack_dispatched"
+else
+  fail "review_ack_dispatched" "status=$rao_status ack_status=$rao_ack_status ack_file=$rao_ack_file out=$out"
+fi
+
+# --- Test 32c: task-review's assigner ack fails entirely — WARNs but reviewer routing stays independent ---
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "review-ack-fail" 2>&1)
+RAF_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+REVIEW_ACK_FAIL="$TMP/session-chat-reviewackfail"
+make_session_chat_stub "$REVIEW_ACK_FAIL" 1 1 "worker-actor"
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$RAF_ID" --reviewer auditor "review ack fail work" >/dev/null 2>&1
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$REVIEW_ACK_FAIL" bash "$HERE/task-review.sh" "$RAF_ID" "commit reviewackfail1" 2>&1)
+raf_status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$RAF_ID.json")
+raf_ack_status=$(jq -r '.meta.last_ack.status // empty' "$SESSION_SCHEDULER_HOME/tasks/$RAF_ID.json")
+raf_hist_count=$(jq -r '[.history[] | select(.event=="review")] | length' "$SESSION_SCHEDULER_HOME/tasks/$RAF_ID.json")
+if [ "$raf_status" = "review" ] && [ "$raf_ack_status" = "failed" ] && [ "$raf_hist_count" = "1" ] \
+   && echo "$out" | grep -qF "durable ack to assigner" \
+   && echo "$out" | grep -qF "Reviewer routing proceeds independently" \
+   && echo "$out" | grep -qF "stays in review" \
+   && echo "$out" | grep -qF "reviewer dispatch to 'auditor' failed"; then
+  pass "review_ack_failed_reviewer_routing_independent"
+else
+  fail "review_ack_failed_reviewer_routing_independent" "status=$raf_status ack_status=$raf_ack_status hist=$raf_hist_count out=$out"
+fi
+
 # --- Test 33: assignment + review packets list BOTH provider forms + provenance contract ---
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "mixed-prov" 2>&1)
 MX_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
@@ -643,44 +761,50 @@ else
   fail "packets_transport_contract" "apf or rpf missing transport-contract guidance"
 fi
 
-# --- Test 33e: task-done with failing ack — transition intact + partial-success warning ---
+# --- Test 33e: task-done with a totally failed ack (dispatch AND inline both fail) — transition intact + partial-success warning ---
 # Stub identity differs from the assigner so the ack is actually attempted, and
-# send-message hard-fails to simulate sandboxed tmux transport denial.
+# BOTH the durable dispatch and the inline send hard-fail to simulate a fully
+# denied transport.
 ACK_FAIL="$TMP/session-chat-ackfail"
-mkdir -p "$ACK_FAIL/scripts" "$ACK_FAIL/.claude-plugin"
-printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$ACK_FAIL/.claude-plugin/plugin.json"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$ACK_FAIL/scripts/dispatch-to-session.sh"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$ACK_FAIL/scripts/send-message.sh"
-printf '%s\n' '#!/usr/bin/env bash' 'echo "worker-actor"' > "$ACK_FAIL/scripts/get-my-name.sh"
-chmod 644 "$ACK_FAIL/scripts"/*.sh
+make_session_chat_stub "$ACK_FAIL" 1 1 "worker-actor"
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "ack-fail-done" 2>&1)
 AF_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
 SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$AF_ID" "ack-fail work" >/dev/null 2>&1
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$ACK_FAIL" bash "$HERE/task-done.sh" "$AF_ID" "finished" 2>&1)
 rc=$?
 af_status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$AF_ID.json")
-if [ "$rc" -eq 0 ] && [ "$af_status" = "done" ] \
+af_ack_status=$(jq -r '.meta.last_ack.status // empty' "$SESSION_SCHEDULER_HOME/tasks/$AF_ID.json")
+af_ack_file=$(jq -r '.meta.last_ack.file // empty' "$SESSION_SCHEDULER_HOME/tasks/$AF_ID.json")
+if [ "$rc" -eq 0 ] && [ "$af_status" = "done" ] && [ "$af_ack_status" = "failed" ] \
+   && [ -f "$af_ack_file" ] \
+   && grep -qF "task $AF_ID (ack-fail-done) done by worker-actor — finished" "$af_ack_file" \
    && echo "$out" | grep -qF "partial success" \
+   && echo "$out" | grep -qF "durable ack" \
    && echo "$out" | grep -qF "Do NOT rerun task-done" \
    && echo "$out" | grep -qF "use --force to repair"; then
   pass "task_done_partial_success_warning"
 else
-  fail "task_done_partial_success_warning" "rc=$rc status=$af_status out=$out"
+  fail "task_done_partial_success_warning" "rc=$rc status=$af_status ack_status=$af_ack_status ack_file=$af_ack_file out=$out"
 fi
 
-# --- Test 33f: task-block with failing ack — transition intact + partial-success warning ---
+# --- Test 33f: task-block with a totally failed ack (dispatch AND inline both fail) — transition intact + partial-success warning ---
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "ack-fail-block" 2>&1)
 AB_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$ACK_FAIL" bash "$HERE/task-block.sh" "$AB_ID" "upstream denied" 2>&1)
 rc=$?
 ab_status=$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$AB_ID.json")
-if [ "$rc" -eq 0 ] && [ "$ab_status" = "blocked" ] \
+ab_ack_status=$(jq -r '.meta.last_ack.status // empty' "$SESSION_SCHEDULER_HOME/tasks/$AB_ID.json")
+ab_ack_file=$(jq -r '.meta.last_ack.file // empty' "$SESSION_SCHEDULER_HOME/tasks/$AB_ID.json")
+if [ "$rc" -eq 0 ] && [ "$ab_status" = "blocked" ] && [ "$ab_ack_status" = "failed" ] \
+   && [ -f "$ab_ack_file" ] \
+   && grep -qF "task $AB_ID (ack-fail-block) BLOCKED by worker-actor: upstream denied" "$ab_ack_file" \
    && echo "$out" | grep -qF "partial success" \
+   && echo "$out" | grep -qF "durable ack" \
    && echo "$out" | grep -qF "Do NOT rerun task-block" \
    && echo "$out" | grep -qF "use --force to repair"; then
   pass "task_block_partial_success_warning"
 else
-  fail "task_block_partial_success_warning" "rc=$rc status=$ab_status out=$out"
+  fail "task_block_partial_success_warning" "rc=$rc status=$ab_status ack_status=$ab_ack_status ack_file=$ab_ack_file out=$out"
 fi
 
 # --- Test 33g: agent-facing docs carry the first-attempt escalation + non-retry guidance ---

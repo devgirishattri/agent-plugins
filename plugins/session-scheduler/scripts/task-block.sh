@@ -35,10 +35,15 @@ fi
 
 if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
   # Notification is nested session-chat/tmux transport AFTER an irreversible
-  # legal transition. On failure, report the partial success explicitly — the
-  # transition must not be retried and this script never self-escalates.
-  if ! session_chat_send "$ASSIGNER" "task ${ID} (${NAME}) BLOCKED by ${ACTOR}: ${REASON}"; then
-    echo "WARN: partial success — the ledger transition to blocked succeeded, but the session-chat notification to '$ASSIGNER' failed." >&2
+  # legal transition: durable file-backed dispatch first (queued to the
+  # assigner's inbox when busy — the same transport task-assign uses), inline
+  # /send as a last-resort fallback. On total failure, report the partial
+  # success explicitly — the transition must not be retried and this script
+  # never self-escalates.
+  session_chat_ack "$ASSIGNER" "$ID" "blocked" "task ${ID} (${NAME}) BLOCKED by ${ACTOR}: ${REASON}"
+  task_record_last_ack "$ID" "blocked" "$ASSIGNER" "$SESSION_CHAT_ACK_STATUS" "$SESSION_CHAT_ACK_FILE"
+  if [ "$SESSION_CHAT_ACK_STATUS" = "failed" ]; then
+    echo "WARN: partial success — the ledger transition to blocked succeeded, but the durable ack to '$ASSIGNER' failed." >&2
     echo "  Task $ID is already blocked. Do NOT rerun task-block and do NOT use --force to repair the notification." >&2
     echo "  Report this partial success; only when authorized, send a separate exact session-chat message to '$ASSIGNER'." >&2
   fi

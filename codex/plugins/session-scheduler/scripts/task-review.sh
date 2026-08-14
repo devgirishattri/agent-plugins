@@ -246,11 +246,14 @@ TRANSPORT_CONTRACT
     echo "WARN: Task moved to review, but session-chat is unavailable for reviewer dispatch." >&2
   fi
 fi
-if [ "$RETRY_REVIEW_DISPATCH" -eq 0 ] && [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
-  CHAT_ROOT=$(session_chat_root 2>/dev/null || true)
-  if [ -n "$CHAT_ROOT" ]; then
-    bash "$CHAT_ROOT/scripts/send-message.sh" "$ASSIGNER" "Task $ID ready for REVIEW: $NOTE" >&2 || true
+if [ "$RETRY_REVIEW_DISPATCH" -eq 0 ] && [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
+  TASK_NAME=$(jq -r '.name // ""' "$FILE")
+  ACK_FIRST_LINE="task $ID ($TASK_NAME) ready for REVIEW by $ACTOR: $NOTE"
+  if ! session_chat_ack "$ASSIGNER" "$ID" "review" "$ACK_FIRST_LINE"; then
+    echo "WARN: Durable assigner notification failed after task $ID reached review; reviewer routing proceeds independently (task remains in review)." >&2
+    echo "Do NOT rerun task-review or use --force to repair the assigner notification." >&2
   fi
+  record_last_ack "$FILE" "review" "$ASSIGNER" "$SESSION_CHAT_ACK_STATUS" "$SESSION_CHAT_ACK_FILE" || true
 fi
 
 if [ "$RETRY_REVIEW_DISPATCH" -eq 1 ] && [ "$REVIEW_DISPATCHED" -eq 1 ]; then

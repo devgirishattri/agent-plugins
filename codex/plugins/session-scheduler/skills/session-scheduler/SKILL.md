@@ -33,6 +33,7 @@ Legal status transitions (enforced by every command): `created→assigned`, `cre
 - `--reviewer PANE` stores the independent reviewer route. When the executor calls `task-review`, the scheduler automatically dispatches the audit packet to that pane. A hard delivery failure leaves the task in review and must be retried with `task-review`; there is no one-line send downgrade.
 - `--workflow ID` groups related tasks in canonical `meta.workflow_id`; `--workflow-id` remains an alias. `task-status --by-workflow` shows each complete workflow arc, including done steps, while omitting tasks without a workflow id; `--workflow ID` filters one workflow.
 - Every assignment records and embeds the absolute scheduler/context homes so a child checkout does not silently write to a different ledger.
+- Eligible `done`, `blocked`, and `review` transitions write lifecycle acknowledgement files and dispatch them durably to the assigner. Busy assigners receive them from the queued inbox; the ledger remains authoritative, and `meta.last_ack` records the event, target, delivery outcome, timestamp, and file.
 - `tasks-clean` selects task files older than its threshold regardless of status unless `--status` narrows the selection. It is dry-run only unless `--apply` is explicitly requested and confirmed.
 
 ## Transport contract
@@ -47,11 +48,14 @@ invoke the helper as one literal Bash segment; never use `bash -c`, wrappers,
 substitution, or broad provider-home access to bypass the sandbox.
 
 Escalation is transport access, not authority: recorded roles and recipients,
-arguments, confirmations, and lifecycle rules remain in force. A failed
-post-transition done/block notification is partial success; inspect
+arguments, confirmations, and lifecycle rules remain in force. Lifecycle
+acknowledgements are durable file-backed dispatches, queued to the assigner's
+inbox when busy, with inline send retained only as a last-resort fallback. The
+ledger remains authoritative and `meta.last_ack` records delivery outcome. A
+failed post-transition acknowledgement is partial success: inspect
 `task-status`, never rerun the completed transition, and never use --force to
 repair transport. Send a separate exact session-chat message only when
-authorized. `task-review` permits a dispatch-only retry only while the task is
+authorized. `task-review` permits a reviewer dispatch-only retry only while the task is
 in `review`, has no successful reviewer-dispatch timestamp, and the prior
 dispatch is known to have failed. If dispatch succeeded but timestamp
 persistence failed, delivery is ambiguous even though a later helper call

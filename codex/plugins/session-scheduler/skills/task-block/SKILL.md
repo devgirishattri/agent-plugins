@@ -36,9 +36,13 @@ or broad provider-home access. Escalation grants transport access only; the
 recorded role and recipient, exact arguments, confirmation requirements, and
 lifecycle rules remain authoritative.
 
-If the helper warns that notification failed, the task is already `blocked`:
-this is partial success. Report that state and never rerun the helper.
-Never use --force to repair a notification. Only when authorized, send a
-separate exact session-chat message to the recorded recipient.
+The lifecycle acknowledgement is a durable file-backed dispatch, queued to the
+assigner's inbox when busy. The ledger remains authoritative, and
+`meta.last_ack` records whether delivery was `dispatched`, used the
+`inline-fallback`, or `failed`. If the helper warns that both delivery paths
+failed, the task is already `blocked`: report that partial success and never rerun
+the helper. Never use --force to repair an acknowledgement. Only when
+authorized, send a separate exact session-chat message to the recorded
+recipient.
 
 Legal from `created`, `assigned`, or `review` (review rejection); other transitions are rejected unless `--force`. Unblock by re-running task-assign (blocked → assigned is legal). Report that the task was marked blocked.

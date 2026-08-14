@@ -216,6 +216,54 @@ session_chat_dispatch() {
   bash "$root/scripts/dispatch-to-session.sh" "$target" "$prompt_file"
 }
 
+# session_chat_ack <target> <id> <event> <first-line>
+# Durable delivery ladder for a lifecycle ack (done/blocked/review
+# notification to the assigner): write an ack file -> durable dispatch (the
+# same file-backed transport task-assign uses, queued to the recipient's
+# inbox when busy) -> inline /send as a last-resort fallback. Every rung is
+# best-effort — the caller's ledger transition has ALREADY landed by the time
+# this runs, so this never aborts the caller and always returns 0. Outcome is
+# reported via two globals (not local — the caller reads them right after
+# the call) for recording on the ledger's meta.last_ack:
+#   SESSION_CHAT_ACK_STATUS  dispatched | inline-fallback | failed
+#   SESSION_CHAT_ACK_FILE    the written ack file, or empty when the file
+#                             write itself failed (caller records JSON null)
+session_chat_ack() {
+  local target="$1" id="$2" event="$3" first_line="$4"
+  local ack_file dc
+  SESSION_CHAT_ACK_STATUS="failed"
+  SESSION_CHAT_ACK_FILE=""
+  ack_file=$(prompt_path "${id}-ack-${event}")
+  if cat > "$ack_file" <<EOF
+${first_line}
+
+Lifecycle ack for task ${id} — status recorded in the shared ledger; no
+dispatch action required. Verify with the form for your runtime:
+  Claude: /session-scheduler:task-status ${id}
+  Codex:  \$session-scheduler:task-status ${id}
+EOF
+  then
+    chmod 600 "$ack_file" 2>/dev/null || true
+    SESSION_CHAT_ACK_FILE="$ack_file"
+    # Same durable transport task-assign uses for the outbound leg; exit 0 =
+    # delivered. Tolerate 3 (queued) defensively, though the current
+    # dispatch-to-session.sh already normalizes a queued send to rc 0.
+    session_chat_dispatch "$target" "$ack_file" >/dev/null 2>&1
+    dc=$?
+    case "$dc" in
+      0|3) SESSION_CHAT_ACK_STATUS="dispatched"; return 0 ;;
+    esac
+  else
+    rm -f "$ack_file" 2>/dev/null
+  fi
+
+  if session_chat_send "$target" "$first_line"; then
+    SESSION_CHAT_ACK_STATUS="inline-fallback"
+    echo "WARN: durable ack dispatch to '$target' failed; ack delivered inline instead." >&2
+  fi
+  return 0
+}
+
 # Get current pane name via session-chat helper, or fall back to '?'.
 current_pane_name() {
   local root
@@ -343,6 +391,33 @@ task_write() {
     echo "ERROR: failed to commit ledger write for $id at $target" >&2
     return 1
   fi
+  return 0
+}
+
+# Record the outcome of a lifecycle ack attempt (best-effort visibility only —
+# the ledger transition itself already landed and must never be blocked or
+# retried because of this). Usage:
+#   task_record_last_ack <id> <event> <target> <status> <file>
+# <file> may be empty — recorded as JSON null — when the ack file write
+# itself failed.
+task_record_last_ack() {
+  local id="$1" event="$2" target="$3" status="$4" file="$5"
+  local current updated
+  current=$(cat "$(task_path "$id")") || return 0
+  updated=$(printf '%s' "$current" | jq \
+    --arg event "$event" \
+    --arg target "$target" \
+    --arg status "$status" \
+    --arg ts "$(iso_now)" \
+    --arg file "$file" \
+    '.meta.last_ack = {
+       event: $event,
+       target: $target,
+       status: $status,
+       at: $ts,
+       file: (if $file == "" then null else $file end)
+     }') || return 0
+  task_write "$id" "$updated" || true
   return 0
 }
 

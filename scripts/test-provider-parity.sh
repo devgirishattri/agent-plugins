@@ -143,13 +143,16 @@ printf '%s\n' '#!/usr/bin/env bash' 'if [ "${PARITY_DISPATCH_FAIL:-0}" = "1" ]; 
   'printf "%s\t%s\n" "$1" "$2" >> "${PARITY_DISPATCH_LOG:?}"' \
   'if [ "${PARITY_DISPATCH_QUEUE:-0}" = "1" ]; then printf "Queued dispatch to %s\n" "$1"; fi' \
   > "$SESSION_CHAT_ROOT_OVERRIDE/scripts/dispatch-to-session.sh"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' \
+printf '%s\n' '#!/usr/bin/env bash' 'if [ "${PARITY_SEND_FAIL:-0}" = "1" ]; then exit 1; fi' \
+  'printf "%s\t%s\n" "$1" "$2" >> "${PARITY_SEND_LOG:?}"' \
   > "$SESSION_CHAT_ROOT_OVERRIDE/scripts/send-message.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'printf "parity-orchestrator\n"' \
   > "$SESSION_CHAT_ROOT_OVERRIDE/scripts/get-my-name.sh"
 chmod +x "$SESSION_CHAT_ROOT_OVERRIDE/scripts/"*.sh
 export PARITY_DISPATCH_LOG="$TMP/dispatch.log"
+export PARITY_SEND_LOG="$TMP/send.log"
 : > "$PARITY_DISPATCH_LOG"
+: > "$PARITY_SEND_LOG"
 
 CLAUDE_SCRIPTS="$ROOT/plugins/session-scheduler/scripts"
 CODEX_SCRIPTS="$ROOT/codex/plugins/session-scheduler/scripts"
@@ -360,6 +363,129 @@ done
 
 [ "$(grep -c 'parity-reviewer' "$PARITY_DISPATCH_LOG")" -ge 2 ] \
   || fail "reviewer routing did not dispatch across both provider paths"
+
+# Lifecycle acks (done/blocked/review notifications to the assigner) are
+# durable on both providers: the primary path is the same file-backed dispatch
+# task-assign uses, inline send is only a fallback, and meta.last_ack records
+# the outcome. The ack packet body must be byte-identical across providers
+# once the provider-specific task id is normalized out.
+new_ack_task() {
+  # new_ack_task <scripts-dir> <id-pattern> — create+assign a task named
+  # "Ack parity task" as parity-orchestrator; echo the parsed id.
+  local scripts="$1" pattern="$2" created id
+  created=$(bash "$scripts/task-new.sh" "Ack parity task")
+  id=$(printf '%s\n' "$created" | grep -oE "$pattern" | head -1)
+  [ -n "$id" ] || fail "could not parse ack-parity task id from $scripts"
+  bash "$scripts/task-assign.sh" parity-worker "$id" "ack parity work" >/dev/null
+  printf '%s\n' "$id"
+}
+
+# Acks fire only when actor != assigner, so completion runs under a worker
+# identity; restored to the orchestrator identity after this section. The two
+# providers resolve their own pane name differently — Claude via session-chat's
+# get-my-name.sh (stubbed above), Codex via `tmux display-message` — so the
+# identity swap must cover both: rewrite the get-my-name stub AND shim tmux on
+# PATH to answer display-message with the same name.
+ACK_BIN="$TMP/ack-bin"
+mkdir -p "$ACK_BIN"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [ "${1:-}" = "display-message" ]; then printf "%s\n" "${PARITY_TMUX_NAME:?}"; fi' \
+  'exit 0' \
+  > "$ACK_BIN/tmux"
+chmod +x "$ACK_BIN/tmux"
+ACK_SAVED_PATH="$PATH"
+ACK_SAVED_TMUX_PANE="${TMUX_PANE:-}"
+export PATH="$ACK_BIN:$PATH"
+export TMUX_PANE="%parity"
+
+set_parity_identity() {
+  printf '%s\n' '#!/usr/bin/env bash' "printf '%s\n' \"$1\"" \
+    > "$SESSION_CHAT_ROOT_OVERRIDE/scripts/get-my-name.sh"
+  chmod +x "$SESSION_CHAT_ROOT_OVERRIDE/scripts/get-my-name.sh"
+  export PARITY_TMUX_NAME="$1"
+}
+
+for provider in claude codex; do
+  if [ "$provider" = "claude" ]; then
+    ack_scripts="$CLAUDE_SCRIPTS"
+    ack_id_pattern='[a-f0-9]{8}'
+  else
+    ack_scripts="$CODEX_SCRIPTS"
+    ack_id_pattern='task-[a-zA-Z0-9_.-]+'
+  fi
+
+  # Happy path: done-ack goes through durable dispatch, never inline send.
+  set_parity_identity parity-orchestrator
+  ack_id=$(new_ack_task "$ack_scripts" "$ack_id_pattern")
+  ack_file="$SESSION_SCHEDULER_HOME/prompts/${ack_id}-ack-done.md"
+  ack_sends_before=$(wc -l < "$PARITY_SEND_LOG" | tr -d ' ')
+  set_parity_identity parity-worker
+  bash "$ack_scripts/task-done.sh" "$ack_id" "ack parity note" >/dev/null
+  grep -F "parity-orchestrator	$ack_file" "$PARITY_DISPATCH_LOG" >/dev/null \
+    || fail "$provider done-ack did not use durable file-backed dispatch"
+  ack_sends_after=$(wc -l < "$PARITY_SEND_LOG" | tr -d ' ')
+  [ "$ack_sends_after" = "$ack_sends_before" ] \
+    || fail "$provider done-ack used inline send despite durable dispatch succeeding"
+  [ -f "$ack_file" ] || fail "$provider done-ack packet missing: $ack_file"
+  head -1 "$ack_file" | grep -Fx "task $ack_id (Ack parity task) done by parity-worker — ack parity note" >/dev/null \
+    || fail "$provider done-ack first line is not canonical"
+  grep -F "Claude: /session-scheduler:task-status $ack_id" "$ack_file" >/dev/null \
+    || fail "$provider done-ack missing Claude task-status form"
+  grep -F "Codex:  \$session-scheduler:task-status $ack_id" "$ack_file" >/dev/null \
+    || fail "$provider done-ack missing Codex task-status form"
+  jq -e --arg file "$ack_file" '
+    .meta.last_ack.event == "done"
+    and .meta.last_ack.target == "parity-orchestrator"
+    and .meta.last_ack.status == "dispatched"
+    and (.meta.last_ack.at // "") != ""
+    and .meta.last_ack.file == $file
+  ' "$SESSION_SCHEDULER_HOME/tasks/$ack_id.json" >/dev/null \
+    || fail "$provider done-ack did not record dispatched meta.last_ack"
+  sed "s/$ack_id/NORMALIZED_ID/g" "$ack_file" > "$TMP/${provider}-ack-normalized.md"
+
+  # Failure ladder: dispatch down + send up => inline-fallback recorded.
+  set_parity_identity parity-orchestrator
+  fb_id=$(new_ack_task "$ack_scripts" "$ack_id_pattern")
+  set_parity_identity parity-worker
+  PARITY_DISPATCH_FAIL=1 bash "$ack_scripts/task-block.sh" "$fb_id" "fallback reason" \
+    >/dev/null 2> "$TMP/${provider}-ack-fallback.err"
+  grep -F "parity-orchestrator	task $fb_id (Ack parity task) BLOCKED by parity-worker: fallback reason" \
+    "$PARITY_SEND_LOG" >/dev/null \
+    || fail "$provider blocked-ack fallback did not send the canonical inline line"
+  jq -e '
+    .status == "blocked"
+    and .meta.last_ack.event == "blocked"
+    and .meta.last_ack.status == "inline-fallback"
+  ' "$SESSION_SCHEDULER_HOME/tasks/$fb_id.json" >/dev/null \
+    || fail "$provider blocked-ack fallback did not record inline-fallback meta.last_ack"
+  grep -F "durable ack dispatch to 'parity-orchestrator' failed; ack delivered inline instead." \
+    "$TMP/${provider}-ack-fallback.err" >/dev/null \
+    || fail "$provider blocked-ack fallback did not warn about the inline downgrade"
+
+  # Failure ladder: both transports down => transition intact, failed recorded.
+  set_parity_identity parity-orchestrator
+  ff_id=$(new_ack_task "$ack_scripts" "$ack_id_pattern")
+  set_parity_identity parity-worker
+  PARITY_DISPATCH_FAIL=1 PARITY_SEND_FAIL=1 bash "$ack_scripts/task-done.sh" "$ff_id" "total ack failure" \
+    >/dev/null 2> "$TMP/${provider}-ack-failed.err" \
+    || fail "$provider task-done aborted because both ack transports failed"
+  jq -e '
+    .status == "done"
+    and .meta.last_ack.event == "done"
+    and .meta.last_ack.status == "failed"
+  ' "$SESSION_SCHEDULER_HOME/tasks/$ff_id.json" >/dev/null \
+    || fail "$provider total ack failure did not record failed meta.last_ack (or rolled back the transition)"
+done
+set_parity_identity parity-orchestrator
+export PATH="$ACK_SAVED_PATH"
+if [ -n "$ACK_SAVED_TMUX_PANE" ]; then
+  export TMUX_PANE="$ACK_SAVED_TMUX_PANE"
+else
+  unset TMUX_PANE
+fi
+
+diff "$TMP/claude-ack-normalized.md" "$TMP/codex-ack-normalized.md" >/dev/null \
+  || fail "done-ack packets are not byte-identical across providers after id normalization"
 
 # Context stores are dedicated private data directories, not arbitrary trees.
 # Both providers must reject a misconfigured project-like root before changing

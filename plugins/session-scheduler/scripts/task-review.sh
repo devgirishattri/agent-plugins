@@ -76,7 +76,17 @@ else
     exit 1
   fi
   if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
-    session_chat_send "$ASSIGNER" "task ${ID} (${NAME}) ready for REVIEW by ${ACTOR}: ${NOTE}"
+    # Durable file-backed dispatch first (queued to the assigner's inbox when
+    # busy — the same transport task-assign uses), inline /send as a
+    # last-resort fallback. This ack is independent of reviewer routing below:
+    # a failure here never blocks or retries the review transition, and never
+    # collides with the review_dispatch_* bookkeeping reviewer routing owns.
+    session_chat_ack "$ASSIGNER" "$ID" "review" "task ${ID} (${NAME}) ready for REVIEW by ${ACTOR}: ${NOTE}"
+    task_record_last_ack "$ID" "review" "$ASSIGNER" "$SESSION_CHAT_ACK_STATUS" "$SESSION_CHAT_ACK_FILE"
+    if [ "$SESSION_CHAT_ACK_STATUS" = "failed" ]; then
+      echo "WARN: durable ack to assigner '$ASSIGNER' failed — the assigner notification that task $ID is ready for review was not delivered." >&2
+      echo "  Reviewer routing proceeds independently; task $ID stays in review. Do not rerun the transition to repair the notification." >&2
+    fi
   fi
 fi
 

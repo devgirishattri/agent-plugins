@@ -32,21 +32,15 @@ ACTOR=$(current_pane_name)
 append_history_update "$FILE" "blocked" "blocked" "$ACTOR" "$REASON" || exit 1
 
 ASSIGNER=$(jq -r '.assigner // ""' "$FILE")
-if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
-  NOTIFICATION_FAILED=0
-  CHAT_ROOT=$(session_chat_root 2>/dev/null || true)
-  if [ -n "$CHAT_ROOT" ]; then
-    if ! bash "$CHAT_ROOT/scripts/send-message.sh" "$ASSIGNER" "Task $ID blocked: $REASON" >&2; then
-      NOTIFICATION_FAILED=1
-    fi
-  else
-    NOTIFICATION_FAILED=1
-  fi
-  if [ "$NOTIFICATION_FAILED" -eq 1 ]; then
-    echo "WARN: Assigner notification failed after task $ID reached blocked (partial success)." >&2
+if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
+  TASK_NAME=$(jq -r '.name // ""' "$FILE")
+  ACK_FIRST_LINE="task $ID ($TASK_NAME) BLOCKED by $ACTOR: $REASON"
+  if ! session_chat_ack "$ASSIGNER" "$ID" "blocked" "$ACK_FIRST_LINE"; then
+    echo "WARN: Durable assigner ack failed after task $ID reached blocked (partial success)." >&2
     echo "Do NOT rerun task-block or use --force to repair the notification." >&2
     echo "Report the partial success and, only when authorized, send a separate exact session-chat message." >&2
   fi
+  record_last_ack "$FILE" "blocked" "$ASSIGNER" "$SESSION_CHAT_ACK_STATUS" "$SESSION_CHAT_ACK_FILE" || true
 fi
 
 echo "Marked task $ID blocked."

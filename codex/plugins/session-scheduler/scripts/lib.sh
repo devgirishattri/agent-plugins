@@ -347,6 +347,78 @@ session_chat_version() {
   jq -r '.version // "unknown"' "$root/.codex-plugin/plugin.json" 2>/dev/null || echo "unknown"
 }
 
+# Deliver a lifecycle acknowledgement to the task assigner. The durable
+# dispatch file is authoritative transport; the legacy one-line send is kept
+# only as a fallback when the file cannot be written or dispatched.
+#
+# Results are returned in SESSION_CHAT_ACK_STATUS and SESSION_CHAT_ACK_FILE so
+# callers can record the best-effort outcome after their transition is durable.
+session_chat_ack() {
+  local target="$1" id="$2" event="$3" first_line="$4"
+  local ack_file chat_root dispatch_rc
+
+  SESSION_CHAT_ACK_STATUS="failed"
+  SESSION_CHAT_ACK_FILE=""
+
+  case "$event" in
+    done|blocked|review) ;;
+    *) return 1 ;;
+  esac
+
+  ack_file="$PROMPTS_DIR/${id}-ack-${event}.md"
+  if {
+    printf '%s\n\n' "$first_line"
+    printf 'Lifecycle ack for task %s — status recorded in the shared ledger; no\n' "$id"
+    printf 'dispatch action required. Verify with the form for your runtime:\n'
+    printf '  Claude: /session-scheduler:task-status %s\n' "$id"
+    printf '  Codex:  $session-scheduler:task-status %s\n' "$id"
+  } > "$ack_file"; then
+    chmod 600 "$ack_file" 2>/dev/null || true
+    SESSION_CHAT_ACK_FILE="$ack_file"
+  fi
+
+  chat_root=$(session_chat_root 2>/dev/null || true)
+  if [ -n "$SESSION_CHAT_ACK_FILE" ] && [ -n "$chat_root" ]; then
+    bash "$chat_root/scripts/dispatch-to-session.sh" "$target" "$SESSION_CHAT_ACK_FILE" \
+      >/dev/null 2>&1
+    dispatch_rc=$?
+    if [ "$dispatch_rc" -eq 0 ] || [ "$dispatch_rc" -eq 3 ]; then
+      SESSION_CHAT_ACK_STATUS="dispatched"
+      return 0
+    fi
+  fi
+
+  if [ -n "$chat_root" ] \
+    && bash "$chat_root/scripts/send-message.sh" "$target" "$first_line" >/dev/null 2>&1; then
+    SESSION_CHAT_ACK_STATUS="inline-fallback"
+    echo "WARN: durable ack dispatch to '$target' failed; ack delivered inline instead." >&2
+    return 0
+  fi
+
+  return 1
+}
+
+record_last_ack() {
+  local file="$1" event="$2" target="$3" status="$4" ack_file="$5"
+  local now
+  now=$(now_iso) || return 1
+  jq \
+    --arg event "$event" \
+    --arg target "$target" \
+    --arg status "$status" \
+    --arg now "$now" \
+    --arg ack_file "$ack_file" \
+    '(.meta //= {})
+     | .meta.last_ack = {
+         event:$event,
+         target:$target,
+         status:$status,
+         at:$now,
+         file:(if $ack_file == "" then null else $ack_file end)
+       }' \
+    "$file" | write_json_atomic "$file"
+}
+
 semver_gte() {
   local actual="${1%%+*}" minimum="${2%%+*}"
   actual="${actual%%-*}"

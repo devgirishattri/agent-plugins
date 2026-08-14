@@ -114,6 +114,17 @@ tmux set-option -p -t "$RECIPIENT" @name scheduler-executor
 tmux set-option -p -t "$REVIEWER" @name scheduler-reviewer
 TMUX_ENV=$(tmux display-message -p -t "$SENDER" '#{socket_path},#{pid},0')
 
+# Deterministic lifecycle-ack transport: dispatch and inline calls are logged
+# separately so the tests can prove durable dispatch is the primary path.
+ACK_SUCCESS_ROOT="$TEST_HOME/ack-success-stub"
+mkdir -p "$ACK_SUCCESS_ROOT/.codex-plugin" "$ACK_SUCCESS_ROOT/scripts"
+printf '{"name":"session-chat","version":"0.16.5"}\n' > "$ACK_SUCCESS_ROOT/.codex-plugin/plugin.json"
+printf '#!/usr/bin/env bash\nprintf "dispatch:%%s:%%s\\n" "$1" "$2" >> "$ACK_STUB_LOG"\nexit 0\n' \
+  > "$ACK_SUCCESS_ROOT/scripts/dispatch-to-session.sh"
+printf '#!/usr/bin/env bash\nprintf "send:%%s:%%s\\n" "$1" "$2" >> "$ACK_STUB_LOG"\nexit 0\n' \
+  > "$ACK_SUCCESS_ROOT/scripts/send-message.sh"
+chmod +x "$ACK_SUCCESS_ROOT/scripts"/*.sh
+
 if AGENT_PLUGINS_TIME_ZONE=Not/AZone run_sender bash "$SCRIPT_DIR/task-new.sh" "Invalid timezone" \
   > "$TEST_HOME/invalid-timezone.out" 2>&1; then
   fail "task-new accepted invalid AGENT_PLUGINS_TIME_ZONE"
@@ -176,15 +187,59 @@ grep -F '/session-scheduler:task-block' "$ASSIGN_MESSAGE_FILE" >/dev/null \
   && ok || fail "assignment packet missing Claude block command"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$TASK_ID" | grep 'assigned' >/dev/null && ok || fail "task not assigned"
 
-run_recipient bash "$SCRIPT_DIR/task-done.sh" "$TASK_ID" "completed"
+DONE_ACK_LOG="$TEST_HOME/done-ack.log"
+run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$ACK_SUCCESS_ROOT" ACK_STUB_LOG="$DONE_ACK_LOG" \
+  bash "$SCRIPT_DIR/task-done.sh" "$TASK_ID" "completed"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$TASK_ID" | grep 'done' >/dev/null && ok || fail "task not done"
-tmux capture-pane -J -t "$SENDER" -p -S -200 | grep "Task $TASK_ID done" >/dev/null && ok || fail "done ack did not reach assigner"
+DONE_ACK_FILE="$TEST_HOME/scheduler/prompts/$TASK_ID-ack-done.md"
+grep -F "dispatch:scheduler-orchestrator:$DONE_ACK_FILE" "$DONE_ACK_LOG" >/dev/null \
+  && ok || fail "done ack did not use durable dispatch"
+if grep '^send:' "$DONE_ACK_LOG" >/dev/null; then
+  fail "done ack used inline send despite successful durable dispatch"
+else
+  ok
+fi
+[ -f "$DONE_ACK_FILE" ] && ok || fail "done ack file missing"
+[ "$(path_mode "$DONE_ACK_FILE")" = "600" ] && ok || fail "done ack file is not mode 600"
+grep -Fx "task $TASK_ID (Smoke task) done by scheduler-executor — completed" "$DONE_ACK_FILE" >/dev/null \
+  && ok || fail "done ack canonical first line is wrong"
+grep -F "Claude: /session-scheduler:task-status $TASK_ID" "$DONE_ACK_FILE" >/dev/null \
+  && ok || fail "done ack missing Claude task-status form"
+grep -F "Codex:  \$session-scheduler:task-status $TASK_ID" "$DONE_ACK_FILE" >/dev/null \
+  && ok || fail "done ack missing Codex task-status form"
+jq -e --arg file "$DONE_ACK_FILE" '
+  .meta.last_ack.event == "done"
+  and .meta.last_ack.target == "scheduler-orchestrator"
+  and .meta.last_ack.status == "dispatched"
+  and (.meta.last_ack.at // "") != ""
+  and .meta.last_ack.file == $file
+' "$TEST_HOME/scheduler/tasks/$TASK_ID.json" >/dev/null \
+  && ok || fail "done ack metadata is incomplete"
 
 blocked=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Blocked task")
 BLOCK_ID=$(printf '%s\n' "$blocked" | awk '/^Created task/{print $3}' | sed 's/:$//')
 run_sender bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$BLOCK_ID" "Block this task"
-run_recipient bash "$SCRIPT_DIR/task-block.sh" "$BLOCK_ID" "blocked reason"
+BLOCK_ACK_LOG="$TEST_HOME/blocked-ack.log"
+run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$ACK_SUCCESS_ROOT" ACK_STUB_LOG="$BLOCK_ACK_LOG" \
+  bash "$SCRIPT_DIR/task-block.sh" "$BLOCK_ID" "blocked reason"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$BLOCK_ID" | grep 'blocked' >/dev/null && ok || fail "task not blocked"
+BLOCK_ACK_FILE="$TEST_HOME/scheduler/prompts/$BLOCK_ID-ack-blocked.md"
+grep -F "dispatch:scheduler-orchestrator:$BLOCK_ACK_FILE" "$BLOCK_ACK_LOG" >/dev/null \
+  && ok || fail "blocked ack did not use durable dispatch"
+if grep '^send:' "$BLOCK_ACK_LOG" >/dev/null; then
+  fail "blocked ack used inline send despite successful durable dispatch"
+else
+  ok
+fi
+grep -Fx "task $BLOCK_ID (Blocked task) BLOCKED by scheduler-executor: blocked reason" "$BLOCK_ACK_FILE" >/dev/null \
+  && ok || fail "blocked ack canonical first line is wrong"
+jq -e --arg file "$BLOCK_ACK_FILE" '
+  .meta.last_ack.event == "blocked"
+  and .meta.last_ack.target == "scheduler-orchestrator"
+  and .meta.last_ack.status == "dispatched"
+  and .meta.last_ack.file == $file
+' "$TEST_HOME/scheduler/tasks/$BLOCK_ID.json" >/dev/null \
+  && ok || fail "blocked ack metadata is incomplete"
 
 run_sender bash "$SCRIPT_DIR/tasks-clean.sh" --older-than 0s > "$TEST_HOME/clean.txt"
 grep 'Dry run only' "$TEST_HOME/clean.txt" >/dev/null && ok || fail "clean dry-run missing"
@@ -236,9 +291,28 @@ REVIEW_ID=$(printf '%s\n' "$review" | awk '/^Created task/{print $3}' | sed 's/:
 run_sender bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$REVIEW_ID" "Do reviewable work"
 started=$(jq -r '.started_at // empty' "$TEST_HOME/scheduler/tasks/$REVIEW_ID.json")
 [ -n "$started" ] && ok || fail "started_at not stamped on assignment"
-run_recipient bash "$SCRIPT_DIR/task-review.sh" "$REVIEW_ID" "commit abc1234"
+REVIEW_ACK_LOG="$TEST_HOME/review-ack.log"
+run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$ACK_SUCCESS_ROOT" ACK_STUB_LOG="$REVIEW_ACK_LOG" \
+  bash "$SCRIPT_DIR/task-review.sh" "$REVIEW_ID" "commit abc1234"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$REVIEW_ID" | grep 'review' >/dev/null && ok || fail "task not in review"
-tmux capture-pane -J -t "$SENDER" -p -S -200 | grep "Task $REVIEW_ID ready for REVIEW" >/dev/null && ok || fail "review ack did not reach assigner"
+REVIEW_ACK_FILE="$TEST_HOME/scheduler/prompts/$REVIEW_ID-ack-review.md"
+grep -F "dispatch:scheduler-orchestrator:$REVIEW_ACK_FILE" "$REVIEW_ACK_LOG" >/dev/null \
+  && ok || fail "review ack did not use durable dispatch"
+if grep '^send:' "$REVIEW_ACK_LOG" >/dev/null; then
+  fail "review ack used inline send despite successful durable dispatch"
+else
+  ok
+fi
+grep -Fx "task $REVIEW_ID (Review task) ready for REVIEW by scheduler-executor: commit abc1234" "$REVIEW_ACK_FILE" >/dev/null \
+  && ok || fail "review ack canonical first line is wrong"
+jq -e --arg file "$REVIEW_ACK_FILE" '
+  .meta.last_ack.event == "review"
+  and .meta.last_ack.target == "scheduler-orchestrator"
+  and .meta.last_ack.status == "dispatched"
+  and .meta.last_ack.file == $file
+  and (.meta.review_dispatch_status | not)
+' "$TEST_HOME/scheduler/tasks/$REVIEW_ID.json" >/dev/null \
+  && ok || fail "review ack metadata is incomplete or collided with reviewer routing"
 run_sender bash "$SCRIPT_DIR/task-done.sh" "$REVIEW_ID" "approved"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$REVIEW_ID" | grep 'done' >/dev/null && ok || fail "reviewed task not done"
 duration=$(jq -r '.duration_seconds // empty' "$TEST_HOME/scheduler/tasks/$REVIEW_ID.json")
@@ -574,16 +648,47 @@ printf '#!/usr/bin/env bash\nexit 1\n' > "$FAIL_STUB/dispatch-to-session.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAIL_STUB/send-message.sh"
 chmod +x "$FAIL_STUB"/*.sh
 
-# A nested notification failure after task-done/task-block is partial success:
-# the transition remains durable, the helper still exits successfully, and the
-# warning forbids replay/--force repair. Stub transport keeps this deterministic
-# without asking real tmux to deliver the new checks.
-FAIL_SEND_ROOT="$TEST_HOME/fail-send-stub"
-mkdir -p "$FAIL_SEND_ROOT/.codex-plugin" "$FAIL_SEND_ROOT/scripts"
-printf '{"name":"session-chat","version":"0.16.5"}\n' > "$FAIL_SEND_ROOT/.codex-plugin/plugin.json"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$FAIL_SEND_ROOT/scripts/dispatch-to-session.sh"
-printf '#!/usr/bin/env bash\necho "stub notification failure" >&2\nexit 1\n' > "$FAIL_SEND_ROOT/scripts/send-message.sh"
-chmod +x "$FAIL_SEND_ROOT/scripts"/*.sh
+# A failed durable dispatch falls back to the legacy inline send once, records
+# that outcome, and leaves the landed transition intact.
+FALLBACK_ACK_ROOT="$TEST_HOME/fallback-ack-stub"
+mkdir -p "$FALLBACK_ACK_ROOT/.codex-plugin" "$FALLBACK_ACK_ROOT/scripts"
+printf '{"name":"session-chat","version":"0.16.5"}\n' > "$FALLBACK_ACK_ROOT/.codex-plugin/plugin.json"
+printf '#!/usr/bin/env bash\nprintf "dispatch:%%s:%%s\\n" "$1" "$2" >> "$ACK_STUB_LOG"\nexit 1\n' \
+  > "$FALLBACK_ACK_ROOT/scripts/dispatch-to-session.sh"
+printf '#!/usr/bin/env bash\nprintf "send:%%s:%%s\\n" "$1" "$2" >> "$ACK_STUB_LOG"\nexit 0\n' \
+  > "$FALLBACK_ACK_ROOT/scripts/send-message.sh"
+chmod +x "$FALLBACK_ACK_ROOT/scripts"/*.sh
+
+fallback_done=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Inline-fallback done task")
+FALLBACK_DONE_ID=$(printf '%s\n' "$fallback_done" | awk '/^Created task/{print $3}' | sed 's/:$//')
+FALLBACK_DONE_FILE="$TEST_HOME/scheduler/tasks/$FALLBACK_DONE_ID.json"
+FALLBACK_DONE_LOG="$TEST_HOME/fallback-done.log"
+run_sender bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$FALLBACK_DONE_ID" "Exercise ack fallback"
+if ! run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$FALLBACK_ACK_ROOT" ACK_STUB_LOG="$FALLBACK_DONE_LOG" \
+  bash "$SCRIPT_DIR/task-done.sh" "$FALLBACK_DONE_ID" "fallback complete" \
+  > "$TEST_HOME/fallback-done.out" 2> "$TEST_HOME/fallback-done.err"; then
+  fail "task-done aborted after its durable ack used inline fallback"
+fi
+[ "$(jq -r '.status' "$FALLBACK_DONE_FILE")" = "done" ] \
+  && ok || fail "inline ack fallback disturbed the done transition"
+[ "$(grep -Fc "WARN: durable ack dispatch to 'scheduler-orchestrator' failed; ack delivered inline instead." "$TEST_HOME/fallback-done.err" || true)" -eq 1 ] \
+  && ok || fail "inline ack fallback did not emit exactly one canonical warning"
+grep -F "dispatch:scheduler-orchestrator:$TEST_HOME/scheduler/prompts/$FALLBACK_DONE_ID-ack-done.md" "$FALLBACK_DONE_LOG" >/dev/null \
+  && ok || fail "inline ack fallback did not attempt durable dispatch first"
+grep -F "send:scheduler-orchestrator:task $FALLBACK_DONE_ID (Inline-fallback done task) done by scheduler-executor — fallback complete" "$FALLBACK_DONE_LOG" >/dev/null \
+  && ok || fail "inline ack fallback did not send the canonical first line"
+jq -e '.meta.last_ack.status == "inline-fallback" and .meta.last_ack.event == "done"' \
+  "$FALLBACK_DONE_FILE" >/dev/null \
+  && ok || fail "inline ack fallback metadata was not recorded"
+
+# When both ack transports fail, the transition remains durable, the helper
+# still exits successfully, and the warning forbids replay/--force repair.
+FAIL_ACK_ROOT="$TEST_HOME/fail-ack-stub"
+mkdir -p "$FAIL_ACK_ROOT/.codex-plugin" "$FAIL_ACK_ROOT/scripts"
+printf '{"name":"session-chat","version":"0.16.5"}\n' > "$FAIL_ACK_ROOT/.codex-plugin/plugin.json"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FAIL_ACK_ROOT/scripts/dispatch-to-session.sh"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FAIL_ACK_ROOT/scripts/send-message.sh"
+chmod +x "$FAIL_ACK_ROOT/scripts"/*.sh
 
 partial_done=$(run_without_tmux bash "$SCRIPT_DIR/task-new.sh" "Partial-success done task")
 PARTIAL_DONE_ID=$(printf '%s\n' "$partial_done" | awk '/^Created task/{print $3}' | sed 's/:$//')
@@ -591,13 +696,15 @@ PARTIAL_DONE_FILE="$TEST_HOME/scheduler/tasks/$PARTIAL_DONE_ID.json"
 jq '.status="assigned" | .assigner="stub-assigner" | .started_at=.created_at' \
   "$PARTIAL_DONE_FILE" > "$TEST_HOME/partial-done.tmp"
 mv "$TEST_HOME/partial-done.tmp" "$PARTIAL_DONE_FILE"
-if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_SEND_ROOT" \
+if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
   bash "$SCRIPT_DIR/task-done.sh" "$PARTIAL_DONE_ID" "completed without ack" \
   > "$TEST_HOME/partial-done.out" 2> "$TEST_HOME/partial-done.err"; then
   fail "task-done aborted after a best-effort notification failure"
 fi
 [ "$(jq -r '.status' "$PARTIAL_DONE_FILE")" = "done" ] \
   && ok || fail "task-done notification failure rolled back the done transition"
+grep -F 'Durable assigner ack failed' "$TEST_HOME/partial-done.err" >/dev/null \
+  && ok || fail "task-done failure warning did not identify the durable ack"
 grep -F 'partial success' "$TEST_HOME/partial-done.err" >/dev/null \
   && ok || fail "task-done notification warning omitted partial success"
 grep -F 'Do NOT rerun task-done' "$TEST_HOME/partial-done.err" >/dev/null \
@@ -606,19 +713,28 @@ grep -F 'use --force to repair' "$TEST_HOME/partial-done.err" >/dev/null \
   && ok || fail "task-done notification warning omitted force-repair prohibition"
 grep -F 'separate exact session-chat message' "$TEST_HOME/partial-done.err" >/dev/null \
   && ok || fail "task-done notification warning omitted authorized fallback guidance"
+jq -e --arg file "$TEST_HOME/scheduler/prompts/$PARTIAL_DONE_ID-ack-done.md" '
+  .meta.last_ack.status == "failed"
+  and .meta.last_ack.event == "done"
+  and .meta.last_ack.target == "stub-assigner"
+  and .meta.last_ack.file == $file
+' "$PARTIAL_DONE_FILE" >/dev/null \
+  && ok || fail "task-done failed ack metadata was not recorded"
 
 partial_block=$(run_without_tmux bash "$SCRIPT_DIR/task-new.sh" "Partial-success blocked task")
 PARTIAL_BLOCK_ID=$(printf '%s\n' "$partial_block" | awk '/^Created task/{print $3}' | sed 's/:$//')
 PARTIAL_BLOCK_FILE="$TEST_HOME/scheduler/tasks/$PARTIAL_BLOCK_ID.json"
 jq '.assigner="stub-assigner"' "$PARTIAL_BLOCK_FILE" > "$TEST_HOME/partial-block.tmp"
 mv "$TEST_HOME/partial-block.tmp" "$PARTIAL_BLOCK_FILE"
-if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_SEND_ROOT" \
+if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
   bash "$SCRIPT_DIR/task-block.sh" "$PARTIAL_BLOCK_ID" "blocked without ack" \
   > "$TEST_HOME/partial-block.out" 2> "$TEST_HOME/partial-block.err"; then
   fail "task-block aborted after a best-effort notification failure"
 fi
 [ "$(jq -r '.status' "$PARTIAL_BLOCK_FILE")" = "blocked" ] \
   && ok || fail "task-block notification failure rolled back the blocked transition"
+grep -F 'Durable assigner ack failed' "$TEST_HOME/partial-block.err" >/dev/null \
+  && ok || fail "task-block failure warning did not identify the durable ack"
 grep -F 'partial success' "$TEST_HOME/partial-block.err" >/dev/null \
   && ok || fail "task-block notification warning omitted partial success"
 grep -F 'Do NOT rerun task-block' "$TEST_HOME/partial-block.err" >/dev/null \
@@ -627,6 +743,38 @@ grep -F 'use --force to repair' "$TEST_HOME/partial-block.err" >/dev/null \
   && ok || fail "task-block notification warning omitted force-repair prohibition"
 grep -F 'separate exact session-chat message' "$TEST_HOME/partial-block.err" >/dev/null \
   && ok || fail "task-block notification warning omitted authorized fallback guidance"
+jq -e --arg file "$TEST_HOME/scheduler/prompts/$PARTIAL_BLOCK_ID-ack-blocked.md" '
+  .meta.last_ack.status == "failed"
+  and .meta.last_ack.event == "blocked"
+  and .meta.last_ack.target == "stub-assigner"
+  and .meta.last_ack.file == $file
+' "$PARTIAL_BLOCK_FILE" >/dev/null \
+  && ok || fail "task-block failed ack metadata was not recorded"
+
+partial_review=$(run_without_tmux bash "$SCRIPT_DIR/task-new.sh" "Partial-success review task")
+PARTIAL_REVIEW_ID=$(printf '%s\n' "$partial_review" | awk '/^Created task/{print $3}' | sed 's/:$//')
+PARTIAL_REVIEW_FILE="$TEST_HOME/scheduler/tasks/$PARTIAL_REVIEW_ID.json"
+jq '.status="assigned" | .assigner="stub-assigner" | .started_at=.created_at' \
+  "$PARTIAL_REVIEW_FILE" > "$TEST_HOME/partial-review.tmp"
+mv "$TEST_HOME/partial-review.tmp" "$PARTIAL_REVIEW_FILE"
+if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
+  bash "$SCRIPT_DIR/task-review.sh" "$PARTIAL_REVIEW_ID" "review without ack" \
+  > "$TEST_HOME/partial-review.out" 2> "$TEST_HOME/partial-review.err"; then
+  fail "task-review aborted after both assigner ack transports failed"
+fi
+[ "$(jq -r '.status' "$PARTIAL_REVIEW_FILE")" = "review" ] \
+  && ok || fail "task-review assigner ack failure rolled back the review transition"
+grep -F 'reviewer routing proceeds independently (task remains in review)' "$TEST_HOME/partial-review.err" >/dev/null \
+  && ok || fail "task-review ack failure warning omitted independent reviewer routing"
+grep -F 'Do NOT rerun task-review' "$TEST_HOME/partial-review.err" >/dev/null \
+  && ok || fail "task-review ack failure warning omitted replay prohibition"
+jq -e --arg file "$TEST_HOME/scheduler/prompts/$PARTIAL_REVIEW_ID-ack-review.md" '
+  .meta.last_ack.status == "failed"
+  and .meta.last_ack.event == "review"
+  and .meta.last_ack.target == "stub-assigner"
+  and .meta.last_ack.file == $file
+' "$PARTIAL_REVIEW_FILE" >/dev/null \
+  && ok || fail "task-review failed ack metadata was not recorded"
 
 # Review-dispatch metadata is scoped to one assignment cycle. Exercise a
 # successful review, rejection, and rework before failing the next review
