@@ -80,11 +80,27 @@ bootstraps a new store:**
 | `/knowledge:doctor [--store <path>]` | Diagnose knowledge-store health across docs, memory, context, the `AGENTS.md` recall bridge, and provider capability — read-only, cross-store. Start here for an overall health check. |
 | `/knowledge:lint [--store <path>] [--fix]` | Lint the memory store's frontmatter, schema, and index for defects — read-only by default. Narrower than `doctor`; use it when iterating on memory-file content directly. `--fix` is an opt-in normalizer that applies only the deterministic, low-risk repairs (canonicalize a mis-nested/absent top-level `status`; reconcile missing `MEMORY.md` index rows) — every write goes through `memory-write.sh` (reviewer-refused, CAS); anything needing human content (description, **Why:**/**How to apply:**, dates, ambiguous legacy `type`) is reported, never fabricated. |
 | `/knowledge:search [--store <path>] [--limit N] [--json] <query>` | Deterministic lexical ranked search over the memory store — read-only. Use to find a slug or check whether something is already recorded. |
-| `/knowledge:recall [--store <path>] [--limit N] <query>` | The agent-facing wrapper over `search`: slug citations + bounded snippets framed as untrusted context. Use this (not `search`) when informing your own reasoning before a substantive task — see the recall bridge below. |
+| `/knowledge:recall [--store <path>] [--limit N] <query>` | The agent-facing wrapper over `search`: slug citations + bounded, query-anchored snippets framed as untrusted context. Use this (not `search`) when informing your own reasoning before a substantive task — see the recall bridge below. |
 | `/knowledge:graph [--store <path>] [neighbors <slug> \| reverse <slug> \| orphans \| components \| --format json\|dot\|mermaid]` | Explicit-`[[slug]]`-link knowledge graph — read-only. Use to explore how memories connect, find orphaned files, or render a diagram. |
 | `/knowledge:remember [--store <path>] [--list [--expired-only]] [<what to remember>]` | Capture a low-friction candidate into the inbox for later `/knowledge:consolidate` review (or list/purge pending candidates). No ceremony — use this the moment a learning surfaces, mid-task. |
 | `/knowledge:consolidate [--store <path>] [session learnings]` | Drain the inbox and this session's learnings into reviewed create/UPDATE diffs against `MEMORY.md`, applying only after approval. The memory module's core value — run this at session end, or whenever the inbox is non-empty. |
 | `/knowledge:promote [context <name> \| memory <slug>] [--store <path>]` | Promote a stabilized context/handoff item or memory file into a memory create/UPDATE or a proposed docs patch, then — as a SEPARATE confirmation — delete the source. The lifecycle-closing surface for a handoff or a superseded memory file. |
+
+## Search/recall ranking (0.3.13)
+
+`search`/`recall` rank by field weight — slug 8, name 6, tags 5, description
+4, type 3, headings 2, backlink slugs 2, body 1, summed per matching field;
+`stale`/`superseded`/`archived` entries are halved; ordering is score desc
+then slug asc. These weights are published for writers, not just readers:
+put an entry's load-bearing words in `tags`/`name` rather than only in prose
+if you want it to surface reliably. `recall`'s third block line is a
+query-anchored snippet of the body (windowed around wherever the query first
+anchors, falling back to the first paragraph when no atom anchors in the
+body at all), not always the first paragraph. A `search`/`recall` query of
+2+ atoms that gets zero full-query hits automatically degrades to the
+best-matching atom subset instead of returning an envelope indistinguishable
+from "nothing is stored" — reported explicitly via a `degraded:` stderr/
+envelope line or a JSON `degraded` object, never silently swapped in.
 
 ## Write boundaries and role rules
 

@@ -5,6 +5,26 @@
 # implements it exactly, inventing nothing beyond the documented ambiguities (see the
 # executor report for the chosen readings).
 #
+# Degraded-query fallback (0.3.13): a >=2-atom query with zero full-query
+# hits falls back to the best-matching atom subset instead of reporting an
+# indistinguishable "nothing stored" zero. Every atom's per-file hit-set and
+# per-field weight-sum is computed once during the normal scoring pass, so a
+# subset score is a cheap intersection + weight-sum over already-known data,
+# never a re-scan. Subsets are tried widest-first (k = n-1 down to 1, atom
+# combinations in lexicographic order); the first non-empty intersection
+# wins. n > 10 atoms skips the combinatorial walk and falls back to the
+# single best-hit-count atom (ties -> leftmost) to keep the worst case
+# bounded. A degraded result is always reported explicitly (never silently
+# swapped in): stderr's `degraded:` line (TSV/recall) or the JSON object's
+# `degraded` key names both the winning subset and the dropped atoms.
+#
+# Query-anchored recall snippets (0.3.13): recall mode's third block line is
+# the sanitized body text windowed around the earliest position any scored
+# atom (the winning subset when degraded, else the full query) anchors in
+# it, not always first_paragraph(body)[:280]. Falls back to that exact
+# first-paragraph text when no atom anchors in the body at all (e.g. an
+# entry that matched only via slug/name/tags/type/backlinks).
+#
 # Usage:
 #   memory-search.sh [--store <path>] [--limit N] [--json] <query...>
 #   memory-search.sh --recall [--store <path>] [--limit N] <query...>
@@ -153,6 +173,7 @@ export KM_RECALL="$recall_mode"
 export KM_QUERY="$raw_query"
 
 python3 <<'PYEOF'
+import itertools
 import json
 import os
 import re
@@ -348,6 +369,79 @@ FIELD_WEIGHTS = [
 ]
 
 
+# --- degraded-query fallback: render a parsed atom back to report text. ---
+def render_atom(atom):
+    kind, value, prefix = atom
+    if kind == "phrase":
+        return '"{}"'.format(value)
+    if prefix:
+        return "{}*".format(value)
+    return value
+
+
+# --- query-anchored snippet: earliest position `atom` anchors in `haystack`
+# (already snip_src.lower()), or None. Boundary rules per atom kind mirror
+# the scoring contract's tokenization (tokens are always [a-z0-9]+).
+def find_anchor_candidate(atom, haystack):
+    kind = atom[0]
+    if kind == "phrase":
+        value = atom[1]
+        pos = haystack.find(value)
+        if pos != -1:
+            return pos
+        first_tok = value.split(" ")[0] if value else ""
+        if not first_tok:
+            return None
+        pattern = re.compile(
+            r"(?<![a-z0-9])" + re.escape(first_tok) + r"(?![a-z0-9])"
+        )
+        m = pattern.search(haystack)
+        return m.start() if m else None
+
+    _, value, prefix = atom
+    if prefix:
+        pattern = re.compile(r"(?<![a-z0-9])" + re.escape(value))
+    else:
+        pattern = re.compile(r"(?<![a-z0-9])" + re.escape(value) + r"(?![a-z0-9])")
+    m = pattern.search(haystack)
+    return m.start() if m else None
+
+
+def anchored_snippet(body, scored_atoms):
+    snip_src = sanitize(body)
+    haystack = snip_src.lower()
+    n = len(snip_src)
+
+    positions = []
+    for atom in scored_atoms:
+        pos = find_anchor_candidate(atom, haystack)
+        if pos is not None:
+            positions.append(pos)
+    if not positions:
+        return None
+
+    anchor = min(positions)
+    start = max(0, anchor - 70)
+    if start > 0 and start < n and snip_src[start - 1].isalnum() and snip_src[start].isalnum():
+        sp = snip_src.find(" ", start)
+        if sp != -1:
+            start = sp + 1
+
+    end = min(start + 276, n)
+    if end < n and end > start and snip_src[end - 1].isalnum() and snip_src[end].isalnum():
+        sp = snip_src.rfind(" ", start, end)
+        if sp != -1:
+            end = sp
+
+    out = ""
+    if start > 0:
+        out += "…"
+    out += snip_src[start:end]
+    if end < n:
+        out += "…"
+    return out
+
+
 def atom_matches(atom, field_tokens, field_joined):
     kind = atom[0]
     if kind == "term":
@@ -363,6 +457,13 @@ def atom_matches(atom, field_tokens, field_joined):
 
 results = []
 raw_bodies = {}
+
+n_atoms = len(atoms)
+# --- degraded-query fallback: per-atom hit-set + per-file weight-sum,
+# computed once here so a subset score (below) is a pure intersection +
+# weight-sum over data already gathered by this pass -- never a re-scan.
+atom_hit_files = [dict() for _ in range(n_atoms)]
+file_meta = {}
 
 for fname in files:
     path = os.path.join(store, fname)
@@ -410,51 +511,141 @@ for fname in files:
 
     # Implicit AND: every atom must match at least one field for this file to
     # be a hit at all; score is then the sum of per-field weights across every
-    # (atom, field) pair that matched (not just one field per atom).
-    total = 0
-    all_matched = True
+    # (atom, field) pair that matched (not just one field per atom). Every
+    # atom's weight is computed unconditionally (no early break) because a
+    # degraded subset may still need an atom that fails the full-query AND.
+    atom_weights = []
     for atom in atoms:
-        atom_matched = False
+        w = 0
         for fname2, weight in FIELD_WEIGHTS:
             if atom_matches(atom, field_tok[fname2], field_joined[fname2]):
-                total += weight
-                atom_matched = True
-        if not atom_matched:
-            all_matched = False
-            break
+                w += weight
+        atom_weights.append(w)
 
-    if status in ("stale", "superseded", "archived"):
-        total = total // 2
-
-    if all_matched and total > 0:
-        results.append({
-            "score": total,
-            "slug": stem,
+    any_hit = False
+    for idx, w in enumerate(atom_weights):
+        if w > 0:
+            atom_hit_files[idx][stem] = w
+            any_hit = True
+    if any_hit:
+        file_meta[stem] = {
             "type": type_val,
             "status": status,
             "description": description,
             "file": fname,
-        })
+        }
+
+    if all(w > 0 for w in atom_weights):
+        total = sum(atom_weights)
+        if status in ("stale", "superseded", "archived"):
+            total = total // 2
+        if total > 0:
+            results.append({
+                "score": total,
+                "slug": stem,
+                "type": type_val,
+                "status": status,
+                "description": description,
+                "file": fname,
+            })
 
 results.sort(key=lambda r: (-r["score"], r["slug"]))
-selected = results[:limit]
+
+# --- degraded-query fallback: triggers ONLY on a >=2-atom query with zero
+# full-query hits. A single-atom zero and any query with >=1 hit are
+# untouched (degraded stays False, active_results stays the full results).
+degraded = False
+degraded_n = 0
+scored_atoms = atoms
+subset_text = ""
+dropped_text = ""
+active_results = results
+
+if not results and n_atoms >= 2:
+    winning_combo = None
+    if n_atoms > 10:
+        best_idx = None
+        best_count = -1
+        for i in range(n_atoms):
+            cnt = len(atom_hit_files[i])
+            if cnt > best_count:
+                best_count = cnt
+                best_idx = i
+        if best_count > 0:
+            winning_combo = (best_idx,)
+    else:
+        for k in range(n_atoms - 1, 0, -1):
+            for combo in itertools.combinations(range(n_atoms), k):
+                inter = set(atom_hit_files[combo[0]].keys())
+                for idx in combo[1:]:
+                    inter &= set(atom_hit_files[idx].keys())
+                    if not inter:
+                        break
+                if inter:
+                    winning_combo = combo
+                    break
+            if winning_combo is not None:
+                break
+
+    if winning_combo is not None:
+        inter = set(atom_hit_files[winning_combo[0]].keys())
+        for idx in winning_combo[1:]:
+            inter &= set(atom_hit_files[idx].keys())
+
+        subset_results = []
+        for stem in inter:
+            meta = file_meta[stem]
+            total = sum(atom_hit_files[i][stem] for i in winning_combo)
+            if meta["status"] in ("stale", "superseded", "archived"):
+                total = total // 2
+            if total > 0:
+                subset_results.append({
+                    "score": total,
+                    "slug": stem,
+                    "type": meta["type"],
+                    "status": meta["status"],
+                    "description": meta["description"],
+                    "file": meta["file"],
+                })
+        subset_results.sort(key=lambda r: (-r["score"], r["slug"]))
+
+        if subset_results:
+            combo_set = set(winning_combo)
+            degraded = True
+            degraded_n = len(subset_results)
+            active_results = subset_results
+            scored_atoms = [atoms[i] for i in winning_combo]
+            dropped_atoms = [atoms[i] for i in range(n_atoms) if i not in combo_set]
+            subset_text = " ".join(render_atom(a) for a in scored_atoms)
+            dropped_text = " ".join(render_atom(a) for a in dropped_atoms)
+
+DEGRADED_LINE = "degraded: 0 results for the full query; showing {} for: {}".format(
+    degraded_n, subset_text
+) if degraded else ""
+
+selected = active_results[:limit]
 
 if recall_mode:
+    header_block = HEADER + "\n" + DEGRADED_LINE if degraded else HEADER
+
     block_texts = []
     for r in selected:
-        para = first_paragraph(raw_bodies.get(r["slug"], ""))
+        body = raw_bodies.get(r["slug"], "")
+        snippet = anchored_snippet(body, scored_atoms)
+        if snippet is None:
+            snippet = first_paragraph(body)
         heading_line = "## {} (score {}, {}, {})".format(
             sanitize(r["slug"]), r["score"], sanitize(r["type"]), sanitize(r["status"])
         )
         desc_line = sanitize(r["description"])
-        block_texts.append("\n".join([heading_line, desc_line, para]))
+        block_texts.append("\n".join([heading_line, desc_line, snippet]))
 
     n = len(selected)
     k = n
-    text = HEADER + "\n"
+    text = header_block + "\n"
     truncated = 0
     while k >= 0:
-        parts = [HEADER] + block_texts[:k]
+        parts = [header_block] + block_texts[:k]
         candidate = "\n\n".join(parts) + "\n"
         if len(candidate) <= BUDGET or k == 0:
             text = candidate
@@ -484,6 +675,8 @@ if json_mode:
             ],
             "truncated": len(selected) - k,
         }
+        if degraded:
+            obj["degraded"] = {"matched": subset_text, "dropped": dropped_text}
         text = json.dumps(obj, ensure_ascii=False) + "\n"
         if len(text) <= BUDGET or k == 0:
             sys.stdout.write(text)
@@ -506,6 +699,8 @@ for r in selected:
     emitted += 1
 truncated = len(selected) - emitted
 sys.stdout.write("".join(out_lines))
+if degraded:
+    print(DEGRADED_LINE, file=sys.stderr)
 if truncated > 0:
     print("truncated: {} more".format(truncated), file=sys.stderr)
 sys.exit(0)

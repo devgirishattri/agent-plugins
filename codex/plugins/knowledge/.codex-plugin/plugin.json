@@ -1,6 +1,6 @@
 {
   "name": "knowledge",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin.",
   "author": {
     "name": "Girish Attri",
