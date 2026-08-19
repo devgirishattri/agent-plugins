@@ -228,6 +228,7 @@ session_chat_dispatch() {
 #   SESSION_CHAT_ACK_STATUS  dispatched | inline-fallback | failed
 #   SESSION_CHAT_ACK_FILE    the written ack file, or empty when the file
 #                             write itself failed (caller records JSON null)
+# shellcheck disable=SC2034  # both globals are read by the sourcing task-* scripts
 session_chat_ack() {
   local target="$1" id="$2" event="$3" first_line="$4"
   local ack_file dc

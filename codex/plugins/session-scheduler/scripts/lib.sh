@@ -353,6 +353,7 @@ session_chat_version() {
 #
 # Results are returned in SESSION_CHAT_ACK_STATUS and SESSION_CHAT_ACK_FILE so
 # callers can record the best-effort outcome after their transition is durable.
+# shellcheck disable=SC2034  # the globals are read by the sourcing task-* scripts
 session_chat_ack() {
   local target="$1" id="$2" event="$3" first_line="$4"
   local ack_file chat_root dispatch_rc
