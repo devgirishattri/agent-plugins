@@ -1390,7 +1390,7 @@ if printf '%s' "$SWT_OUT" | grep -q "failed: 0"; then
 else
   pass "start: the failed-slot count is non-zero when a split genuinely failed"
 fi
-if printf '%s' "$SWT_OUT" | grep -qi "no space for new pane"; then
+if printf '%s' "$SWT_OUT" | grep -Eqi "no space for (a )?new pane"; then
   pass "start: the reported reason is tmux's own stderr, not a generic placeholder"
 else
   fail "start: the reported reason is tmux's own stderr, not a generic placeholder" "$SWT_OUT"
@@ -3459,6 +3459,71 @@ if [ "$(sort -u "$SWF_TMUX_LOG" | tr -d '[:space:]')" = "-V" ]; then
   pass "doctor: the only tmux call it ever makes is 'tmux -V'"
 else
   fail "doctor: the only tmux call it ever makes is 'tmux -V'" "$(cat "$SWF_TMUX_LOG")"
+fi
+
+echo "== browser integration =="
+BROWSER_PLAN="$(HOME="$TMPROOT/browser-home" bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/valid/browser.json" --json 2>&1)"
+if printf '%s' "$BROWSER_PLAN" | jq -e '
+  .browser.port == 9324 and
+  .browser.profile_dir == "'"$TMPROOT"'/browser-home/.cache/session-workspace/chrome/sample-browser" and
+  (.sessions[0].panes[0].command == ["true","--remote-debugging-address=127.0.0.1","--remote-debugging-port=9324","--user-data-dir='"$TMPROOT"'/browser-home/.cache/session-workspace/chrome/sample-browser","--no-first-run","--no-default-browser-check"])
+' >/dev/null 2>&1; then
+  pass "browser: plan derives loopback Chrome argv, port, and isolated profile"
+else
+  fail "browser: plan derives loopback Chrome argv, port, and isolated profile" "$BROWSER_PLAN"
+fi
+
+BROWSER_BAD="$(bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/invalid/browser-latest-package.json" --json 2>&1)"
+BROWSER_BAD_RC=$?
+if [ "$BROWSER_BAD_RC" -ne 0 ] && printf '%s' "$BROWSER_BAD" | grep -Fq 'must pin an exact version'; then
+  pass "browser: floating chrome-devtools-mcp@latest is rejected"
+else
+  fail "browser: floating chrome-devtools-mcp@latest is rejected" "rc=$BROWSER_BAD_RC $BROWSER_BAD"
+fi
+
+BROWSER_PROJECT="$TMPROOT/browser-project"
+mkdir -p "$BROWSER_PROJECT/.agent-workspace"
+cp "$HERE/fixtures/valid/browser.json" "$BROWSER_PROJECT/.agent-workspace/workspace.json"
+BROWSER_RENDER="$(bash "$HERE/workspace-browser-config.sh" --config "$BROWSER_PROJECT/.agent-workspace/workspace.json" --json 2>&1)"
+if printf '%s' "$BROWSER_RENDER" | jq -e '
+  .codex.block | contains("chrome-devtools-mcp@1.2.3") and contains("--browser-url=http://127.0.0.1:9324")
+' >/dev/null 2>&1; then
+  pass "browser-config: dry run renders pinned Codex and Claude MCP entries"
+else
+  fail "browser-config: dry run renders pinned Codex and Claude MCP entries" "$BROWSER_RENDER"
+fi
+
+BROWSER_APPLY="$(bash "$HERE/workspace.sh" browser-config --config "$BROWSER_PROJECT/.agent-workspace/workspace.json" --apply 2>&1)"
+BROWSER_APPLY_RC=$?
+if [ "$BROWSER_APPLY_RC" -eq 0 ] &&
+   grep -Fq '[mcp_servers.chrome-devtools]' "$BROWSER_PROJECT/.codex/config.toml" &&
+   jq -e '.mcpServers["chrome-devtools"].args[2] == "--browser-url=http://127.0.0.1:9324"' "$BROWSER_PROJECT/.mcp.json" >/dev/null 2>&1; then
+  pass "browser-config: explicit apply writes both project MCP configurations"
+else
+  fail "browser-config: explicit apply writes both project MCP configurations" "rc=$BROWSER_APPLY_RC $BROWSER_APPLY"
+fi
+
+BROWSER_BEFORE="$(cksum "$BROWSER_PROJECT/.codex/config.toml" "$BROWSER_PROJECT/.mcp.json")"
+bash "$HERE/workspace-browser-config.sh" --config "$BROWSER_PROJECT/.agent-workspace/workspace.json" --apply >/dev/null 2>&1
+BROWSER_AFTER="$(cksum "$BROWSER_PROJECT/.codex/config.toml" "$BROWSER_PROJECT/.mcp.json")"
+if [ "$BROWSER_BEFORE" = "$BROWSER_AFTER" ]; then
+  pass "browser-config: repeated apply is content-idempotent"
+else
+  fail "browser-config: repeated apply is content-idempotent" "before=$BROWSER_BEFORE after=$BROWSER_AFTER"
+fi
+
+jq '.mcpServers["chrome-devtools"].args[1] = "different-package@9.9.9"' \
+  "$BROWSER_PROJECT/.mcp.json" >"$BROWSER_PROJECT/.mcp.json.changed"
+mv "$BROWSER_PROJECT/.mcp.json.changed" "$BROWSER_PROJECT/.mcp.json"
+BROWSER_CODEX_BEFORE="$(cksum "$BROWSER_PROJECT/.codex/config.toml")"
+BROWSER_CONFLICT="$(bash "$HERE/workspace-browser-config.sh" --config "$BROWSER_PROJECT/.agent-workspace/workspace.json" --apply 2>&1)"
+BROWSER_CONFLICT_RC=$?
+BROWSER_CODEX_AFTER="$(cksum "$BROWSER_PROJECT/.codex/config.toml")"
+if [ "$BROWSER_CONFLICT_RC" -ne 0 ] && [ "$BROWSER_CODEX_BEFORE" = "$BROWSER_CODEX_AFTER" ] &&
+   printf '%s' "$BROWSER_CONFLICT" | grep -Fq 'different unmanaged'; then
+  pass "browser-config: all-provider apply preflights conflicts and makes no partial Codex write"
+else
+  fail "browser-config: all-provider apply preflights conflicts and makes no partial Codex write" "rc=$BROWSER_CONFLICT_RC $BROWSER_CONFLICT"
 fi
 
 echo

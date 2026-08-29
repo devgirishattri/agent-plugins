@@ -71,6 +71,8 @@ while IFS= read -r session_json; do
     p_runtime="$(printf '%s' "$pane_json" | jq -r '.runtime.name')"
     p_model="$(printf '%s' "$pane_json" | jq -r '.agent.model // "inherit"')"
     p_cwd="$(printf '%s' "$pane_json" | jq -r '.cwd // "(unresolved)"')"
+    p_browser="$(printf '%s' "$pane_json" | jq -r '.browser // false')"
+    p_port="$(printf '%s' "$pane_json" | jq -r '.port // empty')"
 
     found_pane="" cur_cmd="" managed=0 dead=0
     if [ "$session_exists" -eq 1 ]; then
@@ -100,13 +102,23 @@ while IFS= read -r session_json; do
       fi
     fi
 
+    readiness="n/a"
+    if [ "$p_browser" = "true" ]; then
+      sw_browser_probe "$p_port"
+      probe_rc=$?
+      if [ "$probe_rc" -eq 0 ]; then readiness="ready"
+      elif [ "$probe_rc" -eq 2 ]; then readiness="unknown-curl-missing"
+      else readiness="not-ready"
+      fi
+    fi
+
     row="$(jq -n \
       --arg session "$s_id" --arg session_name "$s_name" \
       --arg pane "$p_name" --arg role "$p_role" --arg runtime "$p_runtime" \
       --arg model "$p_model" --arg cwd "$p_cwd" --arg pane_id "${found_pane:-}" \
-      --arg process "${cur_cmd:-}" --arg health "$health" \
+      --arg process "${cur_cmd:-}" --arg health "$health" --arg readiness "$readiness" --arg port "$p_port" \
       --argjson session_exists "$session_exists" --argjson session_managed "$session_managed" \
-      '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, pane_id:$pane_id, process:$process, health:$health}')"
+      '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, pane_id:$pane_id, process:$process, health:$health, readiness:$readiness, port:(if $port == "" then null else ($port|tonumber) end)}')"
     ROWS="$(printf '%s' "$ROWS" | jq -c --argjson r "$row" '. + [$r]')"
   done < <(printf '%s' "$session_json" | jq -c '.panes[]')
 done < <(printf '%s' "$PLAN_JSON" | jq -c '.sessions[]')
@@ -120,6 +132,6 @@ echo "session-workspace status — $CONFIG_PATH (project: $PROJECT_ID)"
 printf '%s\n' "$ROWS" | jq -r '
   group_by(.session_name)[] |
   "== session: \(.[0].session_name) == (exists=\(.[0].session_exists) managed=\(.[0].session_managed))",
-  (.[] | "  pane: \(.pane)  role=\(.role) runtime=\(.runtime) model=\(.model)\n    cwd=\(.cwd)\n    pane_id=\(.pane_id // "(none)")  process=\(.process // "(n/a)")  health=\(.health)")
+  (.[] | "  pane: \(.pane)  role=\(.role) runtime=\(.runtime) model=\(.model)\n    cwd=\(.cwd)\n    pane_id=\(.pane_id // "(none)")  process=\(.process // "(n/a)")  health=\(.health)  readiness=\(.readiness)")
 '
 exit 0

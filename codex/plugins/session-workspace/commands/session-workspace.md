@@ -32,6 +32,7 @@ description: Overview of the session-workspace plugin — config-driven tmux wor
    - `$session-workspace:workspace-stop [TARGET|all] [--config PATH] [--no-save] --confirmed [--all]` - destructive stop of marked sessions only.
    - `$session-workspace:workspace-restart [TARGET|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` - stop then start the same target.
    - `$session-workspace:workspace-reconcile [TARGET|all] [--config PATH] [--apply] [--adopt --confirmed]` - dry-run or apply repairs; adoption requires confirmation.
+   - `$session-workspace:workspace-browser-config [--config PATH] [--provider codex|claude|all] [--apply] [--json]` - preview or explicitly apply browser MCP entries.
 
 5. Key safety gates:
    - All lifecycle verbs resolve and validate `.agent-workspace/workspace.json`

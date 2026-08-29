@@ -70,6 +70,10 @@ if [ -z "$ROOT_ABS" ]; then
   echo "ERROR: project.root (\"$ROOT_REL\") does not resolve to an existing directory relative to $CONFIG_DIR" >&2
   exit 1
 fi
+BROWSER_PROFILE_DIR=""
+if printf '%s' "$CONFIG_JSON" | jq -e 'has("browser")' >/dev/null; then
+  BROWSER_PROFILE_DIR="$(sw_browser_profile_dir "$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')")"
+fi
 
 # Filter to TARGET before computing cwds/plan, so an unknown target fails
 # fast with a clear message rather than silently showing everything.
@@ -103,6 +107,7 @@ done < <(printf '%s' "$CWD_MAP" | jq -r '.[] | [.name, .cwd] | @tsv')
 PLAN_JSON="$(printf '%s' "$CONFIG_JSON" | jq -c \
   --arg root "$ROOT_ABS" \
   --arg config_path "$CONFIG_PATH" \
+  --arg browser_profile_dir "$BROWSER_PROFILE_DIR" \
   --argjson cwd_map "$CWD_MAP_RESOLVED" \
   -f "$HERE/compute-plan.jq")"
 

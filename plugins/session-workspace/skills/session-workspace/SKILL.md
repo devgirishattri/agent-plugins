@@ -28,6 +28,7 @@ is not a scaffold.
 | `/workspace-restart` | Stop then start (destructive, confirmation implicit) |
 | `/workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
 | `/workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
+| `/workspace-browser-config` | Render/apply project MCP entries for the configured browser |
 
 ## Configuration model (enforced)
 
@@ -49,6 +50,8 @@ A project opts in by creating `.agent-workspace/workspace.json`
 - `secrets` — an owner-only (mode 0600, git-ignored) env file, gated by
   `secrets.allow` / `secrets.visible_to_roles` / `secrets.on_missing`
 - `behavior` — attach/stop-scope/save defaults
+- `browser` — optional Chrome DevTools session binding, pinned MCP package,
+  loopback port, and portable derived profile
 
 `workspace.schema.json` in `scripts/` documents this shape, and
 `validate-config.sh` enforces it — both structurally (via

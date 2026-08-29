@@ -8,6 +8,18 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": 1 },
+    "browser": {
+      "type": "object",
+      "required": ["session_id", "port", "chrome_program", "mcp_package"],
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "chrome_program": { "type": "string", "minLength": 1 },
+        "mcp_package": { "type": "string", "pattern": "^chrome-devtools-mcp@[0-9]+\\.[0-9]+\\.[0-9]+([-.][A-Za-z0-9.]+)?$" },
+        "mcp_server_name": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" }
+      }
+    },
 
     "project": {
       "type": "object",

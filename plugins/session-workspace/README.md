@@ -20,7 +20,7 @@ coordination stores are exported, memory topology, secrets — as fields in a
 versioned JSON config.
 
 A project adopts the plugin by creating `.agent-workspace/workspace.json`
-and a 35-ish-line bootstrap shim (`workspace.sh`) at its root. All behavior
+and a thin bootstrap shim (`workspace.sh`) at its root. All behavior
 lives in the plugin; the project-local shim contains no project logic at
 all — see "Bootstrap shim" below.
 
@@ -43,6 +43,7 @@ the CLI contract string both entry points use for their compatibility check.
 | `reconcile` | `workspace-reconcile [TARGET\|all] [--config PATH] [--apply] [--adopt --confirmed]` | Only with `--apply` | Dry-run by default; `--apply` repairs missing/misnamed managed resources without respawning healthy panes. `--adopt --confirmed` is the *only* path to claiming an existing unmanaged pane. |
 | `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical target reports `already current` and writes nothing, so it doubles as the refresh for that copy. Backs up any existing target to `<target>.bak`, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
+| `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
 
 `TARGET` is a `sessions[].id` from the config, or `all` (the default).
 `--json` output on `plan`/`status`/`doctor` is produced from the same
@@ -210,7 +211,7 @@ shell script, or CI with no provider CLI in the loop.
 
 ## Known limitations
 
-These are honest gaps in the current (0.1.0) implementation, not aspirational
+These are honest gaps in the current (0.2.0) implementation, not aspirational
 roadmap items — read them before depending on the behavior they describe.
 
 - **`stores.memory.root` does not export `KNOWLEDGE_MEMORY_HOME`.**
@@ -277,6 +278,27 @@ else: a literal `${PROJECT_ROOT}` **prefix** is replaced with the config's
 canonicalized project root, and a literal `${PROJECT_ID}` **substring**
 (anywhere) is replaced with `project.id`. No other `${...}` text, env-var
 expansion, or shell substitution happens anywhere in the config.
+
+### `browser` (optional)
+
+This binds one existing, one-pane service session to a persistent Chrome
+DevTools instance. That pane must omit `command` and `port`; the engine derives
+both so the endpoint has one source of truth.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `browser.session_id` | string | yes | Existing one-pane session whose required `service` role uses the built-in `shell` runtime. |
+| `browser.port` | integer, 1–65535 | yes | Loopback DevTools port. Start records machine-local ownership and refuses a live allocation owned by another project. |
+| `browser.chrome_program` | string | yes | Chrome executable name or absolute path. `doctor` checks resolution without executing it. |
+| `browser.mcp_package` | exact `chrome-devtools-mcp@x.y.z` | yes | Pinned MCP package; floating tags such as `@latest` are rejected. |
+| `browser.mcp_server_name` | `A-Za-z0-9_-` | no | MCP entry name; default `chrome-devtools`. |
+
+The Chrome argv always binds `127.0.0.1`; its profile is derived as
+`${XDG_CACHE_HOME:-$HOME/.cache}/session-workspace/chrome/<project.id>`.
+`start` waits for `/json/version`, while `status` and `doctor` report endpoint
+readiness. `workspace browser-config` previews the Codex/Claude MCP entries;
+`workspace browser-config --apply` backs up and merges them. Start the browser
+session before opening a new Codex or Claude session.
 
 ### `project` (required)
 

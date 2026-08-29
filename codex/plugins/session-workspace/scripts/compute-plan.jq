@@ -52,6 +52,7 @@ def coordination_var_name(store):
   else empty end;
 
 . as $cfg
+| ($cfg.browser // null) as $browser
 | ($cfg.stores.base // ".tmp") as $store_base
 | ($cfg.stores.overrides // {}) as $store_overrides
 | ($cfg.stores.pin // []) as $pin
@@ -115,8 +116,16 @@ def coordination_var_name(store):
                 program: (if $role.runtime == "shell" then "shell" else ($runtime.program // null) end),
                 args: ($runtime.args // [])
               },
-              command: ($p.command // null),
-              port: ($p.port // null),
+              command: (if $browser != null and $s.id == $browser.session_id then
+                [$browser.chrome_program,
+                 "--remote-debugging-address=127.0.0.1",
+                 "--remote-debugging-port=" + ($browser.port | tostring),
+                 "--user-data-dir=" + $browser_profile_dir,
+                 "--no-first-run",
+                 "--no-default-browser-check"]
+                else ($p.command // null) end),
+              port: (if $browser != null and $s.id == $browser.session_id then $browser.port else ($p.port // null) end),
+              browser: ($browser != null and $s.id == $browser.session_id),
               agent: {
                 model: resolve_field($p.agent.model; $role.agent.model),
                 effort: resolve_field($p.agent.effort; $role.agent.effort),
@@ -146,5 +155,14 @@ def coordination_var_name(store):
             }
         ]
       }
-  ]
+  ],
+  browser: (if $browser == null then null else {
+    session_id: $browser.session_id,
+    port: $browser.port,
+    browser_url: ("http://127.0.0.1:" + ($browser.port | tostring)),
+    profile_dir: $browser_profile_dir,
+    chrome_program: $browser.chrome_program,
+    mcp_package: $browser.mcp_package,
+    mcp_server_name: ($browser.mcp_server_name // "chrome-devtools")
+  } end)
 }

@@ -1,6 +1,6 @@
 {
   "name": "session-workspace",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Config-driven tmux workspace engine: one shared engine for session/window/pane lifecycle, replacing hand-maintained per-project workspace.sh launchers with a versioned .agent-workspace/workspace.json config.",
   "author": {
     "name": "Girish Attri"

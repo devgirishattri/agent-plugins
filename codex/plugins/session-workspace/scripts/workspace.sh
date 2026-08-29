@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # workspace.sh — session-workspace CLI dispatcher.
-# Verbs: plan | start | status | stop | doctor | reconcile | restart | install
+# Verbs: plan | start | status | stop | doctor | reconcile | restart | install | browser-config
 #
 # `install` is the odd one out: it takes no config and touches no tmux. It
 # installs this plugin's machine-wide `workspace` dispatcher onto PATH, and is
@@ -27,7 +27,7 @@ if [ "${1:-}" = "--contract" ]; then
 fi
 
 usage() {
-  echo "Usage: workspace.sh <plan|start|status|stop|doctor|reconcile|restart|install> [args...]" >&2
+  echo "Usage: workspace.sh <plan|start|status|stop|doctor|reconcile|restart|install|browser-config> [args...]" >&2
   echo "       workspace.sh --contract" >&2
 }
 
@@ -62,6 +62,9 @@ case "$VERB" in
     ;;
   install)
     exec bash "$HERE/workspace-install.sh" "$@"
+    ;;
+  browser-config)
+    exec bash "$HERE/workspace-browser-config.sh" "$@"
     ;;
   -h|--help)
     usage

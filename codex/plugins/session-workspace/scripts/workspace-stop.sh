@@ -161,6 +161,9 @@ while [ "$i" -lt "$n" ]; do
 
   tmux kill-session -t "=$sname" 2>/dev/null || true
   echo "  [killed] $sname"
+  if printf '%s' "$CONFIG_JSON" | jq -e --arg sid "$sid" 'has("browser") and .browser.session_id == $sid' >/dev/null; then
+    sw_browser_release_port "$PROJECT_ID" "$(printf '%s' "$CONFIG_JSON" | jq -r '.browser.port')"
+  fi
   KILLED=$((KILLED + 1))
 done
 

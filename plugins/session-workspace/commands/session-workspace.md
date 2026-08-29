@@ -32,6 +32,8 @@ Do not narrate or add a preamble.
    - `/workspace-reconcile` — dry-run by default; `--apply` repairs drifted
      managed state; `--adopt --confirmed` is the only path to claiming an
      unmanaged pane, and always shows the adoption candidate first
+   - `/workspace-browser-config` — preview or explicitly apply the project
+     MCP entries derived from the optional browser block
 4. Key safety gates worth knowing about, and relaying if the user hits them:
    - An unmanaged pane occupying a planned slot is never renamed or
      respawned — that slot fails with guidance rather than being silently

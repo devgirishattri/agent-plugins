@@ -45,6 +45,64 @@ ensure_tmux() {
   fi
 }
 
+# Persistent Chrome profiles are derived from the validated project id, never
+# from a project-committed absolute home path. This keeps cookies isolated and
+# makes one workspace config portable across machines.
+sw_browser_profile_dir() {
+  printf '%s/session-workspace/chrome/%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}" "$1"
+}
+
+sw_browser_probe() {
+  local port="$1" payload
+  command -v curl >/dev/null 2>&1 || return 2
+  payload="$(curl -fsS --max-time 1 "http://127.0.0.1:${port}/json/version" 2>/dev/null)" || return 1
+  printf '%s' "$payload" | jq -e '(.Browser | type == "string") and (.webSocketDebuggerUrl | type == "string")' >/dev/null 2>&1
+}
+
+sw_browser_wait_ready() {
+  local port="$1" attempts="${2:-50}" i=0
+  while [ "$i" -lt "$attempts" ]; do
+    sw_browser_probe "$port" && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Cross-project allocation registry. The directory lock is machine-global for
+# this user, so two projects cannot simultaneously claim the same DevTools
+# port. A stale claim is reclaimed only when its endpoint is no longer a live
+# DevTools browser.
+sw_browser_claim_port() {
+  local project_id="$1" port="$2" root lock owner_file owner="" waited=0
+  root="${XDG_STATE_HOME:-$HOME/.local/state}/session-workspace/browser-ports"
+  mkdir -p "$root" || return 1
+  lock="$root/.lock"
+  while ! mkdir "$lock" 2>/dev/null; do
+    [ "$waited" -ge 50 ] && { echo "ERROR: timed out acquiring browser-port allocation lock" >&2; return 1; }
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  owner_file="$root/$port"
+  [ -f "$owner_file" ] && owner="$(sed -n '1p' "$owner_file")"
+  if [ -n "$owner" ] && [ "$owner" != "$project_id" ] && sw_browser_probe "$port"; then
+    rmdir "$lock" 2>/dev/null || true
+    echo "ERROR: browser port $port is owned by project '$owner' and its DevTools endpoint is live" >&2
+    return 1
+  fi
+  printf '%s\n' "$project_id" >"$owner_file"
+  rmdir "$lock" 2>/dev/null || true
+  return 0
+}
+
+sw_browser_release_port() {
+  local project_id="$1" port="$2" owner_file owner=""
+  owner_file="${XDG_STATE_HOME:-$HOME/.local/state}/session-workspace/browser-ports/$port"
+  [ -f "$owner_file" ] || return 0
+  owner="$(sed -n '1p' "$owner_file")"
+  [ "$owner" = "$project_id" ] && rm -f "$owner_file"
+}
+
 # ============================================================================
 # Sibling-plugin resolution — shared by workspace-doctor.sh (which REPORTS
 # whether a helper resolves) and workspace-start.sh (which GATES on it per

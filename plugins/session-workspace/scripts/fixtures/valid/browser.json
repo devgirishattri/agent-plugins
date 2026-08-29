@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "project": {
+    "id": "sample-browser",
+    "display_name": "Sample Browser",
+    "root": "."
+  },
+  "runtimes": {},
+  "roles": {
+    "service": {
+      "runtime": "shell",
+      "env_group": "none"
+    }
+  },
+  "stores": {
+    "pin": []
+  },
+  "browser": {
+    "session_id": "browser",
+    "port": 9324,
+    "chrome_program": "true",
+    "mcp_package": "chrome-devtools-mcp@1.2.3"
+  },
+  "sessions": [
+    {
+      "id": "browser",
+      "name": "${PROJECT_ID}-browser",
+      "window_index": 0,
+      "retain_layout": true,
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-chrome-devtools",
+          "role": "service",
+          "cwd": "."
+        }
+      ]
+    }
+  ],
+  "behavior": {
+    "default_start_target": "browser",
+    "attach": "never"
+  }
+}

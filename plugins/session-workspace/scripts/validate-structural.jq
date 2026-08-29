@@ -32,7 +32,7 @@ def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_H
    else empty end),
 
   # ---- structural: unknown/missing keys, one call per object shape ----
-  chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level"),
+  chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level"),
   chk(.project // {}; ["id", "display_name", "root"]; ["id", "root"]; "project"),
   chk(.stores // {}; ["base", "pin", "overrides", "memory"]; ["pin"]; "stores"),
   chk(.stores.memory // {}; ["mode", "root", "shard"]; []; "stores.memory"),
@@ -41,6 +41,7 @@ def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_H
   chk(.secrets // {}; ["env_file", "allow", "visible_to_roles", "on_missing"]; []; "secrets"),
   chk(.behavior // {}; ["default_start_target", "attach", "stop_scope", "save_before_stop", "session_chat_helper"]; []; "behavior"),
   chk(.behavior.session_chat_helper // {}; ["resolve", "on_missing"]; []; "behavior.session_chat_helper"),
+  (if has("browser") then chk(.browser; ["session_id", "port", "chrome_program", "mcp_package", "mcp_server_name"]; ["session_id", "port", "chrome_program", "mcp_package"]; "browser") else empty end),
 
   ((.runtimes // {}) | to_entries[] | . as $e |
     chk($e.value; ["program", "args"]; ["program"]; "runtimes." + $e.key)),
@@ -93,6 +94,42 @@ def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_H
     if ($sid | test("\\A[A-Za-z0-9._-]+\\z") | not) then
       "session id has invalid characters (allowed: A-Za-z0-9._-): " + $sid
     else empty end),
+
+  # ---- first-class Chrome DevTools browser integration ----
+  (if has("browser") then
+    .browser as $b |
+    ([.sessions[] | select(.id == $b.session_id)] | length) as $matches |
+    (if ($b.session_id | type) != "string" or ($b.session_id | test("\\A[A-Za-z0-9._-]+\\z") | not) then
+       "browser.session_id must match ^[A-Za-z0-9._-]+$"
+     elif $matches != 1 then
+       "browser.session_id must reference exactly one sessions[].id (got: " + ($b.session_id | tostring) + ")"
+     else empty end),
+    (if ($b.port | type) != "number" or ($b.port | floor) != $b.port or $b.port < 1 or $b.port > 65535 then
+       "browser.port must be an integer in 1..65535"
+     else empty end),
+    (if ($b.chrome_program | type) != "string" or ($b.chrome_program | length) == 0 or ($b.chrome_program | test("[\\r\\n]")) then
+       "browser.chrome_program must be a non-empty single-line string"
+     else empty end),
+    (if ($b.mcp_package | type) != "string" or ($b.mcp_package | test("\\Achrome-devtools-mcp@[0-9]+\\.[0-9]+\\.[0-9]+([-.][A-Za-z0-9.]+)?\\z") | not) then
+       "browser.mcp_package must pin an exact version such as chrome-devtools-mcp@1.2.3"
+     else empty end),
+    (($b.mcp_server_name // "chrome-devtools") as $n |
+      if ($n | type) != "string" or ($n | test("\\A[A-Za-z0-9_-]+\\z") | not) then
+        "browser.mcp_server_name must match ^[A-Za-z0-9_-]+$"
+      else empty end),
+    (if $matches == 1 then
+       (.sessions[] | select(.id == $b.session_id)) as $s |
+       (if ($s.panes | length) != 1 then "browser session must contain exactly one pane" else empty end),
+       ($s.panes[0] // {}) as $p |
+       (if $p.role != "service" then "browser session pane role must be named service so --no-services remains authoritative" else empty end),
+       (if ($p.optional // false) then "browser session pane must not be optional" else empty end),
+       (if ($p | has("command")) then "browser session pane must omit command; session-workspace derives the Chrome argv" else empty end),
+       (if ($p | has("port")) then "browser session pane must omit port; use browser.port as the single source of truth" else empty end),
+       ((.roles[$p.role].runtime // "") as $rt | if $rt != "shell" then "browser session pane role must use the built-in shell runtime" else empty end)
+     else empty end),
+    ([.sessions[] | .panes[] | select(has("port")) | .port] | index($b.port)) as $port_collision |
+    (if $port_collision != null then "browser.port duplicates an explicit sessions[].panes[].port" else empty end)
+   else empty end),
 
   # ---- session/pane name uniqueness (post-interpolation) + charset ----
   ([(.sessions // [])[] | .name] as $snames | (

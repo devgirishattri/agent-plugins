@@ -76,7 +76,7 @@
     },
     {
       "name": "session-workspace",
-      "version": "0.1.5",
+      "version": "0.2.0",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-workspace"

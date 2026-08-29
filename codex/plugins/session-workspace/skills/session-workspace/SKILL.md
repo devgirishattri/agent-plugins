@@ -27,6 +27,7 @@ argv, pins non-secret coordination env, and runs read-only diagnostics.
 | Stop then start | `$session-workspace:workspace-restart` | Destructive; stop confirmation is passed internally |
 | Repair drifted tmux state | `$session-workspace:workspace-reconcile` | Only sanctioned adoption path |
 | Install the `workspace` command | `$session-workspace:workspace-install` | Puts the dispatcher on PATH; no config, no tmux, idempotent |
+| Configure browser MCP clients | `$session-workspace:workspace-browser-config` | Dry-run by default; writes only with `--apply` |
 
 ## Configuration Model
 
@@ -47,6 +48,8 @@ A project opts in by creating `.agent-workspace/workspace.json`
   the pane exports the values and unlinks the file
 - `behavior` — `default_start_target`, attach, stop-scope/save, and
   session-chat helper behavior
+- `browser` — optional Chrome DevTools session binding, pinned MCP package,
+  loopback port, and portable derived profile
 
 `workspace.schema.json` documents the shape, and `validate-config.sh` is the
 authoritative validator. Validation includes unknown keys, bad names, invalid

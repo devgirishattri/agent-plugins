@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.8 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.5.13 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.1.5 | Config-driven tmux workspace engine: one shared engine for session, window, and pane lifecycle, replacing per-project `workspace.sh` launchers with a versioned `.agent-workspace/workspace.json` |
+| `session-workspace` | 0.2.0 | Config-driven tmux workspace engine with first-class isolated Chrome DevTools browser sessions and project MCP configuration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -33,6 +33,7 @@ rather than assumed: the `session-scheduler` suite passes 61/61 under 3.2.57.
 |------------|-----------|------------------|
 | `jq` | `session-scheduler`, `session-workspace` | Hard. Both refuse to run without it. |
 | `jq` | `chronos` | Optional. Claude falls back to hand-built JSON; the Codex build never uses jq. |
+| `curl` | `session-workspace` browser integration | Hard only when a top-level `browser` block is configured; used for DevTools readiness checks. |
 | `tmux` | `session-chat`, `session-workspace` | Hard. `session-chat` additionally requires that the agent itself be running inside a tmux pane, not merely that tmux be installed. |
 | `tmux` | `session-scheduler` | Hard in practice. The ledger itself does not touch tmux, but every notify path goes through `session-chat`. |
 | `tmux` | `knowledge` | Optional. Only for pane-identity provenance; `KNOWLEDGE_PANE_NAME` substitutes. |

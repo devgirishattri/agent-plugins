@@ -749,6 +749,38 @@ check_session_chat_helper() {
   add_check "integrations.session_chat_helper" "session-chat helper" "$status" "$message" "" "$details"
 }
 
+check_browser() {
+  [ "$CONFIG_VALID" -eq 1 ] || return 0
+  printf '%s' "$CONFIG_JSON" | jq -e 'has("browser")' >/dev/null || return 0
+  local program port project_id profile owner_file owner=""
+  program="$(printf '%s' "$CONFIG_JSON" | jq -r '.browser.chrome_program')"
+  port="$(printf '%s' "$CONFIG_JSON" | jq -r '.browser.port')"
+  project_id="$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')"
+  profile="$(sw_browser_profile_dir "$project_id")"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    add_check "browser.curl" "browser readiness probe" "ERROR" "curl is not on PATH" "Install curl; browser start uses it to verify the DevTools endpoint."
+  else
+    add_check "browser.curl" "browser readiness probe" "OK" "curl resolves"
+  fi
+  if { case "$program" in /*) [ -x "$program" ] ;; *) command -v "$program" >/dev/null 2>&1 ;; esac; }; then
+    add_check "browser.program" "Chrome executable" "OK" "$program resolves"
+  else
+    add_check "browser.program" "Chrome executable" "ERROR" "$program does not resolve" "Set browser.chrome_program to an executable path or command on PATH."
+  fi
+
+  owner_file="${XDG_STATE_HOME:-$HOME/.local/state}/session-workspace/browser-ports/$port"
+  [ -f "$owner_file" ] && owner="$(sed -n '1p' "$owner_file")"
+  if [ -n "$owner" ] && [ "$owner" != "$project_id" ] && sw_browser_probe "$port"; then
+    add_check "browser.port" "browser port allocation" "ERROR" "port $port is owned by project '$owner' and is live" "Choose a different browser.port."
+  elif sw_browser_probe "$port"; then
+    add_check "browser.port" "browser port allocation" "OK" "DevTools is ready on 127.0.0.1:$port"
+  else
+    add_check "browser.port" "browser port allocation" "INFO" "port $port is allocated; DevTools is not currently running"
+  fi
+  add_check "browser.profile" "browser profile" "OK" "$profile (derived, project-isolated)"
+}
+
 # ============================================================================
 # Run every check, in order.
 # ============================================================================
@@ -763,6 +795,7 @@ check_state_dir
 check_runtimes
 check_stores_drift
 check_session_chat_helper
+check_browser
 
 OVERALL="ok"
 [ "$WARN_COUNT" -gt 0 ] && OVERALL="warn"
