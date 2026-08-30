@@ -1,6 +1,6 @@
 {
   "name": "session-workspace",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Config-driven tmux workspace engine plus an opt-in, fail-closed multi-agent harness: one shared engine for session/window/pane lifecycle driven by a versioned .agent-workspace/workspace.json, and a strict-v1 PreToolUse role policy for orchestrator, executor, and reviewer panes.",
   "author": {
     "name": "Girish Attri"

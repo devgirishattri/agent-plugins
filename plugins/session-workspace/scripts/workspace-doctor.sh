@@ -304,9 +304,16 @@ check_config() {
   fi
 
   if validate_workspace_config "$CONFIG_JSON" "$CONFIG_PATH"; then
-    CONFIG_VALID=1
-    add_check "config.validation" "config validation" "OK" \
-      "$CONFIG_PATH is valid (schema_version 1)"
+    local schema_version
+    if schema_version="$(printf '%s' "$CONFIG_JSON" | jq -er '.schema_version | select(. == 1 or . == 2) | tostring' 2>/dev/null)"; then
+      CONFIG_VALID=1
+      add_check "config.validation" "config validation" "OK" \
+        "$CONFIG_PATH is valid (schema_version $schema_version)"
+    else
+      add_check "config.validation" "config validation" "ERROR" \
+        "validated config has an unreadable schema_version" \
+        "Re-run validate-config.sh and report this internal consistency error."
+    fi
   else
     local joined="" e
     for e in "${VALIDATION_ERRORS[@]}"; do

@@ -3123,13 +3123,18 @@ SWF_CONFIG="$SWF_PROJECT/.agent-workspace/workspace.json"
 
 # swf_doctor [ARGS...] — run the doctor in the fixture's sealed environment.
 # PATH is $SWF_BIN ONLY: no real claude/codex/tmux install can leak in.
-swf_doctor() {
+swf_doctor_config() {
+  local config="$1"
+  shift
   env -u TMUX -u SESSION_WORKSPACE_CONFIG \
     HOME="$SWF_HOME" \
     XDG_STATE_HOME="$SWF_STATE" \
     SESSION_WORKSPACE_SOURCE_TREE_DIR="$SWF_SRC" \
     PATH="$SWF_BIN" \
-    bash "$HERE/workspace-doctor.sh" --config "$SWF_CONFIG" "$@" 2>&1
+    bash "$HERE/workspace-doctor.sh" --config "$config" "$@" 2>&1
+}
+swf_doctor() {
+  swf_doctor_config "$SWF_CONFIG" "$@"
 }
 # swf_status JSON CHECK_ID
 swf_status() {
@@ -3150,6 +3155,29 @@ if printf '%s' "$SWF_JSON" | jq -e '.' >/dev/null 2>&1; then
   pass "doctor: --json emits valid JSON"
 else
   fail "doctor: --json emits valid JSON" "$SWF_JSON"
+fi
+SWF_V1_HUMAN="$(swf_doctor)"
+if printf '%s' "$SWF_V1_HUMAN" | grep -Eq '^\[OK[[:space:]]*\][[:space:]]+config\.validation[[:space:]]+.*\(schema_version 1\)$'; then
+  pass "doctor: schema-v1 human config.validation line reports schema_version 1"
+else
+  fail "doctor: schema-v1 human config.validation line reports schema_version 1" "$SWF_V1_HUMAN"
+fi
+if printf '%s' "$SWF_JSON" | jq -e '([.checks[] | select(.id == "config.validation") | .message] | length) == 1 and ([.checks[] | select(.id == "config.validation") | .message][0] | endswith("(schema_version 1)"))' >/dev/null 2>&1; then
+  pass "doctor: schema-v1 JSON config.validation message reports schema_version 1"
+else
+  fail "doctor: schema-v1 JSON config.validation message reports schema_version 1" "$SWF_JSON"
+fi
+SWF_V2_HUMAN="$(swf_doctor_config "$HARNESS_BASE")"
+if printf '%s' "$SWF_V2_HUMAN" | grep -Eq '^\[OK[[:space:]]*\][[:space:]]+config\.validation[[:space:]]+.*\(schema_version 2\)$'; then
+  pass "doctor: schema-v2 human config.validation line reports schema_version 2"
+else
+  fail "doctor: schema-v2 human config.validation line reports schema_version 2" "$SWF_V2_HUMAN"
+fi
+SWF_V2_JSON="$(swf_doctor_config "$HARNESS_BASE" --json)"
+if printf '%s' "$SWF_V2_JSON" | jq -e '([.checks[] | select(.id == "config.validation") | .message] | length) == 1 and ([.checks[] | select(.id == "config.validation") | .message][0] | endswith("(schema_version 2)"))' >/dev/null 2>&1; then
+  pass "doctor: schema-v2 JSON config.validation message reports schema_version 2"
+else
+  fail "doctor: schema-v2 JSON config.validation message reports schema_version 2" "$SWF_V2_JSON"
 fi
 SWF_BAD="$(printf '%s' "$SWF_JSON" | jq -r '[.checks[] | select(.status == "ERROR" or .status == "WARN") | .id] | join(",")' 2>/dev/null)"
 if [ -z "$SWF_BAD" ]; then
