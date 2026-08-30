@@ -74,6 +74,11 @@ description: Overview of session-workspace lifecycle and the opt-in strict-v1 ro
    - `strict-v1` is an immutable floor: orchestrator child writes are blocked,
      executors are cwd-contained, reviewers are read-only, and installed helper
      execution requires selected provenance plus an exact argv/routing grammar.
+     On Codex, audit denials are rendered as inert PreToolUse `systemMessage`
+     warnings because exit-0 stderr is discarded. Codex 0.151 also omits an
+     `exec_command` call's optional per-call `workdir` from the hook payload;
+     therefore do not present Codex enforce mode as complete path containment
+     or recommend switching from audit solely on that claim.
      Product/release/deployment rules remain project-local and in `AGENTS.md`.
      The normalized plan/audit TTLs are declarative inputs for that project
      command layer; strict-v1 does not create gate evidence or authorize

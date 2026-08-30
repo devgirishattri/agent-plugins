@@ -96,6 +96,15 @@ grant/store consistency.
   Its non-configurable floor keeps the orchestrator out of child writes,
   contains executor paths, makes reviewers read-only, and permits only
   selected installed helpers with exact reviewed argv/routing grammars.
+- Codex renders an audit denial as an inert PreToolUse `systemMessage` because
+  Codex 0.151 discards stderr from hooks that exit 0; Claude keeps the existing
+  stderr audit line. This changes presentation only, never the policy decision.
+- Codex 0.151 does not include an `exec_command` call's optional per-call
+  `workdir` in the PreToolUse payload (the top-level `cwd` is the turn cwd),
+  and non-shell read tools remain outside strict-v1 by design. Do not describe
+  Codex `enforce` as complete path containment or recommend enabling it on that
+  basis until Codex exposes per-call `workdir` or the plugin has a sound
+  mitigation. Use `audit` while evaluating this platform limitation.
 - `AGENTS.md` and project-local commands remain the contract for product,
   release, deployment, and domain-specific checks. The shared harness does
   not attempt to encode those project rules. Its normalized plan/audit TTLs

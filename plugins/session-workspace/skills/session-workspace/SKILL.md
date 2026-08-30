@@ -120,8 +120,13 @@ them:
 - Installed helpers must be invoked as one literal
   `bash <selected-cache-path>/scripts/<name>.sh args...` — no env prefix,
   wrapper, chaining, expansion, stale version, or copied script.
-- `audit` mode prints `AUDIT by session-workspace strict-v1 [...]` and never
-  blocks a *policy* denial; `enforce` prints `BLOCKED ...` and blocks.
+- `audit` mode reports `AUDIT by session-workspace strict-v1 [...]` and never
+  blocks a *policy* denial (on Claude as one stderr line; on Codex, which
+  discards stderr for successful hooks, as one inert top-level
+  `systemMessage` JSON object); `enforce` prints `BLOCKED ...` and blocks.
+  On Codex the runtime does not expose a per-call shell workdir, so do not
+  present Codex `enforce` as complete path containment — `audit` is the
+  recommended Codex mode for now.
   Identity/config/drift integrity failures block in both modes — the remedy
   is `/workspace-restart` of that pane, never hand-editing the identity
   variables.

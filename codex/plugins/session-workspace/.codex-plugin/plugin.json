@@ -1,6 +1,6 @@
 {
   "name": "session-workspace",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Config-driven tmux workspace and opt-in multi-agent harness engine for Codex sessions, with shared fail-closed role policy.",
   "author": {
     "name": "Girish Attri",

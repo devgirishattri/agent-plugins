@@ -16,7 +16,9 @@ Inputs (all engine-owned, emitted per pane by adapters.sh / lifecycle.sh):
 
 Hook mode reads one JSON event (Claude- or Codex-shaped) from stdin:
   allow / inactive  -> silent, exit 0
-  audit             -> one stderr line, exit 0 (never blocks)
+  audit             -> one stderr line, exit 0 (never blocks), or one inert
+                       Codex ``systemMessage`` JSON object on stdout when
+                       ``--codex-hook-output`` is selected by hooks.json
   enforce deny      -> one concise stderr line, exit 2 (blocks the tool call)
 ``--decision-json`` (test/parity mode) always exits 0 and prints exactly one
 JSON object with a fixed, sorted key set so the two provider trees can
@@ -2107,13 +2109,35 @@ def evaluate(raw: str) -> Decision:
     return allow(ctx, tool_name)
 
 
+def audit_message(decision: Decision) -> str:
+    return "AUDIT by session-workspace strict-v1 [%s]: %s (would deny in enforce mode)" % (decision.rule, decision.reason)
+
+
+def emit_codex_system_message(message: str) -> None:
+    """Render one inert Codex warning without changing the policy decision.
+
+    Codex ignores stderr from an exit-0 PreToolUse hook. Its supported stdout
+    contract accepts a top-level ``systemMessage``; deliberately omit every
+    decision/rewrite field so this adapter cannot widen provider permissions.
+    A broken output stream must never turn an audit-only denial into a block.
+    """
+    if sys.stdout is None:
+        return
+    try:
+        rendered = json.dumps({"systemMessage": message}, sort_keys=True, separators=(",", ":"))
+        sys.stdout.write(rendered + "\n")
+        sys.stdout.flush()
+    except (AttributeError, BrokenPipeError, OSError, TypeError, UnicodeError, ValueError):
+        return
+
+
 def main(argv: List[str]) -> int:
-    decision_json = False
-    if argv == ["--decision-json"]:
-        decision_json = True
-    elif argv:
-        print("Usage: harness-policy.py [--decision-json]  (hook payload JSON on stdin)", file=sys.stderr)
+    allowed = {"--decision-json", "--codex-hook-output"}
+    if len(argv) != len(set(argv)) or any(arg not in allowed for arg in argv):
+        print("Usage: harness-policy.py [--decision-json] [--codex-hook-output]  (hook payload JSON on stdin)", file=sys.stderr)
         return 2
+    decision_json = "--decision-json" in argv
+    codex_hook_output = "--codex-hook-output" in argv
     decision = evaluate(sys.stdin.read())
     if decision_json:
         print(json.dumps(decision.normalized(), sort_keys=True, separators=(",", ":")))
@@ -2122,7 +2146,11 @@ def main(argv: List[str]) -> int:
         print("BLOCKED by session-workspace strict-v1 [%s]: %s" % (decision.rule, decision.reason), file=sys.stderr)
         return 2
     if decision.decision == "audit":
-        print("AUDIT by session-workspace strict-v1 [%s]: %s (would deny in enforce mode)" % (decision.rule, decision.reason), file=sys.stderr)
+        message = audit_message(decision)
+        if codex_hook_output:
+            emit_codex_system_message(message)
+        else:
+            print(message, file=sys.stderr)
         return 0
     return 0
 

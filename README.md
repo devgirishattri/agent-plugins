@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.8 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.5.13 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.3.1 | Config-driven tmux workspace plus an opt-in, fail-closed multi-agent role-policy harness |
+| `session-workspace` | 0.3.2 | Config-driven tmux workspace plus an opt-in, fail-closed multi-agent role-policy harness |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -270,10 +270,11 @@ Per project, create two things at the repository root:
    logic, and project-specific behavior belongs in the JSON rather than here.
 
 Create the coordination directories yourself. The engine deliberately does not:
-the only directories it creates are its own state directory and the tmux lock
-directory, so on a fresh clone the `messages`, `scheduler`, and `contexts`
-directories under `stores.base` (and the memory root) must already exist or the
-first agent to write to one can fail.
+for ordinary pane/session lifecycle it creates only its own state directory and
+the tmux lock directory. A configured browser is the exception: browser startup
+also creates its derived Chrome profile directory. On a fresh clone the
+`messages`, `scheduler`, and `contexts` directories under `stores.base` (and the
+memory root) must already exist or the first agent to write to one can fail.
 
 ```bash
 mkdir -p "$STORES_BASE"/{messages,scheduler,contexts}
@@ -295,9 +296,11 @@ read-only:
 ```
 
 `/workspace-start` brings the workspace up, creating only what is missing.
-`/workspace-stop`, `/workspace-restart`, and adopting existing unmanaged panes
-are gated behind explicit `--confirmed` flags. The config schema is documented
-in `plugins/session-workspace/README.md`.
+`/workspace-stop` and adopting existing unmanaged panes require explicit
+confirmation. `/workspace-restart` is itself a destructive surface and passes
+the confirmation internally to its stop phase; it does not accept a separate
+`--confirmed` flag. The config schema is documented in
+`plugins/session-workspace/README.md`.
 
 ### Hooks and restarts
 
@@ -458,10 +461,11 @@ project logic. Lifecycle verbs are exposed as Claude commands (`/workspace-start
 `/workspace-stop`, `/workspace-restart`, `/workspace-reconcile`,
 `/workspace-status`, `/workspace-plan`, `/workspace-doctor`,
 `/workspace-install`) and as matching Codex skills. `plan` and `doctor` mutate
-nothing; destructive and adopting paths are gated behind explicit `--confirmed`
-flags. Secrets declared in the config are handed to panes as a private `0600`
-temp file passed by path, never through `send-keys` or tmux metadata. See
-`plugins/session-workspace/README.md` for the config schema.
+nothing. `stop` and adoption require explicit confirmation; `restart` is the
+destructive exception that confirms its internal stop phase itself and exposes
+no separate `--confirmed` flag. Secrets declared in the config are handed to
+panes as a private `0600` temp file passed by path, never through `send-keys` or
+tmux metadata. See `plugins/session-workspace/README.md` for the config schema.
 
 ### Chronos
 
@@ -478,10 +482,12 @@ per-prompt only (UserPromptSubmit), so it has no throttle variable.
 ### Knowledge (docs and memory)
 
 The `knowledge` plugin's docs workflows (absorbed from the retired
-`creating-docs`) expose no plugin-specific user environment variables. Its
-plugin-root values and validator target directories are runtime or command
-inputs rather than persistent configuration. Memory-store surfaces honor
-`KNOWLEDGE_MEMORY_HOME` (explicit store target) and
+`creating-docs`) expose no user-customizable docs-specific environment
+variables. They do consume the shared `KNOWLEDGE_PANE_NAME` writer identity:
+session-workspace owns it for panes it launches, while standalone callers may
+set it explicitly. Plugin-root values and validator target directories are
+runtime or command inputs rather than persistent configuration.
+Memory-store surfaces honor `KNOWLEDGE_MEMORY_HOME` (explicit store target) and
 `KNOWLEDGE_INBOX_RETENTION_DAYS` (capture-inbox retention, default 30).
 
 Standard shell/runtime inputs such as `HOME`, `TMPDIR`, `TMUX`, `TMUX_PANE`,

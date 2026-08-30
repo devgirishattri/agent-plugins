@@ -171,7 +171,38 @@ run_policy() {
     "$PY" "$POLICY" --decision-json
 }
 
+# Same normalized decision path with the Codex rendering flag present. The
+# flag may only affect hook-mode presentation, never the Decision object.
+run_policy_codex_decision() {
+  local role="$1" pane="$2" cwd="$3" config="$4" mode="$5" payload="$6"
+  printf '%s' "$payload" | env \
+    -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME \
+    -u SESSION_CHAT_TARGET_MESSAGES_DIR -u SESSION_SCHEDULER_HOME -u SESSION_CONTEXT_HOME \
+    SESSION_WORKSPACE_CONFIG="$config" \
+    SESSION_WORKSPACE_PROJECT_ROOT="$ROOT" \
+    SESSION_WORKSPACE_PANE_NAME="$pane" \
+    SESSION_WORKSPACE_ROLE="$role" \
+    SESSION_WORKSPACE_PANE_CWD="$cwd" \
+    SESSION_WORKSPACE_HARNESS_MODE="$mode" \
+    CLAUDE_HOME="$FAKE_CLAUDE" \
+    CODEX_HOME="$FAKE_CODEX" \
+    "$PY" "$POLICY" --codex-hook-output --decision-json
+}
+
 bash_payload() { jq -cn --arg command "$1" '{tool_name:"Bash",tool_input:{command:$command}}'; }
+codex_bash_payload() {
+  jq -cn --arg command "$1" --arg cwd "$CHILD" '{
+    session_id:"00000000-0000-0000-0000-000000000000",
+    turn_id:"turn-canary",
+    cwd:$cwd,
+    hook_event_name:"PreToolUse",
+    model:"gpt-test",
+    permission_mode:"workspace-write",
+    tool_name:"Bash",
+    tool_input:{command:$command},
+    tool_use_id:"call-canary"
+  }'
+}
 edit_payload() { jq -cn --arg path "$1" '{tool_name:"Edit",tool_input:{file_path:$path,old_string:"a",new_string:"b"}}'; }
 
 # expect LABEL ROLE PANE CWD CONFIG MODE PAYLOAD JQ_EXPR [extra env...]
@@ -210,6 +241,21 @@ if [ "$OUT" = "$OUT2" ]; then
 else
   fail "decision JSON is deterministic across runs" "$OUT vs $OUT2"
 fi
+
+assert_rendering_decision_parity() {
+  local label="$1" role="$2" pane="$3" cwd="$4" config="$5" mode="$6" payload="$7" plain codex
+  plain="$(run_policy "$role" "$pane" "$cwd" "$config" "$mode" "$payload")"
+  codex="$(run_policy_codex_decision "$role" "$pane" "$cwd" "$config" "$mode" "$payload")"
+  if [ "$plain" = "$codex" ]; then
+    pass "$label"
+  else
+    fail "$label" "plain=$plain codex=$codex"
+  fi
+}
+assert_rendering_decision_parity "Codex rendering flag preserves allow decision JSON byte-for-byte" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(bash_payload 'git status')"
+assert_rendering_decision_parity "Codex rendering flag preserves audit decision JSON byte-for-byte" reviewer "$REVIEW_PANE" "$CHILD" "$AUDIT_CONFIG" audit "$(edit_payload src/file.ts)"
+assert_rendering_decision_parity "Codex rendering flag preserves policy deny decision JSON byte-for-byte" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(edit_payload src/file.ts)"
+assert_rendering_decision_parity "Codex rendering flag preserves integrity deny decision JSON byte-for-byte" reviewer unknown-pane "$CHILD" "$AUDIT_CONFIG" audit "$(bash_payload 'git status')"
 
 echo "== inactive contract (true no-op) =="
 OUT="$(printf '%s' "$(bash_payload 'rm -rf /')" | env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_HARNESS_MODE "$PY" "$POLICY" --decision-json)"
@@ -279,6 +325,7 @@ as_review "reviewer Write is denied" "$(jq -cn --arg p "$CHILD/new.ts" '{tool_na
 as_review "reviewer MultiEdit is denied" "$(jq -cn --arg p "$CHILD/README.md" '{tool_name:"MultiEdit",tool_input:{file_path:$p,edits:[]}}')" '.decision == "deny" and .rule == "reviewer.readonly"'
 as_review "reviewer Codex apply_patch is denied" '{"tool_name":"apply_patch","tool_input":{"patch":"*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch"}}' '.decision == "deny" and .rule == "reviewer.readonly"'
 as_review "reviewer Codex shell tool name is classified as shell" '{"tool_name":"shell","tool_input":{"command":"touch x"}}' '.decision == "deny" and .rule == "reviewer.command"'
+as_review "reviewer exact Codex 0.151 Bash payload is classified without a tool_input workdir" "$(codex_bash_payload 'pwd | cat')" '.decision == "deny" and .rule == "reviewer.shell" and .tool == "Bash"'
 as_exec "edit tool with no extractable target fails closed" '{"tool_name":"Edit","tool_input":{"old_string":"a","new_string":"b"}}' '.decision == "deny" and .rule == "edit.path"'
 
 echo "== executor: edit targets must resolve inside its configured cwd =="
@@ -766,15 +813,28 @@ expect "audit mode identity failure is still a deny" reviewer unknown-pane "$CHI
 
 echo "== hook exit behavior =="
 hook_run() {
-  # hook_run ROLE PANE CWD CONFIG MODE PAYLOAD STDOUT_FILE STDERR_FILE -> exit status
+  # hook_run ROLE PANE CWD CONFIG MODE PAYLOAD STDOUT_FILE STDERR_FILE [policy args...] -> exit status
   local role="$1" pane="$2" cwd="$3" config="$4" mode="$5" payload="$6" out="$7" err="$8"
+  shift 8
   printf '%s' "$payload" | env \
     -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME \
     SESSION_WORKSPACE_CONFIG="$config" SESSION_WORKSPACE_PROJECT_ROOT="$ROOT" \
     SESSION_WORKSPACE_PANE_NAME="$pane" SESSION_WORKSPACE_ROLE="$role" \
     SESSION_WORKSPACE_PANE_CWD="$cwd" SESSION_WORKSPACE_HARNESS_MODE="$mode" \
     CLAUDE_HOME="$FAKE_CLAUDE" CODEX_HOME="$FAKE_CODEX" \
-    "$PY" "$POLICY" >"$out" 2>"$err"
+    "$PY" "$POLICY" "$@" >"$out" 2>"$err"
+}
+hook_run_closed_stdout() {
+  # hook_run_closed_stdout ROLE PANE CWD CONFIG MODE PAYLOAD STDERR_FILE [policy args...] -> exit status
+  local role="$1" pane="$2" cwd="$3" config="$4" mode="$5" payload="$6" err="$7"
+  shift 7
+  printf '%s' "$payload" | env \
+    -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME \
+    SESSION_WORKSPACE_CONFIG="$config" SESSION_WORKSPACE_PROJECT_ROOT="$ROOT" \
+    SESSION_WORKSPACE_PANE_NAME="$pane" SESSION_WORKSPACE_ROLE="$role" \
+    SESSION_WORKSPACE_PANE_CWD="$cwd" SESSION_WORKSPACE_HARNESS_MODE="$mode" \
+    CLAUDE_HOME="$FAKE_CLAUDE" CODEX_HOME="$FAKE_CODEX" \
+    "$PY" "$POLICY" "$@" 1>&- 2>"$err"
 }
 hook_run reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(edit_payload 'src/file.ts')" "$TMPROOT/enforce.out" "$TMPROOT/enforce.err"
 ENFORCE_STATUS=$?
@@ -790,6 +850,22 @@ if [ "$AUDIT_STATUS" -eq 0 ] && grep -q '^AUDIT by session-workspace strict-v1 \
 else
   fail "audit denial exits 0, reports on stderr, never blocks" "status=$AUDIT_STATUS err=$(cat "$TMPROOT/audit.err")"
 fi
+hook_run reviewer "$REVIEW_PANE" "$CHILD" "$AUDIT_CONFIG" audit "$(codex_bash_payload 'pwd | cat')" "$TMPROOT/codex-audit.out" "$TMPROOT/codex-audit.err" --codex-hook-output
+CODEX_AUDIT_STATUS=$?
+if [ "$CODEX_AUDIT_STATUS" -eq 0 ] && [ ! -s "$TMPROOT/codex-audit.err" ] && \
+   jq -e 'keys == ["systemMessage"] and (.systemMessage | test("^AUDIT by session-workspace strict-v1 \\[reviewer.shell\\]: .+ \\(would deny in enforce mode\\)$"))' "$TMPROOT/codex-audit.out" >/dev/null 2>&1 && \
+   [ "$(wc -l < "$TMPROOT/codex-audit.out" | tr -d ' ')" -eq 1 ]; then
+  pass "Codex audit rendering emits exactly one inert systemMessage JSON object on stdout"
+else
+  fail "Codex audit rendering emits exactly one inert systemMessage JSON object on stdout" "status=$CODEX_AUDIT_STATUS out=$(cat "$TMPROOT/codex-audit.out") err=$(cat "$TMPROOT/codex-audit.err")"
+fi
+hook_run_closed_stdout reviewer "$REVIEW_PANE" "$CHILD" "$AUDIT_CONFIG" audit "$(edit_payload 'src/file.ts')" "$TMPROOT/codex-audit-closed.err" --codex-hook-output
+CODEX_AUDIT_CLOSED_STATUS=$?
+if [ "$CODEX_AUDIT_CLOSED_STATUS" -eq 0 ] && [ ! -s "$TMPROOT/codex-audit-closed.err" ]; then
+  pass "Codex audit rendering failure cannot turn audit into a block"
+else
+  fail "Codex audit rendering failure cannot turn audit into a block" "status=$CODEX_AUDIT_CLOSED_STATUS err=$(cat "$TMPROOT/codex-audit-closed.err")"
+fi
 hook_run reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(bash_payload 'git status')" "$TMPROOT/allow.out" "$TMPROOT/allow.err"
 ALLOW_STATUS=$?
 if [ "$ALLOW_STATUS" -eq 0 ] && [ ! -s "$TMPROOT/allow.out" ] && [ ! -s "$TMPROOT/allow.err" ]; then
@@ -797,12 +873,40 @@ if [ "$ALLOW_STATUS" -eq 0 ] && [ ! -s "$TMPROOT/allow.out" ] && [ ! -s "$TMPROO
 else
   fail "allow is silent (exit 0, no stdout, no stderr)" "status=$ALLOW_STATUS out=$(cat "$TMPROOT/allow.out") err=$(cat "$TMPROOT/allow.err")"
 fi
+hook_run reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(bash_payload 'git status')" "$TMPROOT/codex-allow.out" "$TMPROOT/codex-allow.err" --codex-hook-output
+CODEX_ALLOW_STATUS=$?
+if [ "$CODEX_ALLOW_STATUS" -eq 0 ] && [ ! -s "$TMPROOT/codex-allow.out" ] && [ ! -s "$TMPROOT/codex-allow.err" ]; then
+  pass "Codex rendering keeps allow silent"
+else
+  fail "Codex rendering keeps allow silent" "status=$CODEX_ALLOW_STATUS out=$(cat "$TMPROOT/codex-allow.out") err=$(cat "$TMPROOT/codex-allow.err")"
+fi
+hook_run reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(edit_payload 'src/file.ts')" "$TMPROOT/codex-deny.out" "$TMPROOT/codex-deny.err" --codex-hook-output
+CODEX_DENY_STATUS=$?
+if [ "$CODEX_DENY_STATUS" -eq 2 ] && [ ! -s "$TMPROOT/codex-deny.out" ] && grep -q '^BLOCKED by session-workspace strict-v1 \[reviewer.readonly\]' "$TMPROOT/codex-deny.err"; then
+  pass "Codex rendering keeps enforce denial on stderr with exit 2"
+else
+  fail "Codex rendering keeps enforce denial on stderr with exit 2" "status=$CODEX_DENY_STATUS out=$(cat "$TMPROOT/codex-deny.out") err=$(cat "$TMPROOT/codex-deny.err")"
+fi
+hook_run_closed_stdout reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(edit_payload 'src/file.ts')" "$TMPROOT/codex-deny-closed.err" --codex-hook-output
+CODEX_DENY_CLOSED_STATUS=$?
+if [ "$CODEX_DENY_CLOSED_STATUS" -eq 2 ] && grep -q '^BLOCKED by session-workspace strict-v1 \[reviewer.readonly\]' "$TMPROOT/codex-deny-closed.err"; then
+  pass "Codex rendering failure cannot change an enforce denial exit"
+else
+  fail "Codex rendering failure cannot change an enforce denial exit" "status=$CODEX_DENY_CLOSED_STATUS err=$(cat "$TMPROOT/codex-deny-closed.err")"
+fi
 hook_run reviewer unknown-pane "$CHILD" "$AUDIT_CONFIG" audit "$(bash_payload 'git status')" "$TMPROOT/drift.out" "$TMPROOT/drift.err"
 DRIFT_STATUS=$?
 if [ "$DRIFT_STATUS" -eq 2 ] && grep -q '^BLOCKED' "$TMPROOT/drift.err"; then
   pass "identity failure blocks (exit 2) even in audit mode"
 else
   fail "identity failure blocks (exit 2) even in audit mode" "status=$DRIFT_STATUS err=$(cat "$TMPROOT/drift.err")"
+fi
+hook_run reviewer unknown-pane "$CHILD" "$AUDIT_CONFIG" audit "$(bash_payload 'git status')" "$TMPROOT/codex-drift.out" "$TMPROOT/codex-drift.err" --codex-hook-output
+CODEX_DRIFT_STATUS=$?
+if [ "$CODEX_DRIFT_STATUS" -eq 2 ] && [ ! -s "$TMPROOT/codex-drift.out" ] && grep -q '^BLOCKED' "$TMPROOT/codex-drift.err"; then
+  pass "Codex rendering keeps integrity denial blocking in audit mode"
+else
+  fail "Codex rendering keeps integrity denial blocking in audit mode" "status=$CODEX_DRIFT_STATUS out=$(cat "$TMPROOT/codex-drift.out") err=$(cat "$TMPROOT/codex-drift.err")"
 fi
 printf '%s' "$(bash_payload 'rm -rf /')" | env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_HARNESS_MODE "$PY" "$POLICY" >"$TMPROOT/inactive.out" 2>"$TMPROOT/inactive.err"
 INACTIVE_STATUS=$?
@@ -817,6 +921,13 @@ if [ "$STATUS" -eq 2 ] && printf '%s' "$OUT" | grep -q '^Usage:'; then
   pass "unknown argument prints usage and exits 2"
 else
   fail "unknown argument prints usage and exits 2" "status=$STATUS $OUT"
+fi
+OUT="$("$PY" "$POLICY" --codex-hook-output --codex-hook-output </dev/null 2>&1)"
+STATUS=$?
+if [ "$STATUS" -eq 2 ] && printf '%s' "$OUT" | grep -q '^Usage:'; then
+  pass "duplicate rendering flag prints usage and exits 2"
+else
+  fail "duplicate rendering flag prints usage and exits 2" "status=$STATUS $OUT"
 fi
 
 echo "== hook wrapper (harness-hook.sh) =="

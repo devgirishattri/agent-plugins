@@ -26,7 +26,10 @@ one structured report (even when config validation itself fails):
 - `hook.registration` — the bundled `hooks/hooks.json` registers the
   `PreToolUse` policy hook (a file check only; whether the provider has
   actually loaded and trusted the plugin's hooks cannot be verified from
-  inside a pane).
+  inside a pane). The Claude registration invokes the policy without any
+  option (audit lines go to stderr); the Codex registration passes
+  `--codex-hook-output` so audit renders as an inert `systemMessage`
+  object, because Codex discards stderr of successful hooks.
 - `runtime.python3` — required only while a harness is active; an active
   harness without `python3` fails closed (every gated tool call is blocked).
 - `identity.env` — whether this process inherits engine identity:

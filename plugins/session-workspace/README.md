@@ -126,7 +126,8 @@ restricts which *roles* ever receive a secret file at all — a role absent
 from that list gets no file, so it can never see any key regardless of
 `allow`. `secrets.on_missing` (`"warn"` or `"fail"`) controls what happens
 when an allowed key isn't present in the file or the caller's environment
-(checked in that order — the caller's environment wins): `"fail"` aborts
+(the caller's environment is checked first, then `env_file`; a value in the
+caller's environment wins): `"fail"` aborts
 that pane's launch outright; `"warn"` starts the pane without it.
 
 ## Harness (opt-in, schema v2)
@@ -308,12 +309,21 @@ touching Python whenever the harness is inactive; when it is active and
 (stdlib only, runs on the stock macOS Python 3.9) then:
 
 - allows silently (exit 0, no output);
-- in `audit` mode prints one `AUDIT by session-workspace strict-v1
-  [rule]: reason` line to stderr and exits 0 for a *policy* denial — it
-  never blocks those; identity, config, and drift *integrity* failures
-  still exit 2 in audit mode;
+- in `audit` mode reports one `AUDIT by session-workspace strict-v1
+  [rule]: reason (would deny in enforce mode)` line and exits 0 for a
+  *policy* denial — it never blocks those; identity, config, and drift
+  *integrity* failures still exit 2 in audit mode. **On Claude** that line
+  goes to stderr. **On Codex 0.151** stderr of a successful (exit 0) hook is
+  discarded, so the Codex registration invokes the same policy with
+  `--codex-hook-output`, which renders the identical audit text as exactly
+  one inert, compact JSON object on stdout — top-level `systemMessage`
+  only, never `hookSpecificOutput`/`permissionDecision`/`updatedInput`, so
+  it can never widen a permission. The option changes rendering only; the
+  decision (`--decision-json`) is byte-identical with and without it. The
+  Claude registration never passes it;
 - in `enforce` mode prints one `BLOCKED by session-workspace strict-v1
-  [rule]: reason` line to stderr and exits 2, which blocks the tool call.
+  [rule]: reason` line to stderr and exits 2, which blocks the tool call —
+  on both providers.
 
 `harness-policy.py --decision-json` (test/parity mode) prints exactly one
 compact, key-sorted JSON object —
@@ -323,7 +333,17 @@ byte-compare decisions. Both Claude-shaped (`tool_name`/`tool_input`, string
 `command`) and Codex-shaped (`shell`/`apply_patch`, argv-list or `bash -lc`
 commands, `workdir`, JSON-string `tool_input`) payloads are understood.
 
-### Harness known gaps (0.3.0)
+The exact Codex 0.151 shell hook shape is: `tool_name` `"Bash"` (Codex
+canonicalizes `exec_command` to that name), a *string* `tool_input.command`,
+and a top-level absolute `cwd` (the turn's cwd) — with **no**
+`tool_input.workdir`. Codex does not expose the per-call `exec_command`
+workdir in `PreToolUse`, and non-shell reads are not gated by this policy at
+all, so **Codex `enforce` must not be described as complete path
+containment**: a per-call workdir the policy never receives cannot be
+validated. `audit` is the recommended Codex mode until the runtime exposes
+that information or a sound mitigation exists.
+
+### Harness known gaps (0.3.2)
 
 - The policy re-validates the config by running `workspace-plan.sh --json`
   on every gated tool call (a jq-only plan; the hook is registered on the
@@ -351,6 +371,9 @@ commands, `workdir`, JSON-string `tool_input`) payloads are understood.
   and grammar, master-only routing), arbitrary orchestrator shell is gated
   only by the child-root floor and the `git push` denial; project
   release/build rules stay in `AGENTS.md` and project hooks.
+- Codex `PreToolUse` carries no per-call `exec_command` workdir (only the
+  turn's top-level `cwd`), so executor/reviewer shell containment on Codex
+  is incomplete for commands that set their own workdir; see "The hook".
 - Codex "selected version" resolution needs `~/.codex/config.toml` plus the
   marketplace manifest; on Python < 3.11 (no `tomllib`) a minimal
   line-based reader handles the `[plugins."<name>"]` table.
@@ -440,7 +463,7 @@ shell script, or CI with no provider CLI in the loop.
 
 ## Known limitations
 
-These are honest gaps in the current (0.3.0) implementation, not aspirational
+These are honest gaps in the current (0.3.2) implementation, not aspirational
 roadmap items — read them before depending on the behavior they describe.
 
 - **`stores.memory.root` does not export `KNOWLEDGE_MEMORY_HOME`.**
@@ -459,8 +482,11 @@ roadmap items — read them before depending on the behavior they describe.
   `chmod 700` of the `messages`/`scheduler`/`contexts` directories under
   `stores.base` (and the memory root) before starting panes. This engine
   does not — the only directories it creates are its own state directory
-  (`$XDG_STATE_HOME/session-workspace/<project-id>/`, 0700) and the tmux
-  lock directory. On a machine where those coordination directories already
+  (`$XDG_STATE_HOME/session-workspace/<project-id>/`, 0700), the tmux lock
+  directory, and — only when a `browser` block is configured — the derived
+  Chrome profile directory (`browser.profile_dir`, created by
+  `workspace-start.sh` before launching the browser session). Coordination
+  directories are never among them. On a machine where those coordination directories already
   exist from a prior run this is harmless; on a genuinely fresh clone it
   means the first agent to write to an unmanaged store, or a strict
   consumer of one, can fail until something creates the directory.
@@ -594,7 +620,7 @@ convention.
 
 | Field | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `env.groups.<g>.values` | object, string values | yes if the group exists | — | Extra `NAME=value` pairs exported into every pane whose role's `env_group` is `<g>`. Keys must match `^[A-Z_][A-Z0-9_]*$`; a name that fails that check, or that collides with an engine-always identity var (`TMUX_PANE`, `SESSION_CHAT_PANE_NAME`, `KNOWLEDGE_PANE_NAME`), is dropped with a warning rather than silently accepted. The engine also always ships a fixed `KNOWLEDGE_AUTO_*`/`KNOWLEDGE_CONSOLIDATE_NUDGE` default block (identical across every adopter today); values here override those defaults by name. |
+| `env.groups.<g>.values` | object, string values | yes if the group exists | — | Extra `NAME=value` pairs exported into every pane whose role's `env_group` is `<g>`. Keys must match `^[A-Z_][A-Z0-9_]*$` (config validation rejects a key that does not) and must not name a reserved `SESSION_WORKSPACE_*` identity var (also rejected by validation). A key that collides with one of the three engine-always identity vars (`TMUX_PANE`, `SESSION_CHAT_PANE_NAME`, `KNOWLEDGE_PANE_NAME`) passes validation but is ignored by the `adapters.sh` renderer: the engine-always value is set last and wins. The renderer also drops a charset-invalid name with a warning, but that is defense in depth for a direct, unvalidated invocation — normal config validation has already rejected it. The engine also always ships a fixed `KNOWLEDGE_AUTO_*`/`KNOWLEDGE_CONSOLIDATE_NUDGE` default block (identical across every adopter today); values here override those defaults by name. |
 | `env.groups.<g>.pin_to_session` | boolean | no | `false` | See "known limitations" — gates *both* whether this group's values (plus the `stores.pin` coordination vars) are exported into the pane's own process env, and whether that same subset is mirrored into the tmux session environment via `tmux set-environment` (non-hidden, session-scope) so a later, unmanaged pane in that session inherits it too. |
 | `env.pane_name_aliases` | array of strings | no | `[]` | Extra env-var names, each set to the pane's own name (replaces a project's bespoke `<PROJECT>_CODEX_PANE_NAME`-style variable). Same charset rule and engine-always collision rule as group values. |
 

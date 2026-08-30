@@ -550,10 +550,27 @@ else
   fail "harness-status: a partial identity is reported PARTIAL with the policy's blocking verdict" "$HS_PARTIAL"
 fi
 HOOKS_JSON="$HERE/../hooks/hooks.json"
-if jq -e '.hooks.PreToolUse[0].hooks[0].command | test("harness-hook\\.sh")' "$HOOKS_JSON" >/dev/null 2>&1 && jq -e '.hooks.PreToolUse[0].matcher | test("Bash") and test("Edit") and test("Write")' "$HOOKS_JSON" >/dev/null 2>&1; then
-  pass "hooks/hooks.json registers the PreToolUse harness hook on edit/shell tools"
+HOOK_COMMON_OK=0
+HOOK_PROVIDER_OK=0
+if jq -e '.hooks.PreToolUse[0].hooks[0].command | test("harness-hook\\.sh")' "$HOOKS_JSON" >/dev/null 2>&1 && \
+   jq -e '.hooks.PreToolUse[0].matcher | test("Bash")' "$HOOKS_JSON" >/dev/null 2>&1; then
+  HOOK_COMMON_OK=1
+fi
+if [ -f "$HERE/../.codex-plugin/plugin.json" ]; then
+  if jq -e '.hooks.PreToolUse[0].matcher | test("Edit") and test("Write") and test("apply_patch")' "$HOOKS_JSON" >/dev/null 2>&1 && \
+     jq -e '.hooks.PreToolUse[0].hooks[0].command | test("--codex-hook-output")' "$HOOKS_JSON" >/dev/null 2>&1; then
+    HOOK_PROVIDER_OK=1
+  fi
 else
-  fail "hooks/hooks.json registers the PreToolUse harness hook on edit/shell tools" "$(cat "$HOOKS_JSON" 2>/dev/null)"
+  if jq -e '.hooks.PreToolUse[0].matcher | test("Edit") and test("Write")' "$HOOKS_JSON" >/dev/null 2>&1 && \
+     jq -e '.hooks.PreToolUse[0].hooks[0].command | test("--codex-hook-output") | not' "$HOOKS_JSON" >/dev/null 2>&1; then
+    HOOK_PROVIDER_OK=1
+  fi
+fi
+if [ "$HOOK_COMMON_OK" -eq 1 ] && [ "$HOOK_PROVIDER_OK" -eq 1 ]; then
+  pass "hooks/hooks.json registers the provider-correct PreToolUse harness hook and audit renderer"
+else
+  fail "hooks/hooks.json registers the provider-correct PreToolUse harness hook and audit renderer" "$(cat "$HOOKS_JSON" 2>/dev/null)"
 fi
 HOOK_NOOP_OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_HARNESS_MODE bash "$HERE/harness-hook.sh" 2>&1)"
 if [ $? -eq 0 ] && [ -z "$HOOK_NOOP_OUT" ]; then
