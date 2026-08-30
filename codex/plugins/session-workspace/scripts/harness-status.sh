@@ -56,6 +56,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
   --arg env_role "${SESSION_WORKSPACE_ROLE:-}" \
   --arg env_cwd "${SESSION_WORKSPACE_PANE_CWD:-}" \
   --arg env_mode "${SESSION_WORKSPACE_HARNESS_MODE:-}" \
+  --arg env_guards "${SESSION_WORKSPACE_GUARDS_JSON:-}" \
   --arg chat_alias "${SESSION_CHAT_PANE_NAME:-}" \
   --arg knowledge_alias "${KNOWLEDGE_PANE_NAME:-}" \
   --argjson probe "$PROBE_JSON" '
@@ -70,6 +71,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
       profile: (.harness.profile // null),
       roles: (.harness.roles // null),
       gates: (.harness.gates // null),
+      guards: (.harness.guards // null),
       identity: {
         # present: ANY engine identity variable is set; complete: all five
         # core variables are set (mode is legitimately empty when inactive);
@@ -83,6 +85,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
         role: (if $env_role == "" then null else $env_role end),
         cwd: (if $env_cwd == "" then null else $env_cwd end),
         mode: (if $env_mode == "" then null else $env_mode end),
+        guards: (if $env_guards == "" then null else (try ($env_guards | fromjson) catch "invalid") end),
         aliases: {
           session_chat_pane_name: (if $chat_alias == "" then null else $chat_alias end),
           knowledge_pane_name: (if $knowledge_alias == "" then null else $knowledge_alias end),
@@ -97,6 +100,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
             and $env_role == $pane.role
             and $env_cwd == ($pane.cwd // "")
             and $env_mode == (.harness.mode // "")
+            and (if .harness.guards then (try (($env_guards | fromjson) == .harness.guards) catch false) else $env_guards == "" end)
             and (($chat_alias == "" or $chat_alias == $env_pane) and ($knowledge_alias == "" or $knowledge_alias == $env_pane)))
           end
         )
@@ -116,6 +120,7 @@ printf '%s\n' "$STATUS_JSON" | jq -r '
     "state: active  mode=\(.mode)  profile=\(.profile)",
     "roles: orchestrator=\(.roles.orchestrator) executor=\(.roles.executor) reviewer=\(.roles.reviewer)",
     "gates: plan-review=\(.gates.plan_review_ttl_minutes)m audit=\(.gates.audit_ttl_minutes)m"
+    ,(if .guards then "guards: " + (.guards | tojson) else "guards: none (schema-v2-compatible behavior)" end)
   else
     "state: inactive"
   end,

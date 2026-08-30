@@ -35,7 +35,7 @@ is not a scaffold.
 ## Configuration model (enforced)
 
 A project opts in by creating `.agent-workspace/workspace.json`
-(`schema_version: 1`, or `2` to add the optional `harness` block) describing:
+(`schema_version: 1`, `2` for the optional harness, or `3` for shared guard packs) describing:
 
 - `project` — id/display name/root
 - `runtimes` — named launch profiles (e.g. `claude`, `codex`), replacing any
@@ -54,9 +54,9 @@ A project opts in by creating `.agent-workspace/workspace.json`
 - `behavior` — attach/stop-scope/save defaults
 - `browser` — optional Chrome DevTools session binding, pinned MCP package,
   loopback port, and portable derived profile
-- `harness` (schema v2 only) — opt-in strict-v1 role policy: `enabled`,
+- `harness` (schema v2/v3) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
-  `gates`; absent or `enabled: false` is a true no-op (for panes whose
+  `gates`, plus optional schema-v3 `guards`; absent or `enabled: false` is a true no-op (for panes whose
   launcher mode is empty — a pane launched under audit/enforce keeps that
   mode and blocks as drift until restarted)
 
@@ -87,7 +87,7 @@ use plain `tmux set-environment` on purpose — that path is for coordination
 vars a hand-made pane should also inherit, and secrets are excluded from it
 by construction.
 
-## The opt-in harness (schema v2)
+## The opt-in harness (schema v2/v3)
 
 With `harness.enabled: true` the engine's `PreToolUse` hook enforces an
 **immutable strict-v1 floor** keyed on the per-pane identity it exports at
@@ -130,6 +130,15 @@ them:
   Identity/config/drift integrity failures block in both modes — the remedy
   is `/workspace-restart` of that pane, never hand-editing the identity
   variables.
+- In schema v3, optional `harness.guards` centralize orchestrator protected
+  files, child-directory hops, generic lifecycle reminders, and bounded Stop
+  health warnings. Guard changes require a workspace restart because their
+  canonical JSON is launcher identity.
+- `warn_missing_panes` ignores `optional:true` and shell/service panes.
+  Workspace-health diagnostics emit only from the configured orchestrator;
+  `branch_ahead` is a neutral local-branch fact, not deploy authorization.
+- After a Codex plugin upgrade that changes hook entries, accept/re-trust the
+  new session-workspace hook hashes before relying on lifecycle/Stop output.
 - Run `/harness-doctor` first when something is unexpectedly blocked.
 
 ## Safety gates worth relaying to the user

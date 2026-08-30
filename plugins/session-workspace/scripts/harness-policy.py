@@ -13,6 +13,7 @@ Inputs (all engine-owned, emitted per pane by adapters.sh / lifecycle.sh):
   SESSION_WORKSPACE_ROLE          this pane's configured role name
   SESSION_WORKSPACE_PANE_CWD      this pane's resolved cwd
   SESSION_WORKSPACE_HARNESS_MODE  audit|enforce when active, empty when inactive
+  SESSION_WORKSPACE_GUARDS_JSON   canonical schema-v3 guard pack JSON, when configured
 
 Hook mode reads one JSON event (Claude- or Codex-shaped) from stdin:
   allow / inactive  -> silent, exit 0
@@ -34,6 +35,7 @@ Runs on the stock macOS python3 (3.9): stdlib only, no 3.10+ syntax.
 from __future__ import annotations
 
 import json
+import fnmatch
 import os
 import re
 import shlex
@@ -228,6 +230,7 @@ class Context:
     grant_roots: tuple
     claude_home: Path
     codex_home: Path
+    guards: dict
 
 
 @dataclass(frozen=True)
@@ -351,7 +354,7 @@ def read_raw_config(path: Path) -> Optional[dict]:
 
 
 def raw_harness_state(config: Optional[dict]) -> Tuple[bool, str]:
-    if not config or config.get("schema_version") != 2:
+    if not config or config.get("schema_version") not in {2, 3}:
         return False, ""
     harness = config.get("harness")
     if not isinstance(harness, dict) or harness.get("enabled") is not True:
@@ -420,6 +423,20 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         return None, deny(None, tool, "identity.mode", "validated harness mode is invalid", failure_mode, integrity=True)
     if env_mode != mode:
         return None, deny(None, tool, "identity.mode", "launcher harness mode does not match validated config", mode, integrity=True)
+
+    plan_guards = harness.get("guards")
+    env_guards = os.environ.get("SESSION_WORKSPACE_GUARDS_JSON", "").strip()
+    if plan_guards is None:
+        if env_guards:
+            return None, deny(None, tool, "identity.config", "launcher guard identity is present but validated config has no guards", mode, integrity=True)
+        guards = {}
+    elif not isinstance(plan_guards, dict):
+        return None, deny(None, tool, "identity.config", "validated harness guards are invalid", mode, integrity=True)
+    else:
+        canonical_guards = json.dumps(plan_guards, sort_keys=True, separators=(",", ":"))
+        if env_guards != canonical_guards:
+            return None, deny(None, tool, "identity.config", "launcher guard identity does not match validated config; restart the pane", mode, integrity=True)
+        guards = plan_guards
 
     required_env = {
         "SESSION_WORKSPACE_PROJECT_ROOT": os.environ.get("SESSION_WORKSPACE_PROJECT_ROOT", "").strip(),
@@ -502,6 +519,7 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         grant_roots=tuple(sorted(grant_paths, key=str)),
         claude_home=claude_home,
         codex_home=codex_home,
+        guards=guards,
     )
     return context, None
 
@@ -2020,6 +2038,12 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
             if sub == "push":
                 raise PolicyFailure("orchestrator.push", "orchestrator cannot run git push; route it to the owning executor")
         exec_cwd = segment_exec_cwd(segment, cwd)
+        orchestrator_guard = ctx.guards.get("orchestrator", {})
+        if orchestrator_guard.get("deny_child_chdir") is True and (
+            any(within(after, root) for root in ctx.child_roots)
+            or any(within(exec_cwd, root) for root in ctx.child_roots)
+        ):
+            raise PolicyFailure("orchestrator.child_chdir", "orchestrator cannot change its execution directory into a child repository")
         if segment_mutates(segment) and (
             references_child(segment, ctx, cwd)
             or references_child(unwrap_prefixes(segment), ctx, exec_cwd)
@@ -2047,6 +2071,20 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
     for value in sorted(targets):
         raw = Path(value).expanduser()
         path = canonical(raw if raw.is_absolute() else base / raw)
+        protected = ctx.guards.get("protected_files")
+        if ctx.semantic_role == "orchestrator" and within(path, ctx.project_root) and isinstance(protected, dict):
+            basename = path.name
+            generic = (
+                basename == ".env"
+                or basename.startswith(".env.")
+                or basename in {"google-services.json", "composer.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
+                or fnmatch.fnmatchcase(basename, "*service_account*.json")
+                or fnmatch.fnmatchcase(basename, "*service-account*.json")
+                or fnmatch.fnmatchcase(basename, "*firebase*.json")
+            )
+            extras = protected.get("extra_basenames", [])
+            if generic or (isinstance(extras, list) and basename in extras):
+                raise PolicyFailure("orchestrator.protected_file", "orchestrator cannot edit protected credential/lockfile: %s" % value)
         if ctx.semantic_role == "executor":
             if not within(path, ctx.pane_cwd):
                 raise PolicyFailure("executor.containment", "executor edit escapes its configured child cwd: %s" % value)

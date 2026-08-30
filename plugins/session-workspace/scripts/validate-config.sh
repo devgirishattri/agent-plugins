@@ -92,7 +92,7 @@ _validate_cwds() {
 # apparently non-dot child cwd must not canonicalize back to the project root.
 _validate_harness_resolved_cwds() {
   local json="$1" root_abs="$2"
-  if ! printf '%s' "$json" | jq -e '.schema_version == 2 and (.harness.enabled // false)' >/dev/null; then
+  if ! printf '%s' "$json" | jq -e '(.schema_version == 2 or .schema_version == 3) and (.harness.enabled // false)' >/dev/null; then
     return 0
   fi
 

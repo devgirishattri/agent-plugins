@@ -1,0 +1,1 @@
+{"schema_version":3,"project":{"id":"p","root":"."},"runtimes":{},"roles":{"service":{"runtime":"shell"}},"stores":{"pin":[]},"sessions":[{"id":"s","name":"p-s","panes":[{"name":"p-service","role":"service","cwd":"."}]}],"guards":{}}

@@ -1,6 +1,32 @@
 {
-  "description": "session-workspace: opt-in strict-v1 multi-agent role policy; inactive sessions are a true no-op",
+  "description": "session-workspace: opt-in strict-v1 policy plus schema-v3 lifecycle and health guards; inactive sessions are a true no-op",
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$PLUGIN_ROOT/scripts/guard-lifecycle.sh\" --event session --codex-hook-output",
+            "timeout": 30,
+            "statusMessage": "Loading session-workspace role reminder"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$PLUGIN_ROOT/scripts/guard-lifecycle.sh\" --event prompt --codex-hook-output",
+            "timeout": 30,
+            "statusMessage": "Checking session-workspace routing reminder"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|NotebookEdit|apply_patch|Bash",
@@ -10,6 +36,19 @@
             "command": "bash \"$PLUGIN_ROOT/scripts/harness-hook.sh\" --codex-hook-output",
             "timeout": 30,
             "statusMessage": "Checking session-workspace harness policy"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$PLUGIN_ROOT/scripts/guard-health.sh\" --codex-hook-output",
+            "timeout": 30,
+            "statusMessage": "Checking session-workspace health"
           }
         ]
       }

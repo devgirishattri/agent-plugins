@@ -52,7 +52,8 @@ def coordination_var_name(store):
 
 . as $cfg
 | ($cfg.browser // null) as $browser
-| ($cfg.schema_version == 2 and ($cfg.harness.enabled // false)) as $harness_active
+| (($cfg.schema_version == 2 or $cfg.schema_version == 3) and ($cfg.harness.enabled // false)) as $harness_active
+| ($cfg.schema_version == 3 and $harness_active and ($cfg.harness | has("guards"))) as $guards_configured
 | ($cfg.stores.base // ".tmp") as $store_base
 | ($cfg.stores.overrides // {}) as $store_overrides
 | ($cfg.stores.pin // []) as $pin
@@ -65,7 +66,7 @@ def coordination_var_name(store):
 | ($mem.shard.fallback // "master") as $mem_fallback
 | ($cfg.project.id // "") as $pid
 | ($cfg.env.pane_name_aliases // []) as $aliases
-| [
+| ([
     "TMUX_PANE",
     "SESSION_CHAT_PANE_NAME",
     "KNOWLEDGE_PANE_NAME",
@@ -75,7 +76,7 @@ def coordination_var_name(store):
     "SESSION_WORKSPACE_ROLE",
     "SESSION_WORKSPACE_PANE_CWD",
     "SESSION_WORKSPACE_HARNESS_MODE"
-  ] as $engine_always
+  ] + (if $guards_configured then ["SESSION_WORKSPACE_GUARDS_JSON"] else [] end)) as $engine_always
 |
 {
   config_path: $config_path,
@@ -84,13 +85,13 @@ def coordination_var_name(store):
     display_name: ($cfg.project.display_name // $pid),
     root: $root
   },
-  harness: (if $harness_active then {
+  harness: (if $harness_active then ({
     active: true,
     mode: $cfg.harness.mode,
     profile: $cfg.harness.profile,
     roles: $cfg.harness.roles,
     gates: $cfg.harness.gates
-  } else {active: false} end),
+  } + (if $guards_configured then {guards: $cfg.harness.guards} else {} end)) else {active: false} end),
   sessions: [
     ($cfg.sessions // [])[] | . as $s
     | {

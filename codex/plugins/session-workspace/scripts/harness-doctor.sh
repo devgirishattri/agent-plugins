@@ -88,10 +88,20 @@ else
   add_check "harness.activation" INFO "harness is inactive; hook execution is a no-op"
 fi
 
-if [ -f "$HERE/../hooks/hooks.json" ] && jq -e '.hooks.PreToolUse | type == "array" and length > 0' "$HERE/../hooks/hooks.json" >/dev/null 2>&1; then
-  add_check "hook.registration" OK "bundled hooks/hooks.json registers PreToolUse (file check only; provider trust/loading not verifiable here)"
+if [ -f "$HERE/../hooks/hooks.json" ] && jq -e '
+  [.hooks.PreToolUse, .hooks.SessionStart, .hooks.UserPromptSubmit, .hooks.Stop]
+  | all(type == "array" and length > 0)
+' "$HERE/../hooks/hooks.json" >/dev/null 2>&1; then
+  add_check "hook.registration" OK "bundled hooks/hooks.json registers PreToolUse, SessionStart, UserPromptSubmit, and Stop (file check only; provider trust/loading not verifiable here)"
 else
   add_check "hook.registration" ERROR "hooks/hooks.json is missing or invalid"
+fi
+
+GUARDS_COUNT="$(printf '%s' "$STATUS_JSON" | jq '.guards // {} | length')"
+if [ "$GUARDS_COUNT" -gt 0 ]; then
+  add_check "guards.configuration" OK "schema-v3 guard packs validate and are exposed by the normalized plan"
+else
+  add_check "guards.configuration" INFO "no schema-v3 guard packs configured"
 fi
 
 if [ "$ACTIVE" = true ]; then

@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.8 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.5.13 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.3.2 | Config-driven tmux workspace plus an opt-in, fail-closed multi-agent role-policy harness |
+| `session-workspace` | 0.4.0 | Config-driven tmux workspace plus an opt-in, fail-closed multi-agent harness and shared guard packs |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -39,7 +39,7 @@ rather than assumed: the `session-scheduler` suite passes 61/61 under 3.2.57.
 | `tmux` | `knowledge` | Optional. Only for pane-identity provenance; `KNOWLEDGE_PANE_NAME` substitutes. |
 | `git` | `knowledge` | Hard. Store resolution and `init` both require a repository. |
 | `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
-| `python3` | `session-workspace` harness policy | Hard only when a schema-v2 `harness.enabled` policy is active. Hooks launched inactive (empty launcher mode) remain no-ops; stale active launcher identity/config drift intentionally fails closed. |
+| `python3` | `session-workspace` harness policy | Hard only when a schema-v2/v3 `harness.enabled` policy is active. Hooks launched inactive remain no-ops; stale active launcher identity/config/guard drift intentionally fails closed. |
 | `python3` | `knowledge` doctor, `session-chat` message surfacing | Optional. Both degrade rather than fail. |
 | `codex` CLI | `session-manager` on Codex | Hard for deletion only. Its delete path execs the native CLI and exits 127 without it. |
 | GNU or BSD `date` plus a zoneinfo tree | `chronos` | Hard. It validates `AGENT_PLUGINS_TIME_ZONE` against the system zoneinfo. |
@@ -306,7 +306,7 @@ the confirmation internally to its stop phase; it does not accept a separate
 
 `chronos`, `knowledge`, and `session-chat` register lifecycle hooks;
 `session-manager` and `session-scheduler` register none. `session-workspace`
-registers an opt-in `PreToolUse` harness hook: schema-v1 projects, schema-v2
+registers opt-in harness hooks: schema-v1 projects, schema-v2/v3
 projects without an enabled harness, and sessions without launcher-provided
 harness identity remain true no-ops when no stale active launcher mode is
 present. A pane launched active still fails closed if the config is later
@@ -316,9 +316,9 @@ disabled or changed.
 `UserPromptSubmit` plus a throttled `PreToolUse` refresh, while Codex registers
 only `UserPromptSubmit`, so `CHRONOS_INTERVAL_MIN` has no effect there.
 
-Registering a hook is not the same as turning a feature on. All three of
-`knowledge`'s hooks are gated off internally, so a fresh install injects and
-captures nothing until you opt in.
+Registering a hook is not the same as turning a feature on. `knowledge`'s
+automatic recall and Stop nudge are opt-in. Its SessionStart snapshot detector
+remains automatic, but is silent when the project has no saved snapshots.
 
 Codex prompts for trust before running a plugin's hooks, and installing or
 enabling a plugin does not grant that trust on its own. Restart the session

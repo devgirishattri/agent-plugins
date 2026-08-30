@@ -289,7 +289,7 @@ else
 fi
 
 echo "== golden fixtures validate clean =="
-for fx in project-a project-d harness-v2 harness-disabled-v2; do
+for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3; do
   OUT="$(bash "$HERE/validate-config.sh" --config "$HERE/fixtures/valid/$fx.json" 2>&1)"
   STATUS=$?
   if [ "$STATUS" -eq 0 ] && printf '%s' "$OUT" | grep -q "^OK:"; then
@@ -352,6 +352,115 @@ if bash "$HERE/validate-config.sh" --config "$HARNESS_OFF" >/dev/null 2>&1; then
   pass "harness: schema v2 enabled=false is a valid inactive no-op configuration"
 else
   fail "harness: schema v2 enabled=false is a valid inactive no-op configuration" "validation failed"
+fi
+
+echo "== schema v3 guard packs are additive and identity-bound =="
+HARNESS_V3="$HERE/fixtures/valid/harness-v3.json"
+V3_COMPAT="$TMPROOT/harness-v3-no-guards.json"
+cp "$HARNESS_BASE" "$V3_COMPAT"
+V2_PLAN="$(bash "$HERE/workspace-plan.sh" --config "$V3_COMPAT" --json)"
+jq '.schema_version = 3' "$V3_COMPAT" > "$V3_COMPAT.next"
+mv "$V3_COMPAT.next" "$V3_COMPAT"
+V3_COMPAT_PLAN="$(bash "$HERE/workspace-plan.sh" --config "$V3_COMPAT" --json)"
+if [ "$V2_PLAN" = "$V3_COMPAT_PLAN" ]; then
+  pass "schema v3 without guards produces byte-identical normalized plan to v2"
+else
+  fail "schema v3 without guards produces byte-identical normalized plan to v2" "plans differ"
+fi
+V3_PLAN="$(bash "$HERE/workspace-plan.sh" --config "$HARNESS_V3" --json)"
+if printf '%s' "$V3_PLAN" | jq -e '.harness.guards.protected_files.profile == "credentials-lockfiles-v1" and (.sessions[0].panes[0].env_names | index("SESSION_WORKSPACE_GUARDS_JSON") != null)' >/dev/null; then
+  pass "schema v3 plan exposes guards and launcher guard identity"
+else
+  fail "schema v3 plan exposes guards and launcher guard identity" "$V3_PLAN"
+fi
+V3_GUARDS="$(jq -cS '.harness.guards' "$HARNESS_V3")"
+V3_ROOT="$(cd "$HERE/fixtures/valid" && pwd -P)"
+V3_STATUS="$(env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$V3_ROOT/harness-v3.json" SESSION_WORKSPACE_PROJECT_ROOT="$V3_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-master SESSION_WORKSPACE_ROLE=master SESSION_WORKSPACE_PANE_CWD="$V3_ROOT" \
+  SESSION_WORKSPACE_HARNESS_MODE=enforce SESSION_WORKSPACE_GUARDS_JSON="$V3_GUARDS" \
+  bash "$HERE/harness-status.sh" --config "$V3_ROOT/harness-v3.json" --json)"
+if printf '%s' "$V3_STATUS" | jq -e '.guards.lifecycle.prompt_reminder == true and .identity.matches == true and .policy.decision == "allow"' >/dev/null; then
+  pass "harness-status exposes schema-v3 guards and accepts matching identity"
+else
+  fail "harness-status exposes schema-v3 guards and accepts matching identity" "$V3_STATUS"
+fi
+V3_DOCTOR="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_GUARDS_JSON bash "$HERE/harness-doctor.sh" --config "$HARNESS_V3" --json)"
+if printf '%s' "$V3_DOCTOR" | jq -e '([.checks[] | select(.id == "guards.configuration") | .status] == ["OK"]) and .status.guards.workspace_health.warn_root_dirty == true' >/dev/null; then
+  pass "harness-doctor exposes validated schema-v3 guard configuration"
+else
+  fail "harness-doctor exposes validated schema-v3 guard configuration" "$V3_DOCTOR"
+fi
+for hook in guard-lifecycle.sh guard-health.sh; do
+  NOOP="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_GUARDS_JSON bash "$HERE/$hook" --event prompt 2>&1)"
+  if [ -z "$NOOP" ]; then pass "$hook has a silent no-env fast path"; else fail "$hook has a silent no-env fast path" "$NOOP"; fi
+done
+
+GH_ROOT="$TMPROOT/guard-health-project"
+GH_CHILD="$GH_ROOT/component-a"
+GH_BIN="$TMPROOT/guard-health-bin"
+mkdir -p "$GH_ROOT/.agent-workspace" "$GH_CHILD" "$GH_BIN"
+cp "$HARNESS_V3" "$GH_ROOT/.agent-workspace/workspace.json"
+git -C "$GH_ROOT" init -q
+git -C "$GH_ROOT" config user.email test@example.invalid
+git -C "$GH_ROOT" config user.name Test
+printf 'root\n' > "$GH_ROOT/README.md"
+git -C "$GH_ROOT" add README.md
+git -C "$GH_ROOT" commit -qm root
+git -C "$GH_CHILD" init -q
+git -C "$GH_CHILD" config user.email test@example.invalid
+git -C "$GH_CHILD" config user.name Test
+printf 'base\n' > "$GH_CHILD/file.txt"
+git -C "$GH_CHILD" add file.txt
+git -C "$GH_CHILD" commit -qm base
+git -C "$GH_CHILD" branch -M main
+git -C "$GH_CHILD" checkout -qb production
+printf 'release\n' >> "$GH_CHILD/file.txt"
+git -C "$GH_CHILD" commit -qam release
+git -C "$GH_CHILD" checkout -q main
+printf 'dirty\n' >> "$GH_ROOT/README.md"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" harness-sample-master' > "$GH_BIN/tmux"
+chmod +x "$GH_BIN/tmux"
+GH_CONFIG="$GH_ROOT/.agent-workspace/workspace.json"
+GH_GUARDS="$(jq -cS '.harness.guards' "$GH_CONFIG")"
+GH_ENV=(env PATH="$GH_BIN:$PATH" SESSION_WORKSPACE_CONFIG="$GH_CONFIG" SESSION_WORKSPACE_PROJECT_ROOT="$GH_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-master SESSION_WORKSPACE_ROLE=master SESSION_WORKSPACE_PANE_CWD="$GH_ROOT" \
+  SESSION_WORKSPACE_HARNESS_MODE=enforce SESSION_WORKSPACE_GUARDS_JSON="$GH_GUARDS")
+GH_CLAUDE="$(printf '{}' | "${GH_ENV[@]}" bash "$HERE/guard-health.sh")"
+if printf '%s' "$GH_CLAUDE" | jq -e '.systemMessage | contains("uncommitted") and contains("non-optional workspace panes are missing") and contains("production is ahead of main by 1")' >/dev/null 2>&1; then
+  pass "schema-v3 Stop health emits bounded Claude systemMessage diagnostics"
+else
+  fail "schema-v3 Stop health emits bounded Claude systemMessage diagnostics" "$GH_CLAUDE"
+fi
+GH_CODEX="$(printf '{}' | "${GH_ENV[@]}" bash "$HERE/guard-health.sh" --codex-hook-output)"
+if printf '%s' "$GH_CODEX" | grep -q '^session-workspace health:' && ! printf '%s' "$GH_CODEX" | jq -e . >/dev/null 2>&1; then
+  pass "schema-v3 Stop health emits plain Codex output"
+else
+  fail "schema-v3 Stop health emits plain Codex output" "$GH_CODEX"
+fi
+GL_SESSION="$("${GH_ENV[@]}" bash "$HERE/guard-lifecycle.sh" --event session)"
+if printf '%s' "$GL_SESSION" | jq -e '(.hookSpecificOutput.hookEventName == "SessionStart") and (.hookSpecificOutput.additionalContext | contains("pane harness-sample-master") and contains("role master"))' >/dev/null 2>&1; then
+  pass "schema-v3 SessionStart reminder is generic structured context"
+else
+  fail "schema-v3 SessionStart reminder is generic structured context" "$GL_SESSION"
+fi
+GL_PROMPT="$("${GH_ENV[@]}" bash "$HERE/guard-lifecycle.sh" --event prompt)"
+if printf '%s' "$GL_PROMPT" | jq -e '(.hookSpecificOutput.hookEventName == "UserPromptSubmit") and (.hookSpecificOutput.additionalContext | contains("strict-v1 gates"))' >/dev/null 2>&1; then
+  pass "schema-v3 UserPromptSubmit reminder uses Claude additionalContext"
+else
+  fail "schema-v3 UserPromptSubmit reminder uses Claude additionalContext" "$GL_PROMPT"
+fi
+GH_LAST_CONFIG="$GH_ROOT/.agent-workspace/workspace-last-schema.json"
+jq 'del(.schema_version) + {schema_version: 3}' "$GH_CONFIG" > "$GH_LAST_CONFIG"
+GH_LAST_ENV=(env PATH="$GH_BIN:$PATH" SESSION_WORKSPACE_CONFIG="$GH_LAST_CONFIG" SESSION_WORKSPACE_PROJECT_ROOT="$GH_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-master SESSION_WORKSPACE_ROLE=master SESSION_WORKSPACE_PANE_CWD="$GH_ROOT" \
+  SESSION_WORKSPACE_HARNESS_MODE=enforce SESSION_WORKSPACE_GUARDS_JSON="$GH_GUARDS")
+GL_LAST="$("${GH_LAST_ENV[@]}" bash "$HERE/guard-lifecycle.sh" --event prompt)"
+GH_LAST="$(printf '{}' | "${GH_LAST_ENV[@]}" bash "$HERE/guard-health.sh")"
+if printf '%s' "$GL_LAST" | jq -e '.hookSpecificOutput.hookEventName == "UserPromptSubmit"' >/dev/null 2>&1 && \
+   printf '%s' "$GH_LAST" | jq -e '.systemMessage | contains("session-workspace health")' >/dev/null 2>&1; then
+  pass "schema-v3 guard fast paths accept schema_version as the final JSON key"
+else
+  fail "schema-v3 guard fast paths accept schema_version as the final JSON key" "lifecycle=$GL_LAST health=$GH_LAST"
 fi
 
 echo "== golden plans render (human + --json) without error =="
@@ -553,7 +662,8 @@ HOOKS_JSON="$HERE/../hooks/hooks.json"
 HOOK_COMMON_OK=0
 HOOK_PROVIDER_OK=0
 if jq -e '.hooks.PreToolUse[0].hooks[0].command | test("harness-hook\\.sh")' "$HOOKS_JSON" >/dev/null 2>&1 && \
-   jq -e '.hooks.PreToolUse[0].matcher | test("Bash")' "$HOOKS_JSON" >/dev/null 2>&1; then
+   jq -e '.hooks.PreToolUse[0].matcher | test("Bash")' "$HOOKS_JSON" >/dev/null 2>&1 && \
+   jq -e '[.hooks.SessionStart,.hooks.UserPromptSubmit,.hooks.Stop] | all(type == "array" and length > 0)' "$HOOKS_JSON" >/dev/null 2>&1; then
   HOOK_COMMON_OK=1
 fi
 if [ -f "$HERE/../.codex-plugin/plugin.json" ]; then
@@ -568,9 +678,9 @@ else
   fi
 fi
 if [ "$HOOK_COMMON_OK" -eq 1 ] && [ "$HOOK_PROVIDER_OK" -eq 1 ]; then
-  pass "hooks/hooks.json registers the provider-correct PreToolUse harness hook and audit renderer"
+  pass "hooks/hooks.json registers provider-correct PreToolUse/lifecycle/Stop hooks and renderers"
 else
-  fail "hooks/hooks.json registers the provider-correct PreToolUse harness hook and audit renderer" "$(cat "$HOOKS_JSON" 2>/dev/null)"
+  fail "hooks/hooks.json registers provider-correct PreToolUse/lifecycle/Stop hooks and renderers" "$(cat "$HOOKS_JSON" 2>/dev/null)"
 fi
 HOOK_NOOP_OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_HARNESS_MODE bash "$HERE/harness-hook.sh" 2>&1)"
 if [ $? -eq 0 ] && [ -z "$HOOK_NOOP_OUT" ]; then
@@ -703,7 +813,11 @@ fi
 
 echo "== every static invalid fixture fails validation =="
 declare -a RULE_FIXTURES=(
-  "schema-version.json:schema_version must be 1 or 2"
+  "schema-version.json:schema_version must be 1, 2, or 3"
+  "harness-v2-guards.json:unknown key in harness: guards"
+  "harness-v3-disabled-guards.json:harness.enabled=false must not include"
+  "harness-v3-bad-guards.json:unknown key in harness.guards: unknown"
+  "harness-v3-top-level-guards.json:unknown key in top-level: guards"
   "unknown-key.json:unknown key in project"
   "duplicate-pane-names.json:duplicate pane name after resolution"
   "bad-charset-name.json:invalid characters"

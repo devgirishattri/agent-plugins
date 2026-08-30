@@ -305,7 +305,7 @@ check_config() {
 
   if validate_workspace_config "$CONFIG_JSON" "$CONFIG_PATH"; then
     local schema_version
-    if schema_version="$(printf '%s' "$CONFIG_JSON" | jq -er '.schema_version | select(. == 1 or . == 2) | tostring' 2>/dev/null)"; then
+    if schema_version="$(printf '%s' "$CONFIG_JSON" | jq -er '.schema_version | select(. == 1 or . == 2 or . == 3) | tostring' 2>/dev/null)"; then
       CONFIG_VALID=1
       add_check "config.validation" "config validation" "OK" \
         "$CONFIG_PATH is valid (schema_version $schema_version)"

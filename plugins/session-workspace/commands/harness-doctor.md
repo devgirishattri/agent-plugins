@@ -1,5 +1,5 @@
 ---
-description: Read-only health check for the opt-in session-workspace harness — config validity, activation, hook registration, python3 runtime, and live identity match
+description: Read-only health check for the opt-in session-workspace harness — config validity, activation, hook registration, schema-v3 guards, python3 runtime, and live identity match
 argument-hint: "[--config PATH] [--json]"
 allowed-tools: Bash(bash:*)
 ---
@@ -18,23 +18,35 @@ non-zero only when at least one check is `ERROR`, and `--json` always emits
 one structured report (even when config validation itself fails):
 
 - `config.validation` — the workspace config validates and a plan resolves
-  (schema v1 and v2 both pass; a v1 config simply has no harness).
+  (schema v1, v2, and v3 all pass; a v1 config simply has no harness, and a
+  v3 config without `harness.guards` behaves exactly like v2).
 - `harness.activation` — `OK` when `harness.enabled: true`, `INFO` when
   inactive (the hook is then a no-op for panes launched with an empty
   harness mode; a pane still carrying a stale `audit`/`enforce` mode is
   drift and `identity.live` reports it).
 - `hook.registration` — the bundled `hooks/hooks.json` registers the
-  `PreToolUse` policy hook (a file check only; whether the provider has
-  actually loaded and trusted the plugin's hooks cannot be verified from
-  inside a pane). The Claude registration invokes the policy without any
-  option (audit lines go to stderr); the Codex registration passes
-  `--codex-hook-output` so audit renders as an inert `systemMessage`
-  object, because Codex discards stderr of successful hooks.
+  `PreToolUse` policy hook plus the schema-v3 `SessionStart`,
+  `UserPromptSubmit`, and `Stop` guard hooks (a file check only; whether the
+  provider has actually loaded and trusted the plugin's hooks cannot be
+  verified from inside a pane — Codex trusts each hook entry by hash, so a
+  plugin upgrade that adds or changes entries needs those hashes re-accepted).
+  The Claude registration invokes the policy without any option (audit lines
+  go to stderr); the Codex registration passes `--codex-hook-output` so
+  audit renders as an inert `systemMessage` object, because Codex discards
+  stderr of successful hooks.
+- `guards.configuration` — `OK` when the validated plan exposes schema-v3
+  `harness.guards` packs, `INFO` when none are configured. The lifecycle and
+  Stop guard hooks are silent no-ops unless the pane was launched with a
+  guarded v3 config (`SESSION_WORKSPACE_GUARDS_JSON` present) and the
+  matching feature flag is on; Stop workspace-health diagnostics emit only
+  from the configured orchestrator pane.
 - `runtime.python3` — required only while a harness is active; an active
   harness without `python3` fails closed (every gated tool call is blocked).
 - `identity.env` — whether this process inherits engine identity:
-  `INFO` when none, `OK` when all variables are present, `ERROR` when only
-  some are (a partial identity is blocked by an active policy).
+  `INFO` when none, `OK` when all five core variables are present, `ERROR`
+  when only some are. Harness mode and guarded-v3 identity are checked
+  separately by `identity.live`; a partial core identity is blocked by an
+  active policy.
 - `identity.alias` — `SESSION_CHAT_PANE_NAME` / `KNOWLEDGE_PANE_NAME` agree
   with `SESSION_WORKSPACE_PANE_NAME`; a disagreement is `ERROR`, and an
   *active* policy blocks it (an inactive config with an empty launcher mode

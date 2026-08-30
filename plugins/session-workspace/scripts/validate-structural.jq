@@ -23,6 +23,12 @@ def chk(o; allowed; required; lbl):
   end;
 
 def perm_allowed: ["inherit", "default", "plan", "acceptEdits", "dontAsk"];
+def ref_name_valid:
+  type == "string"
+  and test("\\A[A-Za-z0-9][A-Za-z0-9._/-]*\\z")
+  and (contains("..") | not)
+  and (endswith("/") | not)
+  and (endswith(".lock") | not);
 def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_HOME", "SESSION_CONTEXT_HOME"];
 def harness_engine_vars: [
   "SESSION_WORKSPACE_CONFIG",
@@ -30,29 +36,48 @@ def harness_engine_vars: [
   "SESSION_WORKSPACE_PANE_NAME",
   "SESSION_WORKSPACE_ROLE",
   "SESSION_WORKSPACE_PANE_CWD",
-  "SESSION_WORKSPACE_HARNESS_MODE"
+  "SESSION_WORKSPACE_HARNESS_MODE",
+  "SESSION_WORKSPACE_GUARDS_JSON"
 ];
 
 [
   # ---- schema_version ----
   (.schema_version as $version |
-   if (has("schema_version") | not) or ([1, 2] | index($version)) == null then
-     "schema_version must be 1 or 2 (got: " + ((.schema_version // "missing") | tostring) + ")"
+   if (has("schema_version") | not) or ([1, 2, 3] | index($version)) == null then
+     "schema_version must be 1, 2, or 3 (got: " + ((.schema_version // "missing") | tostring) + ")"
    else empty end),
 
   # ---- structural: unknown/missing keys, one call per object shape ----
-  (if .schema_version == 2 then
+  (if (.schema_version == 2 or .schema_version == 3) then
      chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser", "harness"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
    else
      chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
    end),
-  (if .schema_version == 2 and has("harness") then
-     chk(.harness; ["enabled", "mode", "profile", "roles", "gates"]; ["enabled"]; "harness")
+  (if (.schema_version == 2 or .schema_version == 3) and has("harness") then
+     chk(.harness; (if .schema_version == 3 then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled"]; "harness")
    else empty end),
-  (if .schema_version == 2 and (.harness.enabled // false) == true then
-     chk(.harness; ["enabled", "mode", "profile", "roles", "gates"]; ["enabled", "mode", "profile", "roles", "gates"]; "harness"),
+  (if (.schema_version == 2 or .schema_version == 3) and (.harness.enabled // false) == true then
+     chk(.harness; (if .schema_version == 3 then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled", "mode", "profile", "roles", "gates"]; "harness"),
      chk(.harness.roles // {}; ["orchestrator", "executor", "reviewer"]; ["orchestrator", "executor", "reviewer"]; "harness.roles"),
      chk(.harness.gates // {}; ["plan_review_ttl_minutes", "audit_ttl_minutes"]; ["plan_review_ttl_minutes", "audit_ttl_minutes"]; "harness.gates")
+   else empty end),
+  (if .schema_version == 3 and (.harness.enabled // false) == true and (.harness | has("guards")) then
+     chk(.harness.guards; ["protected_files", "orchestrator", "lifecycle", "workspace_health"]; []; "harness.guards"),
+     (if (.harness.guards | has("protected_files")) then
+        chk(.harness.guards.protected_files; ["profile", "extra_basenames"]; ["profile"]; "harness.guards.protected_files")
+      else empty end),
+     (if (.harness.guards | has("orchestrator")) then
+        chk(.harness.guards.orchestrator; ["deny_child_chdir"]; []; "harness.guards.orchestrator")
+      else empty end),
+     (if (.harness.guards | has("lifecycle")) then
+        chk(.harness.guards.lifecycle; ["session_reminder", "prompt_reminder"]; []; "harness.guards.lifecycle")
+      else empty end),
+     (if (.harness.guards | has("workspace_health")) then
+        chk(.harness.guards.workspace_health; ["warn_root_dirty", "warn_missing_panes", "branch_ahead"]; []; "harness.guards.workspace_health"),
+        (if (.harness.guards.workspace_health | has("branch_ahead")) then
+           chk(.harness.guards.workspace_health.branch_ahead; ["base", "release"]; ["base", "release"]; "harness.guards.workspace_health.branch_ahead")
+         else empty end)
+      else empty end)
    else empty end),
   chk(.project // {}; ["id", "display_name", "root"]; ["id", "root"]; "project"),
   chk(.stores // {}; ["base", "pin", "overrides", "memory"]; ["pin"]; "stores"),
@@ -89,15 +114,15 @@ def harness_engine_vars: [
   # ---- schema-v2 opt-in harness contract. The executable policy owns a
   #      non-configurable safety floor; config only selects the typed profile,
   #      mode, semantic role names, and gate freshness windows. ----
-  (if .schema_version == 2 and has("harness") then
+  (if (.schema_version == 2 or .schema_version == 3) and has("harness") then
      (if (.harness.enabled | type) != "boolean" then
         "harness.enabled must be a boolean"
       else empty end),
      (if (.harness.enabled // false) == false and ((.harness | keys) - ["enabled"] | length) != 0 then
-        "harness.enabled=false must not include mode, profile, roles, or gates"
+        "harness.enabled=false must not include mode, profile, roles, gates, or guards"
       else empty end)
    else empty end),
-  (if .schema_version == 2 and (.harness.enabled // false) == true then
+  (if (.schema_version == 2 or .schema_version == 3) and (.harness.enabled // false) == true then
      .harness as $h |
      (if (["audit", "enforce"] | index($h.mode)) == null then
         "harness.mode must be one of [\"audit\",\"enforce\"]"
@@ -161,6 +186,66 @@ def harness_engine_vars: [
        if ($ttl | type) != "number" or ($ttl | floor) != $ttl or $ttl < 1 or $ttl > 1440 then
          "harness.gates.audit_ttl_minutes must be an integer in 1..1440"
        else empty end)
+   else empty end),
+
+  # ---- schema-v3 additive guard packs. These are closed, typed, and may
+  #      only add denials or warnings; they never accept scripts/regexes. ----
+  (if .schema_version == 3 and (.harness.enabled // false) == true and (.harness | has("guards")) then
+     (.harness.guards // {}) as $g |
+     (if ($g | type) != "object" then
+        "harness.guards must be an object"
+      else empty end),
+     (if ($g.protected_files // null) != null then
+        (if $g.protected_files.profile != "credentials-lockfiles-v1" then
+           "harness.guards.protected_files.profile must be credentials-lockfiles-v1"
+         else empty end),
+        (if ($g.protected_files | has("extra_basenames")) and ($g.protected_files.extra_basenames | type) != "array" then
+           "harness.guards.protected_files.extra_basenames must be an array"
+         else
+           (($g.protected_files.extra_basenames // [])[] as $name |
+             if ($name | type) != "string" or ($name | test("\\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\z") | not) then
+               "harness.guards.protected_files.extra_basenames entry must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$: " + ($name | tostring)
+             else empty end),
+           (if (($g.protected_files.extra_basenames // []) | unique | length) != (($g.protected_files.extra_basenames // []) | length) then
+              "harness.guards.protected_files.extra_basenames must not contain duplicates"
+            else empty end)
+         end)
+      else empty end),
+     (if ($g.orchestrator // null) != null then
+        (if ($g.orchestrator | has("deny_child_chdir")) and ($g.orchestrator.deny_child_chdir | type) != "boolean" then
+           "harness.guards.orchestrator.deny_child_chdir must be a boolean"
+         else empty end)
+      else empty end),
+     (if ($g.lifecycle // null) != null then
+        (if ($g.lifecycle | has("session_reminder")) and ($g.lifecycle.session_reminder | type) != "boolean" then
+           "harness.guards.lifecycle.session_reminder must be a boolean"
+         else empty end),
+        (if ($g.lifecycle | has("prompt_reminder")) and ($g.lifecycle.prompt_reminder | type) != "boolean" then
+           "harness.guards.lifecycle.prompt_reminder must be a boolean"
+         else empty end)
+      else empty end),
+     (if ($g.workspace_health // null) != null then
+        (if ($g.workspace_health | has("warn_root_dirty")) and ($g.workspace_health.warn_root_dirty | type) != "boolean" then
+           "harness.guards.workspace_health.warn_root_dirty must be a boolean"
+         else empty end),
+        (if ($g.workspace_health | has("warn_missing_panes")) and ($g.workspace_health.warn_missing_panes | type) != "boolean" then
+           "harness.guards.workspace_health.warn_missing_panes must be a boolean"
+         else empty end),
+        (if ($g.workspace_health.branch_ahead // null) != null then
+           ($g.workspace_health.branch_ahead as $b |
+             (if ($b.base | ref_name_valid | not) then
+                "harness.guards.workspace_health.branch_ahead.base is not a safe literal ref name: " + (($b.base // "missing") | tostring)
+              else empty end),
+             (if ($b.release | ref_name_valid | not) then
+                "harness.guards.workspace_health.branch_ahead.release is not a safe literal ref name: " + (($b.release // "missing") | tostring)
+              else empty end),
+             (if ($b.base | type) == "string" and ($b.release | type) == "string" and $b.base == $b.release then
+                "harness.guards.workspace_health.branch_ahead base and release must be distinct"
+              else empty end))
+         else empty end)
+      else empty end)
+   elif .schema_version == 3 and has("harness") and (.harness | has("guards")) and (.harness.enabled // false) != true then
+     "harness.guards requires harness.enabled=true"
    else empty end),
 
   # ---- commands must be argv arrays, never a command string ----

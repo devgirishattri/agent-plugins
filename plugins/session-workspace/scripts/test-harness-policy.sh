@@ -53,6 +53,12 @@ INVALID_CONFIG="$ROOT/.agent-workspace/invalid.json"
 jq '.harness.roles.reviewer = "missing"' "$CONFIG" > "$INVALID_CONFIG"
 BROKEN_CONFIG="$ROOT/.agent-workspace/broken.json"
 printf '{not json' > "$BROKEN_CONFIG"
+V3_CONFIG="$ROOT/.agent-workspace/v3.json"
+jq '.schema_version = 3 | .harness.guards = {
+  protected_files:{profile:"credentials-lockfiles-v1",extra_basenames:["custom-secret.json"]},
+  orchestrator:{deny_child_chdir:true}
+}' "$CONFIG" > "$V3_CONFIG"
+V3_GUARDS="$(jq -cS '.harness.guards' "$V3_CONFIG")"
 printf 'hello\n' > "$ROOT/component-a/README.md"
 printf 'root\n' > "$ROOT/AGENTS.md"
 ln -s "$ROOT/component-b" "$ROOT/component-a/escape-link"
@@ -221,6 +227,8 @@ expect() {
 as_exec()   { expect "$1" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$2" "$3"; }
 as_review() { expect "$1" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$2" "$3"; }
 as_master() { expect "$1" master "$MASTER_PANE" "$ROOT" "$CONFIG" enforce "$2" "$3"; }
+as_master_v3() { expect "$1" master "$MASTER_PANE" "$ROOT" "$V3_CONFIG" enforce "$2" "$3" SESSION_WORKSPACE_GUARDS_JSON="$V3_GUARDS"; }
+as_exec_v3() { expect "$1" executor "$EXEC_PANE" "$CHILD" "$V3_CONFIG" enforce "$2" "$3" SESSION_WORKSPACE_GUARDS_JSON="$V3_GUARDS"; }
 
 echo "== decision object shape =="
 OUT="$(run_policy reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(edit_payload src/file.ts)")"
@@ -312,6 +320,21 @@ expect "malformed active hook input fails closed" executor "$EXEC_PANE" "$CHILD"
   '{bad' '.decision == "deny" and .rule == "input.json"'
 expect "empty active hook input fails closed" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce \
   '' '.decision == "deny" and .rule == "input.empty"'
+expect "schema-v2 launcher upgraded to guarded schema v3 fails closed until restart" master "$MASTER_PANE" "$ROOT" "$V3_CONFIG" enforce \
+  "$(bash_payload 'git status')" '.decision == "deny" and .rule == "identity.config"'
+expect "schema-v3 forged guard identity fails closed" master "$MASTER_PANE" "$ROOT" "$V3_CONFIG" enforce \
+  "$(bash_payload 'git status')" '.decision == "deny" and .rule == "identity.config"' SESSION_WORKSPACE_GUARDS_JSON='{}'
+
+echo "== schema v3 additive guard decisions =="
+as_master_v3 "orchestrator protected .env edit is denied" "$(edit_payload '.env')" '.decision == "deny" and .rule == "orchestrator.protected_file"'
+as_master_v3 "orchestrator generic firebase JSON edit is denied" "$(edit_payload 'config/app-firebase-prod.json')" '.decision == "deny" and .rule == "orchestrator.protected_file"'
+as_master_v3 "orchestrator configured exact basename is denied" "$(edit_payload 'config/custom-secret.json')" '.decision == "deny" and .rule == "orchestrator.protected_file"'
+as_master_v3 "orchestrator ordinary root edit remains allowed" "$(edit_payload 'README.md')" '.decision == "allow"'
+as_exec_v3 "protected-file pack does not add an executor denial" "$(edit_payload '.env')" '.decision == "allow"'
+as_master_v3 "orchestrator cd into child is denied by configured guard" "$(bash_payload 'cd component-a && git status')" '.decision == "deny" and .rule == "orchestrator.child_chdir"'
+as_master_v3 "orchestrator env --chdir child is denied by configured guard" "$(bash_payload 'env --chdir component-a git status')" '.decision == "deny" and .rule == "orchestrator.child_chdir"'
+as_master_v3 "git -C child is not classified as process chdir" "$(bash_payload 'git -C component-a status')" '.decision == "allow"'
+as_exec_v3 "child-chdir guard does not alter executor decisions" "$(bash_payload 'cd src && pwd')" '.decision == "allow"'
 
 echo "== tool classification is by name; unknown tools are allowed =="
 READ_PAYLOAD="$(jq -cn --arg p "$ROOT/component-b/secret.ts" '{tool_name:"Read",tool_input:{file_path:$p}}')"

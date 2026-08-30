@@ -1,5 +1,5 @@
 ---
-description: Show the opt-in session-workspace harness state (mode, profile, roles, gates) and whether this pane's engine identity matches the validated plan
+description: Show the opt-in session-workspace harness state (mode, profile, roles, gates, schema-v3 guards) and whether this pane's engine identity matches the validated plan
 argument-hint: "[--config PATH] [--json]"
 allowed-tools: Bash(bash:*)
 ---
@@ -15,11 +15,14 @@ Do not narrate or add a preamble. Report the result above.
 `harness-status` is **read-only** — it validates the config, computes the
 normalized plan, and reports the harness block: `inactive` (schema v1, no
 `harness`, or `enabled: false`) or `active` with its `mode` (`audit` |
-`enforce`), `profile` (`strict-v1`), semantic `roles`, and `gates`.
+`enforce`), `profile` (`strict-v1`), semantic `roles`, and `gates`. A
+`guards:` line follows: the schema-v3 `harness.guards` packs as canonical
+JSON, or `none (schema-v2-compatible behavior)`.
 
 The `identity:` line reads this pane's engine-owned environment
 (`SESSION_WORKSPACE_CONFIG`, `_PROJECT_ROOT`, `_PANE_NAME`, `_ROLE`,
-`_PANE_CWD`, `_HARNESS_MODE`):
+`_PANE_CWD`, `_HARNESS_MODE`, and — for a guarded schema-v3 launch —
+`_GUARDS_JSON`, which must equal the validated `harness.guards` exactly):
 - `not present` — this process was not launched by `workspace-start`; the
   PreToolUse hook is a no-op here.
 - `MATCH` — identity agrees with the validated plan; an active harness
@@ -27,10 +30,11 @@ The `identity:` line reads this pane's engine-owned environment
 - `PARTIAL` — only some identity variables are set; an active policy
   fails closed on this.
 - `MISMATCH` — identity disagrees with the config (drift, a renamed pane, a
-  config edited after launch, or a `SESSION_CHAT_PANE_NAME` /
-  `KNOWLEDGE_PANE_NAME` alias that disagrees). An **active** harness fails
-  closed: every Edit/Write/Bash call is blocked until the pane is restarted
-  via `/workspace-restart`. Relay that remedy verbatim.
+  config edited after launch — including any change to `harness.guards` —
+  or a `SESSION_CHAT_PANE_NAME` / `KNOWLEDGE_PANE_NAME` alias that
+  disagrees). An **active** harness fails closed: every Edit/Write/Bash call
+  is blocked until the pane is restarted via `/workspace-restart`. Relay
+  that remedy verbatim.
 
 The `policy:` line is `harness-policy.py`'s own verdict for this process
 (`no-op`, `active ... identity accepted`, or `BLOCKING [rule] reason`) —

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/devgirishattri/agent-plugins/session-workspace/workspace.schema.json",
   "title": "session-workspace configuration",
-  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape mirrors validate-config.sh, which is authoritative. Schema version 1 remains the workspace-only contract and rejects harness. Schema version 2 adds an optional, explicit harness block; absent or enabled:false is inactive. The strict-v1 harness is deliberately typed and has no arbitrary script, regex, shell-fragment, or permission-widening escape hatch.",
+  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape mirrors validate-config.sh, which is authoritative. Schema version 1 remains workspace-only, version 2 adds the strict-v1 harness, and version 3 adds optional typed guard packs under an enabled harness. No guard accepts arbitrary scripts, regexes, shell fragments, or permission-widening escape hatches.",
   "type": "object",
   "required": ["schema_version", "project", "runtimes", "roles", "stores", "sessions"],
   "additionalProperties": false,
@@ -12,10 +12,14 @@
       "then": { "not": { "required": ["harness"] } }
     },
     {
+      "if": { "properties": { "schema_version": { "const": 2 } } },
+      "then": { "properties": { "harness": { "not": { "required": ["guards"] } } } }
+    },
+    {
       "if": {
         "required": ["harness"],
         "properties": {
-          "schema_version": { "const": 2 },
+          "schema_version": { "enum": [2, 3] },
           "harness": {
             "required": ["enabled"],
             "properties": { "enabled": { "const": true } }
@@ -32,7 +36,7 @@
       "if": {
         "required": ["harness"],
         "properties": {
-          "schema_version": { "const": 2 },
+          "schema_version": { "enum": [2, 3] },
           "harness": {
             "required": ["enabled"],
             "properties": { "enabled": { "const": false } }
@@ -43,7 +47,7 @@
     }
   ],
   "properties": {
-    "schema_version": { "enum": [1, 2] },
+    "schema_version": { "enum": [1, 2, 3] },
     "harness": {
       "type": "object",
       "required": ["enabled"],
@@ -69,6 +73,55 @@
           "properties": {
             "plan_review_ttl_minutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
             "audit_ttl_minutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
+          }
+        },
+        "guards": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "protected_files": {
+              "type": "object",
+              "required": ["profile"],
+              "additionalProperties": false,
+              "properties": {
+                "profile": { "const": "credentials-lockfiles-v1" },
+                "extra_basenames": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+                }
+              }
+            },
+            "orchestrator": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "deny_child_chdir": { "type": "boolean" } }
+            },
+            "lifecycle": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_reminder": { "type": "boolean" },
+                "prompt_reminder": { "type": "boolean" }
+              }
+            },
+            "workspace_health": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "warn_root_dirty": { "type": "boolean" },
+                "warn_missing_panes": { "type": "boolean" },
+                "branch_ahead": {
+                  "type": "object",
+                  "required": ["base", "release"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "base": { "type": "string" },
+                    "release": { "type": "string" }
+                  }
+                }
+              }
+            }
           }
         }
       }
