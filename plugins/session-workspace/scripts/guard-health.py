@@ -122,10 +122,9 @@ def main(argv: List[str]) -> int:
     if not warnings:
         return 0
     message = "session-workspace health: " + "; ".join(warnings)
-    if codex:
-        print(message)
-    else:
-        print(json.dumps({"systemMessage": message}, sort_keys=True, separators=(",", ":")))
+    # Both providers require non-empty Stop stdout to be a JSON command-output
+    # object. Codex 0.151 rejects plain text as "invalid stop hook JSON output".
+    print(json.dumps({"systemMessage": message}, sort_keys=True, separators=(",", ":")))
     return 0
 
 

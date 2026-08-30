@@ -206,8 +206,10 @@ health/lifecycle packs only add non-blocking context. Today they provide:
   local branches, report the neutral fact that `release` is ahead of `base`.
 
 The lifecycle/health wrappers exit silently before jq/Python when the guarded
-v3 launcher identity is absent or the feature is off. Stop checks are bounded,
-skip non-git roots and absent refs, and never block stopping.
+v3 launcher identity is absent or the feature is off. Lifecycle reminders use
+event-specific `hookSpecificOutput.additionalContext` JSON on both providers.
+Stop checks are bounded, skip non-git roots and absent refs, and never block
+stopping.
 
 ### The strict-v1 floor (immutable, not configurable)
 
@@ -368,8 +370,8 @@ commands, `workdir`, JSON-string `tool_input`) payloads are understood.
 
 For guarded schema-v3 launches, the same manifest also registers generic
 `SessionStart`/`UserPromptSubmit` reminders and the non-blocking Stop health
-check. Claude health output is a top-level `systemMessage` JSON object; Codex
-uses plain stdout. Codex trusts each hook entry by hash, so upgrading to a
+check. Claude and Codex health output is a top-level `systemMessage` JSON
+object; Codex rejects non-empty plain-text Stop stdout. Codex trusts each hook entry by hash, so upgrading to a
 release that adds or changes these entries requires accepting/re-trusting the
 new session-workspace hook hashes before relying on them.
 
@@ -383,7 +385,7 @@ containment**: a per-call workdir the policy never receives cannot be
 validated. `audit` is the recommended Codex mode until the runtime exposes
 that information or a sound mitigation exists.
 
-### Harness known gaps (0.4.0)
+### Harness known gaps (0.4.1)
 
 - The policy re-validates the config by running `workspace-plan.sh --json`
   on every gated tool call (a jq-only plan; the hook is registered on the
@@ -503,7 +505,7 @@ shell script, or CI with no provider CLI in the loop.
 
 ## Known limitations
 
-These are honest gaps in the current (0.4.0) implementation, not aspirational
+These are honest gaps in the current (0.4.1) implementation, not aspirational
 roadmap items — read them before depending on the behavior they describe.
 
 - **`stores.memory.root` does not export `KNOWLEDGE_MEMORY_HOME`.**

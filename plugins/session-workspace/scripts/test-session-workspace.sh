@@ -432,10 +432,10 @@ else
   fail "schema-v3 Stop health emits bounded Claude systemMessage diagnostics" "$GH_CLAUDE"
 fi
 GH_CODEX="$(printf '{}' | "${GH_ENV[@]}" bash "$HERE/guard-health.sh" --codex-hook-output)"
-if printf '%s' "$GH_CODEX" | grep -q '^session-workspace health:' && ! printf '%s' "$GH_CODEX" | jq -e . >/dev/null 2>&1; then
-  pass "schema-v3 Stop health emits plain Codex output"
+if printf '%s' "$GH_CODEX" | jq -e 'keys == ["systemMessage"] and (.systemMessage | contains("uncommitted") and contains("non-optional workspace panes are missing") and contains("production is ahead of main by 1"))' >/dev/null 2>&1; then
+  pass "schema-v3 Stop health emits Codex-valid systemMessage JSON"
 else
-  fail "schema-v3 Stop health emits plain Codex output" "$GH_CODEX"
+  fail "schema-v3 Stop health emits Codex-valid systemMessage JSON" "$GH_CODEX"
 fi
 GL_SESSION="$("${GH_ENV[@]}" bash "$HERE/guard-lifecycle.sh" --event session)"
 if printf '%s' "$GL_SESSION" | jq -e '(.hookSpecificOutput.hookEventName == "SessionStart") and (.hookSpecificOutput.additionalContext | contains("pane harness-sample-master") and contains("role master"))' >/dev/null 2>&1; then
@@ -448,6 +448,14 @@ if printf '%s' "$GL_PROMPT" | jq -e '(.hookSpecificOutput.hookEventName == "User
   pass "schema-v3 UserPromptSubmit reminder uses Claude additionalContext"
 else
   fail "schema-v3 UserPromptSubmit reminder uses Claude additionalContext" "$GL_PROMPT"
+fi
+GL_CODEX_SESSION="$("${GH_ENV[@]}" bash "$HERE/guard-lifecycle.sh" --event session --codex-hook-output)"
+GL_CODEX_PROMPT="$("${GH_ENV[@]}" bash "$HERE/guard-lifecycle.sh" --event prompt --codex-hook-output)"
+if printf '%s' "$GL_CODEX_SESSION" | jq -e '(.hookSpecificOutput.hookEventName == "SessionStart") and (.hookSpecificOutput.additionalContext | contains("pane harness-sample-master"))' >/dev/null 2>&1 && \
+   printf '%s' "$GL_CODEX_PROMPT" | jq -e '(.hookSpecificOutput.hookEventName == "UserPromptSubmit") and (.hookSpecificOutput.additionalContext | contains("strict-v1 gates"))' >/dev/null 2>&1; then
+  pass "schema-v3 lifecycle reminders use Codex-valid additionalContext JSON"
+else
+  fail "schema-v3 lifecycle reminders use Codex-valid additionalContext JSON" "session=$GL_CODEX_SESSION prompt=$GL_CODEX_PROMPT"
 fi
 GH_LAST_CONFIG="$GH_ROOT/.agent-workspace/workspace-last-schema.json"
 jq 'del(.schema_version) + {schema_version: 3}' "$GH_CONFIG" > "$GH_LAST_CONFIG"

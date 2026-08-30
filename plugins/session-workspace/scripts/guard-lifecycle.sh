@@ -4,11 +4,10 @@
 set -uo pipefail
 
 EVENT=""
-CODEX_OUTPUT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --event) EVENT="${2:-}"; shift 2 ;;
-    --codex-hook-output) CODEX_OUTPUT=1; shift ;;
+    --codex-hook-output) shift ;;
     *) exit 0 ;;
   esac
 done
@@ -45,9 +44,6 @@ else
   MESSAGE="session-workspace reminder: follow the configured ${ORCHESTRATOR}/${EXECUTOR}/${REVIEWER} routing and strict-v1 gates for this turn."
 fi
 
-if [ "$CODEX_OUTPUT" -eq 1 ]; then
-  printf '%s\n' "$MESSAGE"
-else
-  jq -cn --arg event "$HOOK_EVENT" --arg message "$MESSAGE" \
-    '{hookSpecificOutput:{hookEventName:$event,additionalContext:$message}}'
-fi
+# Claude and Codex consume the same event-specific additionalContext object.
+jq -cn --arg event "$HOOK_EVENT" --arg message "$MESSAGE" \
+  '{hookSpecificOutput:{hookEventName:$event,additionalContext:$message}}'
