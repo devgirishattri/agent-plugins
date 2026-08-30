@@ -1,11 +1,20 @@
 {
   "name": "session-workspace",
-  "version": "0.2.0",
-  "description": "Config-driven tmux workspace engine: one shared engine for session/window/pane lifecycle, replacing hand-maintained per-project workspace.sh launchers with a versioned .agent-workspace/workspace.json config.",
+  "version": "0.3.0",
+  "description": "Config-driven tmux workspace engine plus an opt-in, fail-closed multi-agent harness: one shared engine for session/window/pane lifecycle driven by a versioned .agent-workspace/workspace.json, and a strict-v1 PreToolUse role policy for orchestrator, executor, and reviewer panes.",
   "author": {
     "name": "Girish Attri"
   },
-  "keywords": ["tmux", "workspace", "session", "orchestration", "config", "multi-agent"],
+  "keywords": [
+    "tmux",
+    "workspace",
+    "session",
+    "orchestration",
+    "config",
+    "multi-agent",
+    "harness",
+    "policy"
+  ],
   "homepage": "https://github.com/devgirishattri/agent-plugins",
   "repository": "https://github.com/devgirishattri/agent-plugins",
   "license": "MIT"

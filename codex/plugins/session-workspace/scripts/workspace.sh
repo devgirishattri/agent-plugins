@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # workspace.sh — session-workspace CLI dispatcher.
 # Verbs: plan | start | status | stop | doctor | reconcile | restart | install | browser-config
+#        harness-status | harness-doctor  (read-only views of the opt-in harness)
 #
 # `install` is the odd one out: it takes no config and touches no tmux. It
 # installs this plugin's machine-wide `workspace` dispatcher onto PATH, and is
@@ -27,7 +28,7 @@ if [ "${1:-}" = "--contract" ]; then
 fi
 
 usage() {
-  echo "Usage: workspace.sh <plan|start|status|stop|doctor|reconcile|restart|install|browser-config> [args...]" >&2
+  echo "Usage: workspace.sh <plan|start|status|stop|doctor|reconcile|restart|install|browser-config|harness-status|harness-doctor> [args...]" >&2
   echo "       workspace.sh --contract" >&2
 }
 
@@ -65,6 +66,12 @@ case "$VERB" in
     ;;
   browser-config)
     exec bash "$HERE/workspace-browser-config.sh" "$@"
+    ;;
+  harness-status)
+    exec bash "$HERE/harness-status.sh" "$@"
+    ;;
+  harness-doctor)
+    exec bash "$HERE/harness-doctor.sh" "$@"
     ;;
   -h|--help)
     usage

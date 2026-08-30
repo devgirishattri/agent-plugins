@@ -1,0 +1,18 @@
+{
+  "description": "session-workspace: opt-in strict-v1 multi-agent role policy; inactive sessions are a true no-op",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|apply_patch|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$PLUGIN_ROOT/scripts/harness-hook.sh\"",
+            "timeout": 30,
+            "statusMessage": "Checking session-workspace harness policy"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "session-workspace",
-  "version": "0.2.0",
-  "description": "Config-driven tmux workspace engine for Codex sessions: one shared engine for session/window/pane lifecycle, replacing hand-maintained per-project workspace.sh launchers with a versioned .agent-workspace/workspace.json config.",
+  "version": "0.3.0",
+  "description": "Config-driven tmux workspace and opt-in multi-agent harness engine for Codex sessions, with shared fail-closed role policy.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
@@ -13,14 +13,14 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Session Workspace",
-    "shortDescription": "Config-driven tmux workspace lifecycle for Codex sessions.",
-    "longDescription": "Codex skills for a shared, config-driven tmux workspace engine: session/window/pane ensure, dry-run planning, health checks, and reconcile/adopt of drifted state, all driven by a project-local versioned workspace.json instead of a hand-maintained launcher script.",
+    "shortDescription": "Config-driven tmux workspace and role-policy harness.",
+    "longDescription": "Codex skills for a shared, config-driven tmux workspace engine plus an explicit opt-in, fail-closed multi-agent harness policy for orchestrator, executor, and reviewer panes.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
     "websiteURL": "https://github.com/devgirishattri/agent-plugins",
     "defaultPrompt": [
-      "Check session-workspace health with doctor.",
+      "Check session-workspace and harness health with doctor.",
       "Show the workspace plan for this project.",
       "Start the configured workspace sessions."
     ],

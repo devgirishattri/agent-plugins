@@ -24,15 +24,36 @@ def chk(o; allowed; required; lbl):
 
 def perm_allowed: ["inherit", "default", "plan", "acceptEdits", "dontAsk"];
 def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_HOME", "SESSION_CONTEXT_HOME"];
+def harness_engine_vars: [
+  "SESSION_WORKSPACE_CONFIG",
+  "SESSION_WORKSPACE_PROJECT_ROOT",
+  "SESSION_WORKSPACE_PANE_NAME",
+  "SESSION_WORKSPACE_ROLE",
+  "SESSION_WORKSPACE_PANE_CWD",
+  "SESSION_WORKSPACE_HARNESS_MODE"
+];
 
 [
   # ---- schema_version ----
-  (if (has("schema_version") | not) or (.schema_version != 1) then
-     "schema_version must be 1 (got: " + ((.schema_version // "missing") | tostring) + ")"
+  (.schema_version as $version |
+   if (has("schema_version") | not) or ([1, 2] | index($version)) == null then
+     "schema_version must be 1 or 2 (got: " + ((.schema_version // "missing") | tostring) + ")"
    else empty end),
 
   # ---- structural: unknown/missing keys, one call per object shape ----
-  chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level"),
+  (if .schema_version == 2 then
+     chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser", "harness"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
+   else
+     chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
+   end),
+  (if .schema_version == 2 and has("harness") then
+     chk(.harness; ["enabled", "mode", "profile", "roles", "gates"]; ["enabled"]; "harness")
+   else empty end),
+  (if .schema_version == 2 and (.harness.enabled // false) == true then
+     chk(.harness; ["enabled", "mode", "profile", "roles", "gates"]; ["enabled", "mode", "profile", "roles", "gates"]; "harness"),
+     chk(.harness.roles // {}; ["orchestrator", "executor", "reviewer"]; ["orchestrator", "executor", "reviewer"]; "harness.roles"),
+     chk(.harness.gates // {}; ["plan_review_ttl_minutes", "audit_ttl_minutes"]; ["plan_review_ttl_minutes", "audit_ttl_minutes"]; "harness.gates")
+   else empty end),
   chk(.project // {}; ["id", "display_name", "root"]; ["id", "root"]; "project"),
   chk(.stores // {}; ["base", "pin", "overrides", "memory"]; ["pin"]; "stores"),
   chk(.stores.memory // {}; ["mode", "root", "shard"]; []; "stores.memory"),
@@ -64,6 +85,83 @@ def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_H
       chk($p.value.agent // {}; ["model", "effort", "profile", "permission_mode"]; []; "sessions." + $slabel + ".panes." + $plabel + ".agent")
     ))
   )),
+
+  # ---- schema-v2 opt-in harness contract. The executable policy owns a
+  #      non-configurable safety floor; config only selects the typed profile,
+  #      mode, semantic role names, and gate freshness windows. ----
+  (if .schema_version == 2 and has("harness") then
+     (if (.harness.enabled | type) != "boolean" then
+        "harness.enabled must be a boolean"
+      else empty end),
+     (if (.harness.enabled // false) == false and ((.harness | keys) - ["enabled"] | length) != 0 then
+        "harness.enabled=false must not include mode, profile, roles, or gates"
+      else empty end)
+   else empty end),
+  (if .schema_version == 2 and (.harness.enabled // false) == true then
+     .harness as $h |
+     (if (["audit", "enforce"] | index($h.mode)) == null then
+        "harness.mode must be one of [\"audit\",\"enforce\"]"
+      else empty end),
+     (if $h.profile != "strict-v1" then
+        "harness.profile must be strict-v1"
+      else empty end),
+     (($h.roles // {}) as $hr |
+       ([($hr.orchestrator // null), ($hr.executor // null), ($hr.reviewer // null)] | map(select(type == "string" and length > 0))) as $role_values |
+       (if $role_values | length != 3 then
+          "harness.roles values must be non-empty strings"
+        elif ($role_values | unique | length) != 3 then
+          "harness.roles orchestrator, executor, and reviewer must name three distinct roles"
+        else empty end),
+       (($role_values[]) as $role_name |
+         if $role_name == "service" then
+           "harness.roles must not use the reserved service role"
+         elif ((.roles // {}) | has($role_name)) | not then
+           "harness.roles references unknown role \"" + $role_name + "\""
+         elif (.roles[$role_name].runtime // "") == "shell" then
+           "harness role \"" + $role_name + "\" must not use the built-in shell runtime"
+         else empty end),
+       ([.sessions[] | .panes[]] as $panes |
+         ([ $panes[] | select(.role == $hr.orchestrator) ] | length) as $orchestrators |
+         ([ $panes[] | select(.role == $hr.executor) ] | length) as $executors |
+         ([ $panes[] | select(.role == $hr.reviewer) ] | length) as $reviewers |
+         (if $orchestrators != 1 then
+            "enabled harness requires exactly one orchestrator pane (got: " + ($orchestrators | tostring) + ")"
+          else empty end),
+         (if $executors < 1 then
+            "enabled harness requires at least one executor pane"
+          else empty end),
+         (if $reviewers < 1 then
+            "enabled harness requires at least one reviewer pane"
+          else empty end),
+         ($panes[] | select(.role == $hr.executor) as $executor |
+           if (($executor.cwd // "") | type) != "string" or ($executor.cwd // "") == "" or ($executor.cwd == ".") then
+             "harness executor pane " + ($executor.name // "?") + " must declare a non-dot cwd"
+           else
+             ([ $panes[] | select(.role == $hr.reviewer and (.cwd // null) == $executor.cwd) ] | length) as $matches |
+             if $matches != 1 then
+               "harness executor pane " + ($executor.name // "?") + " must have exactly one reviewer pane with cwd \"" + $executor.cwd + "\" (got: " + ($matches | tostring) + ")"
+             else empty end
+           end),
+         ($panes[] | select(.role == $hr.reviewer) as $reviewer |
+           if (($reviewer.cwd // "") | type) != "string" or ($reviewer.cwd // "") == "" or ($reviewer.cwd == ".") then
+             "harness reviewer pane " + ($reviewer.name // "?") + " must declare a non-dot cwd"
+           else
+             ([ $panes[] | select(.role == $hr.executor and (.cwd // null) == $reviewer.cwd) ] | length) as $matches |
+             if $matches != 1 then
+               "harness reviewer pane " + ($reviewer.name // "?") + " must have exactly one executor pane with cwd \"" + $reviewer.cwd + "\" (got: " + ($matches | tostring) + ")"
+             else empty end
+           end)
+       )
+     ),
+     (($h.gates.plan_review_ttl_minutes // null) as $ttl |
+       if ($ttl | type) != "number" or ($ttl | floor) != $ttl or $ttl < 1 or $ttl > 1440 then
+         "harness.gates.plan_review_ttl_minutes must be an integer in 1..1440"
+       else empty end),
+     (($h.gates.audit_ttl_minutes // null) as $ttl |
+       if ($ttl | type) != "number" or ($ttl | floor) != $ttl or $ttl < 1 or $ttl > 1440 then
+         "harness.gates.audit_ttl_minutes must be an integer in 1..1440"
+       else empty end)
+   else empty end),
 
   # ---- commands must be argv arrays, never a command string ----
   ((.sessions // [])[] | (.panes // [])[] | . as $p |
@@ -215,6 +313,9 @@ def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_H
       (if (coordination_vars | index($kv.key)) != null then
          "env.groups." + $g.key + ".values must not set " + $kv.key + " -- it is derived from stores.pin, never a free-form env value"
        else empty end),
+      (if (harness_engine_vars | index($kv.key)) != null then
+         "env.groups." + $g.key + ".values must not set " + $kv.key + " -- it is reserved for engine-owned per-pane harness identity"
+       else empty end),
       (($kv.value | if startswith("${PROJECT_ROOT}") then .[("${PROJECT_ROOT}" | length):] else . end) as $rest |
         if ($rest | test("[$`]")) then
           "env.groups." + $g.key + ".values." + $kv.key + " must not contain $ or ` (only an exact \"${PROJECT_ROOT}\" prefix is allowed)"
@@ -231,6 +332,8 @@ def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_H
   ((.env.pane_name_aliases // [])[] | . as $alias |
     if ($alias | test("\\A[A-Z_][A-Z0-9_]*\\z") | not) then
       "env.pane_name_aliases entry \"" + $alias + "\" must match ^[A-Z_][A-Z0-9_]*$"
+    elif (harness_engine_vars | index($alias)) != null then
+      "env.pane_name_aliases must not contain reserved engine-owned harness identity name " + $alias
     else empty end),
 
   # ---- secrets.allow[] charset -- these keys are passed as `adapters.sh

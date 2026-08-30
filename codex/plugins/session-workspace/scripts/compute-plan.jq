@@ -16,8 +16,7 @@
 ##
 ## Environment variable NAMES ONLY are ever computed here — never a value.
 ## Shown names are the union of: the role's env_group value keys, configured
-## pane_name_aliases, the three engine-always identity vars (TMUX_PANE,
-## SESSION_CHAT_PANE_NAME, KNOWLEDGE_PANE_NAME), and — when the role's
+## pane_name_aliases, the engine-always identity and harness vars, and — when the role's
 ## env_group has pin_to_session=true — the coordination HOME var name for
 ## each store in stores.pin.
 ##
@@ -25,8 +24,8 @@
 ## engine mirrors into that tmux session's environment with `tmux
 ## set-environment` (see lifecycle.sh's _sw_pin_session_env), i.e. the union
 ## over the session's panes of the pin_to_session group's value keys plus the
-## stores.pin coordination vars. Per-pane identity — the three engine-always
-## vars and pane_name_aliases (whose value IS the pane name) — is deliberately
+## stores.pin coordination vars. Per-pane identity — every engine-always var
+## and pane_name_aliases (whose value IS the pane name) — is deliberately
 ## excluded, as are secrets, which never travel through session env at all.
 ## This field exists so the displayed plan and the engine's actual mirroring
 ## are computed from one definition and cannot drift apart.
@@ -53,6 +52,7 @@ def coordination_var_name(store):
 
 . as $cfg
 | ($cfg.browser // null) as $browser
+| ($cfg.schema_version == 2 and ($cfg.harness.enabled // false)) as $harness_active
 | ($cfg.stores.base // ".tmp") as $store_base
 | ($cfg.stores.overrides // {}) as $store_overrides
 | ($cfg.stores.pin // []) as $pin
@@ -65,7 +65,17 @@ def coordination_var_name(store):
 | ($mem.shard.fallback // "master") as $mem_fallback
 | ($cfg.project.id // "") as $pid
 | ($cfg.env.pane_name_aliases // []) as $aliases
-| ["TMUX_PANE", "SESSION_CHAT_PANE_NAME", "KNOWLEDGE_PANE_NAME"] as $engine_always
+| [
+    "TMUX_PANE",
+    "SESSION_CHAT_PANE_NAME",
+    "KNOWLEDGE_PANE_NAME",
+    "SESSION_WORKSPACE_CONFIG",
+    "SESSION_WORKSPACE_PROJECT_ROOT",
+    "SESSION_WORKSPACE_PANE_NAME",
+    "SESSION_WORKSPACE_ROLE",
+    "SESSION_WORKSPACE_PANE_CWD",
+    "SESSION_WORKSPACE_HARNESS_MODE"
+  ] as $engine_always
 |
 {
   config_path: $config_path,
@@ -74,6 +84,13 @@ def coordination_var_name(store):
     display_name: ($cfg.project.display_name // $pid),
     root: $root
   },
+  harness: (if $harness_active then {
+    active: true,
+    mode: $cfg.harness.mode,
+    profile: $cfg.harness.profile,
+    roles: $cfg.harness.roles,
+    gates: $cfg.harness.gates
+  } else {active: false} end),
   sessions: [
     ($cfg.sessions // [])[] | . as $s
     | {

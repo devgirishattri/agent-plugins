@@ -2,12 +2,77 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/devgirishattri/agent-plugins/session-workspace/workspace.schema.json",
   "title": "session-workspace configuration",
-  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape (types, enums, additionalProperties) mirrors what validate-config.sh enforces by hand with jq -- there is no bundled JSON Schema validator engine in this toolchain, so this file is not executed directly. validate-config.sh is authoritative and additionally enforces cross-field and filesystem rules this format cannot express (duplicate name resolution, path/symlink escape, secrets.env_file gating, env value charset, grants-vs-pin consistency). roles.*.agent.permission_mode and panes[].agent are schema extensions beyond the original design doc, added per binding decision #2 (extend the schema, not the project) to support a permission-mode allowlist that excludes bypassPermissions.",
+  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape mirrors validate-config.sh, which is authoritative. Schema version 1 remains the workspace-only contract and rejects harness. Schema version 2 adds an optional, explicit harness block; absent or enabled:false is inactive. The strict-v1 harness is deliberately typed and has no arbitrary script, regex, shell-fragment, or permission-widening escape hatch.",
   "type": "object",
   "required": ["schema_version", "project", "runtimes", "roles", "stores", "sessions"],
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": { "properties": { "schema_version": { "const": 1 } } },
+      "then": { "not": { "required": ["harness"] } }
+    },
+    {
+      "if": {
+        "required": ["harness"],
+        "properties": {
+          "schema_version": { "const": 2 },
+          "harness": {
+            "required": ["enabled"],
+            "properties": { "enabled": { "const": true } }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "harness": { "required": ["enabled", "mode", "profile", "roles", "gates"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["harness"],
+        "properties": {
+          "schema_version": { "const": 2 },
+          "harness": {
+            "required": ["enabled"],
+            "properties": { "enabled": { "const": false } }
+          }
+        }
+      },
+      "then": { "properties": { "harness": { "maxProperties": 1 } } }
+    }
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2] },
+    "harness": {
+      "type": "object",
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "mode": { "enum": ["audit", "enforce"] },
+        "profile": { "const": "strict-v1" },
+        "roles": {
+          "type": "object",
+          "required": ["orchestrator", "executor", "reviewer"],
+          "additionalProperties": false,
+          "properties": {
+            "orchestrator": { "type": "string", "minLength": 1 },
+            "executor": { "type": "string", "minLength": 1 },
+            "reviewer": { "type": "string", "minLength": 1 }
+          }
+        },
+        "gates": {
+          "type": "object",
+          "required": ["plan_review_ttl_minutes", "audit_ttl_minutes"],
+          "additionalProperties": false,
+          "properties": {
+            "plan_review_ttl_minutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+            "audit_ttl_minutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
+          }
+        }
+      }
+    },
     "browser": {
       "type": "object",
       "required": ["session_id", "port", "chrome_program", "mcp_package"],

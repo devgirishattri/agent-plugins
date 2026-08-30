@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: "Understand the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install). Use before invoking any session-workspace skill so you pick the right one and know the safety gates."
+description: "Understand session-workspace lifecycle and its optional strict-v1 multi-agent harness. Use before invoking workspace or harness skills so you pick the right read-only or mutating surface and know the safety gates."
 ---
 
 # Session Workspace
@@ -14,6 +14,8 @@ lifecycle from it.
 The engine is implemented. It validates config, renders mutation-free plans,
 starts/stops/reconciles managed tmux sessions and panes, builds Claude/Codex
 argv, pins non-secret coordination env, and runs read-only diagnostics.
+Schema v2 can additionally opt into a shared executable role-policy harness;
+schema v1 and v2 configs with no enabled harness retain workspace-only behavior.
 
 ## Choosing A Skill
 
@@ -28,11 +30,13 @@ argv, pins non-secret coordination env, and runs read-only diagnostics.
 | Repair drifted tmux state | `$session-workspace:workspace-reconcile` | Only sanctioned adoption path |
 | Install the `workspace` command | `$session-workspace:workspace-install` | Puts the dispatcher on PATH; no config, no tmux, idempotent |
 | Configure browser MCP clients | `$session-workspace:workspace-browser-config` | Dry-run by default; writes only with `--apply` |
+| Check harness activation/identity | `$session-workspace:harness-status` | Read-only |
+| Diagnose harness setup | `$session-workspace:harness-doctor` | Read-only |
 
 ## Configuration Model
 
-A project opts in by creating `.agent-workspace/workspace.json`
-(`schema_version: 1`) describing:
+A project opts into workspace lifecycle by creating
+`.agent-workspace/workspace.json` (`schema_version: 1` or `2`) describing:
 
 - `project` — id/display name/root
 - `runtimes` — named launch profiles (e.g. `claude`, `codex`), replacing any
@@ -50,6 +54,11 @@ A project opts in by creating `.agent-workspace/workspace.json`
   session-chat helper behavior
 - `browser` — optional Chrome DevTools session binding, pinned MCP package,
   loopback port, and portable derived profile
+- `harness` — schema-v2-only explicit opt-in. `enabled: false` is inactive for
+  new launches; a pane launched active still fails closed if the config is
+  later disabled. `enabled: true` selects only `audit|enforce`, the immutable `strict-v1`
+  profile, existing semantic role names, and bounded gate TTLs. It cannot
+  inject scripts, regexes, shell fragments, or permission exceptions.
 
 `workspace.schema.json` documents the shape, and `validate-config.sh` is the
 authoritative validator. Validation includes unknown keys, bad names, invalid
@@ -82,3 +91,13 @@ grant/store consistency.
   for the current `project.id`.
 - Secrets never travel through tmux history, argv, or session env; only a
   private single-use file path is passed to the launch script.
+- The active strict-v1 harness fails closed on missing/invalid config,
+  unknown pane identity, role/cwd drift, or a missing Python policy runtime.
+  Its non-configurable floor keeps the orchestrator out of child writes,
+  contains executor paths, makes reviewers read-only, and permits only
+  selected installed helpers with exact reviewed argv/routing grammars.
+- `AGENTS.md` and project-local commands remain the contract for product,
+  release, deployment, and domain-specific checks. The shared harness does
+  not attempt to encode those project rules. Its normalized plan/audit TTLs
+  are declarative values for that command layer, not evidence that a review
+  occurred and not authorization for commit, push, deploy, or release.

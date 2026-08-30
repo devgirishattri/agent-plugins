@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "project": {
+    "id": "harness-disabled",
+    "display_name": "Harness Disabled",
+    "root": "."
+  },
+  "runtimes": {
+    "codex": {
+      "program": "codex",
+      "args": []
+    }
+  },
+  "roles": {
+    "orchestrator": {
+      "runtime": "codex",
+      "grants": [],
+      "env_group": "dev"
+    }
+  },
+  "stores": {
+    "pin": []
+  },
+  "env": {
+    "groups": {
+      "dev": {
+        "values": {},
+        "pin_to_session": false
+      }
+    },
+    "pane_name_aliases": []
+  },
+  "sessions": [
+    {
+      "id": "development",
+      "name": "${PROJECT_ID}-development",
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-master",
+          "role": "orchestrator",
+          "cwd": "."
+        }
+      ]
+    }
+  ],
+  "harness": {
+    "enabled": false
+  }
+}

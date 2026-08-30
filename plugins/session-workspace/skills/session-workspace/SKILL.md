@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install). Use this before invoking any /workspace-* command so you understand the config model, the real flags, and the safety gates.
+description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install) and its opt-in strict-v1 multi-agent harness (harness-status/harness-doctor, the PreToolUse role policy). Use this before invoking any /workspace-* or /harness-* command so you understand the config model, the real flags, the safety gates, and what an active harness will block.
 ---
 
 # session-workspace: config-driven tmux workspace engine
@@ -29,11 +29,13 @@ is not a scaffold.
 | `/workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
 | `/workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
 | `/workspace-browser-config` | Render/apply project MCP entries for the configured browser |
+| `/harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), and does this pane's engine identity match the plan |
+| `/harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
 
 ## Configuration model (enforced)
 
 A project opts in by creating `.agent-workspace/workspace.json`
-(`schema_version: 1`) describing:
+(`schema_version: 1`, or `2` to add the optional `harness` block) describing:
 
 - `project` — id/display name/root
 - `runtimes` — named launch profiles (e.g. `claude`, `codex`), replacing any
@@ -52,6 +54,11 @@ A project opts in by creating `.agent-workspace/workspace.json`
 - `behavior` — attach/stop-scope/save defaults
 - `browser` — optional Chrome DevTools session binding, pinned MCP package,
   loopback port, and portable derived profile
+- `harness` (schema v2 only) — opt-in strict-v1 role policy: `enabled`,
+  `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
+  `gates`; absent or `enabled: false` is a true no-op (for panes whose
+  launcher mode is empty — a pane launched under audit/enforce keeps that
+  mode and blocks as drift until restarted)
 
 `workspace.schema.json` in `scripts/` documents this shape, and
 `validate-config.sh` enforces it — both structurally (via
@@ -79,6 +86,46 @@ Non-secret env that a role's `env_group` marks `pin_to_session: true` DOES
 use plain `tmux set-environment` on purpose — that path is for coordination
 vars a hand-made pane should also inherit, and secrets are excluded from it
 by construction.
+
+## The opt-in harness (schema v2)
+
+With `harness.enabled: true` the engine's `PreToolUse` hook enforces an
+**immutable strict-v1 floor** keyed on the per-pane identity it exports at
+launch (`SESSION_WORKSPACE_CONFIG`, `_PROJECT_ROOT`, `_PANE_NAME`, `_ROLE`,
+`_PANE_CWD`, `_HARNESS_MODE`). Relay these consequences when a user hits
+them:
+
+- A session not launched by `workspace-start`, a schema-v1 project, or
+  `enabled: false` is a true no-op — nothing is gated — as long as the pane
+  was not launched under an earlier `audit`/`enforce` mode (stale mode is
+  drift and blocks until `/workspace-restart`).
+- **Reviewer**: every Edit/Write/NotebookEdit is blocked; shell is
+  default-deny except one literal read-only command inside its own checkout
+  (no pipes, redirection, `sed`, sibling `../` reads) and trusted
+  coordination helpers (reply to the orchestrator, `task-done`/`task-block`,
+  context and read-only knowledge helpers). Verdicts go out as a single-line
+  `/reply` or a scheduler note.
+- **Executor**: edits and shell path operands must stay inside its own
+  checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
+  are blocked; it may only message the orchestrator. Read dispatch files
+  with the `Read` tool and stage prompt files inside the checkout (writes
+  under `$TMPDIR` are refused by containment).
+- **Orchestrator**: cannot edit or run mutating commands against a child
+  checkout; routes only to its configured executor/reviewer panes;
+  `broadcast` is not available under strict-v1.
+- `sudo`/`doas`/`su`/`runuser`/`pkexec` are refused for every role at any
+  wrapper hop, as is any unsupported wrapper option (`exec -a`, `nohup --`,
+  `time -o`, `env -S` all fail closed); the accepted `env`/`command`/
+  `builtin`/`exec`/`nohup`/`time` forms are enumerated in the plugin README.
+- Installed helpers must be invoked as one literal
+  `bash <selected-cache-path>/scripts/<name>.sh args...` — no env prefix,
+  wrapper, chaining, expansion, stale version, or copied script.
+- `audit` mode prints `AUDIT by session-workspace strict-v1 [...]` and never
+  blocks a *policy* denial; `enforce` prints `BLOCKED ...` and blocks.
+  Identity/config/drift integrity failures block in both modes — the remedy
+  is `/workspace-restart` of that pane, never hand-editing the identity
+  variables.
+- Run `/harness-doctor` first when something is unexpectedly blocked.
 
 ## Safety gates worth relaying to the user
 

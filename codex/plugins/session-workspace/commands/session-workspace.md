@@ -1,5 +1,5 @@
 ---
-description: Overview of the session-workspace plugin — config-driven tmux workspace lifecycle
+description: Overview of session-workspace lifecycle and the opt-in strict-v1 role-policy harness
 ---
 
 ## Instructions
@@ -23,6 +23,8 @@ description: Overview of the session-workspace plugin — config-driven tmux wor
    validates config, renders dry-run plans, starts/stops/reconciles managed
    tmux sessions and panes, builds Claude/Codex argv, pins non-secret
    coordination env, and runs a read-only doctor.
+   Schema-v2 projects may explicitly enable a shared, fail-closed `strict-v1`
+   harness. Schema v1 remains unchanged and harness-inactive.
 
 4. Summarize the available lifecycle commands for the user:
    - `$session-workspace:workspace-doctor [--config PATH] [--json]` - read-only dependency/config/runtime health check.
@@ -33,6 +35,8 @@ description: Overview of the session-workspace plugin — config-driven tmux wor
    - `$session-workspace:workspace-restart [TARGET|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` - stop then start the same target.
    - `$session-workspace:workspace-reconcile [TARGET|all] [--config PATH] [--apply] [--adopt --confirmed]` - dry-run or apply repairs; adoption requires confirmation.
    - `$session-workspace:workspace-browser-config [--config PATH] [--provider codex|claude|all] [--apply] [--json]` - preview or explicitly apply browser MCP entries.
+   - `$session-workspace:harness-status [--config PATH] [--json]` - read-only harness activation, role, gate, and live identity status.
+   - `$session-workspace:harness-doctor [--config PATH] [--json]` - read-only harness config/hook/runtime/identity validation.
 
 5. Key safety gates:
    - All lifecycle verbs resolve and validate `.agent-workspace/workspace.json`
@@ -64,3 +68,13 @@ description: Overview of the session-workspace plugin — config-driven tmux wor
    - Secrets are not sent through tmux history, argv, or session env. Authorized
      panes receive a private 0600 single-use `KEY=VALUE` file; only that file
      path is embedded in the launch script, and the pane unlinks it after export.
+   - Harness activation is explicit. A hook launched inactive (empty launcher
+     mode) or without workspace identity is a true no-op. A pane launched
+     active fails closed on invalid/disabled config or identity drift.
+   - `strict-v1` is an immutable floor: orchestrator child writes are blocked,
+     executors are cwd-contained, reviewers are read-only, and installed helper
+     execution requires selected provenance plus an exact argv/routing grammar.
+     Product/release/deployment rules remain project-local and in `AGENTS.md`.
+     The normalized plan/audit TTLs are declarative inputs for that project
+     command layer; strict-v1 does not create gate evidence or authorize
+     commit, push, deploy, or release actions itself.

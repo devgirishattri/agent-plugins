@@ -44,6 +44,8 @@ the CLI contract string both entry points use for their compatibility check.
 | `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical target reports `already current` and writes nothing, so it doubles as the refresh for that copy. Backs up any existing target to `<target>.bak`, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
+| `harness-status` | `harness-status [--config PATH] [--json]` | Never | Read-only view of the opt-in harness block (`inactive`, or `active` with mode/profile/roles/gates) and whether this pane's engine identity matches the validated plan. |
+| `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for the harness: config validity, activation, hook registration, `python3` runtime, live identity match. Non-zero only on `ERROR`. |
 
 `TARGET` is a `sessions[].id` from the config, or `all` (the default).
 `--json` output on `plan`/`status`/`doctor` is produced from the same
@@ -127,6 +129,232 @@ when an allowed key isn't present in the file or the caller's environment
 (checked in that order — the caller's environment wins): `"fail"` aborts
 that pane's launch outright; `"warn"` starts the pane without it.
 
+## Harness (opt-in, schema v2)
+
+`schema_version: 2` adds one optional, typed `harness` block that turns the
+workspace into a fail-closed multi-agent harness: one **orchestrator** pane,
+and per child checkout one **executor** / **reviewer** pair, with an
+executable role policy enforced by a `PreToolUse` hook on both providers.
+Everything else in the config is unchanged between v1 and v2; an existing
+v1 config keeps working with no edits (a v1 config with a `harness` key is
+rejected).
+
+**Activation is explicit.** The hook is a true no-op — no Python is even
+spawned — for: a session with no `SESSION_WORKSPACE_CONFIG` (not launched
+by this engine), a schema-v1 config, a v2 config with no `harness` block,
+and `harness.enabled: false` (which must then carry no `mode`/`profile`/
+`roles`/`gates` siblings) — provided the pane's launcher mode
+(`SESSION_WORKSPACE_HARNESS_MODE`) is empty. A pane launched while the
+harness was `audit`/`enforce` still carries that mode after the config is
+disabled; that is drift, and it intentionally blocks until the pane is
+restarted. Only `enabled: true` with `mode` (`audit` | `enforce`),
+`profile: "strict-v1"`, `roles`, and `gates` activates it.
+
+### Per-pane engine identity
+
+Every pane the engine launches (v1 or v2) receives six **engine-owned**
+variables in its own process environment — never mirrored into the tmux
+session env, never settable from `env.groups`/`pane_name_aliases` (both are
+validation errors) — and `workspace-plan` lists their names:
+
+| Variable | Value |
+|---|---|
+| `SESSION_WORKSPACE_CONFIG` | absolute, canonical path of the config the pane was launched from |
+| `SESSION_WORKSPACE_PROJECT_ROOT` | canonical project root |
+| `SESSION_WORKSPACE_PANE_NAME` | the pane's configured name |
+| `SESSION_WORKSPACE_ROLE` | the pane's configured role name |
+| `SESSION_WORKSPACE_PANE_CWD` | the pane's resolved cwd |
+| `SESSION_WORKSPACE_HARNESS_MODE` | `audit` or `enforce` when active; empty for v1, no `harness`, or `enabled: false` |
+
+The policy cross-checks this identity against the validated config on every
+gated tool call and **fails closed** on any disagreement: unknown pane, role
+or cwd mismatch, project-root mismatch, `SESSION_CHAT_PANE_NAME` /
+`KNOWLEDGE_PANE_NAME` disagreeing with the engine name, a config that no
+longer validates, or config drift (harness enabled/disabled/mode-changed
+after launch). Integrity failures block in **both** modes — `audit` only
+softens policy denials. The remedy for drift is always a pane restart
+(`workspace restart`), never editing the variables by hand.
+
+### The strict-v1 floor (immutable, not configurable)
+
+Configuration selects *which* panes hold each role; it cannot add scripts,
+regexes, shell fragments, commands, or permission exceptions. The floor:
+
+- **Reviewer** — every edit/write/patch/notebook tool is denied. Shell is
+  default-deny, with two carve-outs: (a) one literal read-only command
+  (`cat head tail wc ls stat file diff grep rg find jq sort ...` and
+  read-only `git` subcommands without write/output/external-exec options)
+  whose path operands — including bare `.`/`..`, `-C` values, and quoted
+  paths containing spaces — resolve inside its own checkout, the
+  coordination stores the plan grants it, either provider's message inbox,
+  or the *selected version* directory of an installed plugin (a bare
+  operand naming a planted symlink is canonicalized) — no pipes,
+  redirection, expansion, unquoted globs, `cd`, wrappers or assignment
+  prefixes, path-written executables, `sed`/`awk`/`perl`, `tail -f`,
+  `find -exec`, or reads of sibling checkouts via `../`; (b) trusted
+  coordination helpers (below): session-chat send/dispatch/reply to the
+  orchestrator only, scheduler `task-done`/`task-block` (never `--force`,
+  never `task-new`/`task-assign`), context save/share/load/list/search/diff,
+  read-only knowledge recall/search/graph/lint/doctor. Never memory/docs
+  writes.
+- **Executor** — edit targets must resolve (through symlinks) inside its
+  configured pane cwd. Arbitrary shell stays available for builds/tests/git
+  inside the checkout, but every path-like operand must resolve inside that
+  cwd (absolute, `../`, bare `..`, quoted paths with spaces, `-C`/`--chdir`
+  values, and symlink escapes alike) — the fixed `/dev/null` sink/source is
+  the only exempt operand; `cd`/`chdir`/`pushd`/`popd` are
+  tracked across a composed command so later operands resolve against the
+  directory the shell would actually be in, and a `cd` whose target leaves
+  the cwd (or `cd -`, a bare `cd`, `pushd` with no operand) is refused;
+  operands that only exist after a shell expansion (`"$TARGET"`, backticks,
+  unquoted globs/braces) fail closed; redirection targets (`> file`,
+  `>> "escape link"`, `2> /tmp/x`, `< ../x`) are path operands too;
+  attached `-C..`/`-Cdir` and `--chdir=` values are resolved; a bare operand
+  that names an existing entry (a planted symlink) is canonicalized;
+  `xargs`, inline code (`bash -c`, `python -c`, `node -e`, `eval`), and any
+  sandbox/approval-escape flag are refused. Outbound
+  coordination may only target
+  the orchestrator; direct `tmux send-keys`/`paste-buffer`/... and copied or
+  relative session-chat helpers are refused as routing bypasses. Executors
+  additionally get `task-review` and `memory-remember`.
+- **Orchestrator** — may not edit or run mutating commands against any
+  child checkout root (read-only commands and `git` reads against a child
+  are fine), and never runs `git push` — including behind `env`, `command`,
+  `exec`, `nohup`, or an assignment prefix (pushes go through the owning
+  executor and the project's own release gate); `cd child && ...`,
+  `git -Cchild`, `make -Cchild`, `env --chdir=child` and write
+  redirections into a child count as child mutations; its own root, the
+  config,
+  and files outside the workspace are not otherwise gated. Its shell is
+  otherwise free. It owns `task-new`/`task-assign`
+  (only to configured executor/reviewer panes), `tasks-clean`,
+  `messages-clean`, memory/docs writes, and every workspace mutator.
+- **Unknown tools are allowed** for every role (`Read`, `Grep`, `Glob`,
+  `WebFetch`, ...). Classification is by tool *name*, never by the shape of
+  the payload, so the plugin is a floor, not a tool allowlist.
+- **One literal wrapper grammar for any role.** The launch wrappers
+  `parse_wrappers` recognizes, and the complete set of options it accepts:
+  `NAME=value` prefixes (any number, at any hop); `env` with
+  `-i`/`--ignore-environment`, `-u NAME`/`--unset NAME`/`--unset=NAME` (a
+  literal variable name), `-C DIR`/`-CDIR`/`--chdir DIR`/`--chdir=DIR` (a
+  literal directory; nested `env -C` hops compose in order, each resolved
+  through symlinks against the previous hop and checked, while a repeated
+  `-C`/`--chdir` within one `env` behaves like `env` itself — the last
+  value wins, against that `env`'s starting cwd — with every given value
+  still checked), `NAME=value` assignments, and a terminating `--`;
+  `command CMD` (`command -v`/`-V` is a lookup query, not a wrapper);
+  `builtin CMD`; and bare `exec CMD`, `nohup CMD`, `time CMD` with no
+  options. An unsupported, missing, or dynamic wrapper option — `exec -a`/
+  `-l`/`-c`, `nohup --`, `time -o`/`-p`, `/usr/bin/time -o`,
+  `env -S`/`--split-string=` (a re-parsed argv), `env -u` without a name,
+  `env --unset=` with an empty or invalid name, `env --default-signal`,
+  `command -p`, `builtin -x` — is refused (`shell.wrapper`), and the
+  privilege wrappers `sudo`, `doas`, `su`, `runuser`, `pkexec` at any hop
+  (`env sudo`, `command doas`, `FOO=1 sudo`, a later segment) are refused
+  outright (`shell.privilege`) — a privileged or re-parsed argv is never
+  modelled.
+- **No permission-widening escape hatch for any role**: a shell command
+  carrying `--dangerously-bypass-approvals-and-sandbox`,
+  `--dangerously-bypass-hook-trust`, `--dangerously-skip-permissions`, or
+  `--permission-mode bypassPermissions` (a nested agent launch) is refused
+  everywhere, matching the engine's own refusal of those flags in
+  `runtimes.*.args`.
+- **Read roots are exact, and scoped by surface.** A *reviewer's* shell
+  operands, and *trusted-helper* operands for any child role (a dispatch
+  prompt file, `--store`, a context snapshot), may resolve inside: the
+  pane's own cwd; the coordination stores the plan *grants* that pane
+  (`roles.<r>.grants`, i.e. the same directories it receives as
+  `--add-dir`); `~/.claude/messages` and `~/.codex/messages`; and the
+  *selected version* directory of an installed plugin (never another
+  version, never an unselected plugin). An *executor's* arbitrary shell is
+  narrower still: every operand must resolve inside its pane cwd alone
+  (`/dev/null` excepted).
+  Inherited `SESSION_*_HOME` / `SESSION_CHAT_TARGET_MESSAGES_DIR` values
+  and the rest of a marketplace cache are deliberately not trusted. A plain `memory-search.sh --recall`
+  without `--store` still works for a pane without a memory grant (the
+  script resolves its own store); only an explicit `--store` outside the
+  granted roots is refused.
+- **Child routing is master-only.** Children address only the orchestrator;
+  the orchestrator addresses only its configured executor/reviewer panes;
+  `broadcast-message.sh` has no topology-bound form and is not allowed in
+  strict-v1.
+
+### Trusted helpers: exact provenance, literal argv
+
+For **every role**, an installed-plugin helper is recognized only as one
+literal, uncomposed `bash <script> args...` segment where `<script>` is the
+canonical path of the **selected** installed version under
+`~/.claude/plugins/cache/girishattri-plugins/<plugin>/<version>/scripts/<name>.sh`
+or the Codex equivalent under `~/.codex/plugins/cache/...`. Rejected: any
+prefix or wrapper (`FOO=1`, `env`, `exec`, `sh`), operators, pipes,
+redirection, `$`/backtick expansion outside single quotes, multi-line
+arguments, `..`/`~`/unnormalized paths, a symlink at any component below the
+cache root, a stale or unselected version, a script from another
+marketplace or a copy elsewhere, and any basename without a reviewed argv
+grammar. "Selected" means: on Claude, the `installPath`/`version` recorded in
+`~/.claude/plugins/installed_plugins.json` (user scope, or a project scope
+whose `projectPath` is this workspace); on Codex, the plugin enabled in
+`~/.codex/config.toml` at the version of the marketplace manifest under
+`~/.codex/.tmp/marketplaces/`. Every allowed helper carries an exact
+per-basename argv grammar (`harness-policy.py`'s `HELPERS` table) — there is
+no grammar-less pass for any role.
+
+### The hook
+
+`hooks/hooks.json` registers `scripts/harness-hook.sh` on `PreToolUse` for
+`Edit|Write|MultiEdit|NotebookEdit|Bash`. The wrapper exits 0 without
+touching Python whenever the harness is inactive; when it is active and
+`python3` is missing it fails closed (exit 2). `scripts/harness-policy.py`
+(stdlib only, runs on the stock macOS Python 3.9) then:
+
+- allows silently (exit 0, no output);
+- in `audit` mode prints one `AUDIT by session-workspace strict-v1
+  [rule]: reason` line to stderr and exits 0 for a *policy* denial — it
+  never blocks those; identity, config, and drift *integrity* failures
+  still exit 2 in audit mode;
+- in `enforce` mode prints one `BLOCKED by session-workspace strict-v1
+  [rule]: reason` line to stderr and exits 2, which blocks the tool call.
+
+`harness-policy.py --decision-json` (test/parity mode) prints exactly one
+compact, key-sorted JSON object —
+`{"active","decision","mode","pane","profile","reason","role","rule","tool"}`
+with `decision` ∈ `allow | deny | audit` — so both provider trees can
+byte-compare decisions. Both Claude-shaped (`tool_name`/`tool_input`, string
+`command`) and Codex-shaped (`shell`/`apply_patch`, argv-list or `bash -lc`
+commands, `workdir`, JSON-string `tool_input`) payloads are understood.
+
+### Harness known gaps (0.3.0)
+
+- The policy re-validates the config by running `workspace-plan.sh --json`
+  on every gated tool call (a jq-only plan; the hook is registered on the
+  gated tools only). There is deliberately no cache: a same-uid cache file
+  could be planted by an executor.
+- Reviewer verdicts travel as single-line `send-message.sh` replies or
+  scheduler notes — a reviewer cannot stage a multi-line dispatch body
+  because every write tool is denied. Executors stage prompt files inside
+  their own checkout; a trusted helper may consume a pre-existing literal
+  `$TMPDIR` file as input, but containment refuses creating one there.
+- Executors read dispatch files with the provider's `Read` tool (unknown
+  tools are allowed); `cat ~/.claude/messages/...` from an executor shell is
+  refused by the cwd containment floor. Executors stage dispatch prompt
+  files *inside their own checkout* — edit and shell containment refuse
+  creating files under `$TMPDIR`; a temp file that already exists (written
+  by a helper or hook) is accepted as helper input only.
+- `harness-status`/`harness-doctor` probe `harness-policy.py` directly, so
+  their `policy:`/`identity.live` verdict is the policy *engine's* decision
+  for this process — it assumes the bundled hook is actually loaded and
+  trusted by the provider, which the plugin cannot verify from inside a
+  pane. `hook.registration` only checks that the bundled `hooks/hooks.json`
+  registers `PreToolUse`; provider-side trust prompts (Codex) or plugin
+  enablement (Claude) are outside its reach.
+- Outside the global gates (escape flags, exact trusted-helper provenance
+  and grammar, master-only routing), arbitrary orchestrator shell is gated
+  only by the child-root floor and the `git push` denial; project
+  release/build rules stay in `AGENTS.md` and project hooks.
+- Codex "selected version" resolution needs `~/.codex/config.toml` plus the
+  marketplace manifest; on Python < 3.11 (no `tomllib`) a minimal
+  line-based reader handles the `[plugins."<name>"]` table.
+
 ## The bootstrap shim
 
 The per-project alternative to the machine-wide dispatcher (see "The two entry
@@ -166,7 +394,8 @@ every invocation it:
 
 **Then, per project:**
 
-3. Create `.agent-workspace/workspace.json` (`schema_version: 1`) describing
+3. Create `.agent-workspace/workspace.json` (`schema_version: 1`, or `2` to
+   opt into the harness — see "Harness" above) describing
    the project's runtimes, roles, stores, sessions/panes, and behavior — see
    `scripts/workspace.schema.json` for the documented shape, or copy one of
    `scripts/fixtures/valid/*.json` as a starting point, and the
@@ -211,7 +440,7 @@ shell script, or CI with no provider CLI in the loop.
 
 ## Known limitations
 
-These are honest gaps in the current (0.2.0) implementation, not aspirational
+These are honest gaps in the current (0.3.0) implementation, not aspirational
 roadmap items — read them before depending on the behavior they describe.
 
 - **`stores.memory.root` does not export `KNOWLEDGE_MEMORY_HOME`.**
@@ -266,7 +495,8 @@ roadmap items — read them before depending on the behavior they describe.
 
 ## Configuration reference
 
-`.agent-workspace/workspace.json`, `schema_version: 1`. Structural shape,
+`.agent-workspace/workspace.json`, `schema_version: 1` or `2` (v2 = v1 plus the
+optional `harness` block). Structural shape,
 required-ness, and cross-field rules are enforced by `validate-config.sh`
 (`validate-structural.jq` for the pure-jq structural half, plus filesystem
 checks in `validate-config.sh` itself for path containment and the secrets
@@ -418,6 +648,21 @@ hand-added pane in that session present itself as a different pane.
 | `behavior.save_before_stop` | boolean | no | `false` | If true, `stop` saves the window layout (when `retain_layout: true`) and invokes tmux-resurrect's save script (if installed) before killing anything. `--no-save` on the CLI forces this off regardless of the config value. |
 | `behavior.session_chat_helper.resolve` | string | no | `"always"` | `"never"` skips the session-chat helper-resolution check in `doctor` entirely (reported `OK`, not consulted). Any other value resolves the helper via the plugin cache/source tree. |
 | `behavior.session_chat_helper.on_missing` | enum: `warn`, `fail` | no | `"warn"` | What happens when the session-chat helper does not resolve. `fail`: `start` aborts non-zero *before* taking the project lock or touching tmux (nothing is half-created), and `doctor` reports `ERROR`. `warn`: `start` proceeds with a warning and panes come up without inter-pane messaging; `doctor` reports `WARN`. Both verbs resolve the helper through the same function, so `doctor`'s verdict and `start`'s behavior cannot disagree. |
+
+### `harness` (optional, `schema_version: 2` only)
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `harness.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires every field below. |
+| `harness.mode` | enum: `audit`, `enforce` | when enabled | `audit` reports would-be policy denials on stderr without blocking; `enforce` blocks (exit 2). Integrity failures block in both. |
+| `harness.profile` | const `strict-v1` | when enabled | The only profile. No other value is accepted. |
+| `harness.roles.orchestrator` / `.executor` / `.reviewer` | string (a `roles` key) | when enabled | Exactly these three keys; three distinct existing role names; none may be `service` or use the built-in `shell` runtime. |
+| `harness.gates.plan_review_ttl_minutes` / `.audit_ttl_minutes` | integer 1–1440 | when enabled | Exactly these two keys. Freshness windows for plan review and audit (reserved for the scheduler integration; validated now so they are stable config). |
+
+Cross-field rules for an enabled harness: exactly one non-service pane uses
+the orchestrator role; every executor pane declares a non-`.` `cwd` that
+does not resolve to the project root and has exactly one reviewer pane with
+the identical `cwd`; every reviewer pane pairs with exactly one executor.
 
 ### Argv-safety rules validated regardless of the above
 

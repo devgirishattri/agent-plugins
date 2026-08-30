@@ -197,11 +197,22 @@ ENGINE_KNOWLEDGE_DEFAULT_NAMES=(
 )
 ENGINE_KNOWLEDGE_DEFAULT_VALUES=(1 5 4 4000 1 3 20 4096)
 
-# The three vars identity/authorization depends on: engine-always, never
-# config-driven (see plan doc). KNOWLEDGE_PANE_NAME in particular is an
-# authorization boundary for who may write to the memory store, so these
-# must win over anything a config or hook-subprocess tmux probe could set.
-ENGINE_ALWAYS_NAMES=(TMUX_PANE SESSION_CHAT_PANE_NAME KNOWLEDGE_PANE_NAME)
+# Identity and authorization inputs are engine-always and never
+# config-driven. KNOWLEDGE_PANE_NAME and the SESSION_WORKSPACE_* values are
+# authorization boundaries, so they must win over anything a config or
+# hook-subprocess tmux probe could set. They stay pane-local: none is ever
+# mirrored into tmux's session-scoped environment.
+ENGINE_ALWAYS_NAMES=(
+  TMUX_PANE
+  SESSION_CHAT_PANE_NAME
+  KNOWLEDGE_PANE_NAME
+  SESSION_WORKSPACE_CONFIG
+  SESSION_WORKSPACE_PROJECT_ROOT
+  SESSION_WORKSPACE_PANE_NAME
+  SESSION_WORKSPACE_ROLE
+  SESSION_WORKSPACE_PANE_CWD
+  SESSION_WORKSPACE_HARNESS_MODE
+)
 
 # _is_engine_always NAME — true if NAME is one of ENGINE_ALWAYS_NAMES (a
 # config value/alias must never be allowed to set these).
@@ -291,6 +302,11 @@ _env_pin_mark() {
 #   ENV_COORD_VAR_VALUES    array — resolved store paths, parallel to above
 #   ENV_TMUX_PANE_ID        the real target tmux pane id (re-pinned; may be
 #                            empty in a non-tmux Phase C test context)
+#   ENV_WORKSPACE_CONFIG    canonical absolute workspace config path
+#   ENV_PROJECT_ROOT        canonical project root from the plan
+#   ENV_ROLE_NAME           role bound to this pane
+#   ENV_PANE_CWD            resolved pane cwd from the plan
+#   ENV_HARNESS_MODE        audit/enforce when active, empty when inactive
 _env_build_map() {
   local i n
 
@@ -349,12 +365,17 @@ _env_build_map() {
   fi
 
   # Engine-always identity vars win last, unconditionally. They are NEVER
-  # marked pinnable — see the file header: a session-scoped TMUX_PANE /
-  # SESSION_CHAT_PANE_NAME / KNOWLEDGE_PANE_NAME would be wrong for every
-  # pane and could mis-identify a worker as the orchestrator.
+  # marked pinnable: session-scoped identity could mis-identify one pane as
+  # another and turn the harness policy into an authorization bypass.
   _env_set "TMUX_PANE" "${ENV_TMUX_PANE_ID:-}"
   _env_set "SESSION_CHAT_PANE_NAME" "$ENV_PANE_NAME"
   _env_set "KNOWLEDGE_PANE_NAME" "$ENV_PANE_NAME"
+  _env_set "SESSION_WORKSPACE_CONFIG" "${ENV_WORKSPACE_CONFIG:-}"
+  _env_set "SESSION_WORKSPACE_PROJECT_ROOT" "${ENV_PROJECT_ROOT:-}"
+  _env_set "SESSION_WORKSPACE_PANE_NAME" "$ENV_PANE_NAME"
+  _env_set "SESSION_WORKSPACE_ROLE" "${ENV_ROLE_NAME:-}"
+  _env_set "SESSION_WORKSPACE_PANE_CWD" "${ENV_PANE_CWD:-}"
+  _env_set "SESSION_WORKSPACE_HARNESS_MODE" "${ENV_HARNESS_MODE:-}"
 }
 
 # render_env_exports — prints the canonical "export K=V; export K2=V2; ..."
@@ -551,21 +572,24 @@ EOF
 # unchanged), computes the mutation-free plan via workspace-plan.sh, and
 # extracts the CONFIG_JSON (raw interpolated config) + PANE_PLAN (this pane's
 # entry from the plan) + the pane's session id + role. Sets globals:
-#   CONFIG_JSON PLAN_JSON PANE_PLAN SESSION_ID ROLE_NAME
+#   CONFIG_PATH CONFIG_JSON PLAN_JSON PANE_PLAN SESSION_ID ROLE_NAME
 _load_plan_and_pane() {
   local config_override="$1" pane_name="$2"
 
   ensure_jq
   local config_path
   config_path="$(resolve_project_config_path "$config_override")" || return 1
-  CONFIG_JSON="$(load_workspace_config_raw "$config_path")" || return 1
-  if ! validate_workspace_config "$CONFIG_JSON" "$config_path"; then
-    echo "ERROR: config failed validation: $config_path" >&2
+  local config_dir
+  config_dir="$(cd "$(dirname "$config_path")" && pwd -P)" || return 1
+  CONFIG_PATH="$config_dir/$(basename "$config_path")"
+  CONFIG_JSON="$(load_workspace_config_raw "$CONFIG_PATH")" || return 1
+  if ! validate_workspace_config "$CONFIG_JSON" "$CONFIG_PATH"; then
+    echo "ERROR: config failed validation: $CONFIG_PATH" >&2
     print_validation_errors
     return 1
   fi
 
-  PLAN_JSON="$(bash "$HERE/workspace-plan.sh" --config "$config_path" --json)" || return 1
+  PLAN_JSON="$(bash "$HERE/workspace-plan.sh" --config "$CONFIG_PATH" --json)" || return 1
   PANE_PLAN="$(printf '%s' "$PLAN_JSON" | jq -c --arg n "$pane_name" '
     [.sessions[] | . as $s | ($s.panes // [])[] | select(.name == $n) | . + {session_id: $s.id}][0] // empty
   ')"
@@ -683,6 +707,16 @@ _env_prepare_inputs() {
 
   ENV_PANE_NAME="$pane_name"
   ENV_TMUX_PANE_ID="$tmux_pane_id"
+  ENV_WORKSPACE_CONFIG="$CONFIG_PATH"
+  ENV_PROJECT_ROOT="$root_abs"
+  ENV_ROLE_NAME="$ROLE_NAME"
+  ENV_PANE_CWD="$(printf '%s' "$PANE_PLAN" | jq -r '.cwd // ""')"
+  ENV_HARNESS_MODE="$(printf '%s' "$CONFIG_JSON" | jq -r '
+    if .schema_version == 2 and (.harness.enabled // false)
+    then .harness.mode
+    else ""
+    end
+  ')"
 }
 
 cmd_env_exports() {

@@ -86,6 +86,32 @@ _validate_cwds() {
   done <<<"$rows"
 }
 
+# _validate_harness_resolved_cwds JSON PROJECT_ROOT_ABS
+# Structural validation rejects a literal "." for executor/reviewer panes.
+# This filesystem half closes the alias/symlink form of the same hole: an
+# apparently non-dot child cwd must not canonicalize back to the project root.
+_validate_harness_resolved_cwds() {
+  local json="$1" root_abs="$2"
+  if ! printf '%s' "$json" | jq -e '.schema_version == 2 and (.harness.enabled // false)' >/dev/null; then
+    return 0
+  fi
+
+  local executor_role reviewer_role rows pane_name role_name cwd_raw resolved
+  executor_role="$(printf '%s' "$json" | jq -r '.harness.roles.executor')"
+  reviewer_role="$(printf '%s' "$json" | jq -r '.harness.roles.reviewer')"
+  rows="$(printf '%s' "$json" | jq -r --arg executor "$executor_role" --arg reviewer "$reviewer_role" '
+    .sessions[] | .panes[]
+    | select(.role == $executor or .role == $reviewer)
+    | [(.name // "?"), .role, (.cwd // "")] | @tsv
+  ')"
+  while IFS=$'\t' read -r pane_name role_name cwd_raw; do
+    [ -z "$pane_name" ] && continue
+    if resolved="$(_resolve_cwd_within_root "$root_abs" "$cwd_raw")" && [ "$resolved" = "$root_abs" ]; then
+      _add_error "harness $role_name pane $pane_name: cwd \"$cwd_raw\" resolves to the project root; executor/reviewer panes require a distinct child cwd"
+    fi
+  done <<<"$rows"
+}
+
 # _lexical_normalize_path BASE_ABS RAW -> prints an absolute path with every
 # "." and ".." segment collapsed TEXTUALLY (no filesystem access), for RAW
 # interpreted relative to BASE_ABS when RAW is not itself absolute. Unlike
@@ -305,6 +331,7 @@ validate_workspace_config() {
     _add_error "project.root (\"$root_rel\") does not resolve to an existing directory relative to $cfg_dir"
   else
     _validate_cwds "$json" "$root_abs"
+    _validate_harness_resolved_cwds "$json" "$root_abs"
     _validate_stores "$json" "$root_abs"
     _validate_secrets_file "$json" "$root_abs"
   fi
@@ -345,7 +372,7 @@ _run_cli() {
       '{valid: $valid, config: $config, errors: $errors}'
   else
     if [ "$ok" -eq 0 ]; then
-      echo "OK: $path is valid (schema_version 1)"
+      echo "OK: $path is valid (schema_version $(printf '%s' "$json" | jq -r '.schema_version'))"
     else
       echo "ERROR: $path failed validation:" >&2
       print_validation_errors

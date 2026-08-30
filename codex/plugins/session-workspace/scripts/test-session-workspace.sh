@@ -289,7 +289,7 @@ else
 fi
 
 echo "== golden fixtures validate clean =="
-for fx in project-a project-d; do
+for fx in project-a project-d harness-v2 harness-disabled-v2; do
   OUT="$(bash "$HERE/validate-config.sh" --config "$HERE/fixtures/valid/$fx.json" 2>&1)"
   STATUS=$?
   if [ "$STATUS" -eq 0 ] && printf '%s' "$OUT" | grep -q "^OK:"; then
@@ -298,6 +298,61 @@ for fx in project-a project-d; do
     fail "fixtures/valid/$fx.json validates" "status=$STATUS output=$OUT"
   fi
 done
+
+echo "== schema v2 harness is opt-in, typed, and fail-closed =="
+HARNESS_BASE="$HERE/fixtures/valid/harness-v2.json"
+HARNESS_BAD="$TMPROOT/harness-invalid.json"
+# Mutated configs below live directly under TMPROOT, so give their relative
+# child cwd a real directory for filesystem-dependent harness assertions.
+mkdir -p "$TMPROOT/component-a" "$TMPROOT/component-b"
+
+assert_harness_invalid() {
+  local label="$1" needle="$2" filter="$3" out status
+  jq "$filter" "$HARNESS_BASE" > "$HARNESS_BAD"
+  out="$(bash "$HERE/validate-config.sh" --config "$HARNESS_BAD" 2>&1)"
+  status=$?
+  if [ "$status" -ne 0 ] && printf '%s' "$out" | grep -qF "$needle"; then
+    pass "$label"
+  else
+    fail "$label" "status=$status output=$out"
+  fi
+}
+
+assert_harness_invalid "harness: schema v1 rejects the v2 harness key" \
+  "unknown key in top-level: harness" '.schema_version = 1'
+assert_harness_invalid "harness: enabled=false rejects policy-bearing siblings" \
+  "harness.enabled=false must not include" '.harness.enabled = false'
+assert_harness_invalid "harness: unknown mode rejected" \
+  "harness.mode must be one of" '.harness.mode = "permissive"'
+assert_harness_invalid "harness: unknown profile rejected" \
+  "harness.profile must be strict-v1" '.harness.profile = "custom"'
+assert_harness_invalid "harness: duplicate semantic roles rejected" \
+  "must name three distinct roles" '.harness.roles.reviewer = "executor"'
+assert_harness_invalid "harness: unknown semantic role rejected" \
+  "references unknown role" '.harness.roles.reviewer = "missing"'
+assert_harness_invalid "harness: reserved service semantic role rejected" \
+  "must not use the reserved service role" '.roles.service = .roles.reviewer | .harness.roles.reviewer = "service" | .sessions[0].panes[2].role = "service"'
+assert_harness_invalid "harness: shell runtime role rejected" \
+  "must not use the built-in shell runtime" '.roles.reviewer.runtime = "shell"'
+assert_harness_invalid "harness: executor without matching reviewer rejected" \
+  "must have exactly one reviewer pane" '.sessions[0].panes[2].cwd = "component-b"'
+assert_harness_invalid "harness: resolved child cwd cannot collapse to project root" \
+  "resolves to the project root" '.sessions[0].panes[1].cwd = "component-a/.." | .sessions[0].panes[2].cwd = "component-a/.."'
+assert_harness_invalid "harness: out-of-range plan TTL rejected" \
+  "plan_review_ttl_minutes must be an integer in 1..1440" '.harness.gates.plan_review_ttl_minutes = 0'
+assert_harness_invalid "harness: out-of-range audit TTL rejected" \
+  "audit_ttl_minutes must be an integer in 1..1440" '.harness.gates.audit_ttl_minutes = 1441'
+assert_harness_invalid "harness: engine-owned config env rejected" \
+  "reserved for engine-owned per-pane harness identity" '.env.groups.dev.values.SESSION_WORKSPACE_ROLE = "forged"'
+assert_harness_invalid "harness: engine-owned pane alias rejected" \
+  "reserved engine-owned harness identity" '.env.pane_name_aliases = ["SESSION_WORKSPACE_PANE_NAME"]'
+
+HARNESS_OFF="$HERE/fixtures/valid/harness-disabled-v2.json"
+if bash "$HERE/validate-config.sh" --config "$HARNESS_OFF" >/dev/null 2>&1; then
+  pass "harness: schema v2 enabled=false is a valid inactive no-op configuration"
+else
+  fail "harness: schema v2 enabled=false is a valid inactive no-op configuration" "validation failed"
+fi
 
 echo "== golden plans render (human + --json) without error =="
 PLAN_A_JSON="$(bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/valid/project-a.json" --json 2>&1)"
@@ -327,6 +382,190 @@ if [ "$D_SESSIONS" = "1" ] && [ "$D_PANES" = "2" ]; then
   pass "project-d golden plan is 1 session / 2 panes"
 else
   fail "project-d golden plan is 1 session / 2 panes" "sessions=$D_SESSIONS panes=$D_PANES"
+fi
+
+PLAN_HARNESS_JSON="$(bash "$HERE/workspace-plan.sh" --config "$HARNESS_BASE" --json 2>&1)"
+if printf '%s' "$PLAN_HARNESS_JSON" | jq -e '
+  .harness == {
+    "active": true,
+    "mode": "enforce",
+    "profile": "strict-v1",
+    "roles": {"orchestrator":"master","executor":"executor","reviewer":"reviewer"},
+    "gates": {"plan_review_ttl_minutes":60,"audit_ttl_minutes":60}
+  }
+' >/dev/null 2>&1; then
+  pass "harness: normalized plan exposes the active typed policy"
+else
+  fail "harness: normalized plan exposes the active typed policy" "$PLAN_HARNESS_JSON"
+fi
+if printf '%s' "$PLAN_D_JSON" | jq -e '.harness == {"active":false}' >/dev/null 2>&1; then
+  pass "harness: unchanged schema v1 plan is explicitly inactive"
+else
+  fail "harness: unchanged schema v1 plan is explicitly inactive" "$PLAN_D_JSON"
+fi
+
+echo "== harness surfaces: status/doctor verbs, hook registration, OK line schema version =="
+HARNESS_OK_LINE="$(bash "$HERE/validate-config.sh" --config "$HARNESS_BASE" 2>&1)"
+if printf '%s' "$HARNESS_OK_LINE" | grep -q "schema_version 2)"; then
+  pass "validate-config OK line reports schema_version 2 for the harness fixture"
+else
+  fail "validate-config OK line reports schema_version 2 for the harness fixture" "$HARNESS_OK_LINE"
+fi
+V1_OK_LINE="$(bash "$HERE/validate-config.sh" --config "$HERE/fixtures/valid/project-d.json" 2>&1)"
+if printf '%s' "$V1_OK_LINE" | grep -q "schema_version 1)"; then
+  pass "validate-config OK line still reports schema_version 1 for a v1 config"
+else
+  fail "validate-config OK line still reports schema_version 1 for a v1 config" "$V1_OK_LINE"
+fi
+HS_JSON="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/workspace.sh" harness-status --config "$HARNESS_BASE" --json 2>&1)"
+if printf '%s' "$HS_JSON" | jq -e '.active == true and .mode == "enforce" and .profile == "strict-v1" and .roles.orchestrator == "master" and .identity.present == false and .identity.matches == null' >/dev/null 2>&1; then
+  pass "harness-status (via dispatcher): active fixture reports mode/profile/roles and no live identity"
+else
+  fail "harness-status (via dispatcher): active fixture reports mode/profile/roles and no live identity" "$HS_JSON"
+fi
+HS_HUMAN="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/harness-status.sh" --config "$HARNESS_BASE" 2>&1)"
+if printf '%s' "$HS_HUMAN" | grep -q "^state: active  mode=enforce  profile=strict-v1" && printf '%s' "$HS_HUMAN" | grep -q "^identity: not present"; then
+  pass "harness-status human renderer: active state and identity lines"
+else
+  fail "harness-status human renderer: active state and identity lines" "$HS_HUMAN"
+fi
+HS_V1="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/harness-status.sh" --config "$HERE/fixtures/valid/project-d.json" --json 2>&1)"
+if printf '%s' "$HS_V1" | jq -e '.active == false and .mode == "inactive"' >/dev/null 2>&1; then
+  pass "harness-status: schema v1 config reports inactive"
+else
+  fail "harness-status: schema v1 config reports inactive" "$HS_V1"
+fi
+HS_OFF="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/harness-status.sh" --config "$HARNESS_OFF" --json 2>&1)"
+if printf '%s' "$HS_OFF" | jq -e '.active == false' >/dev/null 2>&1; then
+  pass "harness-status: schema v2 enabled=false reports inactive"
+else
+  fail "harness-status: schema v2 enabled=false reports inactive" "$HS_OFF"
+fi
+HARNESS_FIX_ROOT="$(cd "$HERE/fixtures/valid" && pwd -P)"
+HARNESS_CFG_ABS="$HARNESS_FIX_ROOT/harness-v2.json"
+HS_MATCH="$(env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$HARNESS_CFG_ABS" SESSION_WORKSPACE_PROJECT_ROOT="$HARNESS_FIX_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-component-reviewer SESSION_WORKSPACE_ROLE=reviewer \
+  SESSION_WORKSPACE_PANE_CWD="$HARNESS_FIX_ROOT/component-a" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+  bash "$HERE/harness-status.sh" --config "$HARNESS_CFG_ABS" 2>&1)"
+if printf '%s' "$HS_MATCH" | grep -q "^identity: MATCH  pane=harness-sample-component-reviewer role=reviewer"; then
+  pass "harness-status: a matching engine identity reports MATCH"
+else
+  fail "harness-status: a matching engine identity reports MATCH" "$HS_MATCH"
+fi
+HS_MISMATCH="$(env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$HARNESS_CFG_ABS" SESSION_WORKSPACE_PROJECT_ROOT="$HARNESS_FIX_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-component-reviewer SESSION_WORKSPACE_ROLE=executor \
+  SESSION_WORKSPACE_PANE_CWD="$HARNESS_FIX_ROOT/component-a" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+  bash "$HERE/harness-status.sh" --config "$HARNESS_CFG_ABS" 2>&1)"
+if printf '%s' "$HS_MISMATCH" | grep -q "^identity: MISMATCH  pane=harness-sample-component-reviewer role=executor"; then
+  pass "harness-status: a forged role reports MISMATCH (human renderer)"
+else
+  fail "harness-status: a forged role reports MISMATCH (human renderer)" "$HS_MISMATCH"
+fi
+HD_OUT="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/workspace.sh" harness-doctor --config "$HARNESS_BASE" 2>&1)"
+HD_RC=$?
+if [ "$HD_RC" -eq 0 ] && printf '%s' "$HD_OUT" | grep -q "\[OK\] harness.activation" && printf '%s' "$HD_OUT" | grep -q "\[OK\] hook.registration" && printf '%s' "$HD_OUT" | grep -q "\[INFO\] identity.live"; then
+  pass "harness-doctor (via dispatcher): active fixture is OK with an INFO identity line, exit 0"
+else
+  fail "harness-doctor (via dispatcher): active fixture is OK with an INFO identity line, exit 0" "rc=$HD_RC $HD_OUT"
+fi
+HD_MIS="$(env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$HARNESS_CFG_ABS" SESSION_WORKSPACE_PROJECT_ROOT="$HARNESS_FIX_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-component-reviewer SESSION_WORKSPACE_ROLE=executor \
+  SESSION_WORKSPACE_PANE_CWD="$HARNESS_FIX_ROOT/component-a" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+  bash "$HERE/harness-doctor.sh" --config "$HARNESS_CFG_ABS" --json 2>&1)"
+HD_MIS_RC=$?
+if [ "$HD_MIS_RC" -ne 0 ] && printf '%s' "$HD_MIS" | jq -e '.summary.errors == 1 and ([.checks[] | select(.id == "identity.live") | .status] == ["ERROR"])' >/dev/null 2>&1; then
+  pass "harness-doctor: a mismatched identity is an ERROR and exits non-zero"
+else
+  fail "harness-doctor: a mismatched identity is an ERROR and exits non-zero" "rc=$HD_MIS_RC $HD_MIS"
+fi
+HD_V1="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/harness-doctor.sh" --config "$HERE/fixtures/valid/project-d.json" --json 2>&1)"
+if [ $? -eq 0 ] && printf '%s' "$HD_V1" | jq -e '([.checks[] | select(.id == "harness.activation") | .status] == ["INFO"]) and ([.checks[] | select(.id == "runtime.python3") | .status] == ["INFO"])' >/dev/null 2>&1; then
+  pass "harness-doctor: schema v1 config is INFO-only (inactive, python3 not required)"
+else
+  fail "harness-doctor: schema v1 config is INFO-only (inactive, python3 not required)" "$HD_V1"
+fi
+HD_PARTIAL="$(env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$HARNESS_CFG_ABS" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+  bash "$HERE/harness-doctor.sh" --config "$HARNESS_CFG_ABS" --json 2>&1)"
+HD_PARTIAL_RC=$?
+if [ "$HD_PARTIAL_RC" -ne 0 ] && printf '%s' "$HD_PARTIAL" | jq -e '
+  ([.checks[] | select(.id == "identity.env") | .status] == ["ERROR"]) and
+  ([.checks[] | select(.id == "identity.live") | .status] == ["ERROR"]) and
+  .status.identity.partial == true and .status.policy.decision == "deny"' >/dev/null 2>&1; then
+  pass "harness-doctor: a PARTIAL identity (config+mode only) is ERROR on identity.env and identity.live, exits non-zero"
+else
+  fail "harness-doctor: a PARTIAL identity (config+mode only) is ERROR on identity.env and identity.live, exits non-zero" "rc=$HD_PARTIAL_RC $HD_PARTIAL"
+fi
+HD_ALIAS="$(env -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$HARNESS_CFG_ABS" SESSION_WORKSPACE_PROJECT_ROOT="$HARNESS_FIX_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-component-reviewer SESSION_WORKSPACE_ROLE=reviewer \
+  SESSION_WORKSPACE_PANE_CWD="$HARNESS_FIX_ROOT/component-a" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+  SESSION_CHAT_PANE_NAME=someone-else \
+  bash "$HERE/harness-doctor.sh" --config "$HARNESS_CFG_ABS" --json 2>&1)"
+HD_ALIAS_RC=$?
+if [ "$HD_ALIAS_RC" -ne 0 ] && printf '%s' "$HD_ALIAS" | jq -e '
+  ([.checks[] | select(.id == "identity.alias") | .status] == ["ERROR"]) and
+  ([.checks[] | select(.id == "identity.live") | .status] == ["ERROR"]) and
+  .status.policy.rule == "identity.alias"' >/dev/null 2>&1; then
+  pass "harness-doctor: SESSION_CHAT_PANE_NAME alias drift is ERROR (identity.alias + policy probe agree)"
+else
+  fail "harness-doctor: SESSION_CHAT_PANE_NAME alias drift is ERROR (identity.alias + policy probe agree)" "rc=$HD_ALIAS_RC $HD_ALIAS"
+fi
+HD_OK="$(env SESSION_WORKSPACE_CONFIG="$HARNESS_CFG_ABS" SESSION_WORKSPACE_PROJECT_ROOT="$HARNESS_FIX_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-component-reviewer SESSION_WORKSPACE_ROLE=reviewer \
+  SESSION_WORKSPACE_PANE_CWD="$HARNESS_FIX_ROOT/component-a" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+  SESSION_CHAT_PANE_NAME=harness-sample-component-reviewer KNOWLEDGE_PANE_NAME=harness-sample-component-reviewer \
+  bash "$HERE/harness-doctor.sh" --config "$HARNESS_CFG_ABS" --json 2>&1)"
+HD_OK_RC=$?
+if [ "$HD_OK_RC" -eq 0 ] && printf '%s' "$HD_OK" | jq -e '
+  ([.checks[] | select(.id == "identity.live") | .status] == ["OK"]) and .status.policy.decision == "allow" and .status.identity.matches == true' >/dev/null 2>&1; then
+  pass "harness-doctor: a complete, agreeing identity is OK and the policy probe allows"
+else
+  fail "harness-doctor: a complete, agreeing identity is OK and the policy probe allows" "rc=$HD_OK_RC $HD_OK"
+fi
+V1_FIX_ABS="$(cd "$HERE/fixtures/valid" && pwd -P)/project-d.json"
+HD_INACTIVE_DRIFT="$(env -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME \
+  SESSION_WORKSPACE_CONFIG="$V1_FIX_ABS" SESSION_WORKSPACE_PROJECT_ROOT="$HARNESS_FIX_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=project-d-executor SESSION_WORKSPACE_ROLE=orchestrator \
+  SESSION_WORKSPACE_PANE_CWD="$HARNESS_FIX_ROOT" \
+  bash "$HERE/harness-doctor.sh" --config "$V1_FIX_ABS" --json 2>&1)"
+HD_ID_RC=$?
+if [ "$HD_ID_RC" -eq 0 ] && printf '%s' "$HD_INACTIVE_DRIFT" | jq -e '
+  ([.checks[] | select(.id == "identity.live") | .status] == ["WARN"]) and .status.policy.active == false and .summary.errors == 0' >/dev/null 2>&1; then
+  pass "harness-doctor: mismatched identity on an INACTIVE (v1) config is WARN, not ERROR — the hook really no-ops there"
+else
+  fail "harness-doctor: mismatched identity on an INACTIVE (v1) config is WARN, not ERROR — the hook really no-ops there" "rc=$HD_ID_RC $HD_INACTIVE_DRIFT"
+fi
+HD_BAD_JSON="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/harness-doctor.sh" --config "$HERE/fixtures/invalid/unknown-key.json" --json 2>&1)"
+HD_BAD_RC=$?
+if [ "$HD_BAD_RC" -ne 0 ] && printf '%s' "$HD_BAD_JSON" | jq -e '
+  ([.checks[] | select(.id == "config.validation") | .status] == ["ERROR"]) and .summary.errors == 1 and .status == null' >/dev/null 2>&1; then
+  pass "harness-doctor --json: an invalid config still yields one structured report (config.validation ERROR)"
+else
+  fail "harness-doctor --json: an invalid config still yields one structured report (config.validation ERROR)" "rc=$HD_BAD_RC $HD_BAD_JSON"
+fi
+HS_PARTIAL="$(env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$HARNESS_CFG_ABS" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+  bash "$HERE/harness-status.sh" --config "$HARNESS_CFG_ABS" 2>&1)"
+if printf '%s' "$HS_PARTIAL" | grep -q "^identity: PARTIAL" && printf '%s' "$HS_PARTIAL" | grep -q "^policy: BLOCKING in this process \[identity.missing\]"; then
+  pass "harness-status: a partial identity is reported PARTIAL with the policy's blocking verdict"
+else
+  fail "harness-status: a partial identity is reported PARTIAL with the policy's blocking verdict" "$HS_PARTIAL"
+fi
+HOOKS_JSON="$HERE/../hooks/hooks.json"
+if jq -e '.hooks.PreToolUse[0].hooks[0].command | test("harness-hook\\.sh")' "$HOOKS_JSON" >/dev/null 2>&1 && jq -e '.hooks.PreToolUse[0].matcher | test("Bash") and test("Edit") and test("Write")' "$HOOKS_JSON" >/dev/null 2>&1; then
+  pass "hooks/hooks.json registers the PreToolUse harness hook on edit/shell tools"
+else
+  fail "hooks/hooks.json registers the PreToolUse harness hook on edit/shell tools" "$(cat "$HOOKS_JSON" 2>/dev/null)"
+fi
+HOOK_NOOP_OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_HARNESS_MODE bash "$HERE/harness-hook.sh" 2>&1)"
+if [ $? -eq 0 ] && [ -z "$HOOK_NOOP_OUT" ]; then
+  pass "harness-hook.sh: no SESSION_WORKSPACE_CONFIG is a silent no-op (exit 0, no output)"
+else
+  fail "harness-hook.sh: no SESSION_WORKSPACE_CONFIG is a silent no-op (exit 0, no output)" "$HOOK_NOOP_OUT"
+fi
+HOOK_V1_OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | env -u SESSION_WORKSPACE_HARNESS_MODE SESSION_WORKSPACE_CONFIG="$HERE/fixtures/valid/project-d.json" bash "$HERE/harness-hook.sh" 2>&1)"
+if [ $? -eq 0 ] && [ -z "$HOOK_V1_OUT" ]; then
+  pass "harness-hook.sh: a schema v1 config is a silent no-op"
+else
+  fail "harness-hook.sh: a schema v1 config is a silent no-op" "$HOOK_V1_OUT"
 fi
 
 echo "== workspace.sh plan (dispatcher) agrees with workspace-plan.sh (standalone) =="
@@ -447,7 +686,7 @@ fi
 
 echo "== every static invalid fixture fails validation =="
 declare -a RULE_FIXTURES=(
-  "schema-version.json:schema_version must be 1"
+  "schema-version.json:schema_version must be 1 or 2"
   "unknown-key.json:unknown key in project"
   "duplicate-pane-names.json:duplicate pane name after resolution"
   "bad-charset-name.json:invalid characters"
@@ -815,6 +1054,38 @@ if printf '%s' "$ENV_OUT_D_EXEC" | grep -q "SESSION_CHAT_TARGET_MESSAGES_DIR\|SE
   fail "env-exports: project-d (stores.pin=[]) exports no coordination vars" "$ENV_OUT_D_EXEC"
 else
   pass "env-exports: project-d (stores.pin=[]) exports no coordination vars"
+fi
+
+echo "== Phase C: engine-owned per-pane harness identity =="
+HARNESS_ENV="$(bash "$HERE/adapters.sh" env-exports --config "$HARNESS_BASE" --pane harness-sample-component-executor --tmux-pane '%77' 2>"$TMPROOT/env-harness.err")"
+HARNESS_ROOT="$(cd "$HERE/fixtures/valid/component-a" && pwd -P)"
+HARNESS_CONFIG_ABS="$(cd "$HERE/fixtures/valid" && pwd -P)/harness-v2.json"
+for expect in \
+  "SESSION_WORKSPACE_CONFIG=$HARNESS_CONFIG_ABS" \
+  "SESSION_WORKSPACE_PROJECT_ROOT=$(cd "$HERE/fixtures/valid" && pwd -P)" \
+  "SESSION_WORKSPACE_PANE_NAME=harness-sample-component-executor" \
+  "SESSION_WORKSPACE_ROLE=executor" \
+  "SESSION_WORKSPACE_PANE_CWD=$HARNESS_ROOT" \
+  "SESSION_WORKSPACE_HARNESS_MODE=enforce"; do
+  if printf '%s' "$HARNESS_ENV" | grep -qF -- "$expect"; then
+    pass "harness env: contains $expect"
+  else
+    fail "harness env: contains $expect" "$HARNESS_ENV"
+  fi
+done
+
+HARNESS_SESSION_ENV="$(bash "$HERE/adapters.sh" session-env --config "$HARNESS_BASE" --pane harness-sample-component-executor | tr '\0' '\n')"
+if printf '%s' "$HARNESS_SESSION_ENV" | grep -q 'SESSION_WORKSPACE_'; then
+  fail "harness env: engine-owned identity is never pinned to the tmux session" "$HARNESS_SESSION_ENV"
+else
+  pass "harness env: engine-owned identity is never pinned to the tmux session"
+fi
+
+if printf '%s' "$ENV_OUT_D_EXEC" | grep -qF 'SESSION_WORKSPACE_CONFIG=' && \
+   printf '%s' "$ENV_OUT_D_EXEC" | grep -qF "SESSION_WORKSPACE_HARNESS_MODE='';"; then
+  pass "harness env: schema v1 carries identity but an empty inactive mode"
+else
+  fail "harness env: schema v1 carries identity but an empty inactive mode" "$ENV_OUT_D_EXEC"
 fi
 
 echo "== Phase C: engine-always identity vars win even if config tries to override them =="
@@ -2432,6 +2703,71 @@ else
   fail "start after session adoption: the once-foreign session is now managed and idempotent" "status=$SWT_STATUS output=$SWT_OUT"
 fi
 swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG_AD" --confirmed --all >/dev/null 2>&1
+
+# --- 10i. harness identity reaches the pane PROCESS env, never the session env
+# The six SESSION_WORKSPACE_* variables are engine-always per-pane identity:
+# the policy hook keys every decision on them, so they must land in the
+# launched process's own environment (proved with an env-dumping stub, like
+# the secrets test above) and must never be mirrored session-wide (a
+# session-scoped identity would let a hand-made pane impersonate a role).
+SWT_PROJ_H="$SWT_ROOT/sample-harness"
+mkdir -p "$SWT_PROJ_H/.agent-workspace" "$SWT_PROJ_H/component-a"
+jq '.project.id = "sample-harness"' "$HERE/fixtures/valid/harness-v2.json" > "$SWT_PROJ_H/.agent-workspace/workspace.json"
+SWT_CFG_H="$SWT_PROJ_H/.agent-workspace/workspace.json"
+SWT_PROJ_H_ABS="$(cd "$SWT_PROJ_H" && pwd -P)"
+rm -f "$SWT_ROOT"/hdump-*.txt
+cat > "$SWT_BIN/codex" <<EOF
+#!/usr/bin/env bash
+{ for v in SESSION_WORKSPACE_CONFIG SESSION_WORKSPACE_PROJECT_ROOT SESSION_WORKSPACE_PANE_NAME SESSION_WORKSPACE_ROLE SESSION_WORKSPACE_PANE_CWD SESSION_WORKSPACE_HARNESS_MODE; do
+    printf '%s=%s\n' "\$v" "\${!v:-<unset>}"
+  done; } > "$SWT_ROOT/hdump-\${KNOWLEDGE_PANE_NAME:-unknown}.txt" 2>&1
+exec sleep 3600
+EOF
+chmod +x "$SWT_BIN/codex"
+SWT_H_OUT="$(swrun "$HERE/workspace-start.sh" --config "$SWT_CFG_H" --no-attach 2>&1)"
+SWT_H_STATUS=$?
+sleep 1
+SWT_HDUMP_EXEC="$SWT_ROOT/hdump-sample-harness-component-executor.txt"
+SWT_HDUMP_MASTER="$SWT_ROOT/hdump-sample-harness-master.txt"
+if [ "$SWT_H_STATUS" -eq 0 ] && [ -f "$SWT_HDUMP_EXEC" ] &&
+   grep -qxF "SESSION_WORKSPACE_CONFIG=$SWT_PROJ_H_ABS/.agent-workspace/workspace.json" "$SWT_HDUMP_EXEC" &&
+   grep -qxF "SESSION_WORKSPACE_PROJECT_ROOT=$SWT_PROJ_H_ABS" "$SWT_HDUMP_EXEC" &&
+   grep -qxF "SESSION_WORKSPACE_PANE_NAME=sample-harness-component-executor" "$SWT_HDUMP_EXEC" &&
+   grep -qxF "SESSION_WORKSPACE_ROLE=executor" "$SWT_HDUMP_EXEC" &&
+   grep -qxF "SESSION_WORKSPACE_PANE_CWD=$SWT_PROJ_H_ABS/component-a" "$SWT_HDUMP_EXEC" &&
+   grep -qxF "SESSION_WORKSPACE_HARNESS_MODE=enforce" "$SWT_HDUMP_EXEC"; then
+  pass "harness identity: the executor pane's spawned PROCESS receives all six engine-owned variables with the planned values"
+else
+  fail "harness identity: the executor pane's spawned PROCESS receives all six engine-owned variables with the planned values" \
+    "status=$SWT_H_STATUS dump=$(cat "$SWT_HDUMP_EXEC" 2>/dev/null || echo missing) out=$SWT_H_OUT"
+fi
+if [ -f "$SWT_HDUMP_MASTER" ] && grep -qxF "SESSION_WORKSPACE_ROLE=master" "$SWT_HDUMP_MASTER" &&
+   grep -qxF "SESSION_WORKSPACE_PANE_CWD=$SWT_PROJ_H_ABS" "$SWT_HDUMP_MASTER" &&
+   grep -qxF "SESSION_WORKSPACE_HARNESS_MODE=enforce" "$SWT_HDUMP_MASTER"; then
+  pass "harness identity: the orchestrator pane receives its own distinct role/cwd identity"
+else
+  fail "harness identity: the orchestrator pane receives its own distinct role/cwd identity" "$(cat "$SWT_HDUMP_MASTER" 2>/dev/null || echo missing)"
+fi
+SWT_H_SESS_ENV="$(SWT_TMUX show-environment -t '=sample-harness-development' 2>/dev/null; SWT_TMUX show-environment -h -t '=sample-harness-development' 2>/dev/null)"
+if printf '%s' "$SWT_H_SESS_ENV" | grep -q 'SESSION_WORKSPACE_'; then
+  fail "harness identity: no SESSION_WORKSPACE_* variable is ever mirrored into the tmux session env" "$SWT_H_SESS_ENV"
+else
+  pass "harness identity: no SESSION_WORKSPACE_* variable is ever mirrored into the tmux session env"
+fi
+# A live-status probe from INSIDE the launched pane's identity must MATCH.
+SWT_H_STATUS_JSON="$(env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$SWT_PROJ_H_ABS/.agent-workspace/workspace.json" SESSION_WORKSPACE_PROJECT_ROOT="$SWT_PROJ_H_ABS" \
+  SESSION_WORKSPACE_PANE_NAME=sample-harness-component-executor SESSION_WORKSPACE_ROLE=executor \
+  SESSION_WORKSPACE_PANE_CWD="$SWT_PROJ_H_ABS/component-a" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+  bash "$HERE/harness-status.sh" --config "$SWT_CFG_H" --json 2>&1)"
+if printf '%s' "$SWT_H_STATUS_JSON" | jq -e '.identity.matches == true' >/dev/null 2>&1; then
+  pass "harness identity: the exact launched identity reports MATCH in harness-status"
+else
+  fail "harness identity: the exact launched identity reports MATCH in harness-status" "$SWT_H_STATUS_JSON"
+fi
+printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$SWT_BIN/codex"
+chmod +x "$SWT_BIN/codex"
+rm -f "$SWT_ROOT"/hdump-*.txt
+swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG_H" --confirmed --all >/dev/null 2>&1
 
 # --- 11. stop -------------------------------------------------------------
 SWT_OUT="$(swrun "$HERE/workspace-stop.sh" development --config "$SWT_CFG" 2>&1)"

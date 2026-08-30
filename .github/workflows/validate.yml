@@ -36,6 +36,7 @@ jobs:
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-workspace" \
             bash codex/plugins/session-workspace/scripts/test-session-workspace.sh
+          bash codex/plugins/session-workspace/scripts/test-harness-policy.sh
 
       - name: Run Claude parity smoke tests
         run: |
@@ -58,6 +59,7 @@ jobs:
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-workspace" \
             bash plugins/session-workspace/scripts/test-session-workspace.sh
+          bash plugins/session-workspace/scripts/test-harness-policy.sh
 
       - name: Run cross-provider scheduler/context parity test
         run: |
@@ -65,6 +67,7 @@ jobs:
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/provider-parity" \
             bash scripts/test-provider-parity.sh
+          bash scripts/test-session-workspace-policy-parity.sh
 
   shellcheck:
     name: shellcheck

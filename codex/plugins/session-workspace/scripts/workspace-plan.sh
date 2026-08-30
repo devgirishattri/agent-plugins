@@ -125,7 +125,12 @@ flag_or_none() {
 
 printf 'session-workspace plan — %s\n' "$CONFIG_PATH"
 printf '%s\n' "$PLAN_JSON" | jq -r '
-  "project: \(.project.id) (\(.project.display_name))  root=\(.project.root)"
+  "project: \(.project.id) (\(.project.display_name))  root=\(.project.root)",
+  (if .harness.active then
+     "harness: active  mode=\(.harness.mode)  profile=\(.harness.profile)"
+   else
+     "harness: inactive"
+   end)
 '
 echo
 

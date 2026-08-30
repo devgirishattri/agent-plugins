@@ -1,0 +1,17 @@
+{
+  "description": "session-workspace: opt-in strict-v1 multi-agent role policy (PreToolUse). Inactive sessions — no SESSION_WORKSPACE_CONFIG, a schema-v1 config, or a schema-v2 config without an enabled harness — are a true no-op.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/harness-hook.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

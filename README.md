@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.8 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.5.13 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.2.0 | Config-driven tmux workspace engine with first-class isolated Chrome DevTools browser sessions and project MCP configuration |
+| `session-workspace` | 0.3.0 | Config-driven tmux workspace plus an opt-in, fail-closed multi-agent role-policy harness |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -39,6 +39,7 @@ rather than assumed: the `session-scheduler` suite passes 61/61 under 3.2.57.
 | `tmux` | `knowledge` | Optional. Only for pane-identity provenance; `KNOWLEDGE_PANE_NAME` substitutes. |
 | `git` | `knowledge` | Hard. Store resolution and `init` both require a repository. |
 | `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
+| `python3` | `session-workspace` harness policy | Hard only when a schema-v2 `harness.enabled` policy is active. Hooks launched inactive (empty launcher mode) remain no-ops; stale active launcher identity/config drift intentionally fails closed. |
 | `python3` | `knowledge` doctor, `session-chat` message surfacing | Optional. Both degrade rather than fail. |
 | `codex` CLI | `session-manager` on Codex | Hard for deletion only. Its delete path execs the native CLI and exits 127 without it. |
 | GNU or BSD `date` plus a zoneinfo tree | `chronos` | Hard. It validates `AGENT_PLUGINS_TIME_ZONE` against the system zoneinfo. |
@@ -301,7 +302,12 @@ in `plugins/session-workspace/README.md`.
 ### Hooks and restarts
 
 `chronos`, `knowledge`, and `session-chat` register lifecycle hooks;
-`session-manager`, `session-scheduler`, and `session-workspace` register none.
+`session-manager` and `session-scheduler` register none. `session-workspace`
+registers an opt-in `PreToolUse` harness hook: schema-v1 projects, schema-v2
+projects without an enabled harness, and sessions without launcher-provided
+harness identity remain true no-ops when no stale active launcher mode is
+present. A pane launched active still fails closed if the config is later
+disabled or changed.
 `knowledge` and `session-chat` use `SessionStart`, `UserPromptSubmit`, and
 `Stop` on both providers. `chronos` differs by provider: Claude registers
 `UserPromptSubmit` plus a throttled `PreToolUse` refresh, while Codex registers
@@ -586,4 +592,4 @@ Claude likewise reads the Claude marketplace and Claude manifests. It should not
   against the Claude schema, which is a faster inner-loop check than a full
   release validation.
 - `session-scheduler` is intentionally a file-backed ledger layered on `session-chat`; keep scheduling state out of the transport plugin.
-- `session-workspace` owns tmux session/pane lifecycle for adopting projects. Behavior belongs in the plugin engine; a project's root `workspace.sh` is a thin bootstrap shim with no project logic in it.
+- `session-workspace` owns tmux session/pane lifecycle and the optional shared executable role-policy harness for adopting projects. Behavior belongs in the plugin engine; a project's root `workspace.sh` is a thin bootstrap shim with no project logic in it, while product/release/deployment policy and gate evidence remain in `AGENTS.md` and project commands. Harness gate TTLs are normalized inputs for that local command layer, not proof of approval.
