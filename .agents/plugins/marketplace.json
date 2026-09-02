@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "session-manager",
-      "version": "1.7.4",
+      "version": "1.7.5",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-manager"
@@ -48,7 +48,7 @@
     },
     {
       "name": "knowledge",
-      "version": "0.3.13",
+      "version": "0.3.15",
       "source": {
         "source": "local",
         "path": "./codex/plugins/knowledge"

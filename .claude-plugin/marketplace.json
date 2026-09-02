@@ -12,7 +12,7 @@
     {
       "name": "session-manager",
       "description": "List, search, and delete Claude Code sessions and all related data across projects. Supported platforms: macOS, Linux, Windows (WSL).",
-      "version": "1.7.4",
+      "version": "1.7.5",
       "author": {
         "name": "Girish Attri"
       },
@@ -48,7 +48,7 @@
     {
       "name": "knowledge",
       "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory module with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor.",
-      "version": "0.3.13",
+      "version": "0.3.15",
       "author": {
         "name": "Girish Attri"
       },
