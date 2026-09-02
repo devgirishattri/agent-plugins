@@ -38,4 +38,4 @@ Target: **$ARGUMENTS**
 
 6. **If the user cancels**: Report that deletion was cancelled.
 
-IMPORTANT: Only pass a full UUID (36 characters, format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) to the delete script. Never pass a session name or partial ID.
+Pass only a full 36-character UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) to the delete script. It rejects names and partial IDs, so resolve the UUID with the search/list scripts first.
