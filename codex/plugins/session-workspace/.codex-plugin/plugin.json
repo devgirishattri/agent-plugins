@@ -1,6 +1,6 @@
 {
   "name": "session-workspace",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Config-driven tmux workspace, fail-closed multi-agent harness, and schema-v4 reviewed Git orchestration for Codex sessions.",
   "author": {
     "name": "Girish Attri",

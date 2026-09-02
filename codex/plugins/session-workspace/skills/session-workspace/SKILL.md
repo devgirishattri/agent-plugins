@@ -54,8 +54,11 @@ or `4` for reviewed orchestration) describing:
 - `secrets` — an owner-only (mode 0600, git-ignored) env file, gated by
   `secrets.allow` / `secrets.visible_to_roles` / `secrets.on_missing`
 - `behavior` — attach/stop-scope/save defaults
-- `browser` — optional Chrome DevTools session binding, pinned MCP package,
-  loopback port, and portable derived profile
+- `browser` — optional Chrome DevTools binding: `session_id` plus, when that
+  session has more than one pane, `pane_name` naming the single pane that
+  receives the Chrome argv (a one-pane session may omit it); pinned MCP
+  package, loopback port, and portable derived profile. Only the selected pane
+  reports DevTools readiness; siblings keep their own `command`/`port`
 - `harness` (schema v2/v3/v4) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
   `gates`, plus optional schema-v3/v4 `guards`; absent or `enabled: false` is a true no-op (for panes whose

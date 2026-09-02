@@ -52,6 +52,11 @@ def coordination_var_name(store):
 
 . as $cfg
 | ($cfg.browser // null) as $browser
+# The concrete Chrome pane: browser.pane_name when given, else the sole pane
+# of browser.session_id (validation has already rejected any other shape).
+| (if $browser == null then null
+   else ($browser.pane_name // ([($cfg.sessions // [])[] | select(.id == $browser.session_id) | (.panes // [])[] | .name] | .[0]))
+   end) as $browser_pane_name
 | ([($cfg.sessions // [])[] | (.panes // [])[]]) as $all_panes
 | (($cfg.schema_version == 2 or $cfg.schema_version == 3 or $cfg.schema_version == 4) and ($cfg.harness.enabled // false)) as $harness_active
 | (($cfg.schema_version == 3 or $cfg.schema_version == 4) and $harness_active and ($cfg.harness | has("guards"))) as $guards_configured
@@ -135,7 +140,7 @@ def coordination_var_name(store):
                 program: (if $role.runtime == "shell" then "shell" else ($runtime.program // null) end),
                 args: ($runtime.args // [])
               },
-              command: (if $browser != null and $s.id == $browser.session_id then
+              command: (if $browser != null and $s.id == $browser.session_id and $p.name == $browser_pane_name then
                 [$browser.chrome_program,
                  "--remote-debugging-address=127.0.0.1",
                  "--remote-debugging-port=" + ($browser.port | tostring),
@@ -143,8 +148,8 @@ def coordination_var_name(store):
                  "--no-first-run",
                  "--no-default-browser-check"]
                 else ($p.command // null) end),
-              port: (if $browser != null and $s.id == $browser.session_id then $browser.port else ($p.port // null) end),
-              browser: ($browser != null and $s.id == $browser.session_id),
+              port: (if $browser != null and $s.id == $browser.session_id and $p.name == $browser_pane_name then $browser.port else ($p.port // null) end),
+              browser: ($browser != null and $s.id == $browser.session_id and $p.name == $browser_pane_name),
               agent: {
                 model: resolve_field($p.agent.model; $role.agent.model),
                 effort: resolve_field($p.agent.effort; $role.agent.effort),
@@ -177,6 +182,7 @@ def coordination_var_name(store):
   ],
   browser: (if $browser == null then null else {
     session_id: $browser.session_id,
+    pane_name: $browser_pane_name,
     port: $browser.port,
     browser_url: ("http://127.0.0.1:" + ($browser.port | tostring)),
     profile_dir: $browser_profile_dir,

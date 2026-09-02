@@ -289,7 +289,7 @@ else
 fi
 
 echo "== golden fixtures validate clean =="
-for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3 orchestration-v4; do
+for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3 orchestration-v4 browser browser-multipane; do
   OUT="$(bash "$HERE/validate-config.sh" --config "$HERE/fixtures/valid/$fx.json" 2>&1)"
   STATUS=$?
   if [ "$STATUS" -eq 0 ] && printf '%s' "$OUT" | grep -q "^OK:"; then
@@ -1006,6 +1006,15 @@ declare -a RULE_FIXTURES=(
   "pane-name-alias-rce.json:env.pane_name_aliases entry .* must match \^\[A-Z_\]"
   "project-id-bad-charset.json:project.id has invalid characters"
   "session-id-bad-charset.json:session id has invalid characters"
+  "browser-multipane-missing-pane-name.json:has 3 panes; set browser.pane_name"
+  "browser-pane-name-unknown.json:does not match any pane in browser session services"
+  "browser-pane-name-foreign-session.json:belongs to session other, not to browser.session_id services"
+  "browser-pane-name-bad-charset.json:browser.pane_name must match"
+  "browser-selected-pane-role.json:browser session pane role must be named service"
+  "browser-selected-pane-optional.json:browser session pane must not be optional"
+  "browser-selected-pane-command.json:browser session pane must omit command"
+  "browser-selected-pane-port.json:browser session pane must omit port"
+  "browser-selected-pane-runtime.json:browser session pane role must use the built-in shell runtime"
 )
 for entry in "${RULE_FIXTURES[@]}"; do
   fx="${entry%%:*}"
@@ -3139,6 +3148,119 @@ else
   fail "restart: accepts --no-save and rebuilds the session to the planned topology" "status=$SWT_STATUS names=[$SWT_SVC_NAMES] output=$SWT_OUT"
 fi
 
+# --- 12z. browser.pane_name in a shared services session -------------------
+# Chrome lives in ONE selected pane of a multi-pane session. Lifecycle must:
+#   * under --no-services create the pane but neither launch Chrome, claim
+#     the DevTools port, nor wait for readiness;
+#   * on a plain start launch Chrome into the selected pane only, claim the
+#     port, and wait for /json/version -- a stub "Chrome" answers that
+#     endpoint over real HTTP so readiness is observed, not simulated;
+#   * report readiness for the selected pane alone (siblings stay "n/a");
+#   * release the port claim when the shared session is stopped.
+SWT_PROJ_BR="$SWT_ROOT/sample-browser"
+SWT_BR_PORT=47331
+SWT_BR_CACHE="$SWT_ROOT/browser-cache"
+mkdir -p "$SWT_PROJ_BR/.agent-workspace" "$SWT_BR_CACHE"
+cat > "$SWT_BIN/chrome-stub" <<'EOF'
+#!/usr/bin/env bash
+# Stand-in for Chrome: serves a DevTools-shaped /json/version on the
+# --remote-debugging-port it is handed and stays in the foreground.
+port=""
+for a in "$@"; do
+  case "$a" in --remote-debugging-port=*) port="${a#--remote-debugging-port=}" ;; esac
+done
+[ -n "$port" ] || { echo "chrome-stub: no --remote-debugging-port" >&2; exit 1; }
+root="$(dirname "$0")/chrome-stub-root"
+mkdir -p "$root/json"
+printf '{"Browser":"chrome-stub/1.0","webSocketDebuggerUrl":"ws://127.0.0.1:%s/devtools/browser/stub"}\n' "$port" > "$root/json/version"
+cd "$root" || exit 1
+exec python3 -m http.server "$port" --bind 127.0.0.1
+EOF
+chmod +x "$SWT_BIN/chrome-stub"
+cat > "$SWT_PROJ_BR/.agent-workspace/workspace.json" <<EOF
+{"schema_version":1,"project":{"id":"sample-browser","root":"."},
+"runtimes":{},
+"roles":{"service":{"runtime":"shell","env_group":"none"}},
+"stores":{"pin":[]},
+"behavior":{"default_start_target":"all","attach":"never","stop_scope":"selected","session_chat_helper":{"resolve":"never"}},
+"browser":{"session_id":"services","pane_name":"sample-browser-chrome","port":$SWT_BR_PORT,"chrome_program":"$SWT_BIN/chrome-stub","mcp_package":"chrome-devtools-mcp@1.2.3"},
+"sessions":[{"id":"services","name":"sample-browser-services","layout":{"kind":"standard","name":"tiled"},"panes":[
+  {"name":"sample-browser-shell","role":"service","cwd":"."},
+  {"name":"sample-browser-chrome","role":"service","cwd":"."},
+  {"name":"sample-browser-sidecar","role":"service","cwd":".","command":["sleep","3600"],"port":8010}
+]}]}
+EOF
+SWT_CFG_BR="$SWT_PROJ_BR/.agent-workspace/workspace.json"
+SWT_BR_WIN='=sample-browser-services:0'
+SWT_BR_OWNER="$SWT_STATE/session-workspace/browser-ports/$SWT_BR_PORT"
+# Same sandbox as swrun, plus a private XDG_CACHE_HOME so the derived Chrome
+# profile directory never lands in the developer's real ~/.cache.
+swrun_br() {
+  env -u TMUX TMUX_TMPDIR="$SWT_TMPDIR" PATH="$SWT_BIN:$PATH" XDG_STATE_HOME="$SWT_STATE" \
+    XDG_CACHE_HOME="$SWT_BR_CACHE" SESSION_WORKSPACE_STOP_GRACE_SECONDS=0 \
+    bash "$@"
+}
+swt_br_pane() {
+  SWT_TMUX list-panes -t "$SWT_BR_WIN" -F "#{pane_id}	#{@session_workspace_pane}" 2>/dev/null | awk -F'\t' -v n="$1" '$2 == n {print $1}'
+}
+
+SWT_OUT="$(swrun_br "$HERE/workspace-start.sh" --config "$SWT_CFG_BR" --no-attach --no-services 2>&1)"
+SWT_STATUS=$?
+SWT_BR_COUNT="$(SWT_TMUX list-panes -t "$SWT_BR_WIN" -F '#{pane_id}' 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$SWT_STATUS" -eq 0 ] && [ "$SWT_BR_COUNT" = "3" ] &&
+   ! printf '%s' "$SWT_OUT" | grep -q 'browser DevTools endpoint' &&
+   [ ! -e "$SWT_BR_OWNER" ]; then
+  pass "browser --no-services: the selected pane is created but Chrome is neither launched, port-claimed, nor awaited"
+else
+  fail "browser --no-services: the selected pane is created but Chrome is neither launched, port-claimed, nor awaited" \
+    "status=$SWT_STATUS panes=$SWT_BR_COUNT owner=$(cat "$SWT_BR_OWNER" 2>/dev/null) output=$SWT_OUT"
+fi
+
+SWT_BR_STATUS="$(swrun_br "$HERE/workspace-status.sh" --config "$SWT_CFG_BR" --json 2>&1)"
+if printf '%s' "$SWT_BR_STATUS" | jq -e --argjson port "$SWT_BR_PORT" '
+  ([.[] | select(.pane == "sample-browser-chrome")] | length) == 1 and
+  (.[] | select(.pane == "sample-browser-chrome") | (.readiness == "not-ready" or .readiness == "unknown-curl-missing") and .port == $port) and
+  all(.[] | select(.pane != "sample-browser-chrome"); .readiness == "n/a") and
+  (.[] | select(.pane == "sample-browser-sidecar") | .port == 8010)
+' >/dev/null 2>&1; then
+  pass "browser status: only the selected pane carries DevTools readiness (not-ready before launch); siblings stay n/a"
+else
+  fail "browser status: only the selected pane carries DevTools readiness (not-ready before launch); siblings stay n/a" "$SWT_BR_STATUS"
+fi
+
+SWT_OUT="$(swrun_br "$HERE/workspace-start.sh" --config "$SWT_CFG_BR" --no-attach 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 0 ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[ready]  browser DevTools endpoint http://127.0.0.1:$SWT_BR_PORT" &&
+   [ "$(sed -n '1p' "$SWT_BR_OWNER" 2>/dev/null)" = "sample-browser" ]; then
+  pass "browser start: a plain services start launches Chrome into the selected pane, claims the port, and waits for /json/version"
+else
+  fail "browser start: a plain services start launches Chrome into the selected pane, claims the port, and waits for /json/version" \
+    "status=$SWT_STATUS owner=$(cat "$SWT_BR_OWNER" 2>/dev/null) output=$SWT_OUT"
+fi
+
+SWT_BR_SIDECAR="$(swt_br_pane sample-browser-sidecar)"
+[ -n "$SWT_BR_SIDECAR" ] && swt_wait_cmd "$SWT_BR_SIDECAR" "sleep"
+SWT_BR_STATUS="$(swrun_br "$HERE/workspace-status.sh" --config "$SWT_CFG_BR" --json 2>&1)"
+if printf '%s' "$SWT_BR_STATUS" | jq -e '
+  ([.[] | select(.health == "healthy")] | length) == 3 and
+  (.[] | select(.pane == "sample-browser-chrome") | .readiness == "ready") and
+  all(.[] | select(.pane != "sample-browser-chrome"); .readiness == "n/a") and
+  (.[] | select(.pane == "sample-browser-sidecar") | .process == "sleep" and .port == 8010)
+' >/dev/null 2>&1; then
+  pass "browser status: the selected pane reports ready while the sibling service keeps its own command and port"
+else
+  fail "browser status: the selected pane reports ready while the sibling service keeps its own command and port" "$SWT_BR_STATUS"
+fi
+
+swrun_br "$HERE/workspace-stop.sh" services --config "$SWT_CFG_BR" --confirmed >/dev/null 2>&1
+if [ ! -e "$SWT_BR_OWNER" ] && ! SWT_TMUX has-session -t '=sample-browser-services' 2>/dev/null; then
+  pass "browser stop: stopping the shared services session releases the DevTools port claim"
+else
+  fail "browser stop: stopping the shared services session releases the DevTools port claim" \
+    "owner=$(cat "$SWT_BR_OWNER" 2>/dev/null) sessions=$(SWT_TMUX list-sessions -F '#{session_name}' 2>/dev/null | tr '\n' ' ')"
+fi
+
 # --- 13. teardown + leak check -------------------------------------------
 swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG" --confirmed --all >/dev/null 2>&1
 swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG2" --confirmed --all >/dev/null 2>&1
@@ -4190,6 +4312,45 @@ if printf '%s' "$BROWSER_PLAN" | jq -e '
   pass "browser: plan derives loopback Chrome argv, port, and isolated profile"
 else
   fail "browser: plan derives loopback Chrome argv, port, and isolated profile" "$BROWSER_PLAN"
+fi
+
+# 0.5.1 backward compatibility: a one-pane browser session that omits
+# browser.pane_name still binds its sole pane, and the plan now echoes the
+# concrete (interpolated) selection so every consumer keys on one identity.
+if printf '%s' "$BROWSER_PLAN" | jq -e '
+  .browser.pane_name == "sample-browser-chrome-devtools" and
+  .sessions[0].panes[0].browser == true and
+  .sessions[0].panes[0].port == 9324
+' >/dev/null 2>&1; then
+  pass "browser: legacy one-pane config (no pane_name) resolves browser.pane_name to its sole pane"
+else
+  fail "browser: legacy one-pane config (no pane_name) resolves browser.pane_name to its sole pane" "$BROWSER_PLAN"
+fi
+
+# Shared session: only the pane named by browser.pane_name receives the
+# derived Chrome argv / browser.port / browser=true. Siblings keep their own
+# command and port untouched and are never marked as the browser.
+BROWSER_MULTI_PLAN="$(HOME="$TMPROOT/browser-home" bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/valid/browser-multipane.json" --json 2>&1)"
+if printf '%s' "$BROWSER_MULTI_PLAN" | jq -e '
+  .browser.session_id == "services" and
+  .browser.pane_name == "sample-browser-multi-browser" and
+  .browser.port == 9325 and
+  (.sessions[0].panes | length) == 3 and
+  .sessions[0].panes[1].name == "sample-browser-multi-browser" and
+  .sessions[0].panes[1].browser == true and
+  .sessions[0].panes[1].port == 9325 and
+  (.sessions[0].panes[1].command == ["true","--remote-debugging-address=127.0.0.1","--remote-debugging-port=9325","--user-data-dir='"$TMPROOT"'/browser-home/.cache/session-workspace/chrome/sample-browser-multi","--no-first-run","--no-default-browser-check"]) and
+  .sessions[0].panes[0].browser == false and
+  .sessions[0].panes[0].command == null and
+  .sessions[0].panes[0].port == null and
+  .sessions[0].panes[2].browser == false and
+  (.sessions[0].panes[2].command == ["true","--sibling"]) and
+  .sessions[0].panes[2].port == 3001 and
+  ([.sessions[0].panes[] | select(.browser == true)] | length) == 1
+' >/dev/null 2>&1; then
+  pass "browser: multi-pane session binds Chrome argv/port/browser=true to browser.pane_name only; siblings keep command/port"
+else
+  fail "browser: multi-pane session binds Chrome argv/port/browser=true to browser.pane_name only; siblings keep command/port" "$BROWSER_MULTI_PLAN"
 fi
 
 BROWSER_BAD="$(bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/invalid/browser-latest-package.json" --json 2>&1)"

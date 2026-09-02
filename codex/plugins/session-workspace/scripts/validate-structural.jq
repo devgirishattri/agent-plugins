@@ -108,7 +108,7 @@ def harness_engine_vars: [
   chk(.secrets // {}; ["env_file", "allow", "visible_to_roles", "on_missing"]; []; "secrets"),
   chk(.behavior // {}; ["default_start_target", "attach", "stop_scope", "save_before_stop", "session_chat_helper"]; []; "behavior"),
   chk(.behavior.session_chat_helper // {}; ["resolve", "on_missing"]; []; "behavior.session_chat_helper"),
-  (if has("browser") then chk(.browser; ["session_id", "port", "chrome_program", "mcp_package", "mcp_server_name"]; ["session_id", "port", "chrome_program", "mcp_package"]; "browser") else empty end),
+  (if has("browser") then chk(.browser; ["session_id", "pane_name", "port", "chrome_program", "mcp_package", "mcp_server_name"]; ["session_id", "port", "chrome_program", "mcp_package"]; "browser") else empty end),
 
   # JSON Schema is reference-only, so enforce the basic scalar/cardinality
   # contracts that the engine consumes directly here as well.
@@ -403,15 +403,44 @@ def harness_engine_vars: [
       if ($n | type) != "string" or ($n | test("\\A[A-Za-z0-9_-]+\\z") | not) then
         "browser.mcp_server_name must match ^[A-Za-z0-9_-]+$"
       else empty end),
+    # browser.pane_name selects the Chrome pane inside browser.session_id. It is
+    # compared post-interpolation (config.sh resolves ${PROJECT_ID} in every
+    # string value, so it matches sessions[].panes[].name on equal terms) and
+    # must name exactly one pane of that session. A one-pane session may omit
+    # it and binds its sole pane (the pre-0.5.1 contract).
+    (if ($b | has("pane_name")) and (($b.pane_name | type) != "string" or ($b.pane_name | test("\\A[A-Za-z0-9._-]+\\z") | not)) then
+       "browser.pane_name must match ^[A-Za-z0-9._-]+$ (got: " + ($b.pane_name | tostring) + ")"
+     else empty end),
     (if $matches == 1 then
        (.sessions[] | select(.id == $b.session_id)) as $s |
-       (if ($s.panes | length) != 1 then "browser session must contain exactly one pane" else empty end),
-       ($s.panes[0] // {}) as $p |
-       (if $p.role != "service" then "browser session pane role must be named service so --no-services remains authoritative" else empty end),
-       (if ($p.optional // false) then "browser session pane must not be optional" else empty end),
-       (if ($p | has("command")) then "browser session pane must omit command; session-workspace derives the Chrome argv" else empty end),
-       (if ($p | has("port")) then "browser session pane must omit port; use browser.port as the single source of truth" else empty end),
-       ((.roles[$p.role].runtime // "") as $rt | if $rt != "shell" then "browser session pane role must use the built-in shell runtime" else empty end)
+       ($s.panes // []) as $panes |
+       (if ($b | has("pane_name")) then
+          (if ($b.pane_name | type) == "string" and ($b.pane_name | test("\\A[A-Za-z0-9._-]+\\z")) then
+             ([$panes[] | select(.name == $b.pane_name)] | length) as $selected |
+             (if $selected == 0 then
+                ([.sessions[] | select(.id != $b.session_id) | select(any((.panes // [])[]; .name == $b.pane_name)) | .id] | join(", ")) as $foreign |
+                (if $foreign != "" then
+                   "browser.pane_name " + $b.pane_name + " belongs to session " + $foreign + ", not to browser.session_id " + $b.session_id
+                 else
+                   "browser.pane_name " + $b.pane_name + " does not match any pane in browser session " + $b.session_id
+                 end)
+              elif $selected > 1 then
+                "browser.pane_name " + $b.pane_name + " must match exactly one pane in browser session " + $b.session_id + " (got: " + ($selected | tostring) + ")"
+              else empty end)
+           else empty end)
+        elif ($panes | length) != 1 then
+          "browser session " + $b.session_id + " has " + ($panes | length | tostring) + " panes; set browser.pane_name to select the Chrome pane (it may be omitted only for a one-pane session)"
+        else empty end),
+       (if ($b | has("pane_name")) then ([$panes[] | select(.name == $b.pane_name)] | .[0] // null)
+        elif ($panes | length) == 1 then $panes[0]
+        else null end) as $p |
+       (if $p != null then
+          (if $p.role != "service" then "browser session pane role must be named service so --no-services remains authoritative" else empty end),
+          (if ($p.optional // false) then "browser session pane must not be optional" else empty end),
+          (if ($p | has("command")) then "browser session pane must omit command; session-workspace derives the Chrome argv" else empty end),
+          (if ($p | has("port")) then "browser session pane must omit port; use browser.port as the single source of truth" else empty end),
+          ((.roles[$p.role].runtime // "") as $rt | if $rt != "shell" then "browser session pane role must use the built-in shell runtime" else empty end)
+        else empty end)
      else empty end),
     ([.sessions[] | .panes[] | select(has("port")) | .port] | index($b.port)) as $port_collision |
     (if $port_collision != null then "browser.port duplicates an explicit sessions[].panes[].port" else empty end)

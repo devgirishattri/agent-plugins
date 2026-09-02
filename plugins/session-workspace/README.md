@@ -471,7 +471,7 @@ containment**: a per-call workdir the policy never receives cannot be
 validated. `audit` is the recommended Codex mode until the runtime exposes
 that information or a sound mitigation exists.
 
-### Harness known gaps (0.5.0)
+### Harness known gaps (current release)
 
 - The policy re-validates the config by running `workspace-plan.sh --json`
   on every gated tool call (a jq-only plan; the hook is registered on the
@@ -592,7 +592,7 @@ shell script, or CI with no provider CLI in the loop.
 
 ## Known limitations
 
-These are honest gaps in the current (0.5.0) implementation, not aspirational
+These are honest gaps in the current implementation, not aspirational
 roadmap items — read them before depending on the behavior they describe.
 
 - **`stores.memory.root` does not export `KNOWLEDGE_MEMORY_HOME`.**
@@ -611,10 +611,13 @@ roadmap items — read them before depending on the behavior they describe.
   `chmod 700` of the `messages`/`scheduler`/`contexts` directories under
   `stores.base` (and the memory root) before starting panes. This engine
   does not — the only directories it creates are its own state directory
-  (`$XDG_STATE_HOME/session-workspace/<project-id>/`, 0700), the tmux lock
-  directory, and — only when a `browser` block is configured — the derived
-  Chrome profile directory (`browser.profile_dir`, created by
-  `workspace-start.sh` before launching the browser session). Coordination
+  (`$XDG_STATE_HOME/session-workspace/<project-id>/`, 0700), its persistent
+  `layouts/` subdirectory, and its transient `lock/`; and — only when a
+  `browser` block is configured — the shared port registry
+  (`$XDG_STATE_HOME/session-workspace/browser-ports/`), its transient `.lock/`,
+  and the derived Chrome profile directory
+  (`browser.profile_dir`, created by `workspace-start.sh` before launching the
+  browser session). Coordination
   directories are never among them. On a machine where those coordination directories already
   exist from a prior run this is harmless; on a genuinely fresh clone it
   means the first agent to write to an unmanaged store, or a strict
@@ -674,17 +677,29 @@ expansion, or shell substitution happens anywhere in the config.
 
 ### `browser` (optional)
 
-This binds one existing, one-pane service session to a persistent Chrome
-DevTools instance. That pane must omit `command` and `port`; the engine derives
-both so the endpoint has one source of truth.
+This binds one pane of an existing session to a persistent Chrome DevTools
+instance. The selected pane must omit `command` and `port`; the engine derives
+both so the endpoint has one source of truth. Since 0.5.1 that session may
+also hold other `service` panes (for example the project's dev servers): the
+browser binding never touches a sibling pane's `command`, `port`, or status.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `browser.session_id` | string | yes | Existing one-pane session whose required `service` role uses the built-in `shell` runtime. |
+| `browser.session_id` | string | yes | Existing session that contains the Chrome pane. |
+| `browser.pane_name` | string, `^[A-Za-z0-9._-]+$` | no | Name (after `${PROJECT_ID}` interpolation) of the one pane inside `browser.session_id` that receives the Chrome argv. **Required when that session has more than one pane.** A one-pane session may omit it and binds its sole pane, exactly as before 0.5.1. An unknown name, a pane that belongs to another session, or an unsafe string is rejected. |
 | `browser.port` | integer, 1–65535 | yes | Loopback DevTools port. Start records machine-local ownership and refuses a live allocation owned by another project. |
 | `browser.chrome_program` | string | yes | Chrome executable name or absolute path. `doctor` checks resolution without executing it. |
 | `browser.mcp_package` | exact `chrome-devtools-mcp@x.y.z` | yes | Pinned MCP package; floating tags such as `@latest` are rejected. |
 | `browser.mcp_server_name` | `A-Za-z0-9_-` | no | MCP entry name; default `chrome-devtools`. |
+
+The selected pane must be non-optional, use a `service` role with the built-in
+`shell` runtime, and omit `command` and `port`; only those five rules apply to
+the selected pane, sibling panes are unconstrained. Only the selected pane
+receives the derived Chrome argv, `browser.port`, and `browser: true` in the
+plan, and the normalized plan echoes the concrete selection as
+`browser.pane_name`. `status` reports DevTools readiness for that pane alone
+(`n/a` for every other pane). The port-collision check stays global: `browser.port`
+may not duplicate any explicit `sessions[].panes[].port`.
 
 The Chrome argv always binds `127.0.0.1`; its profile is derived as
 `${XDG_CACHE_HOME:-$HOME/.cache}/session-workspace/chrome/<project.id>`.
@@ -692,6 +707,19 @@ The Chrome argv always binds `127.0.0.1`; its profile is derived as
 readiness. `workspace browser-config` previews the Codex/Claude MCP entries;
 `workspace browser-config --apply` backs up and merges them. Start the browser
 session before opening a new Codex or Claude session.
+
+Lifecycle stays keyed on `browser.session_id`. `workspace start <session>` (or
+`all`) claims the port, starts every pane of that session, then waits for
+`/json/version`; `--no-services` suppresses the Chrome pane like any other
+service pane and skips the claim and the wait; `workspace stop <session>`
+releases the port. When Chrome shares a session with dev servers it can no
+longer be stopped or restarted on its own: `workspace restart <session>` bounces
+every pane in that session, and a failed sibling slot suppresses the readiness
+wait and its `[ready]`/`[failed]` report. Because a `split_tree` layout with
+`only_when_fresh: true` is built only while the window has exactly one pane,
+moving Chrome into an already-running session requires stopping that session
+once so the new tree is built fresh; a saved `retain_layout` file from the old
+pane count is rejected by tmux and overwritten on the next successful start.
 
 ### `project` (required)
 
@@ -789,7 +817,7 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].retain_layout` | boolean | no | `false` | If true, the engine saves the window's `#{window_layout}` at the end of a mutating `start`/`reconcile --apply` pass over that session; on the next `start`/`reconcile` it first creates/fills pane slots and applies the configured layout selection, then restores the retained layout on top. During `stop`/`restart`, the *current* manual layout is captured before killing only when `behavior.save_before_stop` is `true` and `--no-save` was not passed — so manual resizing survives a restart only under those conditions, not unconditionally. |
 | `sessions[].layout.kind` | enum: `standard`, `split_tree` | yes (if `layout` present) | — | `standard`: named tmux layout applied via `select-layout` after slot-filling. `split_tree`: an explicit, ordered sequence of splits (see below). |
 | `sessions[].layout.name` | string | no | `"tiled"` | Only used when `kind: standard` — the tmux layout name passed to `select-layout`. |
-| `sessions[].layout.only_when_fresh` | boolean | no | `false` | Only used when `kind: split_tree`. The split tree is built **only** when the window currently has exactly one pane; otherwise the existing panes are matched by marker/position instead (so a previously built split tree is never rebuilt on a second `start`). |
+| `sessions[].layout.only_when_fresh` | boolean | no | `false` | Only used when `kind: split_tree`. Set this explicitly to `true` to construct `layout.nodes`; construction then occurs **only** when the window currently has exactly one pane. When false, or once the window has multiple panes, existing panes are matched by marker/position instead (so a previously built split tree is never rebuilt on a second `start`). |
 | `sessions[].layout.mask_after_split_hook` | boolean | — | (always applied for `split_tree`) | Whether the engine masks the window's `after-split-window` hook during construction and restores it byte-for-byte afterward, so a user's own tmux hooks can't interfere mid-build. This is always done for a fresh split-tree build; the field exists in the schema for documentation/explicitness. |
 | `sessions[].layout.nodes` | array of `{id, from?, dir?, percent?}` | yes (if `kind: split_tree`) | — | Ordered split instructions. The first node has no `from`/`dir`/`percent` (it's the window's existing single pane). Every subsequent node splits the pane at `from` in direction `dir` (`v` or `h`) reserving `percent` (1-99) for the new pane, emitted as `-l <percent>%` (never the deprecated `-p <pct>`). |
 | `sessions[].layout.pane_order` | array of node ids | yes (if `kind: split_tree`) | — | Explicit, authoritative mapping from split-tree node id to `panes[]` slot order — a visual layout can't otherwise express "pane order differs from split order." |

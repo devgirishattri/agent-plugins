@@ -1,0 +1,5 @@
+{"schema_version":1,"project":{"id":"p","root":"."},"runtimes":{},"roles":{"service":{"runtime":"shell"},"helper":{"runtime":"shell"}},"stores":{"pin":[]},
+"browser":{"session_id":"services","pane_name":"p-browser","port":9222,"chrome_program":"true","mcp_package":"chrome-devtools-mcp@1.2.3"},
+"sessions":[{"id":"services","name":"p-services","panes":[
+  {"name":"p-shell","role":"service","cwd":"."},
+  {"name":"p-browser","role":"helper","cwd":"."}]}]}

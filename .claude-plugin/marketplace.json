@@ -105,7 +105,7 @@
     {
       "name": "session-workspace",
       "description": "Config-driven tmux workspace and multi-agent harness engine with fail-closed role policy and schema-v4 reviewed Git orchestration for Claude and Codex.",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "author": {
         "name": "Girish Attri"
       },

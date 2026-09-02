@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "project": {
+    "id": "sample-browser-multi",
+    "display_name": "Sample Browser (shared session)",
+    "root": "."
+  },
+  "runtimes": {},
+  "roles": {
+    "service": {
+      "runtime": "shell",
+      "env_group": "none"
+    }
+  },
+  "stores": {
+    "pin": []
+  },
+  "browser": {
+    "session_id": "services",
+    "pane_name": "${PROJECT_ID}-browser",
+    "port": 9325,
+    "chrome_program": "true",
+    "mcp_package": "chrome-devtools-mcp@1.2.3"
+  },
+  "sessions": [
+    {
+      "id": "services",
+      "name": "${PROJECT_ID}-services",
+      "window_index": 0,
+      "retain_layout": true,
+      "layout": {
+        "kind": "split_tree",
+        "only_when_fresh": true,
+        "mask_after_split_hook": true,
+        "nodes": [
+          { "id": "shell" },
+          { "id": "browser", "from": "shell", "dir": "h", "percent": 50 },
+          { "id": "sidecar", "from": "shell", "dir": "v", "percent": 50 }
+        ],
+        "pane_order": ["shell", "browser", "sidecar"]
+      },
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-shell",
+          "role": "service",
+          "cwd": "."
+        },
+        {
+          "name": "${PROJECT_ID}-browser",
+          "role": "service",
+          "cwd": "."
+        },
+        {
+          "name": "${PROJECT_ID}-sidecar",
+          "role": "service",
+          "cwd": ".",
+          "command": ["true", "--sibling"],
+          "port": 3001
+        }
+      ]
+    }
+  ],
+  "behavior": {
+    "default_start_target": "services",
+    "attach": "never"
+  }
+}
