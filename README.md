@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.8 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.5.13 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.4.1 | Config-driven tmux workspace plus an opt-in, fail-closed multi-agent harness and shared guard packs |
+| `session-workspace` | 0.5.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -39,7 +39,7 @@ rather than assumed: the `session-scheduler` suite passes 61/61 under 3.2.57.
 | `tmux` | `knowledge` | Optional. Only for pane-identity provenance; `KNOWLEDGE_PANE_NAME` substitutes. |
 | `git` | `knowledge` | Hard. Store resolution and `init` both require a repository. |
 | `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
-| `python3` | `session-workspace` harness policy | Hard only when a schema-v2/v3 `harness.enabled` policy is active. Hooks launched inactive remain no-ops; stale active launcher identity/config/guard drift intentionally fails closed. |
+| `python3` | `session-workspace` harness policy | Hard only when a schema-v2/v3/v4 `harness.enabled` policy is active. Hooks launched inactive remain no-ops; stale active launcher identity/config/guard drift intentionally fails closed. |
 | `python3` | `knowledge` doctor, `session-chat` message surfacing | Optional. Both degrade rather than fail. |
 | `codex` CLI | `session-manager` on Codex | Hard for deletion only. Its delete path execs the native CLI and exits 127 without it. |
 | GNU or BSD `date` plus a zoneinfo tree | `chronos` | Hard. It validates `AGENT_PLUGINS_TIME_ZONE` against the system zoneinfo. |
@@ -302,11 +302,19 @@ the confirmation internally to its stop phase; it does not accept a separate
 `--confirmed` flag. The config schema is documented in
 `plugins/session-workspace/README.md`.
 
+Schema v4 can additionally enable the provider-neutral
+`workspace-orchestrator` skill. Its fixed `reviewed-git-v1` lifecycle maps
+validated child targets to their executor/reviewer panes and coordinates plan
+review, scheduler-tracked implementation, independent audit, commit, push, and
+deploy as separate gates. Configuration contains only safe Git coordinates;
+every mutation executes in the owning executor pane, and explicit user
+confirmations are never inferred from harness or ledger state.
+
 ### Hooks and restarts
 
 `chronos`, `knowledge`, and `session-chat` register lifecycle hooks;
 `session-manager` and `session-scheduler` register none. `session-workspace`
-registers opt-in harness hooks: schema-v1 projects, schema-v2/v3
+registers opt-in harness hooks: schema-v1 projects, schema-v2/v3/v4
 projects without an enabled harness, and sessions without launcher-provided
 harness identity remain true no-ops when no stale active launcher mode is
 present. A pane launched active still fails closed if the config is later
@@ -598,4 +606,4 @@ Claude likewise reads the Claude marketplace and Claude manifests. It should not
   against the Claude schema, which is a faster inner-loop check than a full
   release validation.
 - `session-scheduler` is intentionally a file-backed ledger layered on `session-chat`; keep scheduling state out of the transport plugin.
-- `session-workspace` owns tmux session/pane lifecycle and the optional shared executable role-policy harness for adopting projects. Behavior belongs in the plugin engine; a project's root `workspace.sh` is a thin bootstrap shim with no project logic in it, while product/release/deployment policy and gate evidence remain in `AGENTS.md` and project commands. Harness gate TTLs are normalized inputs for that local command layer, not proof of approval.
+- `session-workspace` owns tmux lifecycle, the optional executable role-policy harness, and schema-v4's fixed `reviewed-git-v1` coordination lifecycle. A project's root `workspace.sh` remains a logic-free bootstrap. `workspace.json` supplies validated pane/Git coordinates only; correlated session-chat replies plus the pinned scheduler ledger carry machine-verifiable gate evidence, while product-specific build/test requirements remain in `AGENTS.md` and explicit user confirmations remain conversational rather than harness-enforced.

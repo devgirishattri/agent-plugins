@@ -1,5 +1,5 @@
 ---
-description: Reconcile drifted tmux state against config; only sanctioned path for adopting unmanaged panes
+description: Reconcile drifted tmux state against config; recommended preview-first path for adopting unmanaged panes
 argument-hint: "[TARGET|all] [--config PATH] [--apply] [--adopt --confirmed]"
 ---
 
@@ -28,4 +28,6 @@ argument-hint: "[TARGET|all] [--config PATH] [--apply] [--adopt --confirmed]"
    - Adoption is refused unless both `--adopt` and `--confirmed` are present.
      When applying an adoption, the command prints the occupant details before
      claiming the pane.
+   - `workspace-start --adopt --confirmed` is the direct lifecycle alternative;
+     use reconcile when you want a separate mutation-free preview before apply.
    - Unknown targets exit non-zero.

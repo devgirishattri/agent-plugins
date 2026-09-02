@@ -59,6 +59,10 @@ jq '.schema_version = 3 | .harness.guards = {
   orchestrator:{deny_child_chdir:true}
 }' "$CONFIG" > "$V3_CONFIG"
 V3_GUARDS="$(jq -cS '.harness.guards' "$V3_CONFIG")"
+V3_COMPAT_CONFIG="$ROOT/.agent-workspace/v3-compat.json"
+jq '.schema_version = 3' "$CONFIG" > "$V3_COMPAT_CONFIG"
+V4_COMPAT_CONFIG="$ROOT/.agent-workspace/v4-compat.json"
+jq '.schema_version = 4' "$CONFIG" > "$V4_COMPAT_CONFIG"
 printf 'hello\n' > "$ROOT/component-a/README.md"
 printf 'root\n' > "$ROOT/AGENTS.md"
 ln -s "$ROOT/component-b" "$ROOT/component-a/escape-link"
@@ -248,6 +252,13 @@ if [ "$OUT" = "$OUT2" ]; then
   pass "decision JSON is deterministic across runs"
 else
   fail "decision JSON is deterministic across runs" "$OUT vs $OUT2"
+fi
+V3_COMPAT_DECISION="$(run_policy executor "$EXEC_PANE" "$CHILD" "$V3_COMPAT_CONFIG" enforce "$(bash_payload 'git status')")"
+V4_COMPAT_DECISION="$(run_policy executor "$EXEC_PANE" "$CHILD" "$V4_COMPAT_CONFIG" enforce "$(bash_payload 'git status')")"
+if [ "$V3_COMPAT_DECISION" = "$V4_COMPAT_DECISION" ]; then
+  pass "schema v4 without orchestration produces byte-identical policy decision to v3"
+else
+  fail "schema v4 without orchestration produces byte-identical policy decision to v3" "v3=$V3_COMPAT_DECISION v4=$V4_COMPAT_DECISION"
 fi
 
 assert_rendering_decision_parity() {

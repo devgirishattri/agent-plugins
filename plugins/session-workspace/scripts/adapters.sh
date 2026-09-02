@@ -308,7 +308,7 @@ _env_pin_mark() {
 #   ENV_ROLE_NAME           role bound to this pane
 #   ENV_PANE_CWD            resolved pane cwd from the plan
 #   ENV_HARNESS_MODE        audit/enforce when active, empty when inactive
-#   ENV_GUARDS_JSON         canonical guards JSON when schema-v3 configured,
+#   ENV_GUARDS_JSON         canonical guards JSON when schema-v3/v4 configured,
 #                           empty otherwise
 _env_build_map() {
   local i n
@@ -718,13 +718,13 @@ _env_prepare_inputs() {
   ENV_ROLE_NAME="$ROLE_NAME"
   ENV_PANE_CWD="$(printf '%s' "$PANE_PLAN" | jq -r '.cwd // ""')"
   ENV_HARNESS_MODE="$(printf '%s' "$CONFIG_JSON" | jq -r '
-    if (.schema_version == 2 or .schema_version == 3) and (.harness.enabled // false)
+    if (.schema_version == 2 or .schema_version == 3 or .schema_version == 4) and (.harness.enabled // false)
     then .harness.mode
     else ""
     end
   ')"
   ENV_GUARDS_JSON="$(printf '%s' "$CONFIG_JSON" | jq -cS '
-    if .schema_version == 3 and (.harness.enabled // false) and (.harness | has("guards"))
+    if (.schema_version == 3 or .schema_version == 4) and (.harness.enabled // false) and (.harness | has("guards"))
     then .harness.guards
     else empty
     end
@@ -800,14 +800,15 @@ cmd_secret_value() {
     return 1
   fi
 
-  local root_abs env_file_rel env_file_abs
+  local root_abs env_file_rel env_file_abs=""
   root_abs="$(printf '%s' "$PLAN_JSON" | jq -r '.project.root')"
   env_file_rel="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.env_file // empty')"
-  [ -z "$env_file_rel" ] && { echo "ERROR: adapters: secrets.env_file is not configured" >&2; return 1; }
-  case "$env_file_rel" in
-    /*) env_file_abs="$env_file_rel" ;;
-    *) env_file_abs="$root_abs/$env_file_rel" ;;
-  esac
+  if [ -n "$env_file_rel" ]; then
+    case "$env_file_rel" in
+      /*) env_file_abs="$env_file_rel" ;;
+      *) env_file_abs="$root_abs/$env_file_rel" ;;
+    esac
+  fi
 
   local value on_missing
   if value="$(resolve_secret_value "$env_file_abs" "$key")"; then
@@ -851,17 +852,15 @@ cmd_secret_file() {
   local on_missing
   on_missing="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.on_missing // "warn"')"
 
-  local root_abs env_file_rel env_file_abs
+  local root_abs env_file_rel env_file_abs=""
   root_abs="$(printf '%s' "$PLAN_JSON" | jq -r '.project.root')"
   env_file_rel="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.env_file // empty')"
-  if [ -z "$env_file_rel" ]; then
-    echo "ERROR: adapters: secrets.env_file is not configured" >&2
-    return 1
+  if [ -n "$env_file_rel" ]; then
+    case "$env_file_rel" in
+      /*) env_file_abs="$env_file_rel" ;;
+      *) env_file_abs="$root_abs/$env_file_rel" ;;
+    esac
   fi
-  case "$env_file_rel" in
-    /*) env_file_abs="$env_file_rel" ;;
-    *) env_file_abs="$root_abs/$env_file_rel" ;;
-  esac
 
   # umask 077 (lib.sh, process-wide) already makes this owner-only; chmod is
   # defensive belt-and-suspenders in case a caller's umask was overridden.

@@ -13,7 +13,7 @@ Inputs (all engine-owned, emitted per pane by adapters.sh / lifecycle.sh):
   SESSION_WORKSPACE_ROLE          this pane's configured role name
   SESSION_WORKSPACE_PANE_CWD      this pane's resolved cwd
   SESSION_WORKSPACE_HARNESS_MODE  audit|enforce when active, empty when inactive
-  SESSION_WORKSPACE_GUARDS_JSON   canonical schema-v3 guard pack JSON, when configured
+  SESSION_WORKSPACE_GUARDS_JSON   canonical schema-v3/v4 guard pack JSON, when configured
 
 Hook mode reads one JSON event (Claude- or Codex-shaped) from stdin:
   allow / inactive  -> silent, exit 0
@@ -354,7 +354,7 @@ def read_raw_config(path: Path) -> Optional[dict]:
 
 
 def raw_harness_state(config: Optional[dict]) -> Tuple[bool, str]:
-    if not config or config.get("schema_version") not in {2, 3}:
+    if not config or config.get("schema_version") not in {2, 3, 4}:
         return False, ""
     harness = config.get("harness")
     if not isinstance(harness, dict) or harness.get("enabled") is not True:

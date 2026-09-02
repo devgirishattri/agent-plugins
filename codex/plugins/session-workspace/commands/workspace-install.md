@@ -23,13 +23,15 @@ argument-hint: "[--target PATH] [--dry-run]"
    to the target. That dispatcher is what FINDS the plugin at run time, so it
    must live on PATH rather than inside a versioned cache — which makes it a
    copy that can go stale. This verb creates it and is also the sanctioned
-   refresh. It is idempotent: an identical target reports `already current`
-   and writes nothing, so `upgrade.sh` calls it after every plugin update and
-   the copy cannot drift from the installed release.
+   refresh. It is idempotent: an identical executable target reports `already
+   current` and writes nothing; an identical target missing its executable bit
+   is repaired in place. An external plugin-upgrade flow may call it after every
+   update without churn.
 
 5. It needs no config and touches no tmux — it works on a fresh machine with
-   no `.agent-workspace/` anywhere. An existing target is backed up to
-   `<target>.bak` before being overwritten. After copying it verifies the
+   no `.agent-workspace/` anywhere. A differing existing target is backed up
+   to `<target>.bak` before being overwritten; an identical target is left
+   untouched. After copying it verifies the
    installed file answers `--contract`, reports PATH membership, and prints an
    optional `alias ws=workspace` line. It NEVER edits a shell rc file — relay
    that line verbatim for the user to add themselves.

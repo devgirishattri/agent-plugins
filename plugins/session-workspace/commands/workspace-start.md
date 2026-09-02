@@ -1,6 +1,6 @@
 ---
 description: Bring up session-workspace sessions/panes/agents/services
-argument-hint: "[TARGET|all] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]"
+argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]"
 allowed-tools: Bash(bash:*)
 ---
 
@@ -20,9 +20,11 @@ resolve (un-cloned child repo) is reported `[skipped]` and never launched.
 
 An unmanaged pane occupying a planned slot — or a same-named tmux session
 carrying no managed marker — always FAILS rather than being silently
-renamed/respawned/claimed; adopt it deliberately with
-`/workspace-reconcile --adopt --confirmed` (which previews the adoption plan
-and mutates nothing) followed by `--apply --adopt --confirmed`.
+renamed/respawned/claimed without explicit adoption. Adopting is supported
+directly with `workspace-start --adopt --confirmed`; the recommended
+preview-first route is `/session-workspace:workspace-reconcile --adopt --confirmed` (which
+prints the adoption plan and mutates nothing) followed by
+`--apply --adopt --confirmed`.
 
 `--no-agents`/`--no-services` skip launching the corresponding pane's runtime
 while still creating/marking the pane; such a pane is reported `[claimed]`,
@@ -33,5 +35,5 @@ positional `TARGET`, the target is `behavior.default_start_target`
 (default `all`).
 
 Relay the per-pane report lines and the summary count
-(`started/adopted: N  kept: N  failed: N`) verbatim. A non-zero exit means
+(`started/adopted: N  kept (already healthy): N  failed: N`) verbatim. A non-zero exit means
 at least one slot failed — do not claim the workspace is fully up.

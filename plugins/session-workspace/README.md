@@ -19,14 +19,16 @@ differs — session/pane layout, per-role grants and models, which
 coordination stores are exported, memory topology, secrets — as fields in a
 versioned JSON config.
 
-A project adopts the plugin by creating `.agent-workspace/workspace.json`
-and a thin bootstrap shim (`workspace.sh`) at its root. All behavior
-lives in the plugin; the project-local shim contains no project logic at
-all — see "Bootstrap shim" below.
+A project adopts the plugin by creating `.agent-workspace/workspace.json` —
+that file alone is the adoption. All behavior lives in the plugin, normally
+invoked through the machine-wide `workspace` dispatcher (or the provider
+commands). A project-local `workspace.sh` shim is an optional, narrow legacy
+bootstrap for running verbs without the dispatcher on PATH; it contains no
+project logic and is not required — see "Bootstrap shim" below.
 
 ## Lifecycle verbs
 
-All verbs are exposed as both a Claude command (`/workspace-doctor`, etc.)
+All verbs are exposed as both a Claude command (`/session-workspace:workspace-doctor`, etc.)
 and, in the Codex tree, a matching skill. From a shell they are reached as
 `workspace <verb> [args...]` once the `install` verb has put the dispatcher on
 your `PATH` (or `./workspace.sh <verb>` in a project carrying the older
@@ -42,10 +44,10 @@ the CLI contract string both entry points use for their compatibility check.
 | `restart` | `workspace-restart [TARGET\|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` | Yes | `stop --confirmed` followed by `start`, for the same target. Unlike the old launchers, `restart` accepts `--no-save`. |
 | `reconcile` | `workspace-reconcile [TARGET\|all] [--config PATH] [--apply] [--adopt --confirmed]` | Only with `--apply` | Dry-run by default; `--apply` repairs missing/misnamed managed resources without respawning healthy panes. Use `--adopt --confirmed` to preview adoption, then add `--apply` to perform it; `start --adopt --confirmed` is the direct lifecycle alternative. |
 | `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. |
-| `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical target reports `already current` and writes nothing, so it doubles as the refresh for that copy. Backs up any existing target to `<target>.bak`, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
+| `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
 | `harness-status` | `harness-status [--config PATH] [--json]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates/guards) and whether this pane's engine identity matches the validated plan. |
-| `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
+| `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3/v4 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
 
 `TARGET` is a `sessions[].id` from the config, or `all` (the default).
 `--json` output on `plan`/`status`/`doctor` is produced from the same
@@ -101,13 +103,17 @@ session, so an in-flight agent/service gets a chance to shut down cleanly.
 
 ## Secrets
 
-`secrets.env_file` (relative to `project.root` unless absolute) holds
+`secrets.env_file` (optional even when `secrets` exists — with no file,
+allowlisted keys resolve from the launching process's environment only;
+relative to `project.root` unless absolute) holds
 `KEY=value` lines and is parsed literally — it is never `source`d or
 `eval`'d, so a malicious value like `x=$(rm -rf ~)` stays inert text.
-`workspace-doctor` and `validate-config` both gate it: it must be mode
-`0600`, owned by the current user, **not** a symlink, resolve inside the
-project root, and be git-ignored. A config that fails any of those gates
-fails validation outright.
+`workspace-doctor` and `validate-config` both gate it — but only when
+`env_file` is actually set: it must then be mode `0600`, owned by the
+current user, **not** a symlink, resolve inside the project root, and be
+git-ignored, and a config that fails any of those gates fails validation
+outright. With no `env_file`, no file metadata gate applies and allowlisted
+keys come from the launching environment alone.
 
 Delivery is not "secrets never touch disk" — it is a private, single-use,
 0600 temp file whose **path** (never the value) is embedded into the
@@ -132,7 +138,7 @@ when an allowed key isn't present in the file or the caller's environment
 caller's environment wins): `"fail"` aborts
 that pane's launch outright; `"warn"` starts the pane without it.
 
-## Harness and shared guard packs (opt-in, schemas v2/v3)
+## Harness, guard packs, and reviewed orchestration (opt-in, schemas v2/v3/v4)
 
 `schema_version: 2` adds one optional, typed `harness` block that turns the
 workspace into a fail-closed multi-agent harness: one **orchestrator** pane,
@@ -147,9 +153,16 @@ Without `guards`, a v3 normalized plan and policy decision are byte-identical
 to v2. Guard packs centralize reusable project hooks without accepting a
 script, command, regex, or permission exception.
 
+`schema_version: 4` is v3 plus an optional top-level `orchestration` block
+(reviewed Git orchestration). v4 harness and guards behave exactly like v3,
+and a v4 config without `orchestration` produces a byte-identical normalized
+plan and policy decision to v3. Like guards, orchestration is closed, typed
+data: it names coordinates (targets, remotes, branches) and never accepts a
+command, script, regex, prompt fragment, custom gate, or permission bypass.
+
 **Activation is explicit.** The hook is a true no-op — no Python is even
 spawned — for: a session with no `SESSION_WORKSPACE_CONFIG` (not launched
-by this engine), a schema-v1 config, a v2/v3 config with no `harness` block,
+by this engine), a schema-v1 config, a v2/v3/v4 config with no `harness` block,
 and `harness.enabled: false` (which must then carry no `mode`/`profile`/
 `roles`/`gates`/`guards` siblings) — provided the pane's launcher mode
 (`SESSION_WORKSPACE_HARNESS_MODE`) is empty. A pane launched while the
@@ -161,7 +174,7 @@ restarted. Only `enabled: true` with `mode` (`audit` | `enforce`),
 ### Per-pane engine identity
 
 Every pane the engine launches receives six base **engine-owned** variables;
-a guarded schema-v3 launch receives `SESSION_WORKSPACE_GUARDS_JSON` as a
+a guarded schema-v3/v4 launch receives `SESSION_WORKSPACE_GUARDS_JSON` as a
 seventh. They live in the pane's own process environment — never mirrored into the tmux
 session env, never settable from `env.groups`/`pane_name_aliases` (both are
 validation errors) — and `workspace-plan` lists their names:
@@ -174,7 +187,7 @@ validation errors) — and `workspace-plan` lists their names:
 | `SESSION_WORKSPACE_ROLE` | the pane's configured role name |
 | `SESSION_WORKSPACE_PANE_CWD` | the pane's resolved cwd |
 | `SESSION_WORKSPACE_HARNESS_MODE` | `audit` or `enforce` when active; empty for v1, no `harness`, or `enabled: false` |
-| `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3 launch; absent for v1/v2 and v3 without guards |
+| `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3/v4 launch; absent for v1/v2 and v3/v4 without guards |
 
 The policy cross-checks this identity against the validated config on every
 gated tool call and **fails closed** on any disagreement: unknown pane, role
@@ -182,8 +195,11 @@ or cwd mismatch, project-root mismatch, `SESSION_CHAT_PANE_NAME` /
 `KNOWLEDGE_PANE_NAME` disagreeing with the engine name, a config that no
 longer validates, or config drift (harness enabled/disabled/mode-changed
 after launch). Integrity failures block in **both** modes — `audit` only
-softens policy denials. The remedy for drift is always a pane restart
-(`workspace restart`), never editing the variables by hand.
+softens policy denials. The remedy for drift is always restarting the
+configured session that contains the pane
+(`workspace restart <session-id>` / `/session-workspace:workspace-restart
+<session-id>`) — which kills and recreates ALL of that session's configured
+panes, not just the drifted one — never editing the variables by hand.
 
 ### Schema-v3 shared guards
 
@@ -206,10 +222,80 @@ health/lifecycle packs only add non-blocking context. Today they provide:
   local branches, report the neutral fact that `release` is ahead of `base`.
 
 The lifecycle/health wrappers exit silently before jq/Python when the guarded
-v3 launcher identity is absent or the feature is off. Lifecycle reminders use
+v3/v4 launcher identity is absent or the feature is off. Lifecycle reminders use
 event-specific `hookSpecificOutput.additionalContext` JSON on both providers.
 Stop checks are bounded, skip non-git roots and absent refs, and never block
 stopping.
+
+### Schema-v4 reviewed Git orchestration
+
+`orchestration` (schema v4 only, requires `harness.enabled: true` with
+`profile: strict-v1` and `stores.pin` including `messages` + `scheduler`)
+declares the fixed `reviewed-git-v1` profile plus one or more targets:
+
+```json
+"orchestration": {
+  "enabled": true,
+  "profile": "reviewed-git-v1",
+  "targets": [
+    {
+      "id": "component",
+      "cwd": "component-a",
+      "remote": "origin",
+      "work_branch": "main",
+      "release_branch": "production",
+      "deploy": { "strategy": "merge-no-ff-v1", "align_work_after_release": true }
+    }
+  ]
+}
+```
+
+Validation is closed and cross-checked: each target `id` is a unique
+restricted identifier; `cwd` must exactly equal one configured executor pane
+cwd (which the harness already pairs with exactly one reviewer), resolve to an
+existing distinct child inside the project root, and be unique after physical
+path resolution; `remote` is a safe literal remote name (never a URL); the
+work/release refs are distinct safe literal Git refs; `deploy.strategy` is the
+const `merge-no-ff-v1`; `align_work_after_release` (default `false`) can
+authorize only a post-release `--ff-only` alignment of the work branch.
+
+The `workspace-orchestrator` skill (Claude
+`/session-workspace:workspace-orchestrator`, Codex
+`$session-workspace:workspace-orchestrator` — the same contract on both
+providers) consumes the normalized `workspace-plan --json` targets (resolved
+executor/reviewer pane names and absolute cwd) and drives the invariant
+lifecycle: status → written plan → independent reviewer approval → explicit
+user confirmation → scheduler-tracked executor assignment → independent audit
+→ separately authorized commit → push → deploy. Plan approval is a correlated
+reviewer reply carrying an explicit `APPROVE` token; audit approval is a
+reviewer-authored scheduler closing note (or correlated reply) with an
+explicit `APPROVE` token — a `done` status alone proves closure, not a clean
+verdict. Freshness comes from the existing `harness.gates`
+`plan_review_ttl_minutes` / `audit_ttl_minutes`. The orchestrator pane
+coordinates only: every Git mutation runs in the target's executor pane under
+a fixed Git floor (fetch/status reads, commit on work, normal pushes of the
+configured work/release refs, the reviewed `--no-ff` work-to-release merge,
+optional `--ff-only` alignment — never a force push, leading `+`, ref
+deletion, history rewrite, or `checkout -B` on release). Deploy is gated by a
+six-check executor preflight: both branches exist locally and at the remote,
+release-to-work has commits to ship, work-to-release is empty, both local
+branches exactly equal their remote refs, and the tree is clean. The pinned
+scheduler ledger and session-chat archive are the canonical evidence — the
+skill writes no parallel evidence log — and the selftest / prompt-preview
+workflows are strictly read-only. User confirmations (dispatch, commit, push,
+deploy) are conversational gates: the skill reports them honestly and never
+claims the harness enforces them. Product-specific build/test requirements
+stay in the target repository's `AGENTS.md`. Migrating from v3 is one config
+edit: set `schema_version: 4` (behavior unchanged), then add `orchestration`
+when ready. Adding or editing `orchestration` does not itself change launcher
+identity or require a restart — it invalidates any orchestration
+evidence collected under the previous coordinates, so in-flight workflows
+restart at plan review. A session restart
+(`workspace restart <session-id>`, which kills and recreates every
+configured pane in that session) is required for identity/launcher-bearing
+changes — for example `project.root`, a pane's name, role, cwd, or runtime,
+`harness` mode/roles, or `harness.guards` — because those are baked into the
+engine-owned launch identity the policy cross-checks.
 
 ### The strict-v1 floor (immutable, not configurable)
 
@@ -368,7 +454,7 @@ byte-compare decisions. Both Claude-shaped (`tool_name`/`tool_input`, string
 `command`) and Codex-shaped (`shell`/`apply_patch`, argv-list or `bash -lc`
 commands, `workdir`, JSON-string `tool_input`) payloads are understood.
 
-For guarded schema-v3 launches, the same manifest also registers generic
+For guarded schema-v3/v4 launches, the same manifest also registers generic
 `SessionStart`/`UserPromptSubmit` reminders and the non-blocking Stop health
 check. Claude and Codex health output is a top-level `systemMessage` JSON
 object; Codex rejects non-empty plain-text Stop stdout. Codex trusts each hook entry by hash, so upgrading to a
@@ -385,7 +471,7 @@ containment**: a per-call workdir the policy never receives cannot be
 validated. `audit` is the recommended Codex mode until the runtime exposes
 that information or a sound mitigation exists.
 
-### Harness known gaps (0.4.1)
+### Harness known gaps (0.5.0)
 
 - The policy re-validates the config by running `workspace-plan.sh --json`
   on every gated tool call (a jq-only plan; the hook is registered on the
@@ -460,7 +546,8 @@ every invocation it:
 **Then, per project:**
 
 3. Create `.agent-workspace/workspace.json` (`schema_version: 1`, `2` for the
-   harness, or `3` for optional shared guards — see "Harness" above) describing
+   harness, `3` for optional shared guards, or `4` for reviewed Git
+   orchestration — see "Harness" above) describing
    the project's runtimes, roles, stores, sessions/panes, and behavior — see
    `scripts/workspace.schema.json` for the documented shape, or copy one of
    `scripts/fixtures/valid/*.json` as a starting point, and the
@@ -490,14 +577,14 @@ string hardcoded anywhere — and neither ever pins a marketplace name.
 | Installed by | the `install` verb | copying it yourself |
 | Serves | every configured project | the project it sits in |
 | Finds the config by | the engine's upward walk from `$PWD` | pinning `SESSION_WORKSPACE_CONFIG` to its own directory |
-| Refresh when the template changes | `install` again (idempotent; `upgrade.sh` can call it unconditionally) | re-copy by hand, per project |
+| Refresh when the template changes | `install` again (idempotent; an external upgrade flow may call it unconditionally) | re-copy by hand, per project |
 
 **Prefer the dispatcher.** The shim exists for the case where a project must be
 pinned to its own config regardless of `$PWD`, or where you cannot rely on
 `PATH` — a CI job invoking `./workspace.sh` by relative path, for instance. It
 is not deprecated; it is simply the narrower of the two.
 
-Both are optional. The plugin's own commands and skills (`/workspace-*` on
+Both are optional. The plugin's own commands and skills (`/session-workspace:workspace-*` on
 Claude, `$session-workspace:workspace-*` on Codex) resolve the config the same
 way, so a project with neither entry point installed still works from inside an
 agent session. What the dispatcher adds is a workspace launchable by a human, a
@@ -505,7 +592,7 @@ shell script, or CI with no provider CLI in the loop.
 
 ## Known limitations
 
-These are honest gaps in the current (0.4.1) implementation, not aspirational
+These are honest gaps in the current (0.5.0) implementation, not aspirational
 roadmap items — read them before depending on the behavior they describe.
 
 - **`stores.memory.root` does not export `KNOWLEDGE_MEMORY_HOME`.**
@@ -541,14 +628,15 @@ roadmap items — read them before depending on the behavior they describe.
   service-role pane under `--no-services`, `_sw_launch_pane` returns before
   that respawn ever runs — so a pane created that way is left sitting in
   whatever directory the split happened from, not the configured `cwd`.
-- **A pinnable env var is inexpressible without also session-mirroring
-  it.** `env.groups.<g>.pin_to_session` is a single boolean that gates two
-  things at once: whether that group's values (plus the `stores.pin`
-  coordination vars) are exported into the pane's *own* process
-  environment at all, and whether that same subset is additionally
-  mirrored into the tmux *session* environment for later, unmanaged panes
-  to inherit. There is currently no way to say "export this into the
-  pane's own env, but don't mirror it session-wide" — the two travel
+- **A coordination-pinned env var is inexpressible without also
+  session-mirroring it.** A group's `values` always enter each managed
+  pane's *own* process environment. `env.groups.<g>.pin_to_session: true`
+  *additionally* exports the `stores.pin` coordination vars to that pane
+  and mirrors the pinnable group+coordination subset into the tmux
+  *session* environment for later, unmanaged panes to inherit; `false`
+  only suppresses those coordination vars and the session mirroring.
+  There is currently no way to say "give this pane the coordination vars,
+  but don't mirror them session-wide" — the two travel
   together.
 - **`workspace-doctor`'s post-config checks are skipped, correctly, once
   config validation fails — and the exit code reflects that failure.**
@@ -563,13 +651,20 @@ roadmap items — read them before depending on the behavior they describe.
 
 ## Configuration reference
 
-`.agent-workspace/workspace.json`, `schema_version: 1`, `2`, or `3` (v2 adds
-the harness; v3 adds optional shared guards). Structural shape,
-required-ness, and cross-field rules are enforced by `validate-config.sh`
-(`validate-structural.jq` for the pure-jq structural half, plus filesystem
-checks in `validate-config.sh` itself for path containment and the secrets
-gates); `scripts/workspace.schema.json` documents the same shape for
-reference but is not executed by anything.
+`.agent-workspace/workspace.json`, `schema_version: 1`, `2`, `3`, or `4` (v2
+adds the harness; v3 adds optional shared guards; v4 adds optional reviewed
+Git orchestration). `validate-config.sh` is the runtime authority: it
+enforces its explicit key, safety, and cross-field checks
+(`validate-structural.jq` for the pure-jq structural half — unknown/missing
+keys, uniqueness, charset/safety rules, the harness/guards/orchestration
+rules, and the `project.display_name` / non-empty `sessions` /
+`window_index` checks — plus filesystem checks in `validate-config.sh`
+itself for path containment and the secrets gates).
+`scripts/workspace.schema.json` documents the supported contract but is not
+executed by anything, and not every scalar/cardinality constraint written
+there is mirrored as an executable preflight check — a config outside the
+documented shape is unsupported even where an unmirrored constraint happens
+not to be rejected.
 
 Two interpolation tokens are recognized in any string value, and nowhere
 else: a literal `${PROJECT_ROOT}` **prefix** is replaced with the config's
@@ -663,7 +758,7 @@ convention.
 | Field | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `env.groups.<g>.values` | object, string values | yes if the group exists | — | Extra `NAME=value` pairs exported into every pane whose role's `env_group` is `<g>`. Keys must match `^[A-Z_][A-Z0-9_]*$` (config validation rejects a key that does not) and must not name a reserved `SESSION_WORKSPACE_*` identity var (also rejected by validation). A key that collides with one of the three engine-always identity vars (`TMUX_PANE`, `SESSION_CHAT_PANE_NAME`, `KNOWLEDGE_PANE_NAME`) passes validation but is ignored by the `adapters.sh` renderer: the engine-always value is set last and wins. The renderer also drops a charset-invalid name with a warning, but that is defense in depth for a direct, unvalidated invocation — normal config validation has already rejected it. The engine also always ships a fixed `KNOWLEDGE_AUTO_*`/`KNOWLEDGE_CONSOLIDATE_NUDGE` default block (identical across every adopter today); values here override those defaults by name. |
-| `env.groups.<g>.pin_to_session` | boolean | no | `false` | See "known limitations" — gates *both* whether this group's values (plus the `stores.pin` coordination vars) are exported into the pane's own process env, and whether that same subset is mirrored into the tmux session environment via `tmux set-environment` (non-hidden, session-scope) so a later, unmanaged pane in that session inherits it too. |
+| `env.groups.<g>.pin_to_session` | boolean | no | `false` | The group's `values` always enter each managed pane's own process env. `true` *additionally* exports the `stores.pin` coordination vars to that pane and mirrors the pinnable group+coordination subset into the tmux session environment via `tmux set-environment` (non-hidden, session-scope) so a later, unmanaged pane in that session inherits it too; `false` only suppresses those coordination vars and the session mirroring (see "known limitations"). |
 | `env.pane_name_aliases` | array of strings | no | `[]` | Extra env-var names, each set to the pane's own name (replaces a project's bespoke `<PROJECT>_CODEX_PANE_NAME`-style variable). Same charset rule and engine-always collision rule as group values. |
 
 Three variables are **engine-always** and never config-driven, at any
@@ -679,7 +774,7 @@ hand-added pane in that session present itself as a different pane.
 
 | Field | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `secrets.env_file` | string | yes if the block exists | — | Relative (to `project.root`) or absolute path to a `KEY=value` file. Gated as described in "Secrets" above. |
+| `secrets.env_file` | string | no | — | Relative (to `project.root`) or absolute path to a `KEY=value` file. Optional even when `secrets` exists: without it, allowlisted keys resolve from the launching process's environment only. When set, the file gates in "Secrets" above apply. |
 | `secrets.allow` | array of strings, `^[A-Za-z_][A-Za-z0-9_]*$` | no | `[]` | The only keys any pane may ever request from `env_file`. |
 | `secrets.visible_to_roles` | array of strings | no | `[]` | Roles whose panes receive a secret-transfer file at all. A role not listed here gets nothing, regardless of `allow`. |
 | `secrets.on_missing` | enum: `warn`, `fail` | no | `warn` | Behavior when an allowed key is present in neither the launching process's environment nor `env_file`. `fail` aborts that pane's launch; `warn` starts it without the key. |
@@ -691,7 +786,7 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].id` | string | yes | — | Stable identifier used as the `TARGET` argument to every lifecycle verb, and as the layout-persistence file key. |
 | `sessions[].name` | string | yes | — | The actual tmux session name (commonly `"${PROJECT_ID}-<id>"`). |
 | `sessions[].window_index` | integer ≥ 0 | no | `0` | Window index within the session that holds this session's panes. |
-| `sessions[].retain_layout` | boolean | no | `false` | If true, the window's `#{window_layout}` is saved after every successful `start`/`reconcile --apply` and restored on the next one, before slot-filling — so a user's manual pane resizing survives a restart. |
+| `sessions[].retain_layout` | boolean | no | `false` | If true, the engine saves the window's `#{window_layout}` at the end of a mutating `start`/`reconcile --apply` pass over that session; on the next `start`/`reconcile` it first creates/fills pane slots and applies the configured layout selection, then restores the retained layout on top. During `stop`/`restart`, the *current* manual layout is captured before killing only when `behavior.save_before_stop` is `true` and `--no-save` was not passed — so manual resizing survives a restart only under those conditions, not unconditionally. |
 | `sessions[].layout.kind` | enum: `standard`, `split_tree` | yes (if `layout` present) | — | `standard`: named tmux layout applied via `select-layout` after slot-filling. `split_tree`: an explicit, ordered sequence of splits (see below). |
 | `sessions[].layout.name` | string | no | `"tiled"` | Only used when `kind: standard` — the tmux layout name passed to `select-layout`. |
 | `sessions[].layout.only_when_fresh` | boolean | no | `false` | Only used when `kind: split_tree`. The split tree is built **only** when the window currently has exactly one pane; otherwise the existing panes are matched by marker/position instead (so a previously built split tree is never rebuilt on a second `start`). |
@@ -717,16 +812,16 @@ hand-added pane in that session present itself as a different pane.
 | `behavior.session_chat_helper.resolve` | string | no | `"always"` | `"never"` skips the session-chat helper-resolution check in `doctor` entirely (reported `OK`, not consulted). Any other value resolves the helper via the plugin cache/source tree. |
 | `behavior.session_chat_helper.on_missing` | enum: `warn`, `fail` | no | `"warn"` | What happens when the session-chat helper does not resolve. `fail`: `start` aborts non-zero *before* taking the project lock or touching tmux (nothing is half-created), and `doctor` reports `ERROR`. `warn`: `start` proceeds with a warning and panes come up without inter-pane messaging; `doctor` reports `WARN`. Both verbs resolve the helper through the same function, so `doctor`'s verdict and `start`'s behavior cannot disagree. |
 
-### `harness` (optional in schema v2; guard-capable in schema v3)
+### `harness` (optional in schema v2+; guard-capable in schema v3+)
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `harness.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires `mode`, `profile`, `roles`, and `gates`; schema-v3 `guards` remains optional. |
+| `harness.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires `mode`, `profile`, `roles`, and `gates`; schema-v3/v4 `guards` remain optional. |
 | `harness.mode` | enum: `audit`, `enforce` | when enabled | `audit` reports would-be policy denials on stderr without blocking; `enforce` blocks (exit 2). Integrity failures block in both. |
 | `harness.profile` | const `strict-v1` | when enabled | The only profile. No other value is accepted. |
 | `harness.roles.orchestrator` / `.executor` / `.reviewer` | string (a `roles` key) | when enabled | Exactly these three keys; three distinct existing role names; none may be `service` or use the built-in `shell` runtime. |
 | `harness.gates.plan_review_ttl_minutes` / `.audit_ttl_minutes` | integer 1–1440 | when enabled | Exactly these two keys. Freshness windows for plan review and audit (reserved for the scheduler integration; validated now so they are stable config). |
-| `harness.guards.protected_files.profile` | const `credentials-lockfiles-v1` | v3, if pack exists | Generic protected credential/lockfile basenames; orchestrator Edit-family only. |
+| `harness.guards.protected_files.profile` | const `credentials-lockfiles-v1` | v3/v4, if pack exists | Generic protected credential/lockfile basenames; orchestrator Edit-family only. |
 | `harness.guards.protected_files.extra_basenames` | unique exact-basename array | no | Additive names matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`; no slash or glob. |
 | `harness.guards.orchestrator.deny_child_chdir` | boolean | no | Deny orchestrator process-directory hops into child roots. |
 | `harness.guards.lifecycle.session_reminder` / `.prompt_reminder` | boolean | no | Generic SessionStart/UserPromptSubmit routing reminders. |
@@ -739,6 +834,19 @@ the orchestrator role; every executor pane declares a non-`.` `cwd` that
 does not resolve to the project root and has exactly one reviewer pane with
 the identical `cwd`; every reviewer pane pairs with exactly one executor.
 
+### `orchestration` (optional, schema v4 only)
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `orchestration.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires an enabled strict-v1 harness, `stores.pin` containing `messages` + `scheduler`, `profile`, and `targets`. |
+| `orchestration.profile` | const `reviewed-git-v1` | when enabled | The only orchestration profile. The fixed lifecycle, approvals, and Git floor live in the profile, never in config. |
+| `orchestration.targets[].id` | unique `^[a-z0-9][a-z0-9-]*$` | yes | How the orchestrator names the target. |
+| `orchestration.targets[].cwd` | safe relative path | yes | Must exactly equal one configured executor pane `cwd` (and thereby its paired reviewer), resolve to an existing child inside the project root, never `.`, no `..`, unique after physical resolution. |
+| `orchestration.targets[].remote` | `^[A-Za-z0-9][A-Za-z0-9._-]*$` | yes | Named Git remote only — a URL can never appear here. |
+| `orchestration.targets[].work_branch` / `.release_branch` | distinct safe literal refs | yes | No `..`, no trailing `/` or `.lock`. |
+| `orchestration.targets[].deploy.strategy` | const `merge-no-ff-v1` | yes | Reviewed `--no-ff` work→release merge with the six-check executor preflight. |
+| `orchestration.targets[].deploy.align_work_after_release` | boolean | no (default `false`) | Authorizes only a post-release `--ff-only` fast-forward of work to the release merge commit; anything non-fast-forwardable stops and reports. |
+
 ### Argv-safety rules validated regardless of the above
 
 These aren't config fields, but they explain why certain otherwise-valid-looking
@@ -750,11 +858,12 @@ config values get rejected:
   flag, or `=`-joined), and codex's
   `--dangerously-bypass-approvals-and-sandbox` /
   `--dangerously-bypass-hook-trust`.
-- `env.groups.*.values` keys, `env.pane_name_aliases` entries,
-  `secrets.allow` entries, and `secrets.visible_to_roles` entries are all
+- `env.groups.*.values` keys, `env.pane_name_aliases` entries, and
+  `secrets.allow` entries are all
   charset-restricted (uppercase-snake-case for env names, identifier shape
   for secret keys) specifically so a value can never be crafted to break out
   of the rendered `export NAME=VALUE;` string the pane's shell evaluates —
   even though the *value* half of that string is always `%q`-quoted, an
   unquoted, attacker-chosen *name* could still inject a second shell
-  statement.
+  statement. (`secrets.visible_to_roles` entries are validated differently —
+  as references to existing role names, not as export names.)

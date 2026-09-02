@@ -23,8 +23,8 @@ description: Overview of session-workspace lifecycle and the opt-in strict-v1 ro
    validates config, renders dry-run plans, starts/stops/reconciles managed
    tmux sessions and panes, builds Claude/Codex argv, pins non-secret
    coordination env, and runs a read-only doctor.
-   Schema-v2 projects may explicitly enable a shared, fail-closed `strict-v1`
-   harness. Schema v1 remains unchanged and harness-inactive.
+   Schema-v2/v3/v4 projects may explicitly enable a shared, fail-closed
+   `strict-v1` harness. Schema v1 remains unchanged and harness-inactive.
 
 4. Summarize the available lifecycle commands for the user:
    - `$session-workspace:workspace-doctor [--config PATH] [--json]` - read-only dependency/config/runtime health check.
@@ -37,6 +37,7 @@ description: Overview of session-workspace lifecycle and the opt-in strict-v1 ro
    - `$session-workspace:workspace-browser-config [--config PATH] [--provider codex|claude|all] [--apply] [--json]` - preview or explicitly apply browser MCP entries.
    - `$session-workspace:harness-status [--config PATH] [--json]` - read-only harness activation, role, gate, and live identity status.
    - `$session-workspace:harness-doctor [--config PATH] [--json]` - read-only harness config/hook/runtime/identity validation.
+   - `$session-workspace:workspace-orchestrator <intent>` - schema-v4 reviewed Git lifecycle across configured executor/reviewer pairs; coordinates only from the configured orchestrator pane.
 
 5. Key safety gates:
    - All lifecycle verbs resolve and validate `.agent-workspace/workspace.json`
@@ -79,7 +80,10 @@ description: Overview of session-workspace lifecycle and the opt-in strict-v1 ro
      `exec_command` call's optional per-call `workdir` from the hook payload;
      therefore do not present Codex enforce mode as complete path containment
      or recommend switching from audit solely on that claim.
-     Product/release/deployment rules remain project-local and in `AGENTS.md`.
-     The normalized plan/audit TTLs are declarative inputs for that project
-     command layer; strict-v1 does not create gate evidence or authorize
-     commit, push, deploy, or release actions itself.
+     Schema v3/v4 may add typed shared guard packs. Schema v4 may also add the
+     closed `reviewed-git-v1` orchestration profile, which binds child targets
+     to exact executor/reviewer pairs and coordinates the reviewed
+     plan/dispatch/audit/commit/push/deploy lifecycle through the workspace
+     orchestrator skill. Product-specific build/test rules remain in each
+     repository's `AGENTS.md`; the harness itself does not create approval
+     evidence or authorize Git mutations.

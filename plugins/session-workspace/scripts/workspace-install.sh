@@ -5,9 +5,9 @@
 # WHY THIS EXISTS: the dispatcher (templates/workspace-dispatcher.sh) has to
 # live on PATH, outside any plugin cache, because it is what FINDS the plugin.
 # That makes it a copy, and a copy goes stale silently. This verb is the
-# refresh: it is idempotent, it always copies from the plugin it is running
-# from (never from a source checkout), and `upgrade.sh` calls it after every
-# plugin update so the copy cannot drift from the release.
+# refresh: it is idempotent and always copies from the plugin it is running
+# from (never from a source checkout), so any external plugin-upgrade flow can
+# call it unconditionally without creating churn.
 #
 # Deliberately NOT done here:
 #   * no config discovery — a fresh machine has no project yet, so this verb
@@ -71,10 +71,18 @@ echo "  target: $TARGET"
 
 TARGET_DIR="$(dirname "$TARGET")"
 
-# Idempotence: an identical target is a no-op, so `upgrade.sh` can call this
-# unconditionally on every run without churn or spurious backups.
+# Idempotence: an identical executable target is a no-op; an identical target
+# missing its executable bit is repaired in place without a backup. An external
+# updater can therefore call this unconditionally without churn.
 if [ -f "$TARGET" ] && cmp -s "$SOURCE" "$TARGET"; then
-  echo "  [ok] already current — nothing to do"
+  if [ -x "$TARGET" ]; then
+    echo "  [ok] already current — nothing to do"
+  elif [ "$DRY_RUN" -eq 1 ]; then
+    echo "  [dry-run] content is current; would repair executable mode on $TARGET"
+  else
+    chmod 0755 "$TARGET" || { echo "ERROR: cannot chmod $TARGET" >&2; exit 1; }
+    echo "  [repaired] content was current; restored executable mode"
+  fi
 else
   if [ "$DRY_RUN" -eq 1 ]; then
     if [ -e "$TARGET" ]; then

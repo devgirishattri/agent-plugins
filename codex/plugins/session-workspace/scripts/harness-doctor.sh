@@ -99,9 +99,9 @@ fi
 
 GUARDS_COUNT="$(printf '%s' "$STATUS_JSON" | jq '.guards // {} | length')"
 if [ "$GUARDS_COUNT" -gt 0 ]; then
-  add_check "guards.configuration" OK "schema-v3 guard packs validate and are exposed by the normalized plan"
+  add_check "guards.configuration" OK "schema-v3/v4 guard packs validate and are exposed by the normalized plan"
 else
-  add_check "guards.configuration" INFO "no schema-v3 guard packs configured"
+  add_check "guards.configuration" INFO "no schema-v3/v4 guard packs configured"
 fi
 
 if [ "$ACTIVE" = true ]; then

@@ -289,7 +289,7 @@ else
 fi
 
 echo "== golden fixtures validate clean =="
-for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3; do
+for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3 orchestration-v4; do
   OUT="$(bash "$HERE/validate-config.sh" --config "$HERE/fixtures/valid/$fx.json" 2>&1)"
   STATUS=$?
   if [ "$STATUS" -eq 0 ] && printf '%s' "$OUT" | grep -q "^OK:"; then
@@ -298,6 +298,27 @@ for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3; do
     fail "fixtures/valid/$fx.json validates" "status=$STATUS output=$OUT"
   fi
 done
+
+echo "== reference-schema scalar/cardinality contracts are executable =="
+SHAPE_BASE="$HERE/fixtures/valid/project-a.json"
+SHAPE_BAD="$TMPROOT/shape-invalid.json"
+assert_shape_invalid() {
+  local label="$1" needle="$2" filter="$3" out status
+  jq "$filter" "$SHAPE_BASE" > "$SHAPE_BAD"
+  out="$(bash "$HERE/validate-config.sh" --config "$SHAPE_BAD" 2>&1)"
+  status=$?
+  if [ "$status" -ne 0 ] && printf '%s' "$out" | grep -qF "$needle"; then
+    pass "$label"
+  else
+    fail "$label" "status=$status output=$out"
+  fi
+}
+assert_shape_invalid "shape: project.display_name must be a string" \
+  "project.display_name must be a string" '.project.display_name = 42'
+assert_shape_invalid "shape: sessions must contain at least one entry" \
+  "sessions must be a non-empty array" '.sessions = []'
+assert_shape_invalid "shape: window_index must be a non-negative integer" \
+  "window_index must be an integer >= 0" '.sessions[0].window_index = "zero"'
 
 echo "== schema v2 harness is opt-in, typed, and fail-closed =="
 HARNESS_BASE="$HERE/fixtures/valid/harness-v2.json"
@@ -469,6 +490,148 @@ if printf '%s' "$GL_LAST" | jq -e '.hookSpecificOutput.hookEventName == "UserPro
   pass "schema-v3 guard fast paths accept schema_version as the final JSON key"
 else
   fail "schema-v3 guard fast paths accept schema_version as the final JSON key" "lifecycle=$GL_LAST health=$GH_LAST"
+fi
+GH_V4_CONFIG="$GH_ROOT/.agent-workspace/workspace-schema-v4.json"
+jq '.schema_version = 4' "$GH_CONFIG" > "$GH_V4_CONFIG"
+GH_V4_ENV=(env PATH="$GH_BIN:$PATH" SESSION_WORKSPACE_CONFIG="$GH_V4_CONFIG" SESSION_WORKSPACE_PROJECT_ROOT="$GH_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-master SESSION_WORKSPACE_ROLE=master SESSION_WORKSPACE_PANE_CWD="$GH_ROOT" \
+  SESSION_WORKSPACE_HARNESS_MODE=enforce SESSION_WORKSPACE_GUARDS_JSON="$GH_GUARDS")
+GL_V4="$("${GH_V4_ENV[@]}" bash "$HERE/guard-lifecycle.sh" --event prompt)"
+GH_V4="$(printf '{}' | "${GH_V4_ENV[@]}" bash "$HERE/guard-health.sh")"
+if printf '%s' "$GL_V4" | jq -e '.hookSpecificOutput.hookEventName == "UserPromptSubmit"' >/dev/null 2>&1 && \
+   printf '%s' "$GH_V4" | jq -e '.systemMessage | contains("session-workspace health")' >/dev/null 2>&1; then
+  pass "schema-v4 guard lifecycle and health fast paths remain active"
+else
+  fail "schema-v4 guard lifecycle and health fast paths remain active" "lifecycle=$GL_V4 health=$GH_V4"
+fi
+
+echo "== schema v4 reviewed orchestration is closed, additive, and normalized =="
+ORCH_V4="$HERE/fixtures/valid/orchestration-v4.json"
+V4_COMPAT="$TMPROOT/harness-v4-no-orchestration.json"
+cp "$HARNESS_V3" "$V4_COMPAT"
+V3_NO_ORCH_PLAN="$(bash "$HERE/workspace-plan.sh" --config "$V4_COMPAT" --json)"
+jq '.schema_version = 4' "$V4_COMPAT" > "$V4_COMPAT.next"
+mv "$V4_COMPAT.next" "$V4_COMPAT"
+V4_NO_ORCH_PLAN="$(bash "$HERE/workspace-plan.sh" --config "$V4_COMPAT" --json)"
+if [ "$V3_NO_ORCH_PLAN" = "$V4_NO_ORCH_PLAN" ]; then
+  pass "schema v4 without orchestration produces byte-identical normalized plan to v3"
+else
+  fail "schema v4 without orchestration produces byte-identical normalized plan to v3" "plans differ"
+fi
+
+ORCH_PLAN="$(bash "$HERE/workspace-plan.sh" --config "$ORCH_V4" --json 2>&1)"
+if printf '%s' "$ORCH_PLAN" | jq -e '
+  .orchestration == {
+    active:true,
+    profile:"reviewed-git-v1",
+    gates:{plan_review_ttl_minutes:60,audit_ttl_minutes:60},
+    targets:[{
+      id:"component",cwd_raw:"component-a",cwd:(.project.root + "/component-a"),
+      executor:"harness-sample-component-executor",reviewer:"harness-sample-component-reviewer",
+      remote:"origin",work_branch:"main",release_branch:"production",
+      deploy:{strategy:"merge-no-ff-v1",align_work_after_release:true}
+    }]
+  }
+' >/dev/null 2>&1; then
+  pass "schema v4 plan resolves reviewed-git target, pane pair, TTLs, and Git coordinates"
+else
+  fail "schema v4 plan resolves reviewed-git target, pane pair, TTLs, and Git coordinates" "$ORCH_PLAN"
+fi
+ORCH_HUMAN="$(bash "$HERE/workspace-plan.sh" --config "$ORCH_V4" 2>&1)"
+if printf '%s' "$ORCH_HUMAN" | grep -q '^orchestration: active  profile=reviewed-git-v1  targets=1$' && \
+   printf '%s' "$ORCH_HUMAN" | grep -q 'target component:.*executor=harness-sample-component-executor.*reviewer=harness-sample-component-reviewer'; then
+  pass "schema v4 human plan renders redacted orchestration coordinates"
+else
+  fail "schema v4 human plan renders redacted orchestration coordinates" "$ORCH_HUMAN"
+fi
+ORCH_FILTER_CONFIG="$TMPROOT/orchestration-filter.json"
+jq '
+  .roles.service = {runtime:"shell"} |
+  .sessions += [{id:"services",name:"harness-sample-services",panes:[{name:"harness-sample-service",role:"service",cwd:"."}]}]
+' "$ORCH_V4" > "$ORCH_FILTER_CONFIG"
+ORCH_FILTER_PLAN="$(bash "$HERE/workspace-plan.sh" services --config "$ORCH_FILTER_CONFIG" --json 2>&1)"
+if printf '%s' "$ORCH_FILTER_PLAN" | jq -e '.sessions == [(.sessions[0] | select(.id == "services"))] and (.orchestration.targets | length) == 1 and .orchestration.targets[0].executor == "harness-sample-component-executor"' >/dev/null 2>&1; then
+  pass "schema v4 session filtering preserves the workspace-wide orchestration target map"
+else
+  fail "schema v4 session filtering preserves the workspace-wide orchestration target map" "$ORCH_FILTER_PLAN"
+fi
+
+ORCH_BAD="$TMPROOT/orchestration-invalid.json"
+assert_orchestration_invalid() {
+  local label="$1" needle="$2" filter="$3" out status
+  jq "$filter" "$ORCH_V4" > "$ORCH_BAD"
+  out="$(bash "$HERE/validate-config.sh" --config "$ORCH_BAD" 2>&1)"
+  status=$?
+  if [ "$status" -ne 0 ] && printf '%s' "$out" | grep -qF "$needle"; then
+    pass "$label"
+  else
+    fail "$label" "status=$status output=$out"
+  fi
+}
+assert_orchestration_invalid "orchestration: schema v3 rejects the v4 key" \
+  "unknown key in top-level: orchestration" '.schema_version = 3'
+assert_orchestration_invalid "orchestration: enabled=false rejects siblings" \
+  "orchestration.enabled=false must not include" '.orchestration.enabled = false'
+assert_orchestration_invalid "orchestration: fixed profile enforced" \
+  "orchestration.profile must be reviewed-git-v1" '.orchestration.profile = "custom"'
+assert_orchestration_invalid "orchestration: strict-v1 harness required" \
+  "enabled orchestration requires harness.enabled=true" '.harness = {enabled:false}'
+assert_orchestration_invalid "orchestration: messages and scheduler stores required" \
+  "requires stores.pin to include messages and scheduler" '.stores.pin = ["messages"]'
+assert_orchestration_invalid "orchestration: at least one target required" \
+  "orchestration.targets must be a non-empty array" '.orchestration.targets = []'
+assert_orchestration_invalid "orchestration: target ids are restricted" \
+  "target id must match" '.orchestration.targets[0].id = "Bad_ID"'
+assert_orchestration_invalid "orchestration: target cwd is a safe child literal" \
+  "cwd must be a safe relative" '.orchestration.targets[0].cwd = "../component-a"'
+assert_orchestration_invalid "orchestration: named remote cannot be a URL" \
+  "remote must match" '.orchestration.targets[0].remote = "https://example.invalid/repo"'
+assert_orchestration_invalid "orchestration: work and release refs are distinct" \
+  "work_branch and release_branch must be distinct" '.orchestration.targets[0].release_branch = "main"'
+assert_orchestration_invalid "orchestration: unsafe refs rejected" \
+  "work_branch is not a safe literal ref name" '.orchestration.targets[0].work_branch = "../main"'
+assert_orchestration_invalid "orchestration: deploy strategy is closed" \
+  "deploy.strategy must be merge-no-ff-v1" '.orchestration.targets[0].deploy.strategy = "shell"'
+assert_orchestration_invalid "orchestration: align flag is typed" \
+  "align_work_after_release must be a boolean" '.orchestration.targets[0].deploy.align_work_after_release = "yes"'
+assert_orchestration_invalid "orchestration: target must exactly map to a pair" \
+  "must exactly match one configured executor and reviewer pair" '.orchestration.targets[0].cwd = "component-b"'
+assert_orchestration_invalid "orchestration: target ids are unique" \
+  "orchestration.targets ids must be unique" '.orchestration.targets += [.orchestration.targets[0]]'
+
+ln -s component-a "$TMPROOT/component-alias"
+jq '
+  .sessions[0].panes += [
+    {name:"harness-sample-alias-executor",role:"executor",cwd:"component-alias"},
+    {name:"harness-sample-alias-reviewer",role:"reviewer",cwd:"component-alias"}
+  ] |
+  .orchestration.targets += [(
+    .orchestration.targets[0] |
+    .id = "alias" | .cwd = "component-alias"
+  )]
+' "$ORCH_V4" > "$ORCH_BAD"
+ORCH_ALIAS_OUT="$(bash "$HERE/validate-config.sh" --config "$ORCH_BAD" 2>&1)"
+if [ $? -ne 0 ] && printf '%s' "$ORCH_ALIAS_OUT" | grep -qF "resolves to a child checkout already selected"; then
+  pass "orchestration: physical target cwd aliases are unique"
+else
+  fail "orchestration: physical target cwd aliases are unique" "$ORCH_ALIAS_OUT"
+fi
+
+ORCH_DEFAULT_ALIGN="$TMPROOT/orchestration-default-align.json"
+jq 'del(.orchestration.targets[0].deploy.align_work_after_release)' "$ORCH_V4" > "$ORCH_DEFAULT_ALIGN"
+ORCH_DEFAULT_PLAN="$(bash "$HERE/workspace-plan.sh" --config "$ORCH_DEFAULT_ALIGN" --json 2>&1)"
+if printf '%s' "$ORCH_DEFAULT_PLAN" | jq -e '.orchestration.targets[0].deploy.align_work_after_release == false' >/dev/null 2>&1; then
+  pass "orchestration: align_work_after_release defaults false in the normalized plan"
+else
+  fail "orchestration: align_work_after_release defaults false in the normalized plan" "$ORCH_DEFAULT_PLAN"
+fi
+
+ORCH_OFF="$TMPROOT/orchestration-off.json"
+jq '.orchestration = {enabled:false}' "$ORCH_V4" > "$ORCH_OFF"
+if bash "$HERE/validate-config.sh" --config "$ORCH_OFF" >/dev/null 2>&1; then
+  pass "orchestration: schema v4 enabled=false is a valid inactive configuration"
+else
+  fail "orchestration: schema v4 enabled=false is a valid inactive configuration" "validation failed"
 fi
 
 echo "== golden plans render (human + --json) without error =="
@@ -821,7 +984,7 @@ fi
 
 echo "== every static invalid fixture fails validation =="
 declare -a RULE_FIXTURES=(
-  "schema-version.json:schema_version must be 1, 2, or 3"
+  "schema-version.json:schema_version must be 1, 2, 3, or 4"
   "harness-v2-guards.json:unknown key in harness: guards"
   "harness-v3-disabled-guards.json:harness.enabled=false must not include"
   "harness-v3-bad-guards.json:unknown key in harness.guards: unknown"
@@ -1286,6 +1449,23 @@ if [ "$SECRET_CALLER_GOT" = "$CALLER_SECRET" ]; then
 else
   fail "secrets: caller environment wins over the env file" "got=$SECRET_CALLER_GOT"
 fi
+
+# secrets.env_file is optional: an allowlisted value already present in the
+# launcher environment still uses the same private single-use delivery path.
+SECRET_ENV_ONLY_CFG="$SECRETS2_DIR/.agent-workspace/workspace-env-only.json"
+jq 'del(.secrets.env_file)' "$SECRET_CFG" > "$SECRET_ENV_ONLY_CFG"
+SECRET_ENV_ONLY_VALUE="ENV-ONLY-SECRET-31d4b2"
+SECRET_ENV_ONLY_GOT="$(SOME_TOKEN="$SECRET_ENV_ONLY_VALUE" bash "$HERE/adapters.sh" secret-value --config "$SECRET_ENV_ONLY_CFG" --pane p2-executor --key SOME_TOKEN 2>"$TMPROOT/secret-env-only-value.err")"
+SECRET_ENV_ONLY_FILE="$(SOME_TOKEN="$SECRET_ENV_ONLY_VALUE" bash "$HERE/adapters.sh" secret-file --config "$SECRET_ENV_ONLY_CFG" --pane p2-executor 2>"$TMPROOT/secret-env-only-file.err")"
+if [ "$SECRET_ENV_ONLY_GOT" = "$SECRET_ENV_ONLY_VALUE" ] &&
+   [ -f "$SECRET_ENV_ONLY_FILE" ] &&
+   [ "$(cat "$SECRET_ENV_ONLY_FILE")" = "SOME_TOKEN=$SECRET_ENV_ONLY_VALUE" ]; then
+  pass "secrets: env_file may be omitted when the launcher environment supplies the allowlisted value"
+else
+  fail "secrets: env_file may be omitted when the launcher environment supplies the allowlisted value" \
+    "value=$SECRET_ENV_ONLY_GOT file=$SECRET_ENV_ONLY_FILE content=$(cat "$SECRET_ENV_ONLY_FILE" 2>/dev/null)"
+fi
+rm -f "$SECRET_ENV_ONLY_FILE"
 
 # plan defect #1 fix: secrets are no longer delivered via `tmux
 # set-environment -h` (hidden vars are NEVER passed into the environment of
@@ -2986,6 +3166,28 @@ fi  # end tmux-available guard
 # asserted end to end without touching a real plugin install.
 # ===========================================================================
 echo
+echo "== machine-wide dispatcher install/refresh =="
+SW_INSTALL_TARGET="$TMPROOT/install-bin/workspace"
+mkdir -p "$(dirname "$SW_INSTALL_TARGET")"
+cp "$HERE/../templates/workspace-dispatcher.sh" "$SW_INSTALL_TARGET"
+chmod 0644 "$SW_INSTALL_TARGET"
+SW_INSTALL_REPAIR="$(SESSION_WORKSPACE_PLUGIN_ROOT="$HERE/.." bash "$HERE/workspace-install.sh" --target "$SW_INSTALL_TARGET" 2>&1)"
+SW_INSTALL_MODE="$(stat -c '%a' "$SW_INSTALL_TARGET" 2>/dev/null || stat -f '%Lp' "$SW_INSTALL_TARGET" 2>/dev/null)"
+if [ "$SW_INSTALL_MODE" = "755" ] &&
+   printf '%s' "$SW_INSTALL_REPAIR" | grep -qF '[repaired] content was current; restored executable mode' &&
+   [ ! -e "$SW_INSTALL_TARGET.bak" ]; then
+  pass "install: repairs executable mode on byte-identical dispatcher without a backup"
+else
+  fail "install: repairs executable mode on byte-identical dispatcher without a backup" \
+    "mode=$SW_INSTALL_MODE backup=$([ -e "$SW_INSTALL_TARGET.bak" ] && echo yes || echo no) output=$SW_INSTALL_REPAIR"
+fi
+SW_INSTALL_CURRENT="$(SESSION_WORKSPACE_PLUGIN_ROOT="$HERE/.." bash "$HERE/workspace-install.sh" --target "$SW_INSTALL_TARGET" 2>&1)"
+if printf '%s' "$SW_INSTALL_CURRENT" | grep -qF '[ok] already current — nothing to do'; then
+  pass "install: executable byte-identical dispatcher remains an idempotent no-op"
+else
+  fail "install: executable byte-identical dispatcher remains an idempotent no-op" "$SW_INSTALL_CURRENT"
+fi
+
 echo "== Phase E: bootstrap shim (templates/workspace.sh) =="
 
 SWE_SHIM="$HERE/../templates/workspace.sh"
@@ -3317,6 +3519,20 @@ if printf '%s' "$SWF_V2_JSON" | jq -e '([.checks[] | select(.id == "config.valid
   pass "doctor: schema-v2 JSON config.validation message reports schema_version 2"
 else
   fail "doctor: schema-v2 JSON config.validation message reports schema_version 2" "$SWF_V2_JSON"
+fi
+SWF_V4_COMPAT="$SWF_PROJECT/.agent-workspace/workspace-v4.json"
+jq '.schema_version = 4' "$SWF_CONFIG" > "$SWF_V4_COMPAT"
+SWF_V4_HUMAN="$(swf_doctor_config "$SWF_V4_COMPAT")"
+if printf '%s' "$SWF_V4_HUMAN" | grep -Eq '^\[OK[[:space:]]*\][[:space:]]+config\.validation[[:space:]]+.*\(schema_version 4\)$'; then
+  pass "doctor: schema-v4 human config.validation line reports schema_version 4"
+else
+  fail "doctor: schema-v4 human config.validation line reports schema_version 4" "$SWF_V4_HUMAN"
+fi
+SWF_V4_JSON="$(swf_doctor_config "$SWF_V4_COMPAT" --json)"
+if printf '%s' "$SWF_V4_JSON" | jq -e '([.checks[] | select(.id == "config.validation") | .message] | length) == 1 and ([.checks[] | select(.id == "config.validation") | .message][0] | endswith("(schema_version 4)"))' >/dev/null 2>&1; then
+  pass "doctor: schema-v4 JSON config.validation message reports schema_version 4"
+else
+  fail "doctor: schema-v4 JSON config.validation message reports schema_version 4" "$SWF_V4_JSON"
 fi
 SWF_BAD="$(printf '%s' "$SWF_JSON" | jq -r '[.checks[] | select(.status == "ERROR" or .status == "WARN") | .id] | join(",")' 2>/dev/null)"
 if [ -z "$SWF_BAD" ]; then

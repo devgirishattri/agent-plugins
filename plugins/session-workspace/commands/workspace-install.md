@@ -19,12 +19,14 @@ versioned cache — which makes it a copy that can go stale. This verb is the
 sanctioned way to create AND to refresh it.
 
 It is **idempotent**: an identical target reports `already current` and writes
-nothing, so `upgrade.sh` calls it unconditionally after every plugin update and
-the copy can never drift from the installed release.
+nothing, so an external upgrade flow may call it unconditionally after every
+plugin update and the copy can never drift from the installed release.
 
 It takes no config and touches no tmux — it works on a fresh machine with no
-`.agent-workspace/` anywhere. An existing target is always backed up to
-`<target>.bak` first. After copying it verifies the installed file answers
+`.agent-workspace/` anywhere. An identical **executable** target is left
+untouched (no backup, no write); an identical but **non-executable** target
+is chmod-repaired in place (no backup, no rewrite); **differing** existing
+content is backed up to `<target>.bak` and replaced. After copying it verifies the installed file answers
 `--contract`, reports whether the target directory is on PATH, and prints the
 optional `alias ws=workspace` line. It **never** edits a shell rc file; relay
 the alias line verbatim so the user can add it themselves.

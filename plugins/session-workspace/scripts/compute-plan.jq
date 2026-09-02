@@ -52,8 +52,9 @@ def coordination_var_name(store):
 
 . as $cfg
 | ($cfg.browser // null) as $browser
-| (($cfg.schema_version == 2 or $cfg.schema_version == 3) and ($cfg.harness.enabled // false)) as $harness_active
-| ($cfg.schema_version == 3 and $harness_active and ($cfg.harness | has("guards"))) as $guards_configured
+| ([($cfg.sessions // [])[] | (.panes // [])[]]) as $all_panes
+| (($cfg.schema_version == 2 or $cfg.schema_version == 3 or $cfg.schema_version == 4) and ($cfg.harness.enabled // false)) as $harness_active
+| (($cfg.schema_version == 3 or $cfg.schema_version == 4) and $harness_active and ($cfg.harness | has("guards"))) as $guards_configured
 | ($cfg.stores.base // ".tmp") as $store_base
 | ($cfg.stores.overrides // {}) as $store_overrides
 | ($cfg.stores.pin // []) as $pin
@@ -78,7 +79,7 @@ def coordination_var_name(store):
     "SESSION_WORKSPACE_HARNESS_MODE"
   ] + (if $guards_configured then ["SESSION_WORKSPACE_GUARDS_JSON"] else [] end)) as $engine_always
 |
-{
+({
   config_path: $config_path,
   project: {
     id: $pid,
@@ -183,4 +184,29 @@ def coordination_var_name(store):
     mcp_package: $browser.mcp_package,
     mcp_server_name: ($browser.mcp_server_name // "chrome-devtools")
   } end)
-}
+} + (if $cfg.schema_version == 4 and ($cfg | has("orchestration")) then {
+  orchestration: (if ($cfg.orchestration.enabled // false) then {
+    active: true,
+    profile: $cfg.orchestration.profile,
+    gates: $cfg.harness.gates,
+    targets: [
+      $cfg.orchestration.targets[] | . as $target
+      | ([ $all_panes[] | select(.role == $cfg.harness.roles.executor and (.cwd // null) == $target.cwd) ][0]) as $executor
+      | ([ $all_panes[] | select(.role == $cfg.harness.roles.reviewer and (.cwd // null) == $target.cwd) ][0]) as $reviewer
+      | {
+          id: $target.id,
+          cwd_raw: $target.cwd,
+          cwd: ($cwd_map[$executor.name] // null),
+          executor: $executor.name,
+          reviewer: $reviewer.name,
+          remote: $target.remote,
+          work_branch: $target.work_branch,
+          release_branch: $target.release_branch,
+          deploy: {
+            strategy: $target.deploy.strategy,
+            align_work_after_release: ($target.deploy.align_work_after_release // false)
+          }
+        }
+    ]
+  } else {active: false} end)
+} else {} end))

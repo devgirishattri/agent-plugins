@@ -45,6 +45,9 @@ argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no
      `$session-workspace:workspace-reconcile TARGET --adopt --confirmed`, then
      apply it with
      `$session-workspace:workspace-reconcile TARGET --apply --adopt --confirmed`.
+     Direct adoption through this command is also supported with
+     `workspace-start TARGET --adopt --confirmed` when a separate preview is
+     not required.
    - It uses exact tmux session targets and managed markers to distinguish
      owned resources from user/foreign sessions.
    - On a fully successful run, attach is controlled by `behavior.attach`:

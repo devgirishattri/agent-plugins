@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Schema-v3 Stop diagnostics. Feature-off/unlaunched sessions exit before jq
+# Schema-v3/v4 Stop diagnostics. Feature-off/unlaunched sessions exit before jq
 # or Python so this global plugin hook is free for non-adopters.
 set -uo pipefail
 
@@ -15,7 +15,7 @@ GUARDS="${SESSION_WORKSPACE_GUARDS_JSON:-}"
 [ -n "$CONFIG" ] && [ -n "$GUARDS" ] || exit 0
 [ -r "$CONFIG" ] || exit 0
 CONFIG_TEXT="$(<"$CONFIG")"
-[[ "$CONFIG_TEXT" =~ \"schema_version\"[[:space:]]*:[[:space:]]*3[[:space:]]*([,}]) ]] || exit 0
+[[ "$CONFIG_TEXT" =~ \"schema_version\"[[:space:]]*:[[:space:]]*(3|4)[[:space:]]*([,}]) ]] || exit 0
 case "$GUARDS" in
   *'"warn_root_dirty":true'*|*'"warn_missing_panes":true'*|*'"branch_ahead":'*) : ;;
   *) exit 0 ;;

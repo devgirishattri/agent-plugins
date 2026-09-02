@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/devgirishattri/agent-plugins/session-workspace/workspace.schema.json",
   "title": "session-workspace configuration",
-  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape mirrors validate-config.sh, which is authoritative. Schema version 1 remains workspace-only, version 2 adds the strict-v1 harness, and version 3 adds optional typed guard packs under an enabled harness. No guard accepts arbitrary scripts, regexes, shell fragments, or permission-widening escape hatches.",
+  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape mirrors validate-config.sh, which is authoritative. Schema version 1 remains workspace-only, version 2 adds the strict-v1 harness, version 3 adds optional typed guard packs, and version 4 adds the closed reviewed-git-v1 orchestration profile. No guard or orchestration field accepts arbitrary scripts, regexes, prompts, shell fragments, or permission-widening escape hatches.",
   "type": "object",
   "required": ["schema_version", "project", "runtimes", "roles", "stores", "sessions"],
   "additionalProperties": false,
@@ -16,10 +16,14 @@
       "then": { "properties": { "harness": { "not": { "required": ["guards"] } } } }
     },
     {
+      "if": { "properties": { "schema_version": { "enum": [1, 2, 3] } } },
+      "then": { "not": { "required": ["orchestration"] } }
+    },
+    {
       "if": {
         "required": ["harness"],
         "properties": {
-          "schema_version": { "enum": [2, 3] },
+          "schema_version": { "enum": [2, 3, 4] },
           "harness": {
             "required": ["enabled"],
             "properties": { "enabled": { "const": true } }
@@ -36,7 +40,7 @@
       "if": {
         "required": ["harness"],
         "properties": {
-          "schema_version": { "enum": [2, 3] },
+          "schema_version": { "enum": [2, 3, 4] },
           "harness": {
             "required": ["enabled"],
             "properties": { "enabled": { "const": false } }
@@ -44,10 +48,98 @@
         }
       },
       "then": { "properties": { "harness": { "maxProperties": 1 } } }
+    },
+    {
+      "if": {
+        "required": ["orchestration"],
+        "properties": {
+          "schema_version": { "const": 4 },
+          "orchestration": {
+            "required": ["enabled"],
+            "properties": { "enabled": { "const": true } }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "orchestration": { "required": ["enabled", "profile", "targets"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["orchestration"],
+        "properties": {
+          "schema_version": { "const": 4 },
+          "orchestration": {
+            "required": ["enabled"],
+            "properties": { "enabled": { "const": false } }
+          }
+        }
+      },
+      "then": { "properties": { "orchestration": { "maxProperties": 1 } } }
     }
   ],
   "properties": {
-    "schema_version": { "enum": [1, 2, 3] },
+    "schema_version": { "enum": [1, 2, 3, 4] },
+    "orchestration": {
+      "type": "object",
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "profile": { "const": "reviewed-git-v1" },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "cwd", "remote", "work_branch", "release_branch", "deploy"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+              "cwd": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+                "allOf": [
+                  {"not": {"const": "."}},
+                  {"not": {"pattern": "\\.\\."}},
+                  {"not": {"pattern": "/$"}}
+                ]
+              },
+              "remote": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+              "work_branch": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+                "allOf": [
+                  {"not": {"pattern": "\\.\\."}},
+                  {"not": {"pattern": "/$"}},
+                  {"not": {"pattern": "\\.lock$"}}
+                ]
+              },
+              "release_branch": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+                "allOf": [
+                  {"not": {"pattern": "\\.\\."}},
+                  {"not": {"pattern": "/$"}},
+                  {"not": {"pattern": "\\.lock$"}}
+                ]
+              },
+              "deploy": {
+                "type": "object",
+                "required": ["strategy"],
+                "additionalProperties": false,
+                "properties": {
+                  "strategy": { "const": "merge-no-ff-v1" },
+                  "align_work_after_release": { "type": "boolean", "default": false }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "harness": {
       "type": "object",
       "required": ["enabled"],

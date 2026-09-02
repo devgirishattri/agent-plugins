@@ -75,15 +75,16 @@ if printf '%s' "$CONFIG_JSON" | jq -e 'has("browser")' >/dev/null; then
   BROWSER_PROFILE_DIR="$(sw_browser_profile_dir "$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')")"
 fi
 
-# Filter to TARGET before computing cwds/plan, so an unknown target fails
-# fast with a clear message rather than silently showing everything.
+# Validate TARGET before computing the plan, so an unknown target fails fast.
+# Session filtering happens after normalization: schema-v4 orchestration is a
+# workspace-wide target map and still needs every configured executor/reviewer
+# pair even when the caller asks to display one tmux session.
 if [ "$TARGET" != "all" ]; then
   KNOWN_IDS="$(printf '%s' "$CONFIG_JSON" | jq -r '[(.sessions // [])[].id] | join(", ")')"
   if ! printf '%s' "$CONFIG_JSON" | jq -e --arg t "$TARGET" '[(.sessions // [])[].id] | index($t) != null' >/dev/null; then
     echo "ERROR: unknown session target \"$TARGET\" (known: $KNOWN_IDS)" >&2
     exit 1
   fi
-  CONFIG_JSON="$(printf '%s' "$CONFIG_JSON" | jq -c --arg t "$TARGET" '.sessions |= map(select(.id == $t))')"
 fi
 
 # Resolve every pane's cwd against the filesystem (mutation-free: read-only
@@ -111,6 +112,10 @@ PLAN_JSON="$(printf '%s' "$CONFIG_JSON" | jq -c \
   --argjson cwd_map "$CWD_MAP_RESOLVED" \
   -f "$HERE/compute-plan.jq")"
 
+if [ "$TARGET" != "all" ]; then
+  PLAN_JSON="$(printf '%s' "$PLAN_JSON" | jq -c --arg t "$TARGET" '.sessions |= map(select(.id == $t))')"
+fi
+
 if [ "$JSON_MODE" -eq 1 ]; then
   printf '%s\n' "$PLAN_JSON" | jq '.'
   exit 0
@@ -131,7 +136,14 @@ printf '%s\n' "$PLAN_JSON" | jq -r '
      (if .harness.guards then "guards: " + (.harness.guards | tojson) else empty end)
    else
      "harness: inactive"
-   end)
+   end),
+  (if (.orchestration.active // false) then
+     "orchestration: active  profile=\(.orchestration.profile)  targets=\(.orchestration.targets | length)",
+     (.orchestration.targets[] |
+       "  target \(.id): cwd=\(.cwd) executor=\(.executor) reviewer=\(.reviewer) git=\(.remote)/\(.work_branch)->\(.release_branch) deploy=\(.deploy.strategy) align_work_after_release=\(.deploy.align_work_after_release)")
+   elif has("orchestration") then
+     "orchestration: inactive"
+   else empty end)
 '
 echo
 

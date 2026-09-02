@@ -92,7 +92,7 @@ _validate_cwds() {
 # apparently non-dot child cwd must not canonicalize back to the project root.
 _validate_harness_resolved_cwds() {
   local json="$1" root_abs="$2"
-  if ! printf '%s' "$json" | jq -e '(.schema_version == 2 or .schema_version == 3) and (.harness.enabled // false)' >/dev/null; then
+  if ! printf '%s' "$json" | jq -e '(.schema_version == 2 or .schema_version == 3 or .schema_version == 4) and (.harness.enabled // false)' >/dev/null; then
     return 0
   fi
 
@@ -109,6 +109,38 @@ _validate_harness_resolved_cwds() {
     if resolved="$(_resolve_cwd_within_root "$root_abs" "$cwd_raw")" && [ "$resolved" = "$root_abs" ]; then
       _add_error "harness $role_name pane $pane_name: cwd \"$cwd_raw\" resolves to the project root; executor/reviewer panes require a distinct child cwd"
     fi
+  done <<<"$rows"
+}
+
+# _validate_orchestration_resolved_targets JSON PROJECT_ROOT_ABS
+# Schema v4 target cwd values already have to exactly match one raw
+# executor/reviewer pair. This filesystem half proves that each selected
+# target exists, remains a distinct child after symlink resolution, and no
+# two configured target aliases resolve to the same checkout.
+_validate_orchestration_resolved_targets() {
+  local json="$1" root_abs="$2"
+  if ! printf '%s' "$json" | jq -e '.schema_version == 4 and (.orchestration | type) == "object" and (.orchestration.enabled // false) and (.orchestration.targets | type) == "array"' >/dev/null; then
+    return 0
+  fi
+
+  local rows target_id cwd_raw resolved seen_resolved=""
+  rows="$(printf '%s' "$json" | jq -r '.orchestration.targets[] | [.id, .cwd] | @tsv')"
+  while IFS=$'\t' read -r target_id cwd_raw; do
+    [ -z "$target_id" ] && continue
+    if ! resolved="$(_resolve_cwd_within_root "$root_abs" "$cwd_raw")"; then
+      _add_error "orchestration target $target_id: cwd \"$cwd_raw\" does not resolve inside the project root ($root_abs)"
+      continue
+    fi
+    if [ "$resolved" = "$root_abs" ]; then
+      _add_error "orchestration target $target_id: cwd \"$cwd_raw\" resolves to the project root; a distinct child checkout is required"
+      continue
+    fi
+    case $'\n'"$seen_resolved"$'\n' in
+      *$'\n'"$resolved"$'\n'*)
+        _add_error "orchestration target $target_id: cwd \"$cwd_raw\" resolves to a child checkout already selected by another target ($resolved)"
+        ;;
+      *) seen_resolved="${seen_resolved}${seen_resolved:+$'\n'}${resolved}" ;;
+    esac
   done <<<"$rows"
 }
 
@@ -332,6 +364,7 @@ validate_workspace_config() {
   else
     _validate_cwds "$json" "$root_abs"
     _validate_harness_resolved_cwds "$json" "$root_abs"
+    _validate_orchestration_resolved_targets "$json" "$root_abs"
     _validate_stores "$json" "$root_abs"
     _validate_secrets_file "$json" "$root_abs"
   fi

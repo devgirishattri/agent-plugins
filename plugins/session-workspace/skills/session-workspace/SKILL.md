@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install) and its opt-in strict-v1 multi-agent harness (harness-status/harness-doctor, the PreToolUse role policy). Use this before invoking any /workspace-* or /harness-* command so you understand the config model, the real flags, the safety gates, and what an active harness will block.
+description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install), its opt-in strict-v1 multi-agent harness (harness-status/harness-doctor, the PreToolUse role policy), and schema-v4 reviewed Git orchestration. Use this before invoking any /session-workspace:workspace-* or /session-workspace:harness-* command (including /session-workspace:workspace-orchestrator) so you understand the config model, the real flags, the safety gates, and the provider-neutral coordination boundary.
 ---
 
 # session-workspace: config-driven tmux workspace engine
@@ -20,22 +20,24 @@ is not a scaffold.
 
 | Command | Purpose |
 |---|---|
-| `/workspace-doctor` | Read-only dependency/config health check |
-| `/workspace-plan` | Dry-run plan (human + JSON); mutates nothing |
-| `/workspace-start` | Bring up sessions/panes/agents/services (idempotent) |
-| `/workspace-status` | Current lifecycle state; mutates nothing |
-| `/workspace-stop` | Tear down sessions/panes (destructive, needs `--confirmed`) |
-| `/workspace-restart` | Stop then start (destructive, confirmation implicit) |
-| `/workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
-| `/workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
-| `/workspace-browser-config` | Render/apply project MCP entries for the configured browser |
-| `/harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), and does this pane's engine identity match the plan |
-| `/harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
+| `/session-workspace:workspace-doctor` | Read-only dependency/config health check |
+| `/session-workspace:workspace-plan` | Dry-run plan (human + JSON); mutates nothing |
+| `/session-workspace:workspace-start` | Bring up sessions/panes/agents/services (idempotent) |
+| `/session-workspace:workspace-status` | Current lifecycle state; mutates nothing |
+| `/session-workspace:workspace-stop` | Tear down sessions/panes (destructive, needs `--confirmed`) |
+| `/session-workspace:workspace-restart` | Stop then start (destructive, confirmation implicit) |
+| `/session-workspace:workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
+| `/session-workspace:workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
+| `/session-workspace:workspace-browser-config` | Render/apply project MCP entries for the configured browser |
+| `/session-workspace:harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), and does this pane's engine identity match the plan |
+| `/session-workspace:harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
+| `/session-workspace:workspace-orchestrator` | Schema-v4 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
 
 ## Configuration model (enforced)
 
 A project opts in by creating `.agent-workspace/workspace.json`
-(`schema_version: 1`, `2` for the optional harness, or `3` for shared guard packs) describing:
+(`schema_version: 1`, `2` for the optional harness, `3` for shared guard packs,
+or `4` for reviewed orchestration) describing:
 
 - `project` — id/display name/root
 - `runtimes` — named launch profiles (e.g. `claude`, `codex`), replacing any
@@ -54,11 +56,15 @@ A project opts in by creating `.agent-workspace/workspace.json`
 - `behavior` — attach/stop-scope/save defaults
 - `browser` — optional Chrome DevTools session binding, pinned MCP package,
   loopback port, and portable derived profile
-- `harness` (schema v2/v3) — opt-in strict-v1 role policy: `enabled`,
+- `harness` (schema v2/v3/v4) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
-  `gates`, plus optional schema-v3 `guards`; absent or `enabled: false` is a true no-op (for panes whose
+  `gates`, plus optional schema-v3/v4 `guards`; absent or `enabled: false` is a true no-op (for panes whose
   launcher mode is empty — a pane launched under audit/enforce keeps that
   mode and blocks as drift until restarted)
+- `orchestration` (schema v4 only) — optional closed `reviewed-git-v1`
+  targets. It binds a safe child cwd to its configured executor/reviewer pair,
+  named remote, work/release branches, and fixed merge strategy; it accepts no
+  commands, scripts, prompts, regexes, or custom gate bypasses.
 
 `workspace.schema.json` in `scripts/` documents this shape, and
 `validate-config.sh` enforces it — both structurally (via
@@ -87,7 +93,7 @@ use plain `tmux set-environment` on purpose — that path is for coordination
 vars a hand-made pane should also inherit, and secrets are excluded from it
 by construction.
 
-## The opt-in harness (schema v2/v3)
+## The opt-in harness (schema v2/v3/v4)
 
 With `harness.enabled: true` the engine's `PreToolUse` hook enforces an
 **immutable strict-v1 floor** keyed on the per-pane identity it exports at
@@ -98,13 +104,14 @@ them:
 - A session not launched by `workspace-start`, a schema-v1 project, or
   `enabled: false` is a true no-op — nothing is gated — as long as the pane
   was not launched under an earlier `audit`/`enforce` mode (stale mode is
-  drift and blocks until `/workspace-restart`).
+  drift and blocks until the configured session containing the pane is
+  restarted via `/session-workspace:workspace-restart <session-id>`).
 - **Reviewer**: every Edit/Write/NotebookEdit is blocked; shell is
   default-deny except one literal read-only command inside its own checkout
   (no pipes, redirection, `sed`, sibling `../` reads) and trusted
   coordination helpers (reply to the orchestrator, `task-done`/`task-block`,
   context and read-only knowledge helpers). Verdicts go out as a single-line
-  `/reply` or a scheduler note.
+  `/session-chat:reply` or a scheduler note.
 - **Executor**: edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files
@@ -128,9 +135,11 @@ them:
   present Codex `enforce` as complete path containment — `audit` is the
   recommended Codex mode for now.
   Identity/config/drift integrity failures block in both modes — the remedy
-  is `/workspace-restart` of that pane, never hand-editing the identity
-  variables.
-- In schema v3, optional `harness.guards` centralize orchestrator protected
+  is `/session-workspace:workspace-restart <session-id>` of the configured
+  session containing that pane — this kills and recreates ALL of that
+  session's configured panes, not just the drifted one — never hand-editing
+  the identity variables.
+- In schema v3/v4, optional `harness.guards` centralize orchestrator protected
   files, child-directory hops, generic lifecycle reminders, and bounded Stop
   health warnings. Guard changes require a workspace restart because their
   canonical JSON is launcher identity.
@@ -139,7 +148,19 @@ them:
   `branch_ahead` is a neutral local-branch fact, not deploy authorization.
 - After a Codex plugin upgrade that changes hook entries, accept/re-trust the
   new session-workspace hook hashes before relying on lifecycle/Stop output.
-- Run `/harness-doctor` first when something is unexpectedly blocked.
+- Run `/session-workspace:harness-doctor` first when something is unexpectedly blocked.
+
+## Reviewed orchestration (schema v4)
+
+When `orchestration.enabled` is true, use the `workspace-orchestrator` skill
+(`/session-workspace:workspace-orchestrator`). The normalized workspace plan is
+the sole target map; the orchestrator coordinates and every Git mutation runs
+in the target executor. The fixed lifecycle requires correlated explicit plan
+approval, user confirmation, scheduler-tracked execution, reviewer-authored
+explicit audit approval, and separate commit/push/deploy confirmations. Its
+freshness windows come from `harness.gates`. Ledger and session-chat records
+are machine-verifiable evidence; user confirmations remain conversational and
+must never be described as harness-enforced.
 
 ## Safety gates worth relaying to the user
 

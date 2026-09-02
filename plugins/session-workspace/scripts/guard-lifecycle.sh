@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generic schema-v3 lifecycle reminders. The inactive path is deliberately
+# Generic schema-v3/v4 lifecycle reminders. The inactive path is deliberately
 # pure bash and silent because UserPromptSubmit runs on every turn.
 set -uo pipefail
 
@@ -17,7 +17,7 @@ GUARDS="${SESSION_WORKSPACE_GUARDS_JSON:-}"
 [ -n "$CONFIG" ] && [ -n "$GUARDS" ] || exit 0
 [ -r "$CONFIG" ] || exit 0
 CONFIG_TEXT="$(<"$CONFIG")"
-[[ "$CONFIG_TEXT" =~ \"schema_version\"[[:space:]]*:[[:space:]]*3[[:space:]]*([,}]) ]] || exit 0
+[[ "$CONFIG_TEXT" =~ \"schema_version\"[[:space:]]*:[[:space:]]*(3|4)[[:space:]]*([,}]) ]] || exit 0
 case "$EVENT" in
   session) FEATURE='"session_reminder":true'; HOOK_EVENT="SessionStart" ;;
   prompt) FEATURE='"prompt_reminder":true'; HOOK_EVENT="UserPromptSubmit" ;;

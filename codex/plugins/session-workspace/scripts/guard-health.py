@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded, non-blocking schema-v3 workspace Stop diagnostics."""
+"""Bounded, non-blocking schema-v3/v4 workspace Stop diagnostics."""
 
 from __future__ import annotations
 
