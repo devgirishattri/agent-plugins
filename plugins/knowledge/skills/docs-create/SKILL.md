@@ -10,7 +10,7 @@ A structured process for creating and updating project documentation. Documents 
 
 ## Process
 
-0. **Reviewer-role preflight — MANDATORY, run FIRST, before any other step.** First resolve the repository root in a SEPARATE read-only step by running `git rev-parse --show-toplevel` (if not a git repository, use the current working directory). Then invoke the preflight as exactly one literal Bash segment, substituting the resolved absolute path yourself — no `export`/`env`/assignment prefix, no command substitution, no chaining/piping/redirection:
+0. **Reviewer-role preflight (run first).** First resolve the repository root in a SEPARATE read-only step by running `git rev-parse --show-toplevel` (if not a git repository, use the current working directory). Then invoke the preflight as exactly one literal Bash segment, substituting the resolved absolute path yourself — no `export`/`env`/assignment prefix, no command substitution, no chaining/piping/redirection:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/docs-write.sh" --repo "<REPO_ROOT>"
    ```
@@ -26,7 +26,7 @@ A structured process for creating and updating project documentation. Documents 
 7. **Check size and split if needed** — After writing, check if the doc should be split (see `references/SPLITTING_GUIDE.md`). Proactively suggest splitting to the user if the doc covers 3+ distinct subsystems at 80+ lines each.
 8. **Add diagrams** — Include Mermaid diagrams where relationships are hard to follow in prose. See `references/DIAGRAMS_GUIDE.md` for types and examples.
 9. **Cross-reference** — Link to related docs and update them if the new doc changes the picture.
-10. **MANDATORY independent review — never skip, even for a single-file change.** After *every* docs write or edit, run a fresh, read-only accuracy review before reporting the work done:
+10. **Independent review.** After every docs write or edit, including a single-file change, run a fresh, read-only accuracy review before reporting the work done, because the writer cannot see its own stale references:
     - **Preferred:** delegate to the **doc-reviewer** subagent via the Agent tool (`subagent_type: knowledge:doc-reviewer`). It independently verifies that every referenced path, function, table, endpoint, env var, and cross-link actually exists in the codebase, and re-runs the validation scripts (once per unique parent directory of the docs you touched — see Validation Tools).
     - **Fallback (only when the Agent tool is unavailable):** perform the review inline yourself — re-read each doc you changed, verify every reference against the codebase, and re-run the validators.
     - **Repeat after fixes:** if the review surfaces issues and you edit the docs to fix them, run the independent review again on the changed docs. Do not report the documentation as complete until an independent review has passed.

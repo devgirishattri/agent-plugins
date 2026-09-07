@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate. This is a destructive command — deletion is gated behind an explicit confirmation. Default behavior is dry-run with `--older-than 7`.
+Lead with the result; add text only for errors or the follow-ups below. This is a destructive command — deletion is gated behind an explicit confirmation. Default behavior is dry-run with `--older-than 7`.
 
 `SESSION_SCHEDULER_HOME` must already be present in this session's environment, inherited when the agent process started (the pane/session launcher sets it — never export or derive it here). Every invocation below must be exactly one Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it. If the script reports the variable is not set, stop and request that this pane/session be relaunched with the correct environment instead of deriving another ledger.
 

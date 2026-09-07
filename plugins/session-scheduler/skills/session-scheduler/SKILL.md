@@ -57,7 +57,7 @@ Legal status transitions (enforced by every command):
 
 ## Hard prerequisites
 
-1. **session-chat ≥ 0.13.0** installed. The lock + retry behavior prevents corrupted dispatches, and 0.13's durable inbox means a dispatch or ack to a busy pane is recovered on its next turn rather than lost.
+1. **session-chat ≥ 0.13.0** installed. Its send lock and retries prevent corrupted dispatches, and its durable inbox means a dispatch or ack to a busy pane is recovered on its next turn rather than lost.
 2. **Executor pane has `SESSION_CHAT_INCOMING_MODE=auto`** (or `assist`). Default `notify` tells the executor *not* to read dispatched files — your tasks will be assigned in the ledger but never acted on. Run `/session-chat:incoming-mode auto` in the executor's shell.
 3. **All participating panes have unique registered names** (via `/whoami <name>` or SessionStart auto-naming). Pane names are the addressing scheme.
 
@@ -122,7 +122,7 @@ Atomic writes (tmp + mv) — concurrent executors updating different tasks won't
 
 ## Failure modes
 
-- **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — only happens on a hard failure (no name, unknown/ambiguous target). A *busy* executor is no longer a failure: with session-chat ≥ 0.13.0 the dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. For a hard failure, fix it (run `/session-chat:panes`, ensure the executor has a name), then retry `/task-assign`.
+- **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — only happens on a hard failure (no name, unknown/ambiguous target). A *busy* executor is not a failure: the dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. For a hard failure, fix it (run `/session-chat:panes`, ensure the executor has a name), then retry `/task-assign`.
 - **Lifecycle acks are durable, not best-effort transport** — `/task-done`, `/task-block`, and `/task-review`'s assigner ack always update the ledger first, then ack via a delivery ladder: file-backed dispatch (queued to the assigner's durable inbox when busy, recovered on their next turn), falling back to inline `/send` only if dispatch fails, falling back to a recorded failure only if both fail. `meta.last_ack` records `status` (`dispatched`/`inline-fallback`/`failed`) and `file` for every attempt. A `failed` ack is a **partial success**: the transition already happened, so never rerun the helper and never use --force to repair the notification — follow the transport contract above.
 - **Tasks are `assigned` but executor never acts** — almost always `INCOMING_MODE=notify` on the executor side. Run `/session-chat:incoming-mode auto` in the executor's shell.
 - **`jq` missing** — `brew install jq`. The ledger is JSON; jq is a hard dependency.

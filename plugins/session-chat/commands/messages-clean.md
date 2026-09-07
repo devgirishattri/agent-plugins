@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate. This is a destructive command — deletion is gated behind an explicit confirmation.
+Lead with the result; add text only for errors or the follow-ups below. This is a destructive command — deletion is gated behind an explicit confirmation.
 
 1. **Always run the dry-run FIRST**, regardless of whether the user passed `--apply`. Run the script with `--apply` stripped from `$ARGUMENTS`:
    ```

@@ -5,16 +5,10 @@ description: When and how to use the session-workspace plugin's config-driven tm
 
 # session-workspace: config-driven tmux workspace engine
 
-`session-workspace` is a shared engine that replaces hand-maintained
-per-project `workspace.sh` launchers. Instead of six near-identical scripts
-drifting independently, one engine reads a versioned, project-local
+`session-workspace` is a shared engine that reads a versioned, project-local
 `.agent-workspace/workspace.json` config and drives tmux session/window/pane
-lifecycle from it.
-
-**Current status: fully implemented.** Config load/validation, mutation-free
-planning, runtime argv/env construction, and tmux session/pane lifecycle
-(create, adopt, reconcile, stop, restart) are all live and enforced — this
-is not a scaffold.
+lifecycle from it: config load/validation, mutation-free planning, runtime
+argv/env construction, and create/adopt/reconcile/stop/restart.
 
 ## Commands
 

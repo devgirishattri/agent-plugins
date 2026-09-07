@@ -15,10 +15,10 @@ future session needs to continue, keep historical detail only when it explains
 the current state, and expect stabilized knowledge to be promoted later through
 `$knowledge:promote`.
 
-0. **Handoff flags (optional, Phase E)**: the user's arguments may include `--handoff` and/or `--expires <UTC-ISO>` after the snapshot name, in either order (e.g. `foo --handoff`, `foo --handoff --expires 2026-08-15T00:00:00Z`, `foo --expires ... --handoff`). Parse these out of the user's arguments before deriving the snapshot name in step 1 — they are flags for the save step (step 4), not part of the name.
+0. **Handoff flags (optional)**: the user's arguments may include `--handoff` and/or `--expires <UTC-ISO>` after the snapshot name, in either order (e.g. `foo --handoff`, `foo --handoff --expires 2026-08-15T00:00:00Z`, `foo --expires ... --handoff`). Parse these out of the user's arguments before deriving the snapshot name in step 1 — they are flags for the save step (step 4), not part of the name.
    - `--handoff` marks this snapshot as a **structured handoff**: a running item or resumable endpoint that is promoted then deleted at the end of its arc, instead of an ordinary point-in-time snapshot. Use it when the session is handing off unfinished, resumable work — not for a routine end-of-session summary.
    - `--expires <UTC-ISO>` sets an explicit expiry (`YYYY-MM-DDTHH:MM:SSZ`); only meaningful together with `--handoff`. Omit it to get the default of `created + 14 days`. `expires` means "stale, eligible for confirmed cleanup" — it is never silently deleted by anything.
-   - Without `--handoff`, this command's output is byte-identical to its pre-Phase-E behavior on a plain snapshot. Re-running it without `--handoff` against a snapshot name that is **already** a handoff **refuses** (`save-context.sh` exits 2 with the single stderr line `handoff exists: re-run with --handoff`) rather than silently mutating or dropping its metadata — if you hit this, tell the user and re-run with `--handoff`.
+   - Without `--handoff`, this command writes a plain snapshot. Re-running it without `--handoff` against a snapshot name that is **already** a handoff **refuses** (`save-context.sh` exits 2 with the single stderr line `handoff exists: re-run with --handoff`) rather than silently mutating or dropping its metadata — if you hit this, tell the user and re-run with `--handoff`.
    - Regenerating an existing handoff with `--handoff` again is a normal **update**: it keeps the original `created` date, advances `updated` to now, and keeps the existing `expires` unless `--expires` is given this time (which replaces it). Regenerating an existing **plain** snapshot with `--handoff` **upgrades** it (its `created` becomes now, since a plain snapshot carries no prior metadata to preserve).
 
 1. **Determine snapshot name**: Use the user's arguments (with the handoff
@@ -78,7 +78,7 @@ the current state, and expect stabilized knowledge to be promoted later through
    ```
    bash "<PLUGIN_ROOT>/scripts/save-context.sh" "<snapshot-name>" "<temp-file>" [--handoff] [--expires <UTC-ISO>]
    ```
-   Include `--handoff`/`--expires` only when step 0 found them in the user's arguments; omit both for a plain snapshot (byte-identical to the pre-Phase-E call).
+   Include `--handoff`/`--expires` only when step 0 found them in the user's arguments; omit both for a plain snapshot.
    If the script reports `SESSION_CONTEXT_HOME` is not set, stop and request that this pane/session be relaunched with the correct environment instead of deriving another context store.
    If a snapshot with the same name already exists, the previous version is archived
    automatically to `$SESSION_CONTEXT_HOME/.history/` (the 10 most recent versions are kept).
@@ -88,4 +88,4 @@ the current state, and expect stabilized knowledge to be promoted later through
 
 5. **Report**: "Session context saved as '<snapshot-name>'. Share with `$knowledge:context-share <session> <snapshot-name>` or load later with `$knowledge:context-load <snapshot-name>`." If a previous version was archived, mention `$knowledge:context-diff <snapshot-name>` to see what changed. If this was a handoff, also state its `expires` date and that `$knowledge:promote` is how it eventually gets promoted and its source deleted — expiry only ever marks it stale/eligible for confirmed cleanup, it is never silently deleted.
 
-Keep the summary **concise** — under 150 lines. Focus on what another session needs to continue the work, not a transcript of everything that happened.
+Keep the summary to what another session needs to continue the work, not a transcript of everything that happened.

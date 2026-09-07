@@ -10,7 +10,7 @@ knowledge: documentation workflows, context snapshots, and a native memory
 module for `.agents/memory/` — consolidation, promotion, deterministic
 search/recall, an explicit-link backlink graph, and a read-only cross-store
 doctor. Every command lives under this one plugin; there is no cross-plugin
-composition to reason about. All eighteen commands below are shipped.
+composition to reason about.
 
 ## The taxonomy: three stores, one question each
 
@@ -86,7 +86,7 @@ bootstraps a new store:**
 | `/knowledge:consolidate [--store <path>] [session learnings]` | Drain the inbox and this session's learnings into reviewed create/UPDATE diffs against `MEMORY.md`, applying only after approval. The memory module's core value — run this at session end, or whenever the inbox is non-empty. |
 | `/knowledge:promote [context <name> \| memory <slug>] [--store <path>]` | Promote a stabilized context/handoff item or memory file into a memory create/UPDATE or a proposed docs patch, then — as a SEPARATE confirmation — delete the source. The lifecycle-closing surface for a handoff or a superseded memory file. |
 
-## Search/recall ranking (0.3.13)
+## Search/recall ranking
 
 `search`/`recall` rank by field weight — slug 8, name 6, tags 5, description
 4, type 3, headings 2, backlink slugs 2, body 1, summed per matching field;
@@ -164,8 +164,7 @@ memory writer above; a `*-reviewer` name refuses (exit 6, stderr `reviewer
 role: docs writes refused`); an unresolved fleet identity inside tmux also
 fails closed (exit 6, stderr `unresolved pane identity: set
 KNOWLEDGE_PANE_NAME`). `docs-review` is report-only and does not go through
-this gate. This is the ONE deliberate migration behavior change from the
-retired docs workflow — everything else ported test-identical.
+this gate.
 
 ## Context sharing prerequisites
 

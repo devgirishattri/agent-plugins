@@ -1,10 +1,10 @@
-# Automatic recall / capture hooks (0.2 — opt-in, OFF by default)
+# Automatic recall / capture hooks (opt-in, OFF by default)
 
 Beyond the agent-invoked `recall`/`remember` surfaces, the plugin ships
 hook-driven **automatic** recall and capture-nudge. Both are OFF unless you
 opt in with an environment variable (inherited at launch), because prompt-time
 injection still needs latency / false-positive tuning before it is on by
-default (per the spec's 0.2 roadmap gate). All injected content is framed as
+default. All injected content is framed as
 untrusted background context, never instructions/policy, and every hook fails
 silently (never breaks or stalls a session).
 
@@ -12,8 +12,7 @@ silently (never breaks or stalls a session).
   (case-insensitive): `1`/`yes`/`on`/`true`/`all`/`both` = both;
   `session`/`session-start`/`index` = the SessionStart bounded `MEMORY.md`
   index only; `prompt`/`recall`/`user-prompt` = the per-prompt recall only;
-  unset/`0`/`no`/`off`/`false` = nothing. Any other non-empty value means both,
-  so pre-0.2.1 settings keep working. SessionStart injects the bounded index as
+  unset/`0`/`no`/`off`/`false` = nothing. Any other non-empty value means both. SessionStart injects the bounded index as
   always-on background; UserPromptSubmit extracts salient terms from the
   prompt, qualifies aggregate lexical hits (a strong field score or two
   distinct prompt terms), and injects the top-N. Tunables:

@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Run the script directly and report only the result.
+Lead with the result; add text only for errors or the follow-ups below. Run the script directly and report only the result.
 
 `SESSION_CHAT_INCOMING_MODE` controls how this pane reacts to incoming `/send` and `/dispatch` messages. Default is `notify`, which forbids reading dispatch files — orchestration requires `auto` or `assist`.
 

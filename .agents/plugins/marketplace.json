@@ -20,7 +20,7 @@
     },
     {
       "name": "session-chat",
-      "version": "0.17.8",
+      "version": "0.17.9",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-chat"
@@ -34,7 +34,7 @@
     },
     {
       "name": "session-scheduler",
-      "version": "0.5.13",
+      "version": "0.5.14",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-scheduler"
@@ -48,7 +48,7 @@
     },
     {
       "name": "knowledge",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "source": {
         "source": "local",
         "path": "./codex/plugins/knowledge"
@@ -76,7 +76,7 @@
     },
     {
       "name": "session-workspace",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-workspace"

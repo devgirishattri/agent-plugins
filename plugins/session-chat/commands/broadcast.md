@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Run the script directly and report only the result.
+Lead with the result; add text only for errors or the follow-ups below. Run the script directly and report only the result.
 
 `/broadcast` fans out a **short, single-line** message to every named pane except this one — status pings, "sync now" nudges, fleet-wide notices. Per-target delivery is identical to `/send` (durable enqueue, live paste, queued fallback).
 

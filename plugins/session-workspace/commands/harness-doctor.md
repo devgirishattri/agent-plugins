@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Report the result above.
+Lead with the result; add text only for errors or the follow-ups below. Report the result above.
 
 `harness-doctor` is **strictly read-only** — it diagnoses and never repairs.
 Each check reports `OK`, `INFO`, `WARN`, or `ERROR`; the command exits

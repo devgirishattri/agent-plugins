@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*), Write
 
 ## Instructions
 
-Do not narrate or add a preamble. Run the script directly and report only the result.
+Lead with the result; add text only for errors or the follow-ups below. Run the script directly and report only the result.
 
 `/dispatch` is for **task hand-off** — multi-line prompts, code, structured work. The full prompt is written to a file under the recipient runtime's messages dir (`~/.claude/messages/` for a Claude pane, `~/.codex/messages/` for a Codex pane) and the recipient gets a one-line notification with the file path. See the `session-chat` skill for the full contract, recipient prerequisites, and `INCOMING_MODE` requirements.
 
@@ -32,4 +32,4 @@ Do not narrate or add a preamble. Run the script directly and report only the re
 5. If error about target not found, run `/panes` to show available sessions.
 6. If error about no name, tell user to run `/whoami <name>` first.
 7. If error mentions duplicate names, ask the user to rename one pane via `/whoami`.
-8. **Do not retry a `Queued …` result** — durable delivery surfaces it on the recipient's next turn, so re-dispatching only duplicates the task. (Raising `SESSION_CHAT_VERIFY_TIMEOUT_MS` only makes more dispatches land *live*; it does not change whether delivery happens.) Only a **hard failure** — the script prints an `ERROR:` and exits non-zero (no name, unknown/ambiguous target) — should be retried, after fixing the named cause.
+8. Raising `SESSION_CHAT_VERIFY_TIMEOUT_MS` only makes more dispatches land *live*; it does not change whether delivery happens. Only a **hard failure** — the script prints an `ERROR:` and exits non-zero (no name, unknown/ambiguous target) — should be retried, after fixing the named cause.

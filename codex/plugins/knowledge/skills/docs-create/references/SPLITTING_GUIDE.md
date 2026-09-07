@@ -17,7 +17,7 @@ A single document should cover a single coherent topic.
 
 - Create one overview doc that links to the detail docs
 - Each split doc should be self-contained — a reader should not need to read 3 other docs to understand it
-- Name split docs by concept: `AUTH_OVERVIEW.md`, `AUTH_API_REFERENCE.md`, `AUTH_MOBILE.md` — never `AUTH_PART1.md` or lowercase names
+- Name split docs by concept, in the same `snake_case` as the parent skill's naming convention: `auth_overview.md`, `auth_api_reference.md`, `auth_mobile.md` — never `auth_part1.md`
 - Update cross-references in all affected docs
 
 ## Auto-Split Check

@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Report the result above.
+Lead with the result; add text only for errors or the follow-ups below. Report the result above.
 
 `plan` resolves the project config (loading, token-interpolating, and
 validating `.agent-workspace/workspace.json`) and shows exactly what

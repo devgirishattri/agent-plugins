@@ -29,7 +29,7 @@
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude (and Codex) sessions via tmux. Durable delivery routes fallback/dispatch into the recipient runtime's messages dir.",
-      "version": "0.17.8",
+      "version": "0.17.9",
       "author": {
         "name": "Girish Attri"
       },
@@ -48,7 +48,7 @@
     {
       "name": "knowledge",
       "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory module with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor.",
-      "version": "0.3.15",
+      "version": "0.3.16",
       "author": {
         "name": "Girish Attri"
       },
@@ -86,7 +86,7 @@
     {
       "name": "session-scheduler",
       "description": "Thin file-backed task ledger for orchestrator → executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
-      "version": "0.5.13",
+      "version": "0.5.14",
       "author": {
         "name": "Girish Attri"
       },
@@ -105,7 +105,7 @@
     {
       "name": "session-workspace",
       "description": "Config-driven tmux workspace and multi-agent harness engine with fail-closed role policy and schema-v4 reviewed Git orchestration for Claude and Codex.",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "author": {
         "name": "Girish Attri"
       },

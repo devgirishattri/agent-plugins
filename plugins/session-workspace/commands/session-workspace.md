@@ -9,13 +9,12 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble.
+Lead with the result; add text only for errors or the follow-ups below.
 
-1. This plugin replaces hand-maintained per-project `workspace.sh` launchers
-   with one shared engine driven by a versioned `.agent-workspace/workspace.json`
-   config. It is fully implemented: config load/validation, mutation-free
-   planning, runtime argv/env construction, and tmux session/pane lifecycle
-   (create, adopt, reconcile, stop, restart) are all live.
+1. This plugin is one shared engine driven by a versioned
+   `.agent-workspace/workspace.json` config: config load/validation,
+   mutation-free planning, runtime argv/env construction, and tmux
+   session/pane lifecycle (create, adopt, reconcile, stop, restart).
 2. Report the Contract Check output above verbatim — it should read
    `session-workspace-cli 1`. If it does not, or errors, surface that
    verbatim; it means the install is broken.

@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Run the action directly and report only the result.
+Lead with the result; add text only for errors or the follow-ups below. Run the action directly and report only the result.
 
 1. If the Current Name output above is an `ERROR:` line (e.g. the tmux socket was denied with `Operation not permitted`), do NOT report "No name set" — the query was blocked, not empty. Surface the error verbatim, including its escalated/approved retry hint, and stop.
 

@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate. Parse `$ARGUMENTS` as: first word = pane, second = task id, then optional flags, rest = prompt. Flags must come before the prompt text.
+Lead with the result; add text only for errors or the follow-ups below. Parse `$ARGUMENTS` as: first word = pane, second = task id, then optional flags, rest = prompt. Flags must come before the prompt text.
 
 `SESSION_SCHEDULER_HOME` (and `SESSION_CONTEXT_HOME` when using `--context`) must already be present in this session's environment, inherited when the agent process started (the pane/session launcher sets them — never export or derive them here). Run the helper as exactly one Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it:
 

@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Render the table directly.
+Lead with the result; add text only for errors or the follow-ups below. Render the table directly.
 
 Present the tab-separated data above as a markdown table:
 

@@ -238,6 +238,6 @@ Place pattern docs where they make sense:
 
 - `docs/patterns/` — Cross-cutting patterns (error handling, testing, config)
 - `docs/decisions/` — Architecture decision records
-- `src/module/PATTERNS.md` — Module-specific patterns (alongside the code)
+- `src/module/patterns.md` — Module-specific patterns (alongside the code)
 
-For projects with 10+ patterns, create a `docs/patterns/INDEX.md` that lists all patterns grouped by category.
+For projects with 10+ patterns, create a `docs/patterns/index.md` that lists all patterns grouped by category.

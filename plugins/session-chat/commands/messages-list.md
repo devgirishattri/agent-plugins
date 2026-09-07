@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate. Render the tab-separated output above as a markdown table:
+Lead with the result; add text only for errors or the follow-ups below. Render the tab-separated output above as a markdown table:
 
 | Age | Size | From | To | File |
 

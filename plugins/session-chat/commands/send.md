@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Run the script directly and report only the result.
+Lead with the result; add text only for errors or the follow-ups below. Run the script directly and report only the result.
 
 `/send` is for **short, single-line** messages (status, acks, replies). The script refuses payloads with newlines or >1024 chars — for those, use `/dispatch`. See the `session-chat` skill for the full decision table and recipient prerequisites.
 
@@ -15,7 +15,7 @@ Do not narrate or add a preamble. Run the script directly and report only the re
    ```
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/send-message.sh [--priority high] [--ttl <minutes>] "<target-name>" "<message>"
    ```
-3. If the output says "Sent to ..." (delivered live) or "Queued to ..." (recipient busy — durable delivery, surfaces on their next turn), confirm success to the user. **Do not resend a "Queued" result** — it is not lost, and resending duplicates it.
+3. If the output says "Sent to ..." (delivered live) or "Queued to ..." (recipient busy — durable delivery, surfaces on their next turn), confirm success to the user.
 4. If the error mentions newlines or length, retry with `/dispatch <target> <message>`
 5. If the error is about no name, tell the user to run `/whoami <name>` first
 6. If the target is not found, run `/panes` to show available targets

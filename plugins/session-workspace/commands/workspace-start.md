@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Report the result above.
+Lead with the result; add text only for errors or the follow-ups below. Report the result above.
 
 `start` creates only MISSING managed topology for the resolved plan
 (sessions, windows, panes, runtime argv/env). A second run against an

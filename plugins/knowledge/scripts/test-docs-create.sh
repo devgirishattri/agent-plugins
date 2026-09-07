@@ -79,7 +79,7 @@ fi
 # every docs edit (so a direct skill invocation cannot bypass it), with a safe
 # no-Agent fallback and a repeat-after-fixes rule.
 SKILL="$(cd "$HERE/.." && pwd)/skills/docs-create/SKILL.md"
-if grep -qi "MANDATORY independent review" "$SKILL" \
+if grep -q "Independent review" "$SKILL" \
    && grep -q "knowledge:doc-reviewer" "$SKILL" \
    && grep -qi "Fallback" "$SKILL" \
    && grep -qi "Repeat after fixes" "$SKILL"; then
@@ -152,8 +152,8 @@ fi
 # cannot silently skip the gate.
 CMD="$(cd "$HERE/.." && pwd)/commands/docs-create.md"
 if grep -q "docs-write.sh" "$CMD" && grep -qi "stop" "$CMD" \
-   && grep -q "docs-write.sh" "$SKILL" && grep -qi "MANDATORY" "$SKILL" \
-   && grep -q "run FIRST" "$SKILL"; then
+   && grep -q "docs-write.sh" "$SKILL" && grep -q "Reviewer-role preflight" "$SKILL" \
+   && grep -q "run first" "$SKILL"; then
   pass "docs_create_wires_preflight_first"
 else
   fail "docs_create_wires_preflight_first" "command or skill missing the preflight wiring"

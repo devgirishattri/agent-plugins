@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Report the result above.
+Lead with the result; add text only for errors or the follow-ups below. Report the result above.
 
 `restart` is `stop` (confirmation implicit — this command does not take
 `--confirmed` itself) immediately followed by `start`, for the same target.

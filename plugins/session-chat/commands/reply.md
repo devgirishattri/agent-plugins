@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*), Write
 
 ## Instructions
 
-Do not narrate or add a preamble. Run the action directly and report only the result.
+Lead with the result; add text only for errors or the follow-ups below. Run the action directly and report only the result.
 
 `/reply` responds to a message you received and **automatically correlates** the reply: the transport prepends the `[re:<id>]` token for you, so the original sender's `/check-replies` matches it. Never type `[re:<id>]` yourself — pass the id and let `--reply-to` add it exactly once. See the `session-chat` skill for the delivery contract.
 
@@ -31,7 +31,7 @@ Do not narrate or add a preamble. Run the action directly and report only the re
      4. Optionally `rm -f "<prompt-file-path>"` afterward.
 
 3. Report the result:
-   - "Sent to …" / "Dispatched task to …" (delivered live) or "Queued …" (recipient busy — durable, surfaces on their next turn) → confirm success, and note the reply is correlated (the sender's `/check-replies` will mark id `<message-id>` answered). **Do not resend a "Queued" reply** — it is not lost, and resending duplicates it.
+   - "Sent to …" / "Dispatched task to …" (delivered live) or "Queued …" (recipient busy — durable, surfaces on their next turn) → confirm success, and note the reply is correlated (the sender's `/check-replies` will mark id `<message-id>` answered).
    - If `--reply-to` reports an invalid id, re-check the `id:<hex>` from the received message.
    - If the error is about no name, tell the user to run `/whoami <name>` first.
    - If the target is not found, run `/panes` to show available targets.

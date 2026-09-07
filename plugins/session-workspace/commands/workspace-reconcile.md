@@ -10,7 +10,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Do not narrate or add a preamble. Report the result above.
+Lead with the result; add text only for errors or the follow-ups below. Report the result above.
 
 `reconcile` is **dry-run by default** — it reports what would change
 (`[would-create]`, `[would-start]`, `[would-relaunch]`, `[would-keep]`,
