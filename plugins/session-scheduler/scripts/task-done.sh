@@ -35,8 +35,8 @@ if [ -n "$STARTED_AT" ]; then
   if [ "$START_EPOCH" -gt 0 ]; then
     DURATION=$(($(epoch_now) - START_EPOCH))
     [ "$DURATION" -lt 0 ] && DURATION=0
-    UPDATED_JSON=$(jq --argjson d "$DURATION" '.duration_seconds = $d' "$(task_path "$ID")")
-    task_write "$ID" "$UPDATED_JSON" || echo "WARN: could not record duration_seconds for $ID." >&2
+    task_update "$ID" '.duration_seconds = $d' --argjson d "$DURATION" \
+      || echo "WARN: could not record duration_seconds for $ID." >&2
   fi
 fi
 

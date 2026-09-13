@@ -4,8 +4,7 @@
 # Supported platforms: macOS, Linux
 
 # Ledger records and assignment/review prompts contain private workflow data.
-# Make every subsequently created file owner-only by default; immutable auto
-# contexts are explicitly tightened further to 0400 by task-assign.sh.
+# Make every subsequently created file owner-only by default.
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,6 +27,8 @@ fi
 SCHEDULER_DIR="$SESSION_SCHEDULER_HOME"
 TASKS_DIR="$SCHEDULER_DIR/tasks"
 PROMPTS_DIR="$SCHEDULER_DIR/prompts"
+HANDOFFS_DIR="$SCHEDULER_DIR/handoffs"
+LOCKS_DIR="$SCHEDULER_DIR/locks"
 SESSION_CHAT_MIN_VERSION="0.13.0"
 
 _scheduler_uid() {
@@ -67,7 +68,7 @@ ensure_dirs() {
   fi
   _scheduler_safe_dir "$SCHEDULER_DIR" || return 1
 
-  for dir in "$TASKS_DIR" "$PROMPTS_DIR"; do
+  for dir in "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" "$LOCKS_DIR"; do
     if [ -L "$dir" ]; then
       echo "ERROR: Refusing unsafe scheduler directory: $dir" >&2
       return 1
@@ -90,7 +91,7 @@ ensure_dirs() {
     echo "ERROR: Could not determine the current UID for scheduler ownership checks." >&2
     return 1
   }
-  unsafe=$(find "$SCHEDULER_DIR" -type l -print -quit 2>/dev/null) || {
+  unsafe=$(find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" -type l -print -quit 2>/dev/null) || {
     echo "ERROR: Could not inspect scheduler tree: $SCHEDULER_DIR" >&2
     return 1
   }
@@ -98,7 +99,7 @@ ensure_dirs() {
     echo "ERROR: Refusing scheduler tree containing a symlink: $unsafe" >&2
     return 1
   fi
-  unsafe=$(find "$SCHEDULER_DIR" ! -user "$uid" -print -quit 2>/dev/null) || {
+  unsafe=$(find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" ! -user "$uid" -print -quit 2>/dev/null) || {
     echo "ERROR: Could not inspect scheduler tree ownership: $SCHEDULER_DIR" >&2
     return 1
   }
@@ -106,7 +107,7 @@ ensure_dirs() {
     echo "ERROR: Refusing scheduler tree containing an unowned path: $unsafe" >&2
     return 1
   fi
-  unsafe=$(find "$SCHEDULER_DIR" ! -type d ! -type f -print -quit 2>/dev/null) || {
+  unsafe=$(find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" ! -type d ! -type f -print -quit 2>/dev/null) || {
     echo "ERROR: Could not inspect scheduler tree types: $SCHEDULER_DIR" >&2
     return 1
   }
@@ -115,9 +116,92 @@ ensure_dirs() {
     return 1
   fi
 
-  find "$SCHEDULER_DIR" -type d -exec chmod 700 {} + 2>/dev/null || return 1
-  find "$SCHEDULER_DIR" -type f -exec chmod 600 {} + 2>/dev/null || return 1
+  find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" -type d -exec chmod 700 {} + 2>/dev/null || return 1
+  find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" -type f -exec chmod 600 {} + 2>/dev/null || return 1
 }
+
+# Non-reentrant, cross-provider task transaction lock. Never hold over transport.
+acquire_task_lock() {
+  local id="$1" path holder diagnostic start timeout
+  validate_task_id "$id" || return 1
+  path="$LOCKS_DIR/$id.lock"
+  timeout="${SESSION_SCHEDULER_LOCK_TIMEOUT_SECS:-10}"
+  [[ "$timeout" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid lock timeout: $timeout" >&2; return 1; }
+  start=$(now_epoch)
+  while ! mkdir -m 700 "$path" 2>/dev/null; do
+    if [ -L "$path" ] || [ ! -d "$path" ] || [ ! -O "$path" ]; then
+      # The previous holder may have released between mkdir and inspection.
+      [ ! -e "$path" ] && [ ! -L "$path" ] && continue
+      echo "ERROR: unsafe task lock: $path" >&2; return 1
+    fi
+    holder=""
+    if [ -f "$path/pid" ] && [ ! -L "$path/pid" ] && [ -O "$path/pid" ]; then
+      read -r holder < "$path/pid" || true
+    fi
+    if [[ "$holder" =~ ^[1-9][0-9]*$ ]]; then
+      diagnostic=$(LC_ALL=C kill -0 "$holder" 2>&1)
+      if [ $? -ne 0 ] && [[ "$diagnostic" == *"No such process"* ]]; then
+        # Serialize stale reclamation and recheck the pid after claiming it.
+        if mkdir "$path/reclaim" 2>/dev/null; then
+          if [ "$(cat "$path/pid" 2>/dev/null)" = "$holder" ]; then
+            # Take over in place. Removing pid and then the directory leaves
+            # a torn window in which another reclaim marker can strand it.
+            if ! printf '%s\n' "$$" > "$path/pid"; then
+              rmdir "$path/reclaim" 2>/dev/null || true
+              echo "ERROR: could not take over task lock: $path" >&2
+              return 1
+            fi
+            rmdir "$path/reclaim" 2>/dev/null || true
+            return 0
+          else
+            rmdir "$path/reclaim" 2>/dev/null || true
+          fi
+          continue
+        fi
+      fi
+    fi
+    if [ $(( $(now_epoch) - start )) -ge "$timeout" ]; then
+      echo "ERROR: timed out acquiring task lock: $path" >&2; return 1
+    fi
+    sleep 0.05
+  done
+  if ! printf '%s\n' "$$" > "$path/pid"; then
+    rmdir "$path" 2>/dev/null || true
+    return 1
+  fi
+}
+
+release_task_lock() {
+  local path="$LOCKS_DIR/$1.lock"
+  [ ! -L "$path" ] && [ ! -L "$path/pid" ] || return 1
+  [ "$(cat "$path/pid" 2>/dev/null)" = "$$" ] || return 1
+  rm -f "$path/pid"
+  rmdir "$path" 2>/dev/null
+}
+
+lock_task_for_command() {
+  acquire_task_lock "$1" || return 1
+  SCHEDULER_LOCKED_TASK="$1"
+  trap 'release_task_lock "$SCHEDULER_LOCKED_TASK" || true' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+require_flag_value() {
+  if [ "$#" -lt 2 ] || [ -z "$2" ] || [[ "$2" == --* ]]; then
+    echo "ERROR: $1 requires a value." >&2
+    return 1
+  fi
+}
+
+task_jq_update() (
+  local file="$1" id
+  shift
+  id=$(basename "$file" .json)
+  lock_task_for_command "$id" || exit 1
+  [ -f "$file" ] || { echo "ERROR: Task not found: $id" >&2; exit 1; }
+  jq "$@" "$file" | write_json_atomic "$file"
+)
 
 require_jq() {
   if ! command -v jq >/dev/null 2>&1; then
@@ -202,7 +286,7 @@ generate_id() {
 
 validate_task_id() {
   local id="$1"
-  if [ -z "$id" ] || ! [[ "$id" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+  if [ -z "$id" ] || [ "$id" = . ] || [ "$id" = .. ] || ! [[ "$id" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
     echo "ERROR: Invalid task id: $id" >&2
     return 1
   fi
@@ -403,7 +487,7 @@ record_last_ack() {
   local file="$1" event="$2" target="$3" status="$4" ack_file="$5"
   local now
   now=$(now_iso) || return 1
-  jq \
+  task_jq_update "$file" \
     --arg event "$event" \
     --arg target "$target" \
     --arg status "$status" \
@@ -416,8 +500,7 @@ record_last_ack() {
          status:$status,
          at:$now,
          file:(if $ack_file == "" then null else $ack_file end)
-       }' \
-    "$file" | write_json_atomic "$file"
+       }'
 }
 
 semver_gte() {
@@ -460,7 +543,12 @@ write_json_atomic() {
     rm -f "$tmp"
     return 1
   }
-  mv "$tmp" "$file"
+  if ! jq -e 'type == "object"' "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    echo "ERROR: refusing invalid task JSON: $file" >&2
+    return 1
+  fi
+  mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
 }
 
 # --- Status transition enforcement ---
@@ -573,12 +661,13 @@ task_flags() {
 # Update status + history. Enforces legal transitions unless
 # SESSION_SCHEDULER_FORCE=1 (then the history note records "forced").
 # Sets started_at the first time status becomes assigned.
-append_history_update() {
+append_history_update() (
   local file="$1"
   local status="$2"
   local event="$3"
   local actor="$4"
   local note="$5"
+  lock_task_for_command "$(basename "$file" .json)" || exit 1
   local current
   current=$(jq -r '.status // ""' "$file" 2>/dev/null)
   if ! transition_allowed "$current" "$status"; then
@@ -605,7 +694,7 @@ append_history_update() {
         then .started_at=$now else . end)
      | .history += [{ts:$now,event:$event,actor:$actor,note:$note}]' \
     "$file" | write_json_atomic "$file"
-}
+)
 
 file_mtime() {
   local file="$1"

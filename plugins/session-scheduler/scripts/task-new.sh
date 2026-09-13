@@ -32,6 +32,15 @@ case "$NAME" in
 esac
 shift
 
+# A value-taking flag with nothing after it must error, not spin: under
+# `set -u` a failed `shift 2` leaves "$@" unchanged and the loop never ends.
+need_value() {
+  if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+    echo "ERROR: $1 requires a value. $USAGE" >&2
+    exit 1
+  fi
+}
+
 META_JSON='{}'
 STAGE=""
 DEPENDS_RAW=""
@@ -39,12 +48,14 @@ REVIEWER=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --reviewer)
-      REVIEWER="${2:-}"
+      need_value "$@"
+      REVIEWER="$2"
       shift 2
       validate_pane_name "$REVIEWER" "reviewer pane" || exit 1
       ;;
     --meta)
-      pair="${2:-}"
+      need_value "$@"
+      pair="$2"
       shift 2
       if [[ "$pair" != *=* ]]; then
         echo "ERROR: --meta expects key=value, got '$pair'" >&2
@@ -55,18 +66,21 @@ while [ $# -gt 0 ]; do
       META_JSON=$(printf '%s' "$META_JSON" | jq --arg k "$key" --arg v "$val" '. + {($k): $v}')
       ;;
     --stage)
-      STAGE="${2:-}"
+      need_value "$@"
+      STAGE="$2"
       shift 2
       validate_stage "$STAGE" || exit 1
       ;;
     --workflow|--workflow-id)
-      wf="${2:-}"
+      need_value "$@"
+      wf="$2"
       shift 2
       validate_workflow_id "$wf" || exit 1
       META_JSON=$(printf '%s' "$META_JSON" | jq --arg v "$wf" '. + {workflow_id: $v}')
       ;;
     --depends-on)
-      DEPENDS_RAW="${2:-}"
+      need_value "$@"
+      DEPENDS_RAW="$2"
       shift 2
       if [ -z "$DEPENDS_RAW" ]; then
         echo "ERROR: --depends-on expects a comma-separated list of task ids." >&2
@@ -120,7 +134,10 @@ JSON=$(jq -n \
     meta: $meta,
     history: [{ts: $now, event: "created", actor: $assigner, note: ""}]}')
 
-task_write "$ID" "$JSON"
+if ! task_write "$ID" "$JSON"; then
+  echo "ERROR: task NOT created — ledger write failed for $ID." >&2
+  exit 1
+fi
 
 echo "Created task: $ID"
 echo "  name:     $NAME"

@@ -5,7 +5,7 @@
 #   task-status.sh <id>            # single task detail (incl. deps + flags)
 #   task-status.sh --all           # all tasks
 #   task-status.sh --pending       # status=created
-#   task-status.sh --mine          # tasks where assigner=current pane
+#   task-status.sh --mine          # tasks where current pane is assigner, assignee, or reviewer
 #   task-status.sh --by-stage      # non-done tasks grouped by stage
 #   task-status.sh --by-workflow   # tasks grouped by meta.workflow_id
 #   task-status.sh --workflow ID   # tasks in one workflow
@@ -153,7 +153,6 @@ shown=0
 for f in "${files[@]}"; do
   row=$(jq -r '[.id, .status, (.stage // "-"), .assigner, (.assignee // "-"), .name, .updated_at] | @tsv' "$f" 2>/dev/null) || continue
   status=$(printf '%s' "$row" | cut -f2)
-  assigner=$(printf '%s' "$row" | cut -f4)
   case "$FILTER" in
     active)
       [[ "$status" == "created" || "$status" == "assigned" || "$status" == "review" ]] || continue
@@ -162,7 +161,9 @@ for f in "${files[@]}"; do
       [[ "$status" == "created" ]] || continue
       ;;
     mine)
-      [[ "$assigner" == "$ME" ]] || continue
+      # Any role: tasks I created, am executing, or am reviewing (shared
+      # contract with the Codex side).
+      jq -e --arg me "$ME" '.assigner == $me or .assignee == $me or .reviewer == $me' "$f" >/dev/null 2>&1 || continue
       ;;
     workflow)
       wf=$(jq -r '.meta.workflow_id // ""' "$f" 2>/dev/null)

@@ -24,6 +24,7 @@ Otherwise render the tab-separated rows above as a markdown table:
 
 - Flags: `OVERDUE` = past `eta_at`; `STALE` = assigned/review with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) minutes; `-` = none.
 - Default filter shows active tasks (`created`, `assigned`, `review`).
+- `--pending` = `created` only (not yet assigned). `--mine` = tasks where the current pane is the assigner, the assignee, **or** the reviewer (same on the Codex side).
 - `--workflow ID` shows every task grouped under that workflow id (set via `/task-new --workflow` or `/task-assign --workflow`).
 - Append the count line at the bottom.
 - Suggest `/task-status <id>` for full detail and `/task-board` for the stage-grouped dashboard.

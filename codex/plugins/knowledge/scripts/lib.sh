@@ -222,9 +222,8 @@ _context_validate_directory() {
 }
 
 context_safe_file_mode() {
-  # Scheduler auto-contexts are intentionally immutable at 0400. Preserve only
-  # that exact mode; normalize every other legacy regular file to 0600 so modes
-  # such as 0000, 0100, 0500, and 0700 cannot survive merely by ending in 00.
+  # Normalize every regular context file to 0600, including legacy read-only
+  # snapshots. Scheduler handoffs live in the scheduler's own store.
   local path="$1" raw_mode
   raw_mode=$(_context_path_mode "$path") || {
     _context_path_exists "$path" || return 2
@@ -237,11 +236,7 @@ context_safe_file_mode() {
       return 1
       ;;
   esac
-  if [ "$raw_mode" = "400" ]; then
-    printf '400\n'
-  else
-    printf '600\n'
-  fi
+  printf '600\n'
 }
 
 ensure_context_regular_file() {

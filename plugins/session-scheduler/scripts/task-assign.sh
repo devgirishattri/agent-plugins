@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # task-assign.sh — assign a task to a pane and dispatch via session-chat.
-# Usage: task-assign.sh <pane> <id> [--eta MINUTES] [--stage NAME] [--context NAME] [--force] <prompt-text>
+# Usage: task-assign.sh <pane> <id> [--eta MINUTES] [--stage NAME] [--context NAME|auto] [--reviewer PANE] [--workflow ID] [--force] <prompt-text>
 # Flags must come before the prompt text.
 set -uo pipefail
 
@@ -9,9 +9,20 @@ source "$(dirname "$0")/lib.sh"
 require_jq || exit 1
 ensure_dirs || exit 1
 
+USAGE="Usage: task-assign.sh <pane> <id> [--eta MINUTES] [--stage NAME] [--context NAME|auto] [--reviewer PANE] [--workflow ID] [--force] <prompt-text>"
+
 PANE="${1:-}"
 ID="${2:-}"
 shift 2 2>/dev/null || true
+
+# A value-taking flag with nothing after it must error, not spin: under
+# `set -u` a failed `shift 2` leaves "$@" unchanged and the loop never ends.
+need_value() {
+  if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+    echo "ERROR: $1 requires a value. $USAGE" >&2
+    exit 1
+  fi
+}
 
 ETA_MIN=""
 STAGE=""
@@ -20,11 +31,11 @@ REVIEWER=""
 WORKFLOW=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --eta)      ETA_MIN="${2:-}"; shift 2 ;;
-    --stage)    STAGE="${2:-}"; shift 2 ;;
-    --context)  CONTEXT="${2:-}"; shift 2 ;;
-    --reviewer) REVIEWER="${2:-}"; shift 2 ;;
-    --workflow|--workflow-id) WORKFLOW="${2:-}"; shift 2 ;;
+    --eta)      need_value "$@"; ETA_MIN="$2"; shift 2 ;;
+    --stage)    need_value "$@"; STAGE="$2"; shift 2 ;;
+    --context)  need_value "$@"; CONTEXT="$2"; shift 2 ;;
+    --reviewer) need_value "$@"; REVIEWER="$2"; shift 2 ;;
+    --workflow|--workflow-id) need_value "$@"; WORKFLOW="$2"; shift 2 ;;
     --force)    SESSION_SCHEDULER_FORCE=1; export SESSION_SCHEDULER_FORCE; shift ;;
     *)          break ;;
   esac
@@ -32,7 +43,7 @@ done
 PROMPT_TEXT="${*:-}"
 
 if [ -z "$PANE" ] || [ -z "$ID" ] || [ -z "$PROMPT_TEXT" ]; then
-  echo "ERROR: Usage: task-assign.sh <pane> <id> [--eta MINUTES] [--stage NAME] [--context NAME] [--reviewer PANE] [--workflow ID] [--force] <prompt-text>" >&2
+  echo "ERROR: $USAGE" >&2
   exit 1
 fi
 
@@ -55,7 +66,7 @@ if [ -n "$STAGE" ]; then
 fi
 
 # Pre-flight: status transition must be legal (or forced) BEFORE we touch the
-# prompt file or dispatch anything.
+# prompt file or dispatch anything. (Re-checked inside the lock at commit time.)
 CURRENT_STATUS=$(task_get "$ID" '.status')
 if ! transition_allowed "$CURRENT_STATUS" "assigned" && ! scheduler_force_enabled; then
   echo "ERROR: illegal status transition '$CURRENT_STATUS' -> 'assigned' for task $ID." >&2
@@ -75,56 +86,41 @@ if [ -n "$UNMET" ] && ! scheduler_force_enabled; then
   exit 1
 fi
 
-# Pre-flight: resolve the context snapshot before any side effects.
-# --context auto is a special value: instead of requiring a pre-existing
-# snapshot, the assignment generates a private, immutable handoff derived purely
-# from data this script already holds (the approved prompt + ledger state) — no
-# live-session summarization, so it is safe to produce from a shell script. The
-# generated file is written below (after the prompt is known) and removed on
-# dispatch rollback. CONTEXT_NAME is what the executor actually loads.
+# Pre-flight: resolve the context attachment before any side effects.
+#   --context NAME  attaches an existing knowledge context snapshot
+#                   ($SESSION_CONTEXT_HOME/NAME.md); the executor loads it with
+#                   /knowledge:context-load NAME.
+#   --context auto  generates a scheduler-owned handoff derived purely from
+#                   data this script already holds (the approved prompt + ledger
+#                   state) under $SESSION_SCHEDULER_HOME/handoffs/<id>/<nonce>.md.
+#                   It never touches the knowledge context store and does not
+#                   need SESSION_CONTEXT_HOME. Written below (after the prompt is
+#                   known) and removed on dispatch rollback.
 CONTEXT_FILE=""
 AUTO_CONTEXT=0
-CONTEXT_NAME="$CONTEXT"
 CONTEXT_DIR=""
-if [ -n "$CONTEXT" ]; then
-  # Validate an explicit name before resolving the store, so a name the context
-  # store could never hold is reported as such. `auto` is the sole
-  # scheduler-owned sentinel, not a snapshot name.
-  if [ "$CONTEXT" != "auto" ]; then
-    validate_context_name "$CONTEXT" || exit 1
+HANDOFF_FILE=""
+HANDOFF_TASK_DIR=""
+HANDOFF_DIR_PREEXISTED=0
+if [ "$CONTEXT" = "auto" ]; then
+  AUTO_CONTEXT=1
+  HANDOFF_NONCE=$(generate_context_nonce) || exit 1
+  HANDOFF_TASK_DIR=$(handoff_dir "$ID")
+  [ -d "$HANDOFF_TASK_DIR" ] && HANDOFF_DIR_PREEXISTED=1
+  HANDOFF_FILE="$HANDOFF_TASK_DIR/$HANDOFF_NONCE.md"
+  if [ -e "$HANDOFF_FILE" ]; then
+    echo "ERROR: handoff file $HANDOFF_FILE already exists; handoffs are never overwritten." >&2
+    exit 1
   fi
+elif [ -n "$CONTEXT" ]; then
+  validate_context_name "$CONTEXT" || exit 1
   CONTEXT_DIR="$(resolve_contexts_dir)" || exit 1
-  if [ "$CONTEXT" = "auto" ]; then
-    AUTO_CONTEXT=1
-    # Unique per assignment so the handoff is genuinely immutable: a later
-    # (re)assignment mints a NEW file rather than overwriting a prior one that a
-    # reviewer/executor may still be reading. The random suffix also means we
-    # never clobber an existing snapshot.
-    # The stem must be canonical snake_case or the knowledge context store will
-    # refuse to load (and will flag) the file we just wrote. It must also be
-    # date-free — knowledge keeps dates/datetimes in metadata, never in a
-    # current snapshot filename — so the name is a fixed semantic prefix plus an
-    # entropy-only nonce, with no task id, timestamp, or value derived from
-    # either. The task association lives in the handoff body and meta.context.
-    CONTEXT_NONCE=$(generate_context_nonce) || exit 1
-    CONTEXT_NAME="auto_handoff_${CONTEXT_NONCE}"
-    if ! validate_context_name "$CONTEXT_NAME"; then
-      echo "  (generated auto-handoff name; report this as a session-scheduler bug)" >&2
-      exit 1
-    fi
-    CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT_NAME.md"
-    if [ -e "$CONTEXT_FILE" ]; then
-      echo "ERROR: auto-context file $CONTEXT_FILE already exists; refusing to overwrite an immutable handoff." >&2
-      exit 1
-    fi
-  else
-    CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
-    if [ ! -f "$CONTEXT_FILE" ]; then
-      echo "ERROR: context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2
-      echo "  Generate it first with /knowledge:context-generate $CONTEXT," >&2
-      echo "  or use --context auto to derive an immutable handoff from this task." >&2
-      exit 1
-    fi
+  CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
+  if [ ! -f "$CONTEXT_FILE" ]; then
+    echo "ERROR: context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2
+    echo "  Generate it first with /knowledge:context-generate $CONTEXT," >&2
+    echo "  or use --context auto to derive a scheduler-owned handoff from this task." >&2
+    exit 1
   fi
 fi
 
@@ -138,8 +134,11 @@ PROMPT_FILE=$(prompt_path "$ID")
 # if the executor's inherited value is absent or different, it must request a
 # relaunch rather than derive another ledger.
 SCHED_HOME_ABS=$(abs_dir "$SCHEDULER_DIR")
+HANDOFF_HOME_ABS=$(abs_dir "$HANDOFFS_DIR")
 CTX_HOME_ABS=""
-[ -n "$CONTEXT" ] && CTX_HOME_ABS=$(abs_dir "$CONTEXT_DIR")
+[ -n "$CONTEXT_DIR" ] && CTX_HOME_ABS=$(abs_dir "$CONTEXT_DIR")
+HANDOFF_FILE_ABS=""
+[ "$AUTO_CONTEXT" = "1" ] && HANDOFF_FILE_ABS="$HANDOFF_HOME_ABS/$ID/$HANDOFF_NONCE.md"
 
 # If the prompt file already exists (reassignment), back it up so we can
 # restore it on dispatch failure; if it's new, delete it on dispatch failure.
@@ -160,10 +159,13 @@ restore_prompt_on_failure() {
   else
     rm -f "$PROMPT_FILE"
   fi
-  # An auto handoff generated for THIS assignment is an artifact of a dispatch
-  # that never landed; remove it so a rolled-back assign leaves nothing behind.
-  # (chmod 400 doesn't block owner rm in a writable dir.)
-  [ "$AUTO_CONTEXT" = "1" ] && rm -f "$CONTEXT_FILE" 2>/dev/null
+  # A handoff generated for THIS assignment is an artifact of a dispatch that
+  # never landed; remove it (and the per-task dir if we created it) so a
+  # rolled-back assign leaves nothing behind.
+  if [ "$AUTO_CONTEXT" = "1" ]; then
+    rm -f "$HANDOFF_FILE" 2>/dev/null
+    [ "$HANDOFF_DIR_PREEXISTED" -eq 0 ] && rmdir "$HANDOFF_TASK_DIR" 2>/dev/null
+  fi
 }
 
 # Build the executor prompt with task header + reply instructions.
@@ -222,34 +224,63 @@ Reviewer: ${REVIEWER} — on /task-review this task is auto-dispatched to them f
 EOF
 fi
 
-# Generate the immutable auto handoff (derived from the approved prompt + ledger
-# state) before dispatch, so a rollback can remove it. Owner read-only (0400)
-# marks it immutable; the name is unique per assignment and preflight already
-# refused to overwrite an existing file, so we never clobber a prior handoff.
+# Generate the auto handoff (derived from the approved prompt + ledger state)
+# before dispatch, so a rollback can remove it. The nonce is unique per
+# assignment and preflight already refused an existing path, so a prior
+# handoff is never overwritten. Body layout is provider-shared (Codex emits the
+# identical sections).
 if [ "$AUTO_CONTEXT" = "1" ]; then
-  mkdir -p "$CONTEXT_DIR" 2>/dev/null || true
-  cat > "$CONTEXT_FILE" <<EOF
+  if ! mkdir -p "$HANDOFF_TASK_DIR" 2>/dev/null; then
+    restore_prompt_on_failure
+    echo "ERROR: could not create handoff dir $HANDOFF_TASK_DIR." >&2
+    exit 1
+  fi
+  HO_STAGE="$STAGE"
+  [ -z "$HO_STAGE" ] && HO_STAGE=$(task_get "$ID" '.stage // empty')
+  HO_REVIEWER="$REVIEWER"
+  [ -z "$HO_REVIEWER" ] && HO_REVIEWER=$(task_get "$ID" '.reviewer // empty')
+  HO_WORKFLOW="$WORKFLOW"
+  [ -z "$HO_WORKFLOW" ] && HO_WORKFLOW=$(task_get "$ID" '.meta.workflow_id // empty')
+  HO_DEPS=$(task_get "$ID" '(.depends_on // []) | join(", ")')
+  if ! cat > "$HANDOFF_FILE" <<EOF
 # Auto handoff — task ${ID}: ${NAME}
 
-Immutable snapshot generated by \`/task-assign --context auto\` at dispatch time,
-from the approved prompt and ledger state (no live-session summarization). Load
-with: /knowledge:context-load ${CONTEXT_NAME}
+Generated by \`/task-assign --context auto\` at dispatch time from the approved
+prompt and ledger state (no live-session summarization). Never overwritten:
+each assignment writes a new file.
 
 ## Task
 - id: ${ID}
 - name: ${NAME}
-- stage: ${STAGE:-(unset)}
+- status before assignment: ${CURRENT_STATUS}
+- stage: ${HO_STAGE:-(unset)}
 - assigner: ${ASSIGNER}
 - assignee: ${PANE}
+- reviewer: ${HO_REVIEWER:-(none)}
+- workflow: ${HO_WORKFLOW:-(none)}
+- depends_on: ${HO_DEPS:-(none)}
 - shared ledger: ${SCHED_HOME_ABS}
 
 ## Dispatched prompt
 ${PROMPT_TEXT}
 EOF
-  chmod 400 "$CONTEXT_FILE" 2>/dev/null || true
+  then
+    restore_prompt_on_failure
+    echo "ERROR: could not write handoff file $HANDOFF_FILE." >&2
+    exit 1
+  fi
+  chmod 600 "$HANDOFF_FILE" 2>/dev/null || true
+
+  cat >> "$PROMPT_FILE" <<EOF
+
+## Handoff
+Auto handoff (read it first): ${HANDOFF_FILE_ABS}
+It lives under the shared scheduler home above; the same inherited-environment
+contract applies. Read the file directly — it is not a knowledge context snapshot.
+EOF
 fi
 
-if [ -n "$CONTEXT" ]; then
+if [ -n "$CONTEXT_DIR" ]; then
   cat >> "$PROMPT_FILE" <<EOF
 
 ## Context
@@ -259,8 +290,8 @@ startup — the environment contract above applies to it as well. If it is
 absent or differs, stop and request a relaunch instead of deriving another
 context store.
 Load the shared context first (form for your runtime):
-  Claude: /knowledge:context-load ${CONTEXT_NAME}
-  Codex:  \$knowledge:context-load ${CONTEXT_NAME}
+  Claude: /knowledge:context-load ${CONTEXT}
+  Codex:  \$knowledge:context-load ${CONTEXT}
 EOF
 fi
 
@@ -280,17 +311,25 @@ if [ -n "$ETA_MIN" ]; then
   fi
 fi
 
+# ONE locked mutation: metadata update + status flip. The lock is taken only
+# now — after transport — so a busy-pane dispatch never holds the task lock.
+if ! task_lock "$ID"; then
+  echo "ERROR: dispatch succeeded but the ledger for $ID could not be locked. Inspect $(task_path "$ID")." >&2
+  exit 1
+fi
 CURRENT_JSON=$(cat "$(task_path "$ID")")
 UPDATED_JSON=$(printf '%s' "$CURRENT_JSON" | jq \
   --arg assignee "$PANE" \
   --arg prompt_file "$PROMPT_FILE" \
   --arg eta "$ETA_AT" \
   --arg stage "$STAGE" \
-  --arg ctx "$CONTEXT_NAME" \
+  --arg ctx "$CONTEXT" \
+  --arg ctx_home "$CTX_HOME_ABS" \
+  --arg handoff_file "$HANDOFF_FILE_ABS" \
+  --arg handoff_home "$HANDOFF_HOME_ABS" \
   --arg reviewer "$REVIEWER" \
   --arg workflow "$WORKFLOW" \
   --arg sched_home "$SCHED_HOME_ABS" \
-  --arg ctx_home "$CTX_HOME_ABS" \
   '.assignee = $assignee
    | .prompt_file = $prompt_file
    | .meta.scheduler_home = $sched_home
@@ -299,18 +338,26 @@ UPDATED_JSON=$(printf '%s' "$CURRENT_JSON" | jq \
    | with_entries(select((.key | startswith("review_")) | not))
    | (if $eta != "" then .eta_at = $eta else . end)
    | (if $stage != "" then .stage = $stage else . end)
-   | (if $ctx != "" then .meta.context = $ctx else . end)
-   | (if $ctx_home != "" then .meta.context_home = $ctx_home else . end)
+   | (if $handoff_file != ""
+      then .meta.handoff_file = $handoff_file | .meta.handoff_home = $handoff_home
+           | del(.meta.context, .meta.context_home)
+      elif $ctx != ""
+      then .meta.context = $ctx | .meta.context_home = $ctx_home
+           | del(.meta.handoff_file, .meta.handoff_home)
+      else del(.meta.context, .meta.context_home, .meta.handoff_file, .meta.handoff_home) end)
    | (if $reviewer != "" then .reviewer = $reviewer else . end)
    | (if $workflow != "" then .meta.workflow_id = $workflow else . end)')
 if ! task_write "$ID" "$UPDATED_JSON"; then
+  task_unlock "$ID"
   echo "ERROR: dispatch succeeded but ledger update failed for $ID. Inspect $(task_path "$ID")." >&2
   exit 1
 fi
-if ! task_set_status "$ID" "assigned" "$ASSIGNER" "dispatched to $PANE"; then
+if ! task_set_status_unlocked "$ID" "assigned" "$ASSIGNER" "dispatched to $PANE"; then
+  task_unlock "$ID"
   echo "ERROR: dispatch succeeded but status update failed for $ID. Inspect $(task_path "$ID")." >&2
   exit 1
 fi
+task_unlock "$ID"
 
 echo "Assigned task $ID ($NAME) to $PANE."
 echo "  prompt:   $PROMPT_FILE"
@@ -318,7 +365,8 @@ echo "  status:   assigned"
 echo "  ledger:   $SCHED_HOME_ABS"
 [ -n "$STAGE" ]    && echo "  stage:    $STAGE"
 [ -n "$ETA_AT" ]   && echo "  eta:      $ETA_AT (${ETA_MIN}m)"
-[ -n "$CONTEXT" ]  && echo "  context:  $CONTEXT_NAME$([ "$AUTO_CONTEXT" = "1" ] && echo ' (auto, immutable)')"
+[ "$AUTO_CONTEXT" = "1" ] && echo "  handoff:  $HANDOFF_FILE_ABS"
+[ -n "$CONTEXT_DIR" ] && echo "  context:  $CONTEXT"
 [ -n "$REVIEWER" ] && echo "  reviewer: $REVIEWER (auto-dispatched on /task-review)"
 [ -n "$WORKFLOW" ] && echo "  workflow: $WORKFLOW"
 echo

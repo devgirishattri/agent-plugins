@@ -70,8 +70,16 @@ assert_provider_neutral_packet() {
   context_home_abs=$(cd "$SESSION_CONTEXT_HOME" && pwd -P)
   grep -F "Shared scheduler home (provenance): $scheduler_home_abs" "$packet" >/dev/null \
     || fail "$label packet missing exact canonical scheduler home provenance"
-  grep -F "Shared context home (provenance): $context_home_abs" "$packet" >/dev/null \
-    || fail "$label packet missing exact canonical context home provenance"
+  # Only an EXPLICIT --context NAME attachment references the knowledge store;
+  # --context auto packets must not (their handoff lives under the scheduler home).
+  if [ "${3:-}" = "explicit" ]; then
+    grep -F "Shared context home (provenance): $context_home_abs" "$packet" >/dev/null \
+      || fail "$label packet missing exact canonical context home provenance"
+  else
+    if grep -F "Shared context home (provenance):" "$packet" >/dev/null; then
+      fail "$label packet references the knowledge context home without an explicit --context NAME"
+    fi
+  fi
   grep -F "inherited" "$packet" >/dev/null \
     || fail "$label packet missing inherited-environment guidance"
   grep -F "relaunch" "$packet" >/dev/null \
@@ -97,36 +105,46 @@ assert_provider_neutral_packet() {
     || fail "$label packet missing Codex block command"
   grep -F '/session-scheduler:task-block' "$packet" >/dev/null \
     || fail "$label packet missing Claude block command"
-  grep -F '$knowledge:context-load' "$packet" >/dev/null \
-    || fail "$label packet missing Codex context-load command"
-  grep -F '/knowledge:context-load' "$packet" >/dev/null \
-    || fail "$label packet missing Claude context-load command"
+  if [ "${3:-}" = "explicit" ]; then
+    grep -F '$knowledge:context-load' "$packet" >/dev/null \
+      || fail "$label packet missing Codex context-load command"
+    grep -F '/knowledge:context-load' "$packet" >/dev/null \
+      || fail "$label packet missing Claude context-load command"
+  else
+    if grep -F 'knowledge:context-load' "$packet" >/dev/null; then
+      fail "$label packet tells the executor to context-load a scheduler handoff"
+    fi
+    grep -F "Auto handoff (read it first): $scheduler_home_abs/handoffs/" "$packet" >/dev/null \
+      || fail "$label packet missing the absolute scheduler-owned handoff path"
+  fi
 }
 
-# Scheduler-generated handoffs are consumed through the shared knowledge store,
-# so verify the producer's recorded dynamic name with both provider helpers.
+# --context auto handoffs are SCHEDULER-owned: handoffs/<id>/<32-hex>.md under
+# the shared scheduler home, recorded as meta.handoff_file/meta.handoff_home,
+# 0600, never in the knowledge context store, and never overwritten (each
+# assignment adds a file). The body layout is provider-shared.
 assert_scheduler_auto_context_consumable() {
-  local task_file="$1" label="$2" context listed
-  context=$(jq -r '.meta.context // empty' "$task_file")
-  [ -n "$context" ] || fail "$label did not record meta.context"
-  printf '%s\n' "$context" | grep -Eq '^auto_handoff_[0-9a-f]{32}$' \
-    || fail "$label generated context name outside auto_handoff_<32-hex> contract: $context"
-  [ -f "$SESSION_CONTEXT_HOME/$context.md" ] \
-    || fail "$label generated context file is missing: $context"
-
-  for provider in claude codex; do
-    if [ "$provider" = "claude" ]; then
-      knowledge_scripts="$ROOT/plugins/knowledge/scripts"
-    else
-      knowledge_scripts="$ROOT/codex/plugins/knowledge/scripts"
-    fi
-    listed=$(SESSION_CONTEXT_HOME="$SESSION_CONTEXT_HOME" bash "$knowledge_scripts/list-contexts.sh") \
-      || fail "$label: $provider knowledge list failed for $context"
-    printf '%s\n' "$listed" | grep -Eq "^${context}[[:space:]]" \
-      || fail "$label: $provider knowledge list omitted $context"
-    SESSION_CONTEXT_HOME="$SESSION_CONTEXT_HOME" bash "$knowledge_scripts/load-context.sh" "$context" \
-      > "$TMP/${label//[^a-zA-Z0-9]/_}-${provider}-load.out" \
-      || fail "$label: $provider knowledge load failed for $context"
+  local task_file="$1" label="$2" id handoff home expect_dir nonce mode
+  id=$(jq -r '.id' "$task_file")
+  handoff=$(jq -r '.meta.handoff_file // empty' "$task_file")
+  home=$(jq -r '.meta.handoff_home // empty' "$task_file")
+  [ -n "$handoff" ] || fail "$label did not record meta.handoff_file"
+  expect_dir="$(cd "$SESSION_SCHEDULER_HOME" && pwd -P)/handoffs"
+  [ "$home" = "$expect_dir" ] || fail "$label recorded meta.handoff_home outside the scheduler home: $home"
+  [ "$(dirname "$handoff")" = "$expect_dir/$id" ] || fail "$label handoff is not under handoffs/<id>/: $handoff"
+  nonce=$(basename "$handoff" .md)
+  printf '%s\n' "$nonce" | grep -Eq '^[0-9a-f]{32}$' || fail "$label handoff name is not a 32-hex nonce: $nonce"
+  [ -f "$handoff" ] || fail "$label handoff file is missing: $handoff"
+  mode=$(stat -c '%a' "$handoff" 2>/dev/null || stat -f '%Lp' "$handoff" 2>/dev/null)
+  [ "$mode" = "600" ] || fail "$label handoff mode is $mode, expected 600"
+  [ "$(jq -r '.meta.context // "absent"' "$task_file")" = "absent" ] \
+    || fail "$label auto assignment set meta.context (knowledge store key)"
+  # parity_ctx.md is this gate's own explicit-context fixture; anything else new is a leak.
+  [ -z "$(find "$SESSION_CONTEXT_HOME" -maxdepth 1 -name '*.md' ! -name 'parity_ctx.md' -newer "$TMP/.parity-start" 2>/dev/null)" ] \
+    || fail "$label wrote into the knowledge context store"
+  for line in "# Auto handoff — task $id:" "## Task" "- id: $id" "- status before assignment:" \
+              "- shared ledger: $(cd "$SESSION_SCHEDULER_HOME" && pwd -P)" "## Dispatched prompt"; do
+    grep -F -- "$line" "$handoff" >/dev/null || fail "$label handoff body missing '$line'"
   done
 }
 
@@ -137,6 +155,7 @@ export SESSION_SCHEDULER_HOME="$TMP/shared scheduler's ledger"
 export SESSION_CONTEXT_HOME="$TMP/shared context's store"
 export SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat"
 mkdir -p "$SESSION_CHAT_ROOT_OVERRIDE/.codex-plugin" "$SESSION_CHAT_ROOT_OVERRIDE/scripts" "$SESSION_CONTEXT_HOME"
+: > "$TMP/.parity-start"
 printf '{"name":"session-chat","version":"0.17.0"}\n' > "$SESSION_CHAT_ROOT_OVERRIDE/.codex-plugin/plugin.json"
 
 printf '%s\n' '#!/usr/bin/env bash' 'if [ "${PARITY_DISPATCH_FAIL:-0}" = "1" ]; then exit 1; fi' \
@@ -229,6 +248,8 @@ bash "$CLAUDE_SCRIPTS/task-block.sh" "$CODEX_ID" "changes requested after retry"
 bash "$CODEX_SCRIPTS/task-assign.sh" parity-worker "$CODEX_ID" --context auto \
   "Codex reassigns after Claude review retry" >/dev/null
 assert_scheduler_auto_context_consumable "$CODEX_FILE" "Codex reassignment auto context"
+[ "$(find "$SESSION_SCHEDULER_HOME/handoffs/$CODEX_ID" -name '*.md' | wc -l | tr -d ' ')" = "2" ] \
+  || fail "reassignment did not keep the prior handoff (handoffs are never overwritten)"
 jq -e '
   .status == "assigned"
 ' "$CODEX_FILE" >/dev/null || fail "Codex did not reassign the Claude-reviewed task"
@@ -564,6 +585,106 @@ for provider in claude codex; do
     > "$TMP/${provider}-reply-invalid.out" 2>&1; then
     fail "$provider reply helper accepted a malformed id"
   fi
+done
+
+# --- 0.6.0 contract: shared literals, explicit-context packets, retry notes, no context home ---
+# Canonical snapshot-name regex must be byte-identical across all four libs.
+regex_lines=$(grep -hoE "(SESSION_SCHEDULER|KNOWLEDGE)_CANONICAL_NAME_REGEX='[^']*'" \
+  "$ROOT/plugins/session-scheduler/scripts/lib.sh" "$ROOT/codex/plugins/session-scheduler/scripts/lib.sh" \
+  "$ROOT/plugins/knowledge/scripts/lib.sh" "$ROOT/codex/plugins/knowledge/scripts/lib.sh" \
+  | sed -E "s/^[A-Z_]+=//" | sort -u)
+[ "$(printf '%s\n' "$regex_lines" | wc -l | tr -d ' ')" = "1" ] \
+  || fail "canonical-name regex differs across scheduler/knowledge libs: $regex_lines"
+# Cross-provider lock exclusion must be REAL, not a shared literal: a lock held
+# under one provider's path must block the other provider's mutation (and the
+# same call succeeds once released). Both directions.
+lock_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "lock parity")
+LOCK_ID=$(printf '%s\n' "$lock_created" | grep -oE '[a-f0-9]{8}' | head -1)
+for provider in claude codex; do
+  [ "$provider" = "claude" ] && scripts="$CLAUDE_SCRIPTS" || scripts="$CODEX_SCRIPTS"
+  mkdir -p "$SESSION_SCHEDULER_HOME/locks/$LOCK_ID.lock"
+  printf '%s\n' "$$" > "$SESSION_SCHEDULER_HOME/locks/$LOCK_ID.lock/pid"
+  if SESSION_SCHEDULER_LOCK_TIMEOUT_SECS=1 bash "$scripts/task-block.sh" "$LOCK_ID" "$provider must wait" >/dev/null 2>&1; then
+    fail "$provider task-block ignored a live lock held under the shared locks/ path"
+  fi
+  [ "$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$LOCK_ID.json")" = "created" ] \
+    || fail "$provider mutated a task while its lock was held"
+  rm -rf "$SESSION_SCHEDULER_HOME/locks/$LOCK_ID.lock"
+  bash "$scripts/task-block.sh" "$LOCK_ID" "$provider proceeds" >/dev/null 2>&1 \
+    || fail "$provider task-block failed after the lock was released"
+  [ "$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$LOCK_ID.json")" = "blocked" ] \
+    || fail "$provider task-block did not land after the lock was released"
+  [ ! -e "$SESSION_SCHEDULER_HOME/locks/$LOCK_ID.lock" ] || fail "$provider left its lock behind"
+  bash "$CLAUDE_SCRIPTS/task-assign.sh" parity-worker "$LOCK_ID" "reset for next provider" >/dev/null 2>&1
+  jq '.status = "created"' "$SESSION_SCHEDULER_HOME/tasks/$LOCK_ID.json" > "$TMP/lock-reset.json" \
+    && mv "$TMP/lock-reset.json" "$SESSION_SCHEDULER_HOME/tasks/$LOCK_ID.json"
+done
+# A stale lock (dead holder) is reclaimed by either provider.
+for provider in claude codex; do
+  [ "$provider" = "claude" ] && scripts="$CLAUDE_SCRIPTS" || scripts="$CODEX_SCRIPTS"
+  mkdir -p "$SESSION_SCHEDULER_HOME/locks/$LOCK_ID.lock"
+  printf '%s\n' "999999" > "$SESSION_SCHEDULER_HOME/locks/$LOCK_ID.lock/pid"
+  bash "$scripts/task-block.sh" "$LOCK_ID" "$provider reclaims" >/dev/null 2>&1 \
+    || fail "$provider could not reclaim a stale lock"
+  [ ! -e "$SESSION_SCHEDULER_HOME/locks/$LOCK_ID.lock" ] || fail "$provider left a reclaimed lock behind"
+  jq '.status = "created"' "$SESSION_SCHEDULER_HOME/tasks/$LOCK_ID.json" > "$TMP/lock-reset.json" \
+    && mv "$TMP/lock-reset.json" "$SESSION_SCHEDULER_HOME/tasks/$LOCK_ID.json"
+done
+
+# Explicit --context NAME still goes through the knowledge store, from either provider.
+printf 'shared snapshot\n' > "$SESSION_CONTEXT_HOME/parity_ctx.md"
+explicit_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "explicit context task")
+EXPLICIT_ID=$(printf '%s\n' "$explicit_created" | grep -oE '[a-f0-9]{8}' | head -1)
+bash "$CODEX_SCRIPTS/task-assign.sh" parity-worker "$EXPLICIT_ID" --context parity_ctx "Codex explicit context" >/dev/null \
+  || fail "Codex could not assign with an explicit context"
+assert_provider_neutral_packet "$SESSION_SCHEDULER_HOME/prompts/$EXPLICIT_ID.md" "Codex explicit-context assignment" explicit
+[ "$(jq -r '.meta.context' "$SESSION_SCHEDULER_HOME/tasks/$EXPLICIT_ID.json")" = "parity_ctx" ] \
+  || fail "Codex explicit context not recorded as meta.context"
+bash "$CLAUDE_SCRIPTS/task-assign.sh" parity-worker "$EXPLICIT_ID" --context parity_ctx "Claude explicit context" >/dev/null \
+  || fail "Claude could not reassign with an explicit context"
+assert_provider_neutral_packet "$SESSION_SCHEDULER_HOME/prompts/$EXPLICIT_ID.md" "Claude explicit-context assignment" explicit
+[ "$(jq -r '.meta.handoff_file // "absent"' "$SESSION_SCHEDULER_HOME/tasks/$EXPLICIT_ID.json")" = "absent" ] \
+  || fail "explicit context assignment left a handoff key behind"
+
+# --context auto needs NO context home on either provider.
+for provider in claude codex; do
+  [ "$provider" = "claude" ] && scripts="$CLAUDE_SCRIPTS" || scripts="$CODEX_SCRIPTS"
+  nc_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "$provider no-context-home task")
+  NC_ID=$(printf '%s\n' "$nc_created" | grep -oE '[a-f0-9]{8}' | head -1)
+  env -u SESSION_CONTEXT_HOME bash "$scripts/task-assign.sh" parity-worker "$NC_ID" --context auto "$provider auto without context home" >/dev/null \
+    || fail "$provider --context auto required SESSION_CONTEXT_HOME"
+  assert_scheduler_auto_context_consumable "$SESSION_SCHEDULER_HOME/tasks/$NC_ID.json" "$provider auto without context home"
+  env -u SESSION_CONTEXT_HOME bash "$scripts/task-assign.sh" parity-worker "$NC_ID" "$provider plain reassignment" >/dev/null \
+    || fail "$provider plain assignment required SESSION_CONTEXT_HOME"
+  jq -e '(.meta.handoff_file // null) == null and (.meta.context // null) == null' "$SESSION_SCHEDULER_HOME/tasks/$NC_ID.json" >/dev/null \
+    || fail "$provider no-attachment reassignment kept a stale attachment key"
+done
+
+# Review retry from the OTHER provider reuses the original note in the packet.
+rn_created=$(bash "$CODEX_SCRIPTS/task-new.sh" "retry note parity" --reviewer parity-reviewer)
+RN_ID=$(printf '%s\n' "$rn_created" | grep -oE 'task-[a-zA-Z0-9_.-]+' | head -1)
+bash "$CLAUDE_SCRIPTS/task-assign.sh" parity-worker "$RN_ID" "work" >/dev/null
+PARITY_DISPATCH_FAIL=1 bash "$CLAUDE_SCRIPTS/task-review.sh" "$RN_ID" "sha-parity-original" >/dev/null 2>&1
+bash "$CODEX_SCRIPTS/task-review.sh" "$RN_ID" "codex retry typo" >/dev/null 2>&1 || fail "Codex retry of a Claude review failed"
+grep -F "sha-parity-original" "$SESSION_SCHEDULER_HOME/prompts/${RN_ID}-review.md" >/dev/null \
+  || fail "Codex retry packet lost the original Claude review note"
+if grep -F "codex retry typo" "$SESSION_SCHEDULER_HOME/prompts/${RN_ID}-review.md" >/dev/null; then
+  fail "Codex retry packet carries the retry note instead of the original"
+fi
+rn2_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "retry note parity 2" --reviewer parity-reviewer)
+RN2_ID=$(printf '%s\n' "$rn2_created" | grep -oE '[a-f0-9]{8}' | head -1)
+bash "$CODEX_SCRIPTS/task-assign.sh" parity-worker "$RN2_ID" "work" >/dev/null
+PARITY_DISPATCH_FAIL=1 bash "$CODEX_SCRIPTS/task-review.sh" "$RN2_ID" "sha-parity-original-2" >/dev/null 2>&1
+bash "$CLAUDE_SCRIPTS/task-review.sh" "$RN2_ID" "claude retry typo" >/dev/null 2>&1 || fail "Claude retry of a Codex review failed"
+grep -F "sha-parity-original-2" "$SESSION_SCHEDULER_HOME/prompts/${RN2_ID}-review.md" >/dev/null \
+  || fail "Claude retry packet lost the original Codex review note"
+
+# tasks-clean: bare --older-than means DAYS on both providers (a fresh done task survives --older-than 1).
+for provider in claude codex; do
+  [ "$provider" = "claude" ] && scripts="$CLAUDE_SCRIPTS" || scripts="$CODEX_SCRIPTS"
+  bash "$scripts/tasks-clean.sh" --older-than 1 --apply >/dev/null 2>&1 || fail "$provider tasks-clean --older-than 1 failed"
+  [ -f "$SESSION_SCHEDULER_HOME/tasks/$CLAUDE_ID.json" ] \
+    || fail "$provider tasks-clean treated a bare --older-than integer as something shorter than days"
 done
 
 echo "cross-provider scheduler, context, and reply-correlation parity tests passed"

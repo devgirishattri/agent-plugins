@@ -34,7 +34,7 @@
     },
     {
       "name": "session-scheduler",
-      "version": "0.5.14",
+      "version": "0.6.0",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-scheduler"
@@ -48,7 +48,7 @@
     },
     {
       "name": "knowledge",
-      "version": "0.3.16",
+      "version": "0.3.17",
       "source": {
         "source": "local",
         "path": "./codex/plugins/knowledge"

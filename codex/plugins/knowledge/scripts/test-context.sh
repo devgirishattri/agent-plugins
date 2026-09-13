@@ -163,8 +163,8 @@ mixed_versions=$(SESSION_CONTEXT_HOME="$MIXED_STORE" bash "$SCRIPT_DIR/diff-cont
 mixed_first=$(printf '%s\n' "$mixed_versions" | sed -n '2p' | tr -d ' ')
 [ "$mixed_first" = "20260720-100100-0400" ] && ok || fail "history versions are not ordered by instant: $mixed_versions"
 
-# Safe legacy stores migrate to owner-only modes. Exact 0400 auto contexts stay
-# immutable instead of being broadened to 0600.
+# Safe legacy stores migrate to owner-only modes, including 0400 snapshots
+# previously written by the scheduler.
 LEGACY_STORE="$TMP/legacy-contexts"
 mkdir -m 755 "$LEGACY_STORE"
 mkdir -m 755 "$LEGACY_STORE/.history"
@@ -180,7 +180,7 @@ SESSION_CONTEXT_HOME="$LEGACY_STORE" bash "$SCRIPT_DIR/list-contexts.sh" > "$TMP
 assert_mode 700 "$LEGACY_STORE"
 assert_mode 700 "$LEGACY_STORE/.history"
 assert_mode 600 "$LEGACY_STORE/legacy.md"
-assert_mode 400 "$LEGACY_STORE/auto.md"
+assert_mode 600 "$LEGACY_STORE/auto.md"
 assert_mode 600 "$LEGACY_STORE/weird.md"
 assert_mode 600 "$LEGACY_STORE/.history/legacy.20260710-000000Z.md"
 

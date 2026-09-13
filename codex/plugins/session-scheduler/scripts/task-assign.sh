@@ -26,6 +26,10 @@ REVIEWER_OVERRIDE=""
 WORKFLOW_ID_OVERRIDE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --eta|--stage|--context|--reviewer|--workflow|--workflow-id)
+      require_flag_value "$@" || exit 1 ;;
+  esac
+  case "$1" in
     --eta)     ETA_MIN="${2:-}"; shift 2 ;;
     --stage)   STAGE="${2:-}"; shift 2 ;;
     --context) CONTEXT="${2:-}"; shift 2 ;;
@@ -84,68 +88,30 @@ if [ -n "$UNMET" ] && ! scheduler_force_enabled; then
 fi
 
 # Pre-flight: resolve session-chat and the context snapshot before
-# assignment side effects. `--context auto` creates a task-scoped immutable handoff only
+# assignment side effects. `--context auto` creates a task-scoped handoff only
 # after all other pre-flight checks pass.
 CHAT_ROOT=$(session_chat_root) || exit 1
 TASK_NAME=$(jq -r '.name' "$FILE")
 CONTEXT_FILE=""
 AUTO_CONTEXT_FILE=""
-if [ -n "$CONTEXT" ]; then
+if [ -n "$CONTEXT" ] && [ "$CONTEXT" != "auto" ]; then
   # Validate an explicit name before resolving the store or creating any
   # assignment artifacts. `auto` is the sole scheduler-owned sentinel.
   if [ "$CONTEXT" != "auto" ]; then
     validate_context_name "$CONTEXT" || exit 1
   fi
   CONTEXT_DIR="$(resolve_contexts_dir)" || exit 1
-  if [ "$CONTEXT" = "auto" ]; then
-    mkdir -p "$CONTEXT_DIR" || exit 1
-    umask 077
-    # Mint and atomically reserve a new handoff for every assignment. The
-    # random suffix avoids same-second reassignment collisions; noclobber makes
-    # an unlikely collision retry instead of overwriting an immutable snapshot.
-    AUTO_CONTEXT_ATTEMPTS=0
-    while [ "$AUTO_CONTEXT_ATTEMPTS" -lt 100 ]; do
-      AUTO_CONTEXT_NONCE=$(generate_context_nonce) || exit 1
-      CONTEXT="auto_handoff_$AUTO_CONTEXT_NONCE"
-      validate_context_name "$CONTEXT" || {
-        echo "  (generated from OS randomness; report this as a session-scheduler bug)" >&2
-        exit 1
-      }
-      CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
-      if (set -o noclobber; : > "$CONTEXT_FILE") 2>/dev/null; then
-        break
-      fi
-      CONTEXT_FILE=""
-      AUTO_CONTEXT_ATTEMPTS=$((AUTO_CONTEXT_ATTEMPTS + 1))
-    done
-    if [ -z "$CONTEXT_FILE" ]; then
-      echo "ERROR: Could not reserve a unique immutable auto context after 100 attempts." >&2
-      exit 1
-    fi
-    {
-      printf '# Task handoff: %s\n\n' "$TASK_NAME"
-      printf -- '- Task ID: `%s`\n' "$ID"
-      printf -- '- Created: `%s`\n' "$(now_iso)"
-      printf -- '- Assignee: `%s`\n\n' "$ASSIGNEE"
-      printf '## Approved assignment\n\n%s\n' "$PROMPT"
-      printf '\n## Ledger state at handoff\n\n```json\n'
-      jq '{id,name,status,stage,depends_on,meta}' "$FILE"
-      printf '```\n'
-    } > "$CONTEXT_FILE" || { rm -f "$CONTEXT_FILE"; exit 1; }
-    chmod 400 "$CONTEXT_FILE" 2>/dev/null || { rm -f "$CONTEXT_FILE"; exit 1; }
-    AUTO_CONTEXT_FILE="$CONTEXT_FILE"
-  else
-    CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
-    if [ ! -f "$CONTEXT_FILE" ]; then
-      echo "ERROR: Context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2
-      echo "Generate it first with \$knowledge:context-generate $CONTEXT." >&2
-      exit 1
-    fi
+  CONTEXT_FILE="$CONTEXT_DIR/$CONTEXT.md"
+  if [ ! -f "$CONTEXT_FILE" ]; then
+    echo "ERROR: Context snapshot '$CONTEXT' not found at $CONTEXT_FILE." >&2
+    echo "Generate it first with \$knowledge:context-generate $CONTEXT." >&2
+    exit 1
   fi
 fi
 
 ASSIGNER=$(current_pane_name)
-[ -z "$ASSIGNER" ] && ASSIGNER=$(jq -r '.assigner // ""' "$FILE")
+[ -z "$ASSIGNER" ] && ASSIGNER=$(jq -r '.assigner // "?"' "$FILE")
+[ -n "$ASSIGNER" ] || ASSIGNER="?"
 PROMPT_FILE=$(prompt_file "$ID") || exit 1
 REVIEWER=$(jq -r '.reviewer // empty' "$FILE")
 WORKFLOW_ID=$(jq -r '.meta.workflow_id // .workflow_id // empty' "$FILE")
@@ -153,9 +119,8 @@ WORKFLOW_ID=$(jq -r '.meta.workflow_id // .workflow_id // empty' "$FILE")
 [ -n "$WORKFLOW_ID_OVERRIDE" ] && WORKFLOW_ID="$WORKFLOW_ID_OVERRIDE"
 SCHEDULER_HOME_ABS=$(absolute_existing_dir "$SCHEDULER_DIR") || exit 1
 CONTEXT_HOME_ABS=""
-if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
-  mkdir -p "$SESSION_CONTEXT_HOME" || exit 1
-  CONTEXT_HOME_ABS=$(absolute_existing_dir "$SESSION_CONTEXT_HOME") || exit 1
+if [ -n "$CONTEXT" ] && [ "$CONTEXT" != "auto" ]; then
+  CONTEXT_HOME_ABS=$(absolute_existing_dir "$CONTEXT_DIR") || exit 1
 fi
 # If the prompt file already exists (reassignment), back it up so we can
 # restore it on dispatch failure; if it is new, delete it on dispatch failure.
@@ -172,22 +137,77 @@ if [ -f "$PROMPT_FILE" ]; then
 fi
 
 restore_prompt_on_failure() {
+  [ "${PROMPT_RESTORED:-0}" = 0 ] || return 0
+  PROMPT_RESTORED=1
   if [ "$HAD_PROMPT" -eq 1 ]; then
     mv "$PROMPT_BACKUP" "$PROMPT_FILE" 2>/dev/null
   else
     rm -f "$PROMPT_FILE"
   fi
   [ -n "$AUTO_CONTEXT_FILE" ] && rm -f "$AUTO_CONTEXT_FILE"
+  [ -n "$AUTO_CONTEXT_FILE" ] && rmdir "$(dirname "$AUTO_CONTEXT_FILE")" 2>/dev/null || true
+  [ -n "${HANDOFF_TASK_DIR:-}" ] && rmdir "$HANDOFF_TASK_DIR" 2>/dev/null || true
 }
 
-cat > "$PROMPT_FILE" <<EOF
+DISPATCH_SUCCEEDED=0
+trap '[ "$DISPATCH_SUCCEEDED" = 1 ] || restore_prompt_on_failure' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+HANDOFF_HOME_ABS=""
+if [ "$CONTEXT" = "auto" ]; then
+  HANDOFF_HOME_ABS=$(absolute_existing_dir "$HANDOFFS_DIR") || exit 1
+  HANDOFF_TASK_DIR="$HANDOFF_HOME_ABS/$ID"
+  [ ! -L "$HANDOFF_TASK_DIR" ] || { echo "ERROR: unsafe handoff directory" >&2; exit 1; }
+  mkdir -p "$HANDOFF_TASK_DIR" || exit 1
+  _scheduler_safe_dir "$HANDOFF_TASK_DIR" || exit 1
+  AUTO_CONTEXT_NONCE=$(generate_context_nonce) || exit 1
+  AUTO_CONTEXT_FILE="$HANDOFF_TASK_DIR/$AUTO_CONTEXT_NONCE.md"
+  HANDOFF_STAGE="${STAGE:-$(jq -r '.stage // "(unset)"' "$FILE")}"
+  HANDOFF_STAGE="${HANDOFF_STAGE:-(unset)}"
+  HANDOFF_DEPS=$(jq -r '(.depends_on // []) | if length == 0 then "(none)" else join(", ") end' "$FILE")
+  if ! (set -o noclobber; : > "$AUTO_CONTEXT_FILE") 2>/dev/null; then
+    echo "ERROR: refusing existing handoff path: $AUTO_CONTEXT_FILE" >&2
+    AUTO_CONTEXT_FILE=""
+    restore_prompt_on_failure
+    exit 1
+  fi
+  if ! cat > "$AUTO_CONTEXT_FILE" <<EOF
+# Auto handoff — task $ID: $TASK_NAME
+
+Generated by \`/task-assign --context auto\` at dispatch time from the approved
+prompt and ledger state (no live-session summarization). Never overwritten:
+each assignment writes a new file.
+
+## Task
+- id: $ID
+- name: $TASK_NAME
+- status before assignment: $CURRENT_STATUS
+- stage: $HANDOFF_STAGE
+- assigner: $ASSIGNER
+- assignee: $ASSIGNEE
+- reviewer: ${REVIEWER:-(none)}
+- workflow: ${WORKFLOW_ID:-(none)}
+- depends_on: $HANDOFF_DEPS
+- shared ledger: $SCHEDULER_HOME_ABS
+
+## Dispatched prompt
+$PROMPT
+EOF
+  then
+    echo "ERROR: could not create never overwritten handoff: $AUTO_CONTEXT_FILE" >&2
+    restore_prompt_on_failure
+    exit 1
+  fi
+fi
+
+if ! cat > "$PROMPT_FILE" <<EOF
 Task ID: $ID
 Task Name: $TASK_NAME
 Assigned To: $ASSIGNEE
 Reviewer: ${REVIEWER:-(none)}
 Workflow: ${WORKFLOW_ID:-(none)}
 Shared scheduler home (provenance): $SCHEDULER_HOME_ABS
-Shared context home (provenance): ${CONTEXT_HOME_ABS:-(not set)}
 
 $PROMPT
 
@@ -232,15 +252,30 @@ If blocked, use either provider form:
 Codex:  \$session-scheduler:task-block $ID <reason>
 Claude: /session-scheduler:task-block $ID <reason>
 EOF
+then
+  restore_prompt_on_failure
+  exit 1
+fi
 
-if [ -n "$CONTEXT" ]; then
-  cat >> "$PROMPT_FILE" <<EOF
+if [ "$CONTEXT" = "auto" ]; then
+  if ! cat >> "$PROMPT_FILE" <<EOF
+
+## Handoff
+Auto handoff (read it first): $AUTO_CONTEXT_FILE
+It lives under the shared scheduler home above; the same inherited-environment
+contract applies. Read the file directly — it is not a knowledge context snapshot.
+EOF
+  then restore_prompt_on_failure; exit 1; fi
+elif [ -n "$CONTEXT" ]; then
+  if ! cat >> "$PROMPT_FILE" <<EOF
 
 ## Context
+Shared context home (provenance): $CONTEXT_HOME_ABS
 Load the shared context first with either provider form:
 Codex:  \$knowledge:context-load $CONTEXT
 Claude: /knowledge:context-load $CONTEXT
 EOF
+  then restore_prompt_on_failure; exit 1; fi
 fi
 
 if ! bash "$CHAT_ROOT/scripts/dispatch-to-session.sh" "$ASSIGNEE" "$PROMPT_FILE"; then
@@ -248,6 +283,7 @@ if ! bash "$CHAT_ROOT/scripts/dispatch-to-session.sh" "$ASSIGNEE" "$PROMPT_FILE"
   echo "ERROR: session-chat dispatch to '$ASSIGNEE' failed; ledger NOT updated, prompt file rolled back." >&2
   exit 1
 fi
+DISPATCH_SUCCEEDED=1
 [ -n "$PROMPT_BACKUP" ] && rm -f "$PROMPT_BACKUP"
 
 # Compute eta_at (now + N minutes) via epoch math; portable across BSD/GNU date.
@@ -260,6 +296,13 @@ fi
 # Every successful assignment starts a fresh review-dispatch cycle. Clear the
 # prior cycle's transport metadata so a later failed review can be retried even
 # after an earlier review was successfully dispatched and then rejected.
+lock_task_for_command "$ID" || exit 1
+[ -f "$FILE" ] || { echo "ERROR: dispatch succeeded but task disappeared: $ID" >&2; exit 1; }
+CURRENT_STATUS=$(jq -r '.status' "$FILE")
+if ! transition_allowed "$CURRENT_STATUS" assigned && ! scheduler_force_enabled; then
+  echo "ERROR: dispatch succeeded but task changed to $CURRENT_STATUS; assignment not committed." >&2
+  exit 1
+fi
 jq \
   --arg assignee "$ASSIGNEE" \
   --arg assigner "$ASSIGNER" \
@@ -267,21 +310,33 @@ jq \
   --arg eta "$ETA_AT" \
   --arg stage "$STAGE" \
   --arg ctx "$CONTEXT" \
-  --arg reviewer "$REVIEWER" \
-  --arg workflow "$WORKFLOW_ID" \
+  --arg reviewer "$REVIEWER_OVERRIDE" \
+  --arg workflow "$WORKFLOW_ID_OVERRIDE" \
   --arg scheduler_home "$SCHEDULER_HOME_ABS" \
   --arg context_home "$CONTEXT_HOME_ABS" \
+  --arg handoff "$AUTO_CONTEXT_FILE" \
+  --arg handoff_home "$HANDOFF_HOME_ABS" \
+  --arg now "$(now_iso)" \
+  --arg note "$PROMPT$(if ! transition_allowed "$CURRENT_STATUS" assigned; then printf ' (forced)'; fi)" \
   '.assignee=$assignee
    | .assigner=(if (.assigner // "") == "" then $assigner else .assigner end)
    | .prompt_file=$prompt_file
    | (if $eta != "" then .eta_at=$eta else . end)
    | (if $stage != "" then .stage=$stage else . end)
    | (.meta //= {})
-   | (if $ctx != "" then .meta.context=$ctx else . end)
-   | .reviewer=(if $reviewer == "" then null else $reviewer end)
-   | .meta.workflow_id=(if $workflow == "" then null else $workflow end)
+   | (if $ctx == "auto" then
+        del(.meta.context, .meta.context_home)
+        | .meta.handoff_file=$handoff | .meta.handoff_home=$handoff_home
+      elif $ctx != "" then
+        del(.meta.handoff_file, .meta.handoff_home)
+        | .meta.context=$ctx | .meta.context_home=$context_home
+      else del(.meta.context, .meta.context_home, .meta.handoff_file, .meta.handoff_home) end)
+   | (if $reviewer != "" then .reviewer=$reviewer else . end)
+   | .meta.workflow_id=(if $workflow == "" then (.meta.workflow_id // .workflow_id // null) else $workflow end)
    | .meta.scheduler_home=$scheduler_home
-   | .meta.context_home=(if $context_home == "" then null else $context_home end)
+   | .status="assigned" | .updated_at=$now
+   | (if .started_at == null then .started_at=$now else . end)
+   | .history += [{ts:$now,event:"assigned",actor:$assigner,note:$note}]
    | del(.workflow_id, .scheduler_home, .context_home,
          .meta.review_prompt_file, .meta.review_dispatched_at,
          .meta.review_dispatch_status, .meta.review_dispatch_attempt_at,
@@ -293,12 +348,14 @@ jq \
          .review_dispatch_error)' \
   "$FILE" | write_json_atomic "$FILE" || exit 1
 
-append_history_update "$FILE" "assigned" "assigned" "$ASSIGNER" "$PROMPT" || exit 1
-
 echo "Assigned task $ID to $ASSIGNEE"
 [ -n "$STAGE" ]   && echo "Stage: $STAGE"
 [ -n "$ETA_AT" ]  && echo "ETA: $ETA_AT (${ETA_MIN}m)"
-[ -n "$CONTEXT" ] && echo "Context: $CONTEXT"
+if [ "$CONTEXT" = "auto" ]; then
+  echo "  handoff:  $AUTO_CONTEXT_FILE"
+elif [ -n "$CONTEXT" ]; then
+  echo "  context:  $CONTEXT"
+fi
 [ -n "$REVIEWER" ] && echo "Reviewer: $REVIEWER"
 [ -n "$WORKFLOW_ID" ] && echo "Workflow: $WORKFLOW_ID"
 echo "Scheduler home: $SCHEDULER_HOME_ABS"

@@ -7,12 +7,12 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
-ensure_dirs || exit 1
 
 echo "session-scheduler plugin: $PLUGIN_ROOT"
 echo "scheduler dir: $SCHEDULER_DIR"
 echo "tasks dir: $TASKS_DIR"
 echo "prompts dir: $PROMPTS_DIR"
+echo "handoffs dir: $HANDOFFS_DIR ($(find "$HANDOFFS_DIR" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ') file(s))"
 echo "pane name: $(current_pane_name)"
 echo "context dir: ${SESSION_CONTEXT_HOME:-(not set)}"
 
@@ -41,27 +41,21 @@ else
   echo "date math: WARN ISO->epoch failed; OVERDUE/STALE flags and durations will not work."
 fi
 
-if ROOT=$(workspace_root 2>/dev/null); then
-  EXPECTED_SCHEDULER="$ROOT/.tmp/scheduler"
-  EXPECTED_CONTEXT="$ROOT/.tmp/contexts"
+if ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
   ACTUAL_SCHEDULER=$(absolute_existing_dir "$SCHEDULER_DIR" 2>/dev/null || printf '%s' "$SCHEDULER_DIR")
-  if [ "$ACTUAL_SCHEDULER" = "$EXPECTED_SCHEDULER" ]; then
-    echo "workspace scheduler home: OK ($ROOT)"
-  else
-    echo "workspace scheduler home: WARN expected $EXPECTED_SCHEDULER, got $ACTUAL_SCHEDULER"
-    echo "This usually means a child checkout is using a private ledger instead of the workspace ledger."
-  fi
-  if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
-    mkdir -p "$SESSION_CONTEXT_HOME"
-    ACTUAL_CONTEXT=$(absolute_existing_dir "$SESSION_CONTEXT_HOME" 2>/dev/null || printf '%s' "$SESSION_CONTEXT_HOME")
-    if [ "$ACTUAL_CONTEXT" = "$EXPECTED_CONTEXT" ]; then
-      echo "workspace context home: OK"
-    else
-      echo "workspace context home: WARN expected $EXPECTED_CONTEXT, got $ACTUAL_CONTEXT"
-    fi
-  else
-    echo "workspace context home: WARN SESSION_CONTEXT_HOME is not set; expected $EXPECTED_CONTEXT"
-  fi
+  echo "ledger home: $ACTUAL_SCHEDULER"
+  case "$ACTUAL_SCHEDULER/" in
+    "$ROOT/"*) echo "ledger inside current git root: yes" ;;
+    *) echo "ledger inside current git root: no (shared external homes are allowed)" ;;
+  esac
+fi
+if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
+  for legacy in "$SESSION_CONTEXT_HOME"/auto_handoff_*.md; do
+    [ -f "$legacy" ] || continue
+    name=${legacy##*/}; name=${name%.md}
+    echo "WARN: legacy scheduler handoff in knowledge store: $legacy"
+    printf '  Inspect it, then explicitly remove with: $knowledge:context-remove %s\n' "$name"
+  done
 fi
 
 RECORDED_HOMES=""

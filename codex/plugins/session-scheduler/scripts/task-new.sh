@@ -36,6 +36,7 @@ DEPENDS_RAW=""
 REVIEWER=""
 WORKFLOW_ID=""
 while [ "$#" -gt 0 ]; do
+  require_flag_value "$@" || exit 1
   case "$1" in
     --meta)
       [ "$#" -ge 2 ] || { echo "ERROR: --meta requires k=v." >&2; exit 1; }
@@ -101,6 +102,8 @@ fi
 
 ID=$(generate_id)
 FILE=$(task_file "$ID") || exit 1
+lock_task_for_command "$ID" || exit 1
+[ ! -e "$FILE" ] || { echo "ERROR: task ID collision: $ID" >&2; exit 1; }
 NOW=$(now_iso)
 ASSIGNER=$(current_pane_name)
 
@@ -131,7 +134,7 @@ jq -n \
     eta_at:null,
     meta:($meta + (if $workflow == "" then {} else {workflow_id:$workflow} end)),
     history:[{ts:$created,event:"created",actor:$assigner,note:$name}]
-  }' > "$FILE"
+  }' | write_json_atomic "$FILE" || exit 1
 
 echo "Created task $ID: $NAME"
 [ -n "$STAGE" ] && echo "Stage: $STAGE"

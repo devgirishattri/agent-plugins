@@ -36,7 +36,7 @@ FILE=$(task_file "$ID") || exit 1
 # at the task root. Migrate those aliases only when the canonical key is
 # absent (an explicit canonical null means a newer assignment cleared it),
 # then remove every legacy alias in the same atomic rewrite.
-jq '
+task_jq_update "$FILE" '
   (.meta | if type == "object" then . else {} end) as $meta
   | .meta = $meta
   | .meta.review_prompt_file =
@@ -65,7 +65,7 @@ jq '
         .review_dispatch_status, .review_dispatch_attempt_at,
         .review_last_dispatch_attempt_at, .review_dispatch_attempts,
         .review_dispatch_error)
-' "$FILE" | write_json_atomic "$FILE" || {
+' || {
   echo "ERROR: Could not normalize review dispatch metadata for task $ID." >&2
   exit 1
 }
@@ -113,6 +113,7 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
     [ -n "$SCHEDULER_HOME_RECORDED" ] || SCHEDULER_HOME_RECORDED=$(absolute_existing_dir "$SCHEDULER_DIR")
     CONTEXT_HOME_RECORDED=$(jq -r '.meta.context_home // .context_home // empty' "$FILE")
     CONTEXT_NAME=$(jq -r '.meta.context // empty' "$FILE")
+    HANDOFF_FILE=$(jq -r '.meta.handoff_file // empty' "$FILE")
     CONTEXT_NAME_ARG=""
     if [ -n "$CONTEXT_NAME" ]; then
       CONTEXT_NAME_ARG=$(printf '%q' "$CONTEXT_NAME")
@@ -123,11 +124,10 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
       printf 'Task name: %s\n' "$TASK_NAME"
       printf 'Reviewer: %s\n' "$REVIEWER"
       printf 'Shared scheduler home (provenance): %s\n' "$SCHEDULER_HOME_RECORDED"
-      printf 'Shared context home (provenance): %s\n\n' "${CONTEXT_HOME_RECORDED:-(not set)}"
-      printf 'Review request: %s\n' "$REVIEW_REQUEST_NOTE"
-      if [ "$RETRY_REVIEW_DISPATCH" -eq 1 ] && [ "$NOTE" != "$REVIEW_REQUEST_NOTE" ]; then
-        printf 'Dispatch retry note: %s\n' "$NOTE"
+      if [ -n "$CONTEXT_NAME" ]; then
+        printf 'Shared context home (provenance): %s\n\n' "$CONTEXT_HOME_RECORDED"
       fi
+      printf 'Review request: %s\n' "$REVIEW_REQUEST_NOTE"
       printf '\nAudit the completed work independently.\n'
       printf '\nEnvironment contract:\n'
       printf -- '- The shared home paths in this packet are provenance and relaunch guidance,\n'
@@ -170,6 +170,11 @@ TRANSPORT_CONTRACT
         printf 'Codex:  $knowledge:context-load %s\n' "$CONTEXT_NAME_ARG"
         printf 'Claude: /knowledge:context-load %s\n' "$CONTEXT_NAME_ARG"
       fi
+      if [ -n "$HANDOFF_FILE" ]; then
+        printf '\n## Handoff\nAuto handoff (read it first): %s\n' "$HANDOFF_FILE"
+        printf 'It lives under the shared scheduler home above; the same inherited-environment\n'
+        printf 'contract applies. Read the file directly — it is not a knowledge context snapshot.\n'
+      fi
       if [ -n "$TRUSTED_ORIGINAL_PROMPT" ]; then
         printf '\n## Original assignment\n\n'
         cat "$TRUSTED_ORIGINAL_PROMPT"
@@ -188,7 +193,7 @@ TRANSPORT_CONTRACT
         *) REVIEW_DISPATCH_STATUS="delivered" ;;
       esac
       [ -n "$DISPATCH_OUTPUT" ] && printf '%s\n' "$DISPATCH_OUTPUT"
-      jq --arg prompt "$REVIEW_PROMPT" --arg now "$NOW" --arg status "$REVIEW_DISPATCH_STATUS" \
+      task_jq_update "$FILE" --arg prompt "$REVIEW_PROMPT" --arg now "$NOW" --arg status "$REVIEW_DISPATCH_STATUS" \
         '(.meta //= {})
          | .meta.review_prompt_file=$prompt
          | .meta.review_dispatched_at=$now
@@ -200,7 +205,7 @@ TRANSPORT_CONTRACT
                .review_prompt_file, .review_dispatched_at,
                .review_dispatch_status, .review_dispatch_attempt_at,
                .review_last_dispatch_attempt_at, .review_dispatch_attempts,
-               .review_dispatch_error)' "$FILE" | write_json_atomic "$FILE" || {
+               .review_dispatch_error)' || {
         echo "ERROR: Review was dispatched, but its delivery metadata could not be recorded for task $ID." >&2
         exit 1
       }
@@ -208,7 +213,7 @@ TRANSPORT_CONTRACT
       NOW=$(now_iso)
       DISPATCH_ERROR="session-chat dispatch failed (rc=$DISPATCH_RC)"
       [ -n "$DISPATCH_OUTPUT" ] && printf '%s\n' "$DISPATCH_OUTPUT" >&2
-      jq --arg prompt "$REVIEW_PROMPT" --arg now "$NOW" --arg error "$DISPATCH_ERROR" \
+      task_jq_update "$FILE" --arg prompt "$REVIEW_PROMPT" --arg now "$NOW" --arg error "$DISPATCH_ERROR" \
         '(.meta //= {})
          | .meta.review_prompt_file=$prompt
          | del(.meta.review_dispatched_at)
@@ -220,7 +225,7 @@ TRANSPORT_CONTRACT
                .review_prompt_file, .review_dispatched_at,
                .review_dispatch_status, .review_dispatch_attempt_at,
                .review_last_dispatch_attempt_at, .review_dispatch_attempts,
-               .review_dispatch_error)' "$FILE" | write_json_atomic "$FILE" || {
+               .review_dispatch_error)' || {
         echo "ERROR: Could not record the failed review dispatch for task $ID." >&2
         exit 1
       }
@@ -228,7 +233,7 @@ TRANSPORT_CONTRACT
     fi
   else
     NOW=$(now_iso)
-    jq --arg now "$NOW" \
+    task_jq_update "$FILE" --arg now "$NOW" \
       '(.meta //= {})
        | del(.meta.review_dispatched_at)
        | .meta.review_dispatch_status="failed"
@@ -239,7 +244,7 @@ TRANSPORT_CONTRACT
              .review_prompt_file, .review_dispatched_at,
              .review_dispatch_status, .review_dispatch_attempt_at,
              .review_last_dispatch_attempt_at, .review_dispatch_attempts,
-             .review_dispatch_error)' "$FILE" | write_json_atomic "$FILE" || {
+             .review_dispatch_error)' || {
       echo "ERROR: Could not record the unavailable reviewer transport for task $ID." >&2
       exit 1
     }
@@ -262,6 +267,9 @@ elif [ "$RETRY_REVIEW_DISPATCH" -eq 1 ]; then
   echo "Review dispatch retry for task $ID failed; task remains in review."
 else
   echo "Marked task $ID review."
+fi
+if [ "$RETRY_REVIEW_DISPATCH" -eq 1 ]; then
+  printf '  note: %s (original review note reused on retry)\n' "$REVIEW_REQUEST_NOTE"
 fi
 if [ "$REVIEW_DISPATCHED" -eq 1 ] && [ "$RETRY_REVIEW_DISPATCH" -eq 0 ]; then
   echo "Dispatched independent review to $REVIEWER."

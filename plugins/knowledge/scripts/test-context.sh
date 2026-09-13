@@ -293,7 +293,7 @@ else
   fail "unset_tmux_clean_error" "urc=$urc out=$unset_out"
 fi
 
-# --- Test 8: store hardening migrates legacy modes + preserves 0400 auto ---
+# --- Test 8: store hardening migrates legacy modes (0400 included) to 0600 ---
 harden_out=$(
   source "$HERE/lib.sh"
   B=$(mktemp -d); S="$B/store"; mkdir -p "$S/.history"
@@ -310,10 +310,10 @@ harden_out=$(
 )
 if echo "$harden_out" | grep -q "RC0" && echo "$harden_out" | grep -q "STORE=700" \
    && echo "$harden_out" | grep -q "HIST=700" && echo "$harden_out" | grep -q "FILE=600" \
-   && echo "$harden_out" | grep -q "HFILE=600" && echo "$harden_out" | grep -q "AUTO=400"; then
-  pass "harden_migrates_and_preserves_auto"
+   && echo "$harden_out" | grep -q "HFILE=600" && echo "$harden_out" | grep -q "AUTO=600"; then
+  pass "harden_migrates_legacy_modes"
 else
-  fail "harden_migrates_and_preserves_auto" "out=$harden_out"
+  fail "harden_migrates_legacy_modes" "out=$harden_out"
 fi
 
 # --- Test 9: store hardening rejects root + nested symlinks (fail closed) ---

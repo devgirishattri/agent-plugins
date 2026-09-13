@@ -18,6 +18,7 @@ if [ "${1:-}" = "--force" ]; then
   shift
 fi
 NOTE="${*:-}"
+NOTE_SUFFIX=""
 
 if [ -z "$ID" ] || [ -z "$NOTE" ]; then
   echo "ERROR: Usage: task-review.sh <id> [--force] <note>   (note required, e.g. a commit SHA)" >&2
@@ -57,19 +58,27 @@ if [ "$CURRENT" = "review" ]; then
     # alias ONLY when the canonical key is absent (an explicit canonical null stays
     # authoritative); derive review_dispatch_status="delivered" when a success
     # timestamp exists but no status; then drop every root review_* alias.
-    _mig=$(cat "$(task_path "$ID")" | jq '
+    task_update "$ID" '
       .meta = (.meta | if type == "object" then . else {} end)
       | reduce ("review_dispatched_at","review_dispatch_status","review_dispatch_error","review_dispatch_attempt_at","review_last_dispatch_attempt_at","review_dispatch_attempts","review_prompt_file") as $k
         (.; if ((.meta | has($k)) | not) and has($k) then .meta[$k] = .[$k] else . end)
       | (if (.meta.review_dispatched_at != null) and ((.meta.review_dispatch_status // null) == null)
          then .meta.review_dispatch_status = "delivered" else . end)
-      | with_entries(select((.key | startswith("review_")) | not))')
-    task_write "$ID" "$_mig" || true
+      | with_entries(select((.key | startswith("review_")) | not))' || true
     echo "Task $ID is already in review and was dispatched to its reviewer at ${REVIEW_DISPATCHED}."
     echo "  Not re-dispatching (would duplicate delivery). Resolve with /task-done $ID or /task-block $ID <reason>."
     exit 0
   fi
   RETRY=1  # RETRY_REVIEW_DISPATCH
+  # A retry re-sends the ORIGINAL review request: the audit packet must carry
+  # the note (e.g. commit SHA) recorded when the task entered review, not
+  # whatever the retry invocation typed. The CLI note stays required
+  # syntactically and is ignored here.
+  ORIGINAL_NOTE=$(task_get "$ID" '[.history[]? | select(.event == "review")][-1].note // empty')
+  if [ -n "$ORIGINAL_NOTE" ]; then
+    NOTE="$ORIGINAL_NOTE"
+    NOTE_SUFFIX=" (original review note reused on retry)"
+  fi
 else
   if ! task_set_status "$ID" "review" "$ACTOR" "$NOTE"; then
     echo "ERROR: task $ID NOT moved to review." >&2
@@ -164,20 +173,22 @@ EOF
   # Record dispatch metadata so a later /task-review can tell a successful
   # delivery (do NOT re-dispatch — would duplicate) from a failed one (retry OK).
   _rv_now=$(iso_now)
-  _rv_json=$(cat "$(task_path "$ID")")
   case "$dc" in
     0|3)
       [ "$dc" = "3" ] && ROUTED="$REVIEWER (queued to durable inbox)" || ROUTED="$REVIEWER"
       _rv_status=$([ "$dc" = "3" ] && echo queued || echo delivered)
-      _rv_out=$(printf '%s' "$_rv_json" | jq --arg t "$_rv_now" --arg s "$_rv_status" --arg pf "$REVIEW_PROMPT" \
+      # Delivered packet: the success stamp MUST persist, or a later
+      # /task-review would re-dispatch and duplicate delivery. Report loudly.
+      task_update "$ID" \
         'with_entries(select((.key | startswith("review_")) | not))
          | .meta.review_dispatched_at = $t
          | .meta.review_dispatch_status = $s
          | .meta.review_dispatch_error = null
          | .meta.review_prompt_file = $pf
          | .meta.review_last_dispatch_attempt_at = $t
-         | .meta.review_dispatch_attempts = ((.meta.review_dispatch_attempts // 0) + 1)')
-      task_write "$ID" "$_rv_out" || true
+         | .meta.review_dispatch_attempts = ((.meta.review_dispatch_attempts // 0) + 1)' \
+        --arg t "$_rv_now" --arg s "$_rv_status" --arg pf "$REVIEW_PROMPT" \
+        || ROUTE_WARN="reviewer packet was delivered to '$REVIEWER' but recording review_dispatched_at FAILED; do NOT re-run /task-review (it would duplicate delivery). Inspect $(task_path "$ID")."
       ;;
     *)
       ROUTE_WARN="reviewer dispatch to '$REVIEWER' failed (rc=$dc); task remains in review. Fix the issue (see /session-chat:panes) and re-run /task-review, or notify the reviewer manually."
@@ -185,7 +196,7 @@ EOF
       # clear stale legacy root review_* aliases AND force canonical
       # .meta.review_dispatched_at to null so a leftover root/meta success stamp
       # can never falsely suppress the retry.
-      _rv_out=$(printf '%s' "$_rv_json" | jq --arg t "$_rv_now" --arg e "dispatch failed rc=$dc" --arg pf "$REVIEW_PROMPT" \
+      task_update "$ID" \
         'with_entries(select((.key | startswith("review_")) | not))
          | .meta.review_dispatched_at = null
          | .meta.review_dispatch_status = null
@@ -193,8 +204,8 @@ EOF
          | .meta.review_last_dispatch_attempt_at = $t
          | .meta.review_dispatch_error = $e
          | .meta.review_prompt_file = $pf
-         | .meta.review_dispatch_attempts = ((.meta.review_dispatch_attempts // 0) + 1)')
-      task_write "$ID" "$_rv_out" || true
+         | .meta.review_dispatch_attempts = ((.meta.review_dispatch_attempts // 0) + 1)' \
+        --arg t "$_rv_now" --arg e "dispatch failed rc=$dc" --arg pf "$REVIEW_PROMPT" || true
       ;;
   esac
 fi
@@ -204,7 +215,7 @@ if [ "$RETRY" = "1" ]; then
 else
   echo "Task $ID moved to review."
 fi
-echo "  note: $NOTE"
+echo "  note: ${NOTE}${NOTE_SUFFIX}"
 [ -n "$ROUTED" ] && echo "  routed to reviewer: $ROUTED"
 echo
 echo "Reviewer: approve with /task-done $ID [note], or reject with /task-block $ID <reason>."

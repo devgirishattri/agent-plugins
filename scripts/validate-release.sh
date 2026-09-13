@@ -751,18 +751,29 @@ require_tokens(
     "transcript's first user message",
     "do not retry a queued result",
 )
-require_tokens(
-    root / "codex/plugins/session-scheduler/commands/task-assign.md",
-    "auto_handoff_<random-hex>",
-    "32 lowercase hex",
-    "^[a-z0-9]+(_[a-z0-9]+)*$",
-)
-require_tokens(
-    root / "codex/plugins/session-scheduler/skills/session-scheduler/SKILL.md",
-    "auto_handoff_<random-hex>",
-    "32-character lowercase-hex nonce",
-    "^[a-z0-9]+(_[a-z0-9]+)*$",
-)
+for _doc in (
+    "codex/plugins/session-scheduler/commands/task-assign.md",
+    "codex/plugins/session-scheduler/skills/session-scheduler/SKILL.md",
+    "plugins/session-scheduler/commands/task-assign.md",
+    "plugins/session-scheduler/skills/session-scheduler/SKILL.md",
+):
+    require_tokens(
+        root / _doc,
+        "handoffs/<task-id>/<nonce>.md",
+        "meta.handoff_file",
+        "32 lowercase hex",
+        "never overwritten",
+        "^[a-z0-9]+(_[a-z0-9]+)*$",
+    )
+    # The old naming contract was documented as `auto_handoff_<random-hex>`; a
+    # bare `auto_handoff_*.md` mention describing legacy residue is allowed.
+    reject_pattern(root / _doc, r"auto_handoff_<", "pre-0.6.0 knowledge-store auto handoff naming")
+    reject_pattern(root / _doc, r"\b0400\b|chmod 400", "handoffs are 0600; no immutable-mode story")
+for _doc in (
+    "codex/plugins/session-scheduler/skills/session-scheduler/SKILL.md",
+    "plugins/session-scheduler/skills/session-scheduler/SKILL.md",
+):
+    require_tokens(root / _doc, '"handoff_file"', '"handoff_home"', "locks/<id>.lock")
 require_tokens(
     root / "codex/plugins/knowledge/skills/context-load/SKILL.md",
     "7 or more days old",
@@ -1005,7 +1016,12 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
     scheduler = provider_root / "session-scheduler" / "scripts"
     require_tokens(scheduler / "lib.sh", 'SESSION_CHAT_MIN_VERSION="0.13.0"')
     require_tokens(scheduler / "task-new.sh", "--reviewer", "workflow_id")
-    require_tokens(scheduler / "task-assign.sh", "--context auto", ".meta.workflow_id", ".meta.scheduler_home")
+    require_tokens(scheduler / "task-assign.sh", "--context auto", ".meta.workflow_id", ".meta.scheduler_home", ".meta.handoff_file", "Auto handoff (read it first):")
+    reject_pattern(scheduler / "task-assign.sh", r"chmod 400", "auto handoffs are 0600 scheduler artifacts, not immutable knowledge snapshots")
+    require_tokens(scheduler / "lib.sh", "/locks", "task_lock")
+    require_tokens(scheduler / "tasks-clean.sh", "handoffs", "referenced by")
+    require_tokens(context / "lib.sh", "printf '600\\n'")
+    reject_pattern(context / "lib.sh", r"printf '400", "knowledge must not preserve 0400 scheduler files")
     require_tokens(scheduler / "task-assign.sh", "Shared scheduler home (provenance):", "inherited", "relaunch", "$session-scheduler:task-done", "/session-scheduler:task-done")
     require_tokens(scheduler / "task-assign.sh", ".meta.review_dispatched_at", ".meta.review_dispatch_error")
     require_tokens(scheduler / "task-review.sh", "Shared scheduler home (provenance):", "reviewer", "dispatch", "RETRY_REVIEW_DISPATCH", ".meta.review_dispatched_at")

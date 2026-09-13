@@ -5,6 +5,10 @@ description: "Move an assigned task to review and auto-dispatch its audit packet
 
 # Task Review
 
+A dispatch-only retry reuses the note from the latest history event `review`.
+The CLI note remains syntactically required but is ignored on retry; output is
+`note: <original> (original review note reused on retry)`.
+
 Resolve the absolute plugin root from this selected skill's installed source
 path: it is the directory two levels above this `SKILL.md`. Substitute that
 absolute path literally for `<PLUGIN_ROOT>` below; never infer it from the

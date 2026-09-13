@@ -537,65 +537,80 @@ else
   fail "abs_home_propagation" "home=$ah_home expected=$abs_expected prompt=$(cat "$ah_prompt" 2>/dev/null)"
 fi
 
-# --- Test 30: --context auto generates an immutable handoff (removed on rollback) ---
-AUTO_CTX_DIR="$TMP/contexts"
-mkdir -p "$AUTO_CTX_DIR"
-out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "auto-ctx" 2>&1)
+# --- Test 30: --context auto writes a scheduler-owned handoff (never the knowledge store) ---
+# No SESSION_CONTEXT_HOME at all: auto must not need it. A decoy contexts dir
+# proves nothing lands there even when one exists.
+DECOY_CTX_DIR="$TMP/contexts-decoy"
+mkdir -p "$DECOY_CTX_DIR"
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "auto-ctx" --stage execute 2>&1)
 AC_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
-SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$AC_ID" --context auto "auto handoff work" >/dev/null 2>&1
-# Name is unique per assignment (auto_handoff_<random-hex>) for true
-# immutability — derive the actual file from the recorded meta.context rather
-# than assuming it. The stem must be canonical snake_case, or the knowledge
-# context store would reject the very file we told the executor to load.
-meta_ctx=$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$AC_ID.json")
-auto_file="$AUTO_CTX_DIR/$meta_ctx.md"
-perms_ok=""
-[ -f "$auto_file" ] && perms_ok=$(stat -c '%a' "$auto_file" 2>/dev/null || stat -f '%Lp' "$auto_file" 2>/dev/null)
-name_ok=$(printf '%s' "$meta_ctx" | grep -qE '^auto_handoff_[0-9a-f]{32}$' && echo yes || echo no)
-canon_ok=$(printf '%s' "$meta_ctx" | grep -qE '^[a-z0-9]+(_[a-z0-9]+)*$' && echo yes || echo no)
-# rollback: a dispatch failure must remove the auto handoff. The name carries no
-# task id, so assert that the failed assignment left no new snapshot behind.
-pre_rb_count=$(find "$AUTO_CTX_DIR" -name 'auto_handoff_*.md' 2>/dev/null | wc -l | tr -d ' ')
-out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "auto-ctx-rb" 2>&1)
-AC_RB=$(echo "$out" | awk '/Created task:/ {print $3}')
-SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX_DIR" SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-failstub" bash "$HERE/task-assign.sh" worker-1 "$AC_RB" --context auto "doomed" >/dev/null 2>&1
-post_rb_count=$(find "$AUTO_CTX_DIR" -name 'auto_handoff_*.md' 2>/dev/null | wc -l | tr -d ' ')
-rb_count=$((post_rb_count - pre_rb_count))
-if [ -f "$auto_file" ] && [ "$name_ok" = "yes" ] && [ "$canon_ok" = "yes" ] && [ "$perms_ok" = "400" ] \
-   && grep -q "Auto handoff" "$auto_file" && grep -q "auto handoff work" "$auto_file" \
-   && [ "$rb_count" = "0" ]; then
-  pass "context_auto_immutable"
+out=$(env -u SESSION_CONTEXT_HOME SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$AC_ID" --context auto "auto handoff work" 2>&1)
+ac_rc=$?
+ho_file=$(jq -r '.meta.handoff_file // empty' "$SESSION_SCHEDULER_HOME/tasks/$AC_ID.json")
+ho_home=$(jq -r '.meta.handoff_home // empty' "$SESSION_SCHEDULER_HOME/tasks/$AC_ID.json")
+ho_ctx=$(jq -r '.meta.context // "absent"' "$SESSION_SCHEDULER_HOME/tasks/$AC_ID.json")
+ho_expected_dir="$(cd "$SESSION_SCHEDULER_HOME/handoffs" && pwd -P)/$AC_ID"
+ho_name_ok=$(basename "$ho_file" .md | grep -qE '^[0-9a-f]{32}$' && echo yes || echo no)
+ho_perms=""
+[ -f "$ho_file" ] && ho_perms=$(stat -c '%a' "$ho_file" 2>/dev/null || stat -f '%Lp' "$ho_file" 2>/dev/null)
+decoy_count=$(find "$DECOY_CTX_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+if [ "$ac_rc" = "0" ] && [ -f "$ho_file" ] && [ "$(dirname "$ho_file")" = "$ho_expected_dir" ] \
+   && [ "$ho_home" = "$(dirname "$ho_expected_dir")" ] && [ "$ho_ctx" = "absent" ] \
+   && [ "$ho_name_ok" = "yes" ] && [ "$ho_perms" = "600" ] && [ "$decoy_count" = "0" ] \
+   && grep -q "^# Auto handoff — task $AC_ID" "$ho_file" && grep -q "auto handoff work" "$ho_file" \
+   && grep -q "^- stage: execute" "$ho_file" && grep -q "^- status before assignment: created" "$ho_file" \
+   && grep -q "Auto handoff (read it first): $ho_file" "$SESSION_SCHEDULER_HOME/prompts/$AC_ID.md" \
+   && ! grep -q "context-load" "$SESSION_SCHEDULER_HOME/prompts/$AC_ID.md" \
+   && echo "$out" | grep -q "handoff:  $ho_file"; then
+  pass "context_auto_scheduler_owned"
 else
-  fail "context_auto_immutable" "file=$([ -f "$auto_file" ] && echo yes || echo no) name_ok=$name_ok canon_ok=$canon_ok perms=$perms_ok meta=$meta_ctx rb_count=$rb_count"
+  fail "context_auto_scheduler_owned" "rc=$ac_rc file=$ho_file home=$ho_home ctx=$ho_ctx name_ok=$ho_name_ok perms=$ho_perms decoy=$decoy_count out=$out"
 fi
 
-# --- Test 30b: auto name is canonical, date-free, and id-free ---
+# --- Test 30a: rollback removes the handoff (and the per-task dir it created) ---
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "auto-ctx-rb" 2>&1)
+AC_RB=$(echo "$out" | awk '/Created task:/ {print $3}')
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-failstub" bash "$HERE/task-assign.sh" worker-1 "$AC_RB" --context auto "doomed" >/dev/null 2>&1
+if [ ! -e "$SESSION_SCHEDULER_HOME/handoffs/$AC_RB" ] \
+   && [ "$(jq -r '.status' "$SESSION_SCHEDULER_HOME/tasks/$AC_RB.json")" = "created" ] \
+   && [ "$(jq -r '.meta.handoff_file // "absent"' "$SESSION_SCHEDULER_HOME/tasks/$AC_RB.json")" = "absent" ]; then
+  pass "context_auto_rollback_removes_handoff"
+else
+  fail "context_auto_rollback_removes_handoff" "$(ls -R "$SESSION_SCHEDULER_HOME/handoffs" 2>&1)"
+fi
+
+# --- Test 30b: reassignment mints a NEW handoff; the prior one is never overwritten ---
 # A ledger shared with another provider can hold task ids carrying dates or
-# epoch stamps. Knowledge keeps dates in metadata, never in a current snapshot
-# filename, so none of the id (or any part of it) may leak into the name — the
-# task association lives in the handoff body and meta.context instead.
+# hyphens; the nonce filename never derives from the id.
 ODD_ID="Report-2026-08-11_1786421913"
 out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "odd-id-task" 2>&1)
 SEED_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
 jq --arg id "$ODD_ID" '.id = $id' "$SESSION_SCHEDULER_HOME/tasks/$SEED_ID.json" \
   > "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json"
-SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$ODD_ID" --context auto "odd id work" >/dev/null 2>&1
-odd_ctx=$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")
-odd_exact=$(printf '%s' "$odd_ctx" | grep -qE '^auto_handoff_[0-9a-f]{32}$' && echo yes || echo no)
-# No date, epoch, or id token anywhere in the filename. (The exact-pattern
-# assertion above already fixes every character outside the hex nonce; these
-# checks state the intent directly, without matching hex digits by accident.)
-odd_datefree=$(printf '%s' "$odd_ctx" | grep -qiE 'report|1786421913|2026[-_]?08[-_]?11' && echo no || echo yes)
-# Two assignments must not collide on the entropy-only nonce.
-SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$AUTO_CTX_DIR" bash "$HERE/task-assign.sh" worker-1 "$ODD_ID" --force --context auto "odd id work again" >/dev/null 2>&1
-odd_ctx2=$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")
-# The handoff still carries the task association in its body.
-odd_assoc=$(grep -q "id: $ODD_ID" "$AUTO_CTX_DIR/$odd_ctx.md" 2>/dev/null && echo yes || echo no)
-if [ "$odd_exact" = "yes" ] && [ "$odd_datefree" = "yes" ] && [ "$odd_assoc" = "yes" ] \
-   && [ -f "$AUTO_CTX_DIR/$odd_ctx.md" ] && [ -n "$odd_ctx2" ] && [ "$odd_ctx2" != "$odd_ctx" ]; then
-  pass "context_auto_name_date_free"
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-1 "$ODD_ID" --context auto "odd id work" >/dev/null 2>&1
+odd_first=$(jq -r '.meta.handoff_file // empty' "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-2 "$ODD_ID" --context auto "odd id work again" >/dev/null 2>&1
+odd_second=$(jq -r '.meta.handoff_file // empty' "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")
+odd_nonce_ok=$(basename "$odd_second" .md | grep -qiE 'report|1786421913|2026' && echo no || echo yes)
+if [ -f "$odd_first" ] && [ -f "$odd_second" ] && [ "$odd_first" != "$odd_second" ] \
+   && [ "$odd_nonce_ok" = "yes" ] && [ "$(dirname "$odd_first")" = "$(dirname "$odd_second")" ] \
+   && grep -q "odd id work$" "$odd_first" && grep -q "odd id work again" "$odd_second" \
+   && grep -q "^- id: $ODD_ID" "$odd_second" \
+   && [ "$(ls "$SESSION_SCHEDULER_HOME/handoffs/$ODD_ID" | wc -l | tr -d ' ')" = "2" ]; then
+  pass "context_auto_reassign_never_overwrites"
 else
-  fail "context_auto_name_date_free" "ctx=$odd_ctx exact=$odd_exact datefree=$odd_datefree assoc=$odd_assoc ctx2=$odd_ctx2"
+  fail "context_auto_reassign_never_overwrites" "first=$odd_first second=$odd_second nonce_ok=$odd_nonce_ok"
+fi
+
+# --- Test 30c: explicit --context NAME still needs the knowledge store and clears handoff keys ---
+mkdir -p "$DECOY_CTX_DIR"; printf 'snapshot\n' > "$DECOY_CTX_DIR/real_ctx.md"
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CONTEXT_HOME="$DECOY_CTX_DIR" bash "$HERE/task-assign.sh" worker-3 "$ODD_ID" --context real_ctx "explicit ctx" >/dev/null 2>&1
+if [ "$(jq -r '.meta.context // empty' "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")" = "real_ctx" ] \
+   && [ "$(jq -r '.meta.handoff_file // "absent"' "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")" = "absent" ] \
+   && grep -q "/knowledge:context-load real_ctx" "$SESSION_SCHEDULER_HOME/prompts/$ODD_ID.md"; then
+  pass "context_explicit_clears_handoff_keys"
+else
+  fail "context_explicit_clears_handoff_keys" "$(jq -c .meta "$SESSION_SCHEDULER_HOME/tasks/$ODD_ID.json")"
 fi
 
 # --- Test 31: reviewer dispatch failure — NO /send downgrade, stays in review ---
@@ -1032,6 +1047,208 @@ if echo "$out" | grep -q "Not re-dispatching" && [ "$ld_status" = "delivered" ] 
   pass "review_legacy_derives_delivered"
 else
   fail "review_legacy_derives_delivered" "status=$ld_status root=$ld_root out=$out"
+fi
+
+
+# --- Test 40: tasks-clean sweeps every artifact a task owns, by exact name ---
+CLEAN_HOME="$TMP/clean-scheduler"
+mkdir -p "$CLEAN_HOME"
+c_out=$(SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/task-new.sh" "old-done" 2>&1)
+C_OLD=$(echo "$c_out" | awk '/Created task:/ {print $3}')
+c_out=$(SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/task-new.sh" "hyphen-sibling" 2>&1)
+C_SIB_SEED=$(echo "$c_out" | awk '/Created task:/ {print $3}')
+# A task literally named "<C_OLD>-review" must NOT lose its base prompt when
+# <C_OLD> is cleaned (exact names, never <id>-* globs).
+C_SIB="${C_OLD}-review"
+jq --arg id "$C_SIB" '.id = $id' "$CLEAN_HOME/tasks/$C_SIB_SEED.json" > "$CLEAN_HOME/tasks/$C_SIB.json"
+rm -f "$CLEAN_HOME/tasks/$C_SIB_SEED.json"
+SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/task-assign.sh" worker-1 "$C_OLD" --context auto "old work" >/dev/null 2>&1
+SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/task-assign.sh" worker-1 "$C_SIB" "sibling work" >/dev/null 2>&1
+SESSION_SCHEDULER_HOME="$CLEAN_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub" bash "$HERE/task-done.sh" "$C_OLD" "finished" >/dev/null 2>&1
+# Fake packet files the task owns, then age the task.
+: > "$CLEAN_HOME/prompts/$C_OLD-ack-done.md"; : > "$CLEAN_HOME/prompts/$C_OLD-ack-review.md"
+jq '.updated_at = "2020-01-01T00:00:00+05:30"' "$CLEAN_HOME/tasks/$C_OLD.json" > "$CLEAN_HOME/tasks/$C_OLD.json.tmp" && mv "$CLEAN_HOME/tasks/$C_OLD.json.tmp" "$CLEAN_HOME/tasks/$C_OLD.json"
+dry=$(SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/tasks-clean.sh" --older-than 7 2>&1)
+SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/tasks-clean.sh" --older-than 7 --apply >/dev/null 2>&1
+if echo "$dry" | grep -q "DRY-RUN: would delete 1 task" \
+   && [ ! -e "$CLEAN_HOME/tasks/$C_OLD.json" ] && [ ! -e "$CLEAN_HOME/prompts/$C_OLD.md" ] \
+   && [ ! -e "$CLEAN_HOME/prompts/$C_OLD-ack-done.md" ] && [ ! -e "$CLEAN_HOME/prompts/$C_OLD-ack-review.md" ] \
+   && [ ! -e "$CLEAN_HOME/handoffs/$C_OLD" ] \
+   && [ -f "$CLEAN_HOME/tasks/$C_SIB.json" ] && [ -f "$CLEAN_HOME/prompts/$C_SIB.md" ]; then
+  pass "clean_sweeps_owned_artifacts_exact_names"
+else
+  fail "clean_sweeps_owned_artifacts_exact_names" "dry=$dry; $(ls -R "$CLEAN_HOME")"
+fi
+
+# --- Test 40a: reverse-dependency guard keeps a referenced prerequisite ---
+c_out=$(SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/task-new.sh" "prereq" 2>&1)
+C_PRE=$(echo "$c_out" | awk '/Created task:/ {print $3}')
+c_out=$(SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/task-new.sh" "dependent" --depends-on "$C_PRE" 2>&1)
+C_DEP=$(echo "$c_out" | awk '/Created task:/ {print $3}')
+jq '.status = "done" | .updated_at = "2020-01-01T00:00:00+05:30"' "$CLEAN_HOME/tasks/$C_PRE.json" > "$CLEAN_HOME/tasks/$C_PRE.json.tmp" && mv "$CLEAN_HOME/tasks/$C_PRE.json.tmp" "$CLEAN_HOME/tasks/$C_PRE.json"
+dry=$(SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/tasks-clean.sh" --older-than 7 --apply 2>&1)
+# Control: once the dependent is deleted too, the prerequisite goes.
+jq '.updated_at = "2020-01-01T00:00:00+05:30"' "$CLEAN_HOME/tasks/$C_DEP.json" > "$CLEAN_HOME/tasks/$C_DEP.json.tmp" && mv "$CLEAN_HOME/tasks/$C_DEP.json.tmp" "$CLEAN_HOME/tasks/$C_DEP.json"
+SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/tasks-clean.sh" --older-than 7 --apply >/dev/null 2>&1
+if echo "$dry" | grep -q "kept $C_PRE (referenced by $C_DEP)" && echo "$dry" | grep -q "Nothing to clean" \
+   && [ ! -e "$CLEAN_HOME/tasks/$C_PRE.json" ] && [ ! -e "$CLEAN_HOME/tasks/$C_DEP.json" ]; then
+  pass "clean_keeps_referenced_prerequisite"
+else
+  fail "clean_keeps_referenced_prerequisite" "out=$dry; $(ls "$CLEAN_HOME/tasks")"
+fi
+
+# --- Test 40b: orphan sweep removes handoffs/prompts with no task, honouring the suffix rule ---
+mkdir -p "$CLEAN_HOME/handoffs/ghost"; : > "$CLEAN_HOME/handoffs/ghost/0123456789abcdef0123456789abcdef.md"
+: > "$CLEAN_HOME/prompts/ghost.md"; : > "$CLEAN_HOME/prompts/ghost-review.md"
+: > "$CLEAN_HOME/prompts/$C_SIB-ack-done.md"   # owned by live task C_SIB — must survive
+touch -t 202001010000 "$CLEAN_HOME/handoffs/ghost" "$CLEAN_HOME/prompts/ghost.md" "$CLEAN_HOME/prompts/ghost-review.md" "$CLEAN_HOME/prompts/$C_SIB-ack-done.md"
+: > "$CLEAN_HOME/prompts/fresh-orphan.md"        # orphan but NEW — must survive
+dry=$(SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/tasks-clean.sh" --older-than 7 2>&1)
+SESSION_SCHEDULER_HOME="$CLEAN_HOME" bash "$HERE/tasks-clean.sh" --older-than 7 --apply >/dev/null 2>&1
+if echo "$dry" | grep -q "Orphans (no task JSON, older than 7d): 3" \
+   && [ ! -e "$CLEAN_HOME/handoffs/ghost" ] && [ ! -e "$CLEAN_HOME/prompts/ghost.md" ] && [ ! -e "$CLEAN_HOME/prompts/ghost-review.md" ] \
+   && [ -f "$CLEAN_HOME/prompts/$C_SIB-ack-done.md" ] && [ -f "$CLEAN_HOME/prompts/fresh-orphan.md" ]; then
+  pass "clean_orphan_sweep"
+else
+  fail "clean_orphan_sweep" "dry=$dry; $(ls -R "$CLEAN_HOME")"
+fi
+
+# --- Test 41: per-task lock serializes concurrent mutations (no lost update) ---
+LOCK_HOME="$TMP/lock-scheduler"
+mkdir -p "$LOCK_HOME"
+l_out=$(SESSION_SCHEDULER_HOME="$LOCK_HOME" bash "$HERE/task-new.sh" "contended" 2>&1)
+L_ID=$(echo "$l_out" | awk '/Created task:/ {print $3}')
+# 12 concurrent history appends through the locked lib path; every one must land.
+for i in $(seq 1 12); do
+  ( SESSION_SCHEDULER_HOME="$LOCK_HOME" bash -c 'source "$1/lib.sh"; task_append_history "$2" "note" "w$3" "n$3"' _ "$HERE" "$L_ID" "$i" ) &
+done
+wait
+l_count=$(jq '[.history[] | select(.event == "note")] | length' "$LOCK_HOME/tasks/$L_ID.json")
+# Control: a held lock blocks a writer until timeout (then fails, never writes).
+mkdir -p "$LOCK_HOME/locks/$L_ID.lock"; printf '%s\n' "$$" > "$LOCK_HOME/locks/$L_ID.lock/pid"
+l_blocked=$(SESSION_SCHEDULER_HOME="$LOCK_HOME" SESSION_SCHEDULER_LOCK_TIMEOUT_SECS=1 bash "$HERE/task-block.sh" "$L_ID" "should wait" 2>&1)
+l_rc=$?
+rm -rf "$LOCK_HOME/locks/$L_ID.lock"
+# Stale lock (dead pid) is reclaimed.
+mkdir -p "$LOCK_HOME/locks/$L_ID.lock"; printf '%s\n' "999999" > "$LOCK_HOME/locks/$L_ID.lock/pid"
+SESSION_SCHEDULER_HOME="$LOCK_HOME" bash "$HERE/task-block.sh" "$L_ID" "reclaimed" >/dev/null 2>&1
+l_status=$(jq -r '.status' "$LOCK_HOME/tasks/$L_ID.json")
+if [ "$l_count" = "12" ] && [ "$l_rc" != "0" ] && echo "$l_blocked" | grep -q "could not lock task" \
+   && [ "$l_status" = "blocked" ] && [ ! -e "$LOCK_HOME/locks/$L_ID.lock" ]; then
+  pass "task_lock_serializes_and_reclaims"
+else
+  fail "task_lock_serializes_and_reclaims" "count=$l_count blocked_rc=$l_rc status=$l_status out=$l_blocked"
+fi
+
+# --- Test 41b: stale-lock reclaim is serialized — many waiters, one dead holder, no double-hold ---
+# Every waiter sees the same dead pid at once. Without the reclaim marker +
+# recheck, one waiter reclaims and re-acquires while another still deletes the
+# "stale" pid file — now the LIVE holder's — and a second holder gets in. Each
+# waiter records its own pid while holding the lock and sleeps briefly; any
+# overlap shows up as two holders present at once.
+RL_HOME="$TMP/reclaim-scheduler"
+mkdir -p "$RL_HOME"
+rl_out=$(SESSION_SCHEDULER_HOME="$RL_HOME" bash "$HERE/task-new.sh" "reclaim-race" 2>&1)
+RL_ID=$(echo "$rl_out" | awk '/Created task:/ {print $3}')
+RL_LIB="${SESSION_SCHEDULER_LOCK_TEST_LIB:-$HERE/lib.sh}"
+run_reclaim_race() {
+  rm -rf "$RL_HOME/locks/$RL_ID.lock" "$RL_HOME/overlap"
+  mkdir -p "$RL_HOME/locks/$RL_ID.lock"; printf '%s\n' "999999" > "$RL_HOME/locks/$RL_ID.lock/pid"
+  for i in $(seq 1 10); do
+    ( SESSION_SCHEDULER_HOME="$RL_HOME" bash -c '
+        source "$1"; id="$2"; home="$3"
+        task_lock "$id" || exit 9
+        # While held: the pid file must be ours, and nobody else may be inside.
+        [ "$(cat "$home/locks/$id.lock/pid" 2>/dev/null)" = "$$" ] || touch "$home/overlap"
+        [ -e "$home/inside" ] && touch "$home/overlap"
+        : > "$home/inside"; sleep 0.05; rm -f "$home/inside"
+        task_append_history "$id" "rl" "w" "x" >/dev/null 2>&1 || true
+        task_unlock "$id"' _ "$RL_LIB" "$RL_ID" "$RL_HOME" ) &
+  done
+  wait
+}
+# task_append_history takes the lock itself, so call it OUTSIDE the held
+# section above (non-reentrant); rerun the race so the count check is real.
+run_reclaim_race
+rl_overlap=$([ -e "$RL_HOME/overlap" ] && echo yes || echo no)
+rl_left=$([ -e "$RL_HOME/locks/$RL_ID.lock" ] && echo yes || echo no)
+if [ "$rl_overlap" = "no" ] && [ "$rl_left" = "no" ]; then
+  pass "task_lock_stale_reclaim_serialized"
+else
+  fail "task_lock_stale_reclaim_serialized" "overlap=$rl_overlap lock_left=$rl_left"
+fi
+
+# --- Test 42: review retry reuses the ORIGINAL note in the audit packet ---
+RN_HOME="$TMP/retry-note"
+mkdir -p "$RN_HOME"
+make_session_chat_stub "$TMP/rn-fail" 1 0 "rn-executor"
+make_session_chat_stub "$TMP/rn-ok" 0 0 "rn-executor"
+rn_out=$(SESSION_SCHEDULER_HOME="$RN_HOME" bash "$HERE/task-new.sh" "retry-note" --reviewer rn-reviewer 2>&1)
+RN_ID=$(echo "$rn_out" | awk '/Created task:/ {print $3}')
+SESSION_SCHEDULER_HOME="$RN_HOME" bash "$HERE/task-assign.sh" rn-executor "$RN_ID" "work" >/dev/null 2>&1
+SESSION_SCHEDULER_HOME="$RN_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/rn-fail" bash "$HERE/task-review.sh" "$RN_ID" "sha-original-1234" >/dev/null 2>&1
+rn_retry=$(SESSION_SCHEDULER_HOME="$RN_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/rn-ok" bash "$HERE/task-review.sh" "$RN_ID" "retry typo note" 2>&1)
+if grep -q "Note (e.g. commit SHA): sha-original-1234" "$RN_HOME/prompts/$RN_ID-review.md" \
+   && ! grep -q "retry typo note" "$RN_HOME/prompts/$RN_ID-review.md" \
+   && echo "$rn_retry" | grep -q "note: sha-original-1234 (original review note reused on retry)" \
+   && [ "$(jq -r '.meta.review_dispatch_status' "$RN_HOME/tasks/$RN_ID.json")" = "delivered" ]; then
+  pass "review_retry_reuses_original_note"
+else
+  fail "review_retry_reuses_original_note" "out=$rn_retry packet=$(grep Note "$RN_HOME/prompts/$RN_ID-review.md")"
+fi
+
+# --- Test 43: --mine covers assigner, assignee, and reviewer ---
+MINE_HOME="$TMP/mine"
+mkdir -p "$MINE_HOME"
+make_session_chat_stub "$TMP/mine-stub" 0 0 "me-pane"
+m_out=$(SESSION_SCHEDULER_HOME="$MINE_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub" bash "$HERE/task-new.sh" "assigned-to-me" 2>&1)
+M_ASSIGNEE=$(echo "$m_out" | awk '/Created task:/ {print $3}')
+SESSION_SCHEDULER_HOME="$MINE_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub" bash "$HERE/task-assign.sh" me-pane "$M_ASSIGNEE" "w" >/dev/null 2>&1
+m_out=$(SESSION_SCHEDULER_HOME="$MINE_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub" bash "$HERE/task-new.sh" "reviewed-by-me" --reviewer me-pane 2>&1)
+M_REVIEWER=$(echo "$m_out" | awk '/Created task:/ {print $3}')
+m_out=$(SESSION_SCHEDULER_HOME="$MINE_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub" bash "$HERE/task-new.sh" "not-mine" 2>&1)
+M_OTHER=$(echo "$m_out" | awk '/Created task:/ {print $3}')
+m_out=$(SESSION_SCHEDULER_HOME="$MINE_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/mine-stub" bash "$HERE/task-new.sh" "created-by-me" 2>&1)
+M_CREATOR=$(echo "$m_out" | awk '/Created task:/ {print $3}')
+mine=$(SESSION_SCHEDULER_HOME="$MINE_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/mine-stub" bash "$HERE/task-status.sh" --mine 2>&1)
+pending=$(SESSION_SCHEDULER_HOME="$MINE_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/mine-stub" bash "$HERE/task-status.sh" --pending 2>&1)
+if echo "$mine" | grep -q "$M_ASSIGNEE" && echo "$mine" | grep -q "$M_REVIEWER" && echo "$mine" | grep -q "$M_CREATOR" \
+   && ! echo "$mine" | grep -q "$M_OTHER" && echo "$mine" | grep -q "3 task(s) shown" \
+   && ! echo "$pending" | grep -q "$M_ASSIGNEE" && echo "$pending" | grep -q "3 task(s) shown"; then
+  pass "status_mine_all_roles_pending_created_only"
+else
+  fail "status_mine_all_roles_pending_created_only" "mine=$mine pending=$pending"
+fi
+
+# --- Test 44: value-taking flags with no value error out instead of looping ---
+f_out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" timeout 5 bash "$HERE/task-assign.sh" worker-1 "$AC_ID" --eta 2>&1); f1=$?
+g_out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" timeout 5 bash "$HERE/task-new.sh" "flagless" --stage 2>&1); f2=$?
+h_out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" timeout 5 bash "$HERE/tasks-clean.sh" --older-than 2>&1); f3=$?
+if [ "$f1" = "1" ] && echo "$f_out" | grep -q -- "--eta requires a value" \
+   && [ "$f2" = "1" ] && echo "$g_out" | grep -q -- "--stage requires a value" \
+   && [ "$f3" = "1" ] && echo "$h_out" | grep -q -- "--older-than requires a value"; then
+  pass "flags_missing_value_error"
+else
+  fail "flags_missing_value_error" "rc=$f1/$f2/$f3 out=$f_out | $g_out | $h_out"
+fi
+
+# --- Test 45: task-new reports failure (non-zero, no success line) when the write fails ---
+# ensure_dirs re-locks the tree to 0700 on every call, so an unwritable tasks/
+# dir cannot be injected from outside; instead run the real task-new.sh against
+# a lib.sh whose task_write fails, and require the script to propagate it.
+STUBLIB="$TMP/stublib"
+mkdir -p "$STUBLIB"
+cp "$HERE/task-new.sh" "$STUBLIB/task-new.sh"
+printf '%s\n' "source \"$HERE/lib.sh\"" 'task_write() { echo "stub: write refused" >&2; return 1; }' > "$STUBLIB/lib.sh"
+ro_out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$STUBLIB/task-new.sh" "unwritable" 2>&1); ro_rc=$?
+# Control: the same copy with the real lib succeeds.
+printf '%s\n' "source \"$HERE/lib.sh\"" > "$STUBLIB/lib.sh"
+ok_out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$STUBLIB/task-new.sh" "writable" 2>&1); ok_rc=$?
+if [ "$ro_rc" != "0" ] && ! echo "$ro_out" | grep -q "Created task:" && echo "$ro_out" | grep -q "task NOT created" \
+   && [ "$ok_rc" = "0" ] && echo "$ok_out" | grep -q "Created task:"; then
+  pass "task_new_fails_closed_on_write_error"
+else
+  fail "task_new_fails_closed_on_write_error" "rc=$ro_rc out=$ro_out ctrl_rc=$ok_rc"
 fi
 
 echo

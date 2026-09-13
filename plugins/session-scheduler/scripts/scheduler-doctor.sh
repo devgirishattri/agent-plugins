@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # scheduler-doctor.sh — diagnostic for session-scheduler setup.
+# Read-mostly: ensure_dirs creates/locks the ledger dirs (same as every helper);
+# nothing else is created, and SESSION_CONTEXT_HOME is only reported, never
+# created or resolved.
 set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
@@ -10,6 +13,8 @@ echo "=== session-scheduler doctor ==="
 echo "scheduler dir:  $SCHEDULER_DIR"
 echo "tasks dir:      $TASKS_DIR ($(ls -1 "$TASKS_DIR" 2>/dev/null | wc -l | tr -d ' ') task(s))"
 echo "prompts dir:    $PROMPTS_DIR ($(ls -1 "$PROMPTS_DIR" 2>/dev/null | wc -l | tr -d ' ') prompt(s))"
+echo "handoffs dir:   $HANDOFFS_DIR ($(ls -1 "$HANDOFFS_DIR" 2>/dev/null | wc -l | tr -d ' ') task dir(s))"
+echo "locks dir:      $LOCKS_DIR ($(ls -1 "$LOCKS_DIR" 2>/dev/null | wc -l | tr -d ' ') held)"
 echo
 
 echo "current pane:   $(current_pane_name)"
@@ -57,21 +62,49 @@ else
 fi
 echo
 
-# Ledger-home drift: SESSION_SCHEDULER_HOME is inherited at pane launch, so a
-# value that does not match this pane's project root usually just means a shared
-# workspace ledger — but surface it so a misconfigured launcher is caught.
-# task-assign embeds the absolute home in every prompt as provenance.
-gitroot=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-project_home="$(abs_dir "$gitroot")/.tmp/scheduler"
+# Ledger home: inherited at pane launch (session-workspace pins it from
+# stores.base/stores.overrides, so no fixed relative path is assumed here).
+# Report where it is and whether it sits inside this pane's project root; a
+# home outside the project is expected for a shared workspace ledger but worth
+# seeing.
 active_home="$(abs_dir "$SCHEDULER_DIR")"
 echo "ledger home:    $active_home"
-if [ "$active_home" = "$project_home" ]; then
-  echo "  OK: matches this pane's project root."
+gitroot=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+gitroot_abs="$(abs_dir "$gitroot")"
+case "$active_home/" in
+  "$gitroot_abs"/*) echo "  OK: inside this pane's project root ($gitroot_abs)." ;;
+  *)
+    echo "  NOTE: outside this pane's project root ($gitroot_abs)."
+    echo "  Expected when panes share a workspace-level ledger. If it is wrong, relaunch"
+    echo "  the pane with the correct SESSION_SCHEDULER_HOME in its startup environment;"
+    echo "  agents must not export it mid-session."
+    ;;
+esac
+echo
+
+# Context home: needed only by `/task-assign --context NAME` (explicit knowledge
+# snapshot). Reported, never created or resolved. `--context auto` does not use it.
+if [ -n "${SESSION_CONTEXT_HOME:-}" ]; then
+  echo "context home:   $SESSION_CONTEXT_HOME"
+  if [ -d "$SESSION_CONTEXT_HOME" ] && [ ! -L "$SESSION_CONTEXT_HOME" ]; then
+    echo "  OK: present (used only by --context NAME; --context auto writes under handoffs/)."
+    # Legacy residue: before 0.6.0, --context auto wrote auto_handoff_*.md into
+    # the live knowledge context store. Never deleted here — report + the
+    # manual removal command.
+    legacy=$(find "$SESSION_CONTEXT_HOME" -maxdepth 1 -name 'auto_handoff_*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$legacy" -gt 0 ]; then
+      echo "  WARN: $legacy legacy auto_handoff_*.md file(s) in the knowledge context store (pre-0.6.0 scheduler)."
+      echo "  They are not swept by tasks-clean. Remove each with: /knowledge:context-remove <name>"
+      find "$SESSION_CONTEXT_HOME" -maxdepth 1 -name 'auto_handoff_*.md' -type f 2>/dev/null | while IFS= read -r f; do
+        echo "    $(basename "$f" .md)"
+      done
+    fi
+  else
+    echo "  NOTE: not present yet (created by the knowledge plugin on first context-generate)."
+  fi
 else
-  echo "  NOTE: differs from this pane's project root ($project_home)."
-  echo "  Expected when panes share a workspace-level ledger. If it is wrong, relaunch"
-  echo "  the pane with the correct SESSION_SCHEDULER_HOME in its startup environment;"
-  echo "  agents must not export it mid-session."
+  echo "context home:   SESSION_CONTEXT_HOME not set"
+  echo "  NOTE: /task-assign --context NAME will fail closed; --context auto is unaffected."
 fi
 echo
 

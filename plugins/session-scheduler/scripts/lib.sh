@@ -25,12 +25,23 @@ fi
 SCHEDULER_DIR="$SESSION_SCHEDULER_HOME"
 TASKS_DIR="$SCHEDULER_DIR/tasks"
 PROMPTS_DIR="$SCHEDULER_DIR/prompts"
+# Auto handoffs (--context auto) are scheduler-owned artifacts, one per-task
+# subdirectory: handoffs/<id>/<nonce>.md. They never touch the knowledge context
+# store. tasks-clean sweeps them with the task.
+HANDOFFS_DIR="$SCHEDULER_DIR/handoffs"
+# Per-task mutation locks: locks/<id>.lock/ (mkdir-atomic, pid inside). Kept
+# OUTSIDE the vetted tasks/ and prompts/ subtrees because ensure_dirs fails
+# closed on entries that vanish mid-traversal — exactly what a transient lock
+# directory does. Both providers use this identical path, so cross-provider
+# exclusion on one ledger is real.
+LOCKS_DIR="$SCHEDULER_DIR/locks"
 
-# The ledger holds task JSON, executor prompts, and review packets — all of
-# which can carry sensitive task content — so keep everything owner-only. umask
-# 077 makes new files 0600 / new dirs 0700 (process-local: the /task-* commands
-# invoke these scripts as subprocesses, so it never tightens the user's shell).
-# Auto-context handoffs are additionally chmod 0400 (immutable) by task-assign.
+# The ledger holds task JSON, executor prompts, review packets, and handoffs —
+# all of which can carry sensitive task content — so keep everything owner-only.
+# umask 077 makes new files 0600 / new dirs 0700 (process-local: the /task-*
+# commands invoke these scripts as subprocesses, so it never tightens the user's
+# shell). Nothing is 0400: handoffs are "never overwritten" by unique naming,
+# not by file mode.
 umask 077
 
 # A real, owner-owned, non-symlink directory.
@@ -54,24 +65,25 @@ ensure_dirs() {
   local d entry
   agent_plugins_timezone >/dev/null || return 1
   # Never create or write THROUGH a symlink planted at the root/tasks/prompts.
-  for d in "$SCHEDULER_DIR" "$TASKS_DIR" "$PROMPTS_DIR"; do
+  for d in "$SCHEDULER_DIR" "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" "$LOCKS_DIR"; do
     if [ -L "$d" ]; then
       echo "ERROR: refusing to use scheduler path '$d' — it is a symlink." >&2
       return 1
     fi
   done
-  if ! mkdir -p "$TASKS_DIR" "$PROMPTS_DIR" 2>/dev/null; then
+  if ! mkdir -p "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" "$LOCKS_DIR" 2>/dev/null; then
     echo "ERROR: could not create scheduler dirs under '$SCHEDULER_DIR'." >&2
     return 1
   fi
-  for d in "$SCHEDULER_DIR" "$TASKS_DIR" "$PROMPTS_DIR"; do
+  for d in "$SCHEDULER_DIR" "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" "$LOCKS_DIR"; do
     if ! _sched_dir_is_safe "$d"; then
       echo "ERROR: scheduler path '$d' is unsafe (symlink, not a directory, or not owned by you)." >&2
       return 1
     fi
     chmod 700 "$d" 2>/dev/null || { echo "ERROR: could not lock '$d' to 0700." >&2; return 1; }
   done
-  # Vet + migrate every entry under tasks/ and prompts/. NUL-safe traversal with
+  # Vet + migrate every entry under tasks/, prompts/, and handoffs/ (locks/ is
+  # deliberately NOT traversed: its entries are transient). NUL-safe traversal with
   # an OBSERVED find status: a `< <(find ...)` process substitution hides a
   # traversal failure (e.g. an unreadable subdir) so the loop could vet a partial
   # tree and still succeed, and a pre-planted owner file MAY contain a newline in
@@ -79,7 +91,7 @@ ensure_dirs() {
   # read NUL-delimited entries. Fail closed on any unsafe condition.
   local entry tmp_list find_rc
   tmp_list=$(mktemp 2>/dev/null) || { echo "ERROR: could not allocate a temp file for ledger traversal." >&2; return 1; }
-  find "$TASKS_DIR" "$PROMPTS_DIR" -mindepth 1 -print0 > "$tmp_list" 2>/dev/null
+  find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" -mindepth 1 -print0 > "$tmp_list" 2>/dev/null
   find_rc=$?
   if [ "$find_rc" -ne 0 ]; then
     rm -f "$tmp_list"
@@ -362,8 +374,109 @@ prompt_path() {
   printf '%s/%s.md\n' "$PROMPTS_DIR" "$1"
 }
 
+# Per-task handoff directory: handoffs/<id>/ holds one <nonce>.md per
+# assignment that used --context auto.
+handoff_dir() {
+  printf '%s/%s\n' "$HANDOFFS_DIR" "$1"
+}
+
+# Every derived artifact a task can own besides tasks/<id>.json, by EXACT name
+# (never an <id>-* glob: ids may contain hyphens, so a glob for task "a" would
+# also match task "a-b"'s files). tasks-clean removes exactly this set.
+task_prompt_artifacts() {
+  local id="$1" suffix
+  prompt_path "$id"
+  for suffix in review ack-done ack-blocked ack-review; do
+    prompt_path "${id}-${suffix}"
+  done
+}
+
 task_exists() {
   [ -f "$(task_path "$1")" ]
+}
+
+# --- Per-task mutation lock ---
+# Ledger writes are atomic per file (tmp + mv), but a status transition is a
+# read-modify-write: two actors updating the SAME task concurrently (an
+# orchestrator reassigning while a reviewer marks done) could otherwise lose
+# one update. mkdir is the atomic acquire; the holder pid lives inside so a
+# lock abandoned by a dead process is reclaimed, while a live holder (kill -0
+# succeeds, or fails with EPERM) is respected. Non-reentrant: a caller that
+# already holds the lock must use the *_unlocked mutators.
+task_lock_path() {
+  printf '%s/%s.lock\n' "$LOCKS_DIR" "$1"
+}
+
+_sched_pid_alive() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  if kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  # EPERM => alive but not ours; ESRCH => dead. ps distinguishes them.
+  ps -p "$pid" >/dev/null 2>&1
+}
+
+task_lock() {
+  local id="$1" lock deadline holder timeout
+  lock=$(task_lock_path "$id")
+  timeout="${SESSION_SCHEDULER_LOCK_TIMEOUT_SECS:-10}"
+  [[ "$timeout" =~ ^[0-9]+$ ]] || timeout=10
+  deadline=$(( $(epoch_now) + timeout ))
+  while :; do
+    if mkdir "$lock" 2>/dev/null; then
+      if ! printf '%s\n' "$$" > "$lock/pid" 2>/dev/null; then
+        rmdir "$lock" 2>/dev/null
+        echo "ERROR: could not record holder pid in $lock." >&2
+        return 1
+      fi
+      return 0
+    fi
+    if [ -L "$lock" ] || { [ -e "$lock" ] && { [ ! -d "$lock" ] || [ ! -O "$lock" ]; }; }; then
+      echo "ERROR: unsafe task lock (symlink, not a directory, or not owned by you): $lock" >&2
+      return 1
+    fi
+    holder=$(cat "$lock/pid" 2>/dev/null)
+    if [[ "$holder" =~ ^[0-9]+$ ]] && ! _sched_pid_alive "$holder"; then
+      # Stale reclaim, serialized through a `reclaim` marker (the SAME protocol
+      # the Codex side uses on this directory): claim the reclaim, re-read the
+      # pid, and dismantle the lock only if it is still the same dead holder.
+      # Without the recheck, two stale waiters could both read the dead pid,
+      # one reclaim and re-acquire, and the other then delete the new live
+      # holder's pid file — two holders at once.
+      # The winner TAKES OVER the lock in place (overwrites the dead pid with
+      # its own) rather than dismantling it: dismantling (rm pid, rmdir) opens
+      # a window where the directory exists with no pid — another waiter's
+      # transient reclaim marker can then make the final rmdir fail and leave
+      # an ownerless lock that every waiter waits on until timeout.
+      if mkdir "$lock/reclaim" 2>/dev/null; then
+        if [ "$(cat "$lock/pid" 2>/dev/null)" = "$holder" ] \
+           && printf '%s\n' "$$" > "$lock/pid" 2>/dev/null; then
+          rmdir "$lock/reclaim" 2>/dev/null || true
+          return 0
+        fi
+        rmdir "$lock/reclaim" 2>/dev/null || true
+        continue
+      fi
+    fi
+    if [ "$(epoch_now)" -ge "$deadline" ]; then
+      echo "ERROR: could not lock task $id within ${timeout}s (held by pid ${holder:-unknown}; lock: $lock)." >&2
+      [ -z "$holder" ] && echo "  The lock has no holder pid (interrupted acquire/reclaim); remove '$lock' by hand once no helper is running." >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+}
+
+# Release only a lock THIS process holds (pid file == $$), so a caller that
+# timed out, or a stale-reclaim loser, can never release someone else's lock.
+task_unlock() {
+  local lock
+  lock=$(task_lock_path "$1")
+  [ ! -L "$lock" ] && [ ! -L "$lock/pid" ] || return 1
+  [ "$(cat "$lock/pid" 2>/dev/null)" = "$$" ] || return 1
+  rm -f "$lock/pid" 2>/dev/null
+  rmdir "$lock" 2>/dev/null || true
 }
 
 # Read a task field via jq. Usage: task_get <id> <jq-expr>
@@ -404,7 +517,8 @@ task_write() {
 task_record_last_ack() {
   local id="$1" event="$2" target="$3" status="$4" file="$5"
   local current updated
-  current=$(cat "$(task_path "$id")") || return 0
+  task_lock "$id" || return 0
+  current=$(cat "$(task_path "$id")") || { task_unlock "$id"; return 0; }
   updated=$(printf '%s' "$current" | jq \
     --arg event "$event" \
     --arg target "$target" \
@@ -417,25 +531,37 @@ task_record_last_ack() {
        status: $status,
        at: $ts,
        file: (if $file == "" then null else $file end)
-     }') || return 0
+     }') || { task_unlock "$id"; return 0; }
   task_write "$id" "$updated" || true
+  task_unlock "$id"
   return 0
+}
+
+# Locked generic read-modify-write. Usage: task_update <id> <jq-filter> [jq args...]
+# Applies the filter to the current task JSON under the per-task lock and
+# writes the result atomically. Returns non-zero on lock, jq, or write failure.
+task_update() {
+  local id="$1" filter="$2"
+  shift 2
+  local current updated rc
+  task_lock "$id" || return 1
+  current=$(cat "$(task_path "$id")") || { task_unlock "$id"; return 1; }
+  updated=$(printf '%s' "$current" | jq "$@" "$filter") || { task_unlock "$id"; return 1; }
+  task_write "$id" "$updated"; rc=$?
+  task_unlock "$id"
+  return $rc
 }
 
 # Append a history entry. Usage: task_append_history <id> <event> <actor> <note>
 task_append_history() {
   local id="$1" event="$2" actor="$3" note="$4"
-  local current
-  current=$(cat "$(task_path "$id")")
-  local updated
-  updated=$(printf '%s' "$current" | jq \
+  task_update "$id" \
+    '.updated_at = $ts
+     | .history += [{ts: $ts, event: $event, actor: $actor, note: $note}]' \
     --arg ts "$(iso_now)" \
     --arg event "$event" \
     --arg actor "$actor" \
-    --arg note "$note" \
-    '.updated_at = $ts
-     | .history += [{ts: $ts, event: $event, actor: $actor, note: $note}]')
-  task_write "$id" "$updated"
+    --arg note "$note"
 }
 
 # --- Status transition enforcement ---
@@ -472,7 +598,19 @@ scheduler_force_enabled() {
 # Update status + history together. Usage: task_set_status <id> <status> <actor> [note]
 # Enforces legal transitions unless SESSION_SCHEDULER_FORCE=1 (then the history
 # note records "forced"). Sets started_at the first time status becomes assigned.
+# Runs under the per-task lock; the transition check happens INSIDE the lock so
+# it is evaluated against the state that will actually be replaced.
 task_set_status() {
+  local id="$1" rc
+  task_lock "$id" || return 1
+  task_set_status_unlocked "$@"; rc=$?
+  task_unlock "$id"
+  return $rc
+}
+
+# Caller MUST already hold task_lock <id>. Used by task-assign to fold its
+# metadata update and status flip into one locked mutation.
+task_set_status_unlocked() {
   local id="$1" status="$2" actor="$3" note="${4:-}"
   local current_status
   current_status=$(task_get "$id" '.status')
@@ -505,14 +643,9 @@ task_set_status() {
 # Set assignee (used by task-assign).
 task_set_assignee() {
   local id="$1" assignee="$2" prompt_file="$3"
-  local current
-  current=$(cat "$(task_path "$id")")
-  local updated
-  updated=$(printf '%s' "$current" | jq \
+  task_update "$id" '.assignee = $assignee | .prompt_file = $prompt_file' \
     --arg assignee "$assignee" \
-    --arg prompt_file "$prompt_file" \
-    '.assignee = $assignee | .prompt_file = $prompt_file')
-  task_write "$id" "$updated"
+    --arg prompt_file "$prompt_file"
 }
 
 validate_task_id() {

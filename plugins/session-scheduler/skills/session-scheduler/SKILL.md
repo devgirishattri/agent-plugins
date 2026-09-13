@@ -5,9 +5,9 @@ description: When and how to track multi-pane orchestrator → executor work wit
 
 # session-scheduler: file-backed task ledger
 
-A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `$SESSION_SCHEDULER_HOME/tasks/<id>.json`; prompts go to `$SESSION_SCHEDULER_HOME/prompts/<id>.md`.
+A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `$SESSION_SCHEDULER_HOME/tasks/<id>.json`; prompts and lifecycle packets go to `$SESSION_SCHEDULER_HOME/prompts/`; auto handoffs go to `$SESSION_SCHEDULER_HOME/handoffs/<task-id>/<nonce>.md`; per-task mutation locks live in `$SESSION_SCHEDULER_HOME/locks/<id>.lock/`.
 
-Storage is keyed on `SESSION_SCHEDULER_HOME`, which must already be present in each pane's environment, **inherited when the agent process started** — the launcher/parent shell establishes it before the agent starts, and every participating pane must be launched with the same absolute value. The `/task-*` commands and the scripts never export or derive it (there is no git-root/cwd fallback); they **fail closed** when it is unset, and the fix is to relaunch the pane/session with the correct environment. Direct human script use may set `SESSION_SCHEDULER_HOME=<dir>` in the parent shell beforehand, but agent-facing instructions never combine environment setup with helper execution — an already-running agent invokes each helper as exactly one literal Bash segment using the inherited value. `/task-assign --context` requires `SESSION_CONTEXT_HOME` under the same inherited-at-startup contract.
+Storage is keyed on `SESSION_SCHEDULER_HOME`, which must already be present in each pane's environment, **inherited when the agent process started** — the launcher/parent shell establishes it before the agent starts, and every participating pane must be launched with the same absolute value. The `/task-*` commands and the scripts never export or derive it (there is no git-root/cwd fallback); they **fail closed** when it is unset, and the fix is to relaunch the pane/session with the correct environment. Direct human script use may set `SESSION_SCHEDULER_HOME=<dir>` in the parent shell beforehand, but agent-facing instructions never combine environment setup with helper execution — an already-running agent invokes each helper as exactly one literal Bash segment using the inherited value. `/task-assign --context NAME` (an explicit knowledge snapshot) requires `SESSION_CONTEXT_HOME` under the same inherited-at-startup contract; `--context auto` does not.
 
 Launching every pane with the same shared home means **claude and codex panes working in the same project share the same ledger** — orchestrator and reviewer can both read/write the same task list.
 
@@ -36,14 +36,19 @@ Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executo
 Legal status transitions (enforced by every command):
 `created→assigned`, `created→blocked`, `assigned→review`, `assigned→done`, `assigned→blocked`, `assigned→assigned` (reassignment), `review→done` (approve), `review→blocked` (reject), `blocked→assigned`. Anything else is rejected with the current status and legal next steps; override with `--force` (or `SESSION_SCHEDULER_FORCE=1`), which records "forced" in history.
 
-`/tasks-clean` removes old task files past `--older-than DAYS` (default 7) — **any status** by default; narrow with `--status done|blocked`. Dry-run by default.
+`/tasks-clean` removes tasks past `--older-than DAYS` (default 7; a bare integer is days on both providers) — **any status** by default; narrow with `--status done|blocked`. Dry-run by default. It deletes every artifact the task owns by exact name (base prompt, review packet, ack packets, `handoffs/<id>/`, leftover lock), keeps a task that a surviving task still lists in `depends_on` (reported as `kept … (referenced by …)`), and sweeps aged **orphans** (handoff dirs / known-suffix prompt files with no task JSON).
 
 ## Stages, ETAs, and dependencies
 
 - **Stages** are optional free-form labels (`--stage` on `/task-new` or `/task-assign`). Suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`. View grouped output with `/task-status --by-stage` or `/task-board`.
 - **ETAs**: `/task-assign --eta MINUTES` stores `eta_at`; tasks past it are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
 - **Dependencies**: `/task-new --depends-on id1,id2` stores `depends_on`. `/task-assign` refuses to dispatch until every dependency is `done` (the error names the unmet deps) unless `--force`.
-- **Context attach**: `/task-assign --context NAME` resolves the context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`, records `meta.context`, and tells the executor to `/knowledge:context-load NAME` before starting. Snapshot names follow the knowledge context store's contract — canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`); a non-canonical `NAME` is rejected before any side effect, and `--context auto` mints a canonical, date-free `auto_handoff_<random-hex>` name (semantic prefix + entropy-only nonce, never a task id or timestamp) so the executor can always load what was attached; the task association stays in the handoff body and `meta.context`.
+- **Context attach (explicit)**: `/task-assign --context NAME` resolves the knowledge context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`, records `meta.context` + `meta.context_home`, and tells the executor to `/knowledge:context-load NAME` before starting. Snapshot names follow the knowledge context store's contract — canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`); a non-canonical `NAME` is rejected before any side effect.
+- **Auto handoff**: `/task-assign --context auto` writes a **scheduler-owned** handoff at `handoffs/<task-id>/<nonce>.md` under the shared scheduler home (the nonce is 32 lowercase hex digits from OS randomness — never the task id or a timestamp), mode 0600, derived from the approved prompt + ledger state. It is never overwritten: each assignment adds a new file; the current one is recorded as `meta.handoff_file` (with `meta.handoff_home`). The packet carries the absolute path under `## Handoff` ("read it first"). The knowledge context store is never written and `SESSION_CONTEXT_HOME` is not needed. Handoffs are swept with the task by `/tasks-clean`. A reassignment with no `--context` clears all four attachment keys.
+
+## Concurrency
+
+Every ledger write is atomic (tmp + mv), and every read-modify-write (status transitions, history, metadata, acks, durations) runs under the per-task lock `locks/<id>.lock/` (mkdir-atomic; `pid` inside; `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS`, default 10; a lock whose holder pid is dead is reclaimed). Both providers use the identical lock path, so Claude and Codex panes sharing one ledger exclude each other. The lock is never held across session-chat transport. Known limitation: two simultaneous *reassignments of the same task* still race on the prompt file; coordinate those serially.
 
 ## Nested transport and escalation
 
@@ -69,13 +74,13 @@ Legal status transitions (enforced by every command):
 |---|---|
 | `/task-new <name> [--meta k=v] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id. |
 | `/task-assign <pane> <id> [--eta MIN] [--stage NAME] [--context NAME] [--reviewer PANE] [--workflow ID] [--force] <prompt>` | Dispatch the task to an executor and update the ledger. |
-| `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage\|--by-workflow\|--workflow ID]` | Read-only view. Default = active (created+assigned+review). Shows OVERDUE/STALE flags. |
-| `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); durably acks the assigner. |
+| `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage\|--by-workflow\|--workflow ID]` | Read-only view. Default = active (created+assigned+review); `--pending` = created only; `--mine` = assigner, assignee, or reviewer is me. Shows OVERDUE/STALE flags. |
+| `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); durably acks the assigner. A dispatch-only retry reuses the original note. |
 | `/task-done <id> [--force] [note]` | Executor or reviewer calls this; records duration; durably acks the assigner. |
 | `/task-block <id> [--force] <reason>` | Executor or reviewer calls this when blocked/rejecting; reason required. |
 | `/task-board` | Stage-grouped dashboard: id, name, status, assignee, age, flags, unmet deps + totals. |
-| `/tasks-clean [--older-than DAYS] [--status S] [--apply]` | Dry-run by default. |
-| `/scheduler-doctor` | Diagnose dirs, session-chat install, incoming-mode, jq/tmux, date math. |
+| `/tasks-clean [--older-than DAYS] [--status S] [--apply]` | Dry-run by default. Removes owned prompt/packet/handoff files too; keeps referenced prerequisites; sweeps aged orphans. |
+| `/scheduler-doctor` | Diagnose dirs (tasks/prompts/handoffs/locks), session-chat install, incoming-mode, context home (reported, never created), legacy knowledge-store residue, jq/tmux, date math. |
 
 ## Ledger schema
 
@@ -97,8 +102,10 @@ Legal status transitions (enforced by every command):
   "duration_seconds": 1234,
   "meta": {
     "free-form": "key/value",
-    "context": "context_snapshot_name",
-    "context_home": "/abs/.../.tmp/contexts",
+    "context": "context_snapshot_name (explicit --context NAME only)",
+    "context_home": "/abs/.../.tmp/contexts (explicit --context NAME only)",
+    "handoff_file": "/abs/.../scheduler/handoffs/<id>/<nonce>.md (--context auto only)",
+    "handoff_home": "/abs/.../scheduler/handoffs (--context auto only)",
     "workflow_id": "workflow-group-id",
     "scheduler_home": "/abs/.../.tmp/scheduler",
     "review_...": "reviewer-routing bookkeeping (review_dispatch_status, review_dispatched_at, …)",
@@ -112,7 +119,7 @@ Legal status transitions (enforced by every command):
 
 `started_at`, `eta_at`, `duration_seconds`, `stage`, `reviewer`, and `depends_on` are optional — older task files without them still work.
 
-Atomic writes (tmp + mv) — concurrent executors updating different tasks won't conflict.
+Atomic writes (tmp + mv) plus the per-task lock — concurrent actors updating the same task won't lose an update; different tasks never contend.
 
 ## Conventions
 

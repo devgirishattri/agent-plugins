@@ -13,8 +13,8 @@ Every plugin below ships for both providers at the same version number.
 |--------|---------|---------|
 | `session-manager` | 1.7.5 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.9 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.5.14 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.16 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-scheduler` | 0.6.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `knowledge` | 0.3.17 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.5.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
@@ -27,7 +27,7 @@ version here along with the other four.
 
 Supported platforms are macOS and Linux; `session-manager` also runs on Windows
 under WSL. The scripts run on the bash 3.2 that macOS ships, which is verified
-rather than assumed: the `session-scheduler` suite passes 61/61 under 3.2.57.
+rather than assumed: the `session-scheduler` suite passes 72/72 under 3.2.57.
 
 | Dependency | Needed by | Hard or optional |
 |------------|-----------|------------------|
@@ -237,8 +237,10 @@ panes can actually message each other before assigning tasks.
 
 The ledger itself does not touch tmux, so creating and querying tasks works
 outside it. Assigning, reviewing, completing, and blocking all notify through
-`session-chat`, which does require tmux. Attaching a context to a task
-additionally requires `SESSION_CONTEXT_HOME`.
+`session-chat`, which does require tmux. Attaching an explicit knowledge
+context (`--context NAME`) additionally requires `SESSION_CONTEXT_HOME`;
+`--context auto` writes a scheduler-owned handoff under the ledger home and
+needs nothing else.
 
 Run `/scheduler-doctor` first. It checks jq, tmux, the session-chat install and
 its version, ledger-home drift, and the current pane's incoming mode, and it

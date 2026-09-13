@@ -7,8 +7,9 @@
 # Context snapshots and their archived history hold private handoff content, so
 # keep everything owner-only. umask 077 makes new files 0600 / dirs 0700
 # (process-local: the /context-* commands run these scripts as subprocesses, so
-# it never tightens the user's interactive umask). Auto-context handoffs written
-# by session-scheduler are 0400 and are preserved as-is by harden_existing_contexts_dir.
+# it never tightens the user's interactive umask). Every regular file in the
+# store is normalized to 0600 by harden_existing_contexts_dir (session-scheduler
+# no longer writes into this store; its handoffs live under its own home).
 umask 077
 
 # --- tmux checks ---
@@ -155,9 +156,9 @@ _context_validate_directory() {
 }
 
 context_safe_file_mode() {
-  # Scheduler auto-contexts are intentionally immutable at 0400. Preserve only
-  # that exact mode; normalize every other legacy regular file to 0600 so modes
-  # such as 0000, 0100, 0500, and 0700 cannot survive merely by ending in 00.
+  # Every regular file normalizes to 0600, so legacy modes such as 0000, 0100,
+  # 0400, 0500, and 0700 never survive. (Pre-0.6.0 session-scheduler wrote 0400
+  # auto handoffs here; that special case is gone with the files' relocation.)
   local path="$1" raw_mode
   raw_mode=$(_context_path_mode "$path") || {
     _context_path_exists "$path" || return 2
@@ -170,11 +171,7 @@ context_safe_file_mode() {
       return 1
       ;;
   esac
-  if [ "$raw_mode" = "400" ]; then
-    printf '400\n'
-  else
-    printf '600\n'
-  fi
+  printf '600\n'
 }
 
 ensure_context_regular_file() {

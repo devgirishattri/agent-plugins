@@ -430,12 +430,12 @@ run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task
 ROUTED_FILE="$TEST_HOME/scheduler/tasks/$ROUTED_ID.json"
 [ "$(jq -r '.reviewer' "$ROUTED_FILE")" = "scheduler-reviewer" ] && ok || fail "reviewer route not recorded"
 [ "$(jq -r '.meta.workflow_id' "$ROUTED_FILE")" = "release-42" ] && ok || fail "workflow id not recorded"
-AUTO_CONTEXT=$(jq -r '.meta.context' "$ROUTED_FILE")
-[ -f "$TEST_HOME/contexts/$AUTO_CONTEXT.md" ] && ok || fail "automatic context snapshot missing"
-printf '%s\n' "$AUTO_CONTEXT" | grep -Eq '^auto_handoff_[0-9a-f]{32}$' \
+AUTO_CONTEXT=$(jq -r '.meta.handoff_file' "$ROUTED_FILE")
+[ -f "$AUTO_CONTEXT" ] && ok || fail "automatic handoff missing"
+basename "$AUTO_CONTEXT" | grep -Eq '^[0-9a-f]{32}\.md$' \
   && ok || fail "automatic context name is not an entropy-only nonce: $AUTO_CONTEXT"
-AUTO_CONTEXT_MODE=$(stat -c '%a' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null || stat -f '%Lp' "$TEST_HOME/contexts/$AUTO_CONTEXT.md" 2>/dev/null)
-[ "$AUTO_CONTEXT_MODE" = "400" ] && ok || fail "automatic context is not owner read-only: $AUTO_CONTEXT_MODE"
+AUTO_CONTEXT_MODE=$(path_mode "$AUTO_CONTEXT")
+[ "$AUTO_CONTEXT_MODE" = "600" ] && ok || fail "automatic handoff is not owner-only: $AUTO_CONTEXT_MODE"
 
 # Cross-provider task ids may contain dots, hyphens, uppercase letters, and
 # obvious date/epoch tokens; auto context filenames must contain none of them.
@@ -448,15 +448,15 @@ jq --arg id "$CROSS_PROVIDER_ID" '.id = $id' "$TEST_HOME/scheduler/tasks/$CROSS_
 mv "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json.tmp" "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json"
 run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" bash "$SCRIPT_DIR/task-assign.sh" \
   scheduler-executor "$CROSS_PROVIDER_ID" --context auto "Cross-provider auto context"
-CROSS_AUTO_CONTEXT=$(jq -r '.meta.context' "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json")
-printf '%s\n' "$CROSS_AUTO_CONTEXT" | grep -Eq '^auto_handoff_[0-9a-f]{32}$' \
+CROSS_AUTO_CONTEXT=$(jq -r '.meta.handoff_file' "$TEST_HOME/scheduler/tasks/$CROSS_PROVIDER_ID.json")
+basename "$CROSS_AUTO_CONTEXT" | grep -Eq '^[0-9a-f]{32}\.md$' \
   && ok || fail "cross-provider auto context name is not an entropy-only nonce: $CROSS_AUTO_CONTEXT"
-if printf '%s\n' "$CROSS_AUTO_CONTEXT" | grep -Eq '20260811|1786421169'; then
+if basename "$CROSS_AUTO_CONTEXT" | grep -Eq '20260811|1786421169'; then
   fail "cross-provider auto context leaked a date/epoch token: $CROSS_AUTO_CONTEXT"
 else
   ok
 fi
-[ -f "$TEST_HOME/contexts/$CROSS_AUTO_CONTEXT.md" ] && ok \
+[ -f "$CROSS_AUTO_CONTEXT" ] && ok \
   || fail "cross-provider auto context snapshot missing"
 grep 'Shared scheduler home (provenance):' "$TEST_HOME/scheduler/prompts/$ROUTED_ID.md" >/dev/null && ok || fail "assignment prompt missing shared scheduler home provenance"
 run_sender bash "$SCRIPT_DIR/task-status.sh" --by-workflow | grep 'Workflow: release-42' >/dev/null && ok || fail "workflow grouping missing"
@@ -479,8 +479,8 @@ ROUTED_REVIEW_PACKET="$TEST_HOME/scheduler/prompts/${ROUTED_ID}-review.md"
 awk '/^## Original assignment/{exit} {print}' "$ROUTED_REVIEW_PACKET" > "$TEST_HOME/routed-review-instructions.txt"
 grep -F "Shared scheduler home (provenance): $EXPECTED_SCHEDULER_HOME" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   && ok || fail "review packet missing exact canonical scheduler home provenance"
-grep -F "Shared context home (provenance): $EXPECTED_CONTEXT_HOME" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
-  && ok || fail "review packet missing exact canonical context home provenance"
+grep -F "Auto handoff (read it first): $AUTO_CONTEXT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  && ok || fail "review packet missing exact handoff path"
 grep -F 'inherited' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   && ok || fail "review packet missing inherited-environment guidance"
 grep -F 'relaunch' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
@@ -504,10 +504,10 @@ grep -F '$session-scheduler:task-block' "$TEST_HOME/routed-review-instructions.t
   && ok || fail "review packet missing Codex rejection command"
 grep -F '/session-scheduler:task-block' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
   && ok || fail "review packet missing Claude rejection command"
-grep -F "\$knowledge:context-load $AUTO_CONTEXT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
-  && ok || fail "review packet missing Codex context-load command"
-grep -F "/knowledge:context-load $AUTO_CONTEXT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
-  && ok || fail "review packet missing Claude context-load command"
+grep -F "Auto handoff (read it first): $AUTO_CONTEXT" "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  && ok || fail "review packet missing handoff path"
+! grep -F 'knowledge:context-load auto' "$TEST_HOME/routed-review-instructions.txt" >/dev/null \
+  && ok || fail "review packet treats auto handoff as knowledge context"
 run_reviewer bash "$SCRIPT_DIR/task-done.sh" "$ROUTED_ID" "approved independently"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$ROUTED_ID" | grep 'done' >/dev/null && ok || fail "reviewer could not complete routed task"
 
@@ -555,7 +555,7 @@ if grep 'Workflow: (none)' "$TEST_HOME/byworkflow.txt" >/dev/null; then
   fail "by-workflow included tasks without workflow ids"
 fi
 
-# Same-second reassignments must mint separate immutable automatic contexts.
+# Same-second reassignments must mint separate never overwritten handoffs.
 # Freeze the old timestamp format so this deterministically catches the former
 # second-precision filename collision.
 FIXED_DATE_DIR="$TEST_HOME/fixed-date-bin"
@@ -573,17 +573,17 @@ chmod +x "$FIXED_DATE_DIR/date"
 unique_ctx=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Same-second context task")
 UNIQUE_CTX_ID=$(printf '%s\n' "$unique_ctx" | awk '/^Created task/{print $3}' | sed 's/:$//')
 run_sender env PATH="$FIXED_DATE_DIR:$PATH" SESSION_CONTEXT_HOME="$TEST_HOME/contexts" \
-  bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$UNIQUE_CTX_ID" --context auto "First immutable handoff"
-FIRST_AUTO_CONTEXT=$(jq -r '.meta.context' "$TEST_HOME/scheduler/tasks/$UNIQUE_CTX_ID.json")
+  bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$UNIQUE_CTX_ID" --context auto "First handoff"
+FIRST_AUTO_CONTEXT=$(jq -r '.meta.handoff_file' "$TEST_HOME/scheduler/tasks/$UNIQUE_CTX_ID.json")
 run_sender env PATH="$FIXED_DATE_DIR:$PATH" SESSION_CONTEXT_HOME="$TEST_HOME/contexts" \
-  bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$UNIQUE_CTX_ID" --context auto "Second immutable handoff" \
+  bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$UNIQUE_CTX_ID" --context auto "Second handoff" \
   && ok || fail "same-second auto-context reassignment collided"
-SECOND_AUTO_CONTEXT=$(jq -r '.meta.context' "$TEST_HOME/scheduler/tasks/$UNIQUE_CTX_ID.json")
+SECOND_AUTO_CONTEXT=$(jq -r '.meta.handoff_file' "$TEST_HOME/scheduler/tasks/$UNIQUE_CTX_ID.json")
 [ "$FIRST_AUTO_CONTEXT" != "$SECOND_AUTO_CONTEXT" ] && ok || fail "same-second reassignment reused an auto-context filename"
-[ -f "$TEST_HOME/contexts/$FIRST_AUTO_CONTEXT.md" ] && ok || fail "first immutable auto context was not preserved"
-[ -f "$TEST_HOME/contexts/$SECOND_AUTO_CONTEXT.md" ] && ok || fail "second immutable auto context missing"
-grep 'First immutable handoff' "$TEST_HOME/contexts/$FIRST_AUTO_CONTEXT.md" >/dev/null && ok || fail "first auto context was overwritten"
-grep 'Second immutable handoff' "$TEST_HOME/contexts/$SECOND_AUTO_CONTEXT.md" >/dev/null && ok || fail "second auto context has stale assignment content"
+[ -f "$FIRST_AUTO_CONTEXT" ] && ok || fail "first handoff was not preserved"
+[ -f "$SECOND_AUTO_CONTEXT" ] && ok || fail "second handoff missing"
+grep 'First handoff' "$FIRST_AUTO_CONTEXT" >/dev/null && ok || fail "first handoff was overwritten"
+grep 'Second handoff' "$SECOND_AUTO_CONTEXT" >/dev/null && ok || fail "second handoff has stale assignment content"
 
 # Review packets must never inline a ledger-supplied traversal path.
 TRAVERSAL_SECRET='TRAVERSAL-SECRET-MUST-NOT-BE-DISPATCHED'
@@ -829,8 +829,8 @@ jq -e '
 RETRY_REVIEW_PACKET="$TEST_HOME/scheduler/prompts/${RETRY_REVIEW_ID}-review.md"
 grep -F 'Review request: original review note' "$RETRY_REVIEW_PACKET" >/dev/null \
   && ok || fail "review retry packet did not preserve the original review request"
-grep -F 'Dispatch retry note: transport restored' "$RETRY_REVIEW_PACKET" >/dev/null \
-  && ok || fail "review retry packet omitted the retry note"
+! grep -F 'transport restored' "$RETRY_REVIEW_PACKET" >/dev/null \
+  && ok || fail "review retry packet used the ignored retry note"
 
 rb=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Rollback task")
 RB_ID=$(printf '%s\n' "$rb" | awk '/^Created task/{print $3}' | sed 's/:$//')
@@ -842,12 +842,12 @@ run_sender bash "$SCRIPT_DIR/task-status.sh" "$RB_ID" | grep 'created' >/dev/nul
 
 auto_rb=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Auto-context rollback task")
 AUTO_RB_ID=$(printf '%s\n' "$auto_rb" | awk '/^Created task/{print $3}' | sed 's/:$//')
-before_auto=$(find "$TEST_HOME/contexts" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
+before_auto=$(find "$TEST_HOME/scheduler/handoffs" -type f -name '*.md' | wc -l | tr -d ' ')
 if run_sender env SESSION_CONTEXT_HOME="$TEST_HOME/contexts" SESSION_CHAT_ROOT_OVERRIDE="$TEST_HOME/failstub" \
   bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$AUTO_RB_ID" --context auto "Doomed handoff" 2>/dev/null; then
   fail "auto-context assignment with failing dispatch did not fail"
 fi
-after_auto=$(find "$TEST_HOME/contexts" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
+after_auto=$(find "$TEST_HOME/scheduler/handoffs" -type f -name '*.md' | wc -l | tr -d ' ')
 [ "$before_auto" = "$after_auto" ] && ok || fail "failed dispatch left an automatic context snapshot"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$AUTO_RB_ID" | grep 'created' >/dev/null && ok || fail "auto-context rollback changed ledger"
 

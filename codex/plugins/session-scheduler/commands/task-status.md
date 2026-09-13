@@ -27,3 +27,4 @@ argument-hint: "[task-id|--all|--pending|--mine|--by-stage|--by-workflow|--workf
 4. Flags: `OVERDUE` = past `eta_at`; `STALE` = assigned/review with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) minutes; `-` = none.
 5. Default output is active tasks; `--all` includes done and blocked tasks; `--by-stage` groups non-done tasks; `--by-workflow` shows every task carrying a workflow id, including completed steps, and omits ungrouped tasks; `--workflow ID` filters one workflow.
 6. The single-task view also lists the recorded shared scheduler home, dependencies, and flags.
+7. `--pending` selects only status `created`; `--active` selects non-terminal tasks. `--mine` matches the current pane as assigner, assignee, or reviewer. Value-taking flags require a value.

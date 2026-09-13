@@ -23,4 +23,6 @@ argument-hint: ""
    that this pane be relaunched with the correct environment instead of
    deriving another ledger.
 
-3. Report scheduler/context directories, current pane, enforced session-chat version, date math, workspace-root consistency, and ledger provenance. A workspace-home warning means a child checkout may be writing to a private ledger and must be fixed before dispatch.
+3. Report the absolute ledger home, whether it is inside the current git root, the handoffs directory count, current pane, enforced session-chat version, date math, and ledger provenance. Custom workspace store locations are supported; do not assume `.tmp/scheduler` is the expected path.
+4. Report `SESSION_CONTEXT_HOME` as set or unset without creating or resolving it. It is needed only for explicit `--context NAME`, not `--context auto`.
+5. Surface any WARN listing legacy `auto_handoff_*.md` files in the context home and its manual removal command. Diagnostics are read-only and never delete that residue.

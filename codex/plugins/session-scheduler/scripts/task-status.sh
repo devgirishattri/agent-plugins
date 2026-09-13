@@ -15,6 +15,7 @@ ensure_dirs || exit 1
 MODE="${1:---active}"
 WORKFLOW_FILTER=""
 if [ "$MODE" = "--workflow" ]; then
+  require_flag_value "$@" || exit 1
   WORKFLOW_FILTER="${2:-}"
   validate_route_name "workflow id" "$WORKFLOW_FILTER" || exit 1
 fi
@@ -111,7 +112,10 @@ for file in "$TASKS_DIR"/*.json; do
     --all)
       row=$(jq -r "$ROW_FILTER" "$file")
       ;;
-    --pending|--active)
+    --pending)
+      row=$(jq -r "select(.status == \"created\") | $ROW_FILTER" "$file")
+      ;;
+    --active)
       row=$(jq -r "select(.status != \"done\" and .status != \"blocked\") | $ROW_FILTER" "$file")
       ;;
     --mine)

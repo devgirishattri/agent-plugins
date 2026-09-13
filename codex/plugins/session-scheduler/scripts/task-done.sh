@@ -34,7 +34,7 @@ if [ -n "$STARTED_AT" ]; then
   if [ "$START_EPOCH" -gt 0 ]; then
     DURATION=$((  $(now_epoch) - START_EPOCH ))
     [ "$DURATION" -lt 0 ] && DURATION=0
-    jq --argjson d "$DURATION" '.duration_seconds=$d' "$FILE" | write_json_atomic "$FILE" \
+    task_jq_update "$FILE" --argjson d "$DURATION" '.duration_seconds=$d' \
       || echo "WARN: Could not record duration_seconds for $ID." >&2
   fi
 fi
