@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 
-MODES = ("search", "recall", "hook-off", "hook-on")
+MODES = ("search", "recall", "hook-off", "hook-on", "hook-selective")
 SLUG = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)*\Z")
 K = 5
 
@@ -149,7 +149,8 @@ def invoke(scripts, store, case, mode, timeout):
     if mode.startswith("hook-"):
         environment.update(KNOWLEDGE_AUTO_RECALL="prompt", KNOWLEDGE_AUTO_RECALL_LIMIT="5",
                            KNOWLEDGE_AUTO_RECALL_TERMS="4", KNOWLEDGE_AUTO_RECALL_BUDGET="4000",
-                           KNOWLEDGE_AUTO_RECALL_GRAPH="true" if mode == "hook-on" else "false")
+                           KNOWLEDGE_AUTO_RECALL_GRAPH="false" if mode == "hook-off" else "true",
+                           KNOWLEDGE_AUTO_RECALL_GRAPH_MODE="selective" if mode == "hook-selective" else "all")
         command = ["bash", str(scripts / "inject-recall.sh"), "--prompt"]
         payload = json.dumps({"prompt": case["prompt"]}).encode("utf-8")
     else:
@@ -194,7 +195,7 @@ def aggregate(rows):
 
 def evaluate(args):
     corpus_hash = hashlib.sha256(args.corpus.read_bytes()).hexdigest()
-    helper_names = ("memory-search.sh", "search-query.py", "inject-recall.sh", "memory-backlinks.sh", "memory-lint.sh", "lib.sh")
+    helper_names = ("memory-search.sh", "search-query.py", "recall-graph.py", "inject-recall.sh", "memory-backlinks.sh", "memory-lint.sh", "lib.sh")
     hashes = {name: hashlib.sha256((args.scripts / name).read_bytes()).hexdigest() for name in helper_names}
     corpus = load_corpus(args.corpus)
     known = {m["slug"] for m in corpus["memories"]}

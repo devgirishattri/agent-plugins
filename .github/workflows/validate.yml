@@ -76,6 +76,8 @@ jobs:
         run: |
           python3 -B codex/plugins/knowledge/scripts/test-knowledge-find.py
           python3 -B plugins/knowledge/scripts/test-knowledge-find.py
+          python3 -B codex/plugins/knowledge/scripts/test-recall-graph.py
+          python3 -B plugins/knowledge/scripts/test-recall-graph.py
 
       - name: Validate retrieval evaluation tooling and corpus
         run: |
@@ -83,6 +85,8 @@ jobs:
           python3 -B plugins/knowledge/scripts/test-eval-retrieval.py
           python3 -B codex/plugins/knowledge/scripts/eval-retrieval.py --repeats 1 --warmup 0 --output "$RUNNER_TEMP/retrieval-codex.json"
           python3 -B plugins/knowledge/scripts/eval-retrieval.py --repeats 1 --warmup 0 --output "$RUNNER_TEMP/retrieval-claude.json"
+          python3 -B codex/plugins/knowledge/scripts/eval-retrieval.py --corpus codex/plugins/knowledge/scripts/fixtures/retrieval-eval-holdout.json --modes hook-off hook-on hook-selective --repeats 1 --warmup 0 --output "$RUNNER_TEMP/holdout-codex.json"
+          python3 -B plugins/knowledge/scripts/eval-retrieval.py --corpus plugins/knowledge/scripts/fixtures/retrieval-eval-holdout.json --modes hook-off hook-on hook-selective --repeats 1 --warmup 0 --output "$RUNNER_TEMP/holdout-claude.json"
           python3 -c 'import json,sys; [print(path, json.dumps(json.load(open(path))["summary"], indent=2)) for path in sys.argv[1:]]' "$RUNNER_TEMP/retrieval-codex.json" "$RUNNER_TEMP/retrieval-claude.json"
 
       - name: Run structured handoff regression tests

@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "notes": "Held-out graph-routing corpus. Distinct synthetic vocabulary (ProjectC/ProjectD, marlin/osprey/gantry) from retrieval-eval.json so no case shares a memory with the tuning set. Relevance labelled by intent BEFORE any selective-expansion results were produced (2026-09-16). Cases are built to probe the candidate filter (active-only, outbound-only, link-sentence overlap) from both sides: links that should be followed without any shared target token, links whose sentence merely mentions a prompt word, factual lookups vs how-to, exploratory questions, inbound-only and stale neighbours. Never add real project names.",
+  "memories": [
+    {
+      "slug": "projectc_marlin_release",
+      "name": "Marlin release procedure",
+      "description": "How a ProjectC marlin build is cut and shipped",
+      "tags": ["marlin", "release", "ship"],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** marlin ships weekly and a missed step blocks the whole train.\n\n**How to apply:** tag the build, run the smoke pass, then ship. Shipping is blocked on the days listed in [[projectc_blackout_days]]. The signing key rotation is tracked in [[projectc_signing_rotation]]."
+    },
+    {
+      "slug": "projectc_blackout_days",
+      "name": "Blackout days",
+      "description": "Days when no ProjectC shipment may go out",
+      "tags": ["blackout", "calendar"],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** finance closes the books on these days.\n\n**How to apply:** do not ship on a listed day; the next open day is fine."
+    },
+    {
+      "slug": "projectc_signing_rotation",
+      "name": "Signing key rotation",
+      "description": "Schedule for rotating the ProjectC signing key",
+      "tags": ["signing", "rotation"],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** the key expires yearly.\n\n**How to apply:** rotate in the first week of the quarter; nothing else changes."
+    },
+    {
+      "slug": "projectc_marlin_smoke",
+      "name": "Marlin smoke pass",
+      "description": "What the marlin smoke pass checks before a ship",
+      "tags": ["marlin", "smoke"],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** the smoke pass catches the packaging regressions.\n\n**How to apply:** run it on the tagged build only; the release steps are in [[projectc_marlin_release]]."
+    },
+    {
+      "slug": "projectd_osprey_ingest",
+      "name": "Osprey ingest pipeline",
+      "description": "How ProjectD osprey ingests partner feeds",
+      "tags": ["osprey", "ingest", "feeds"],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** partner feeds arrive in three formats.\n\n**How to apply:** normalise each feed, then load. A feed that fails validation is quarantined per [[projectd_quarantine_policy]]. Historical throughput numbers are in [[projectd_osprey_throughput_2024]]."
+    },
+    {
+      "slug": "projectd_quarantine_policy",
+      "name": "Quarantine policy",
+      "description": "How long a rejected osprey feed is held before deletion",
+      "tags": ["quarantine", "retention"],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** partners sometimes resend a corrected feed.\n\n**How to apply:** hold a rejected feed for ten days, then delete."
+    },
+    {
+      "slug": "projectd_osprey_throughput_2024",
+      "name": "Osprey throughput 2024",
+      "description": "Archived osprey ingest throughput figures",
+      "tags": ["osprey", "throughput"],
+      "type": "reference",
+      "status": "archived",
+      "body": "**Why:** kept for the audit trail.\n\n**How to apply:** nothing operational."
+    },
+    {
+      "slug": "projectd_osprey_alerts",
+      "name": "Osprey alert routing",
+      "description": "Where osprey ingest alerts are sent",
+      "tags": ["osprey", "alerts"],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** alerts went to a dead mailbox once.\n\n**How to apply:** route ingest alerts to the on-call channel; the pipeline itself is [[projectd_osprey_ingest]]."
+    },
+    {
+      "slug": "projectc_gantry_calibrate",
+      "name": "Gantry calibration",
+      "description": "Calibrating the ProjectC gantry after maintenance",
+      "tags": ["gantry", "calibration"],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** the gantry drifts after any maintenance.\n\n**How to apply:** run the calibration cycle twice. The old procedure for the previous gantry model is [[projectc_gantry_calibrate_v1]]."
+    },
+    {
+      "slug": "projectc_gantry_calibrate_v1",
+      "name": "Gantry calibration (previous model)",
+      "description": "Superseded calibration steps for the first gantry model",
+      "tags": ["gantry", "calibration", "previous"],
+      "type": "project",
+      "status": "superseded",
+      "body": "**Why:** the first model needed a manual offset.\n\n**How to apply:** only when servicing the first model."
+    },
+    {
+      "slug": "projectc_gantry_parts",
+      "name": "Gantry spare parts",
+      "description": "Where ProjectC gantry spare parts are stocked",
+      "tags": ["gantry", "parts", "stock"],
+      "type": "reference",
+      "status": "active",
+      "body": "**Why:** the belt and the encoder wear out first.\n\n**How to apply:** check stock before scheduling maintenance."
+    },
+    {
+      "slug": "reference_ledger_export",
+      "name": "Ledger export format",
+      "description": "Column layout of the nightly ledger export",
+      "tags": ["ledger", "export", "csv"],
+      "type": "reference",
+      "status": "active",
+      "body": "**Why:** downstream parsers break on column changes.\n\n**How to apply:** append columns only; never reorder."
+    },
+    {
+      "slug": "user_prefers_short_pr",
+      "name": "User prefers short PRs",
+      "description": "Keep pull requests under three hundred lines",
+      "tags": ["pull-requests", "style"],
+      "type": "user",
+      "status": "active",
+      "body": "**Why:** review quality drops with size.\n\n**How to apply:** split anything larger."
+    },
+    {
+      "slug": "feedback_no_force_push",
+      "name": "Never force-push shared branches",
+      "description": "Force-pushing a shared branch is forbidden",
+      "tags": ["git", "force-push"],
+      "type": "feedback",
+      "status": "active",
+      "body": "**Why:** it destroyed a reviewer's local work once.\n\n**How to apply:** rebase locally, push a new branch."
+    }
+  ],
+  "cases": [
+    {
+      "id": "h01_dependency_no_shared_token",
+      "category": "graph-helpful",
+      "query": "marlin ship",
+      "prompt": "can we ship the marlin build today",
+      "relevant": ["projectc_marlin_release", "projectc_blackout_days"],
+      "rationale": "Whether a ship is allowed today depends on the blackout calendar, which shares no prompt token; it is reachable only through the release entry's link. The link sentence ('Shipping is blocked on the days…') overlaps the intent."
+    },
+    {
+      "id": "h02_same_seed_unrelated_link",
+      "category": "graph-harmful",
+      "query": "marlin release smoke",
+      "prompt": "which checks does the marlin release smoke pass run",
+      "relevant": ["projectc_marlin_smoke", "projectc_marlin_release"],
+      "rationale": "The release entry also links the signing-key rotation, which does not answer a question about smoke checks; that link's sentence has no overlap with the prompt."
+    },
+    {
+      "id": "h03_lookup_not_howto",
+      "category": "factual-lookup",
+      "query": "quarantine held",
+      "prompt": "how long is a rejected osprey feed held",
+      "relevant": ["projectd_quarantine_policy"],
+      "rationale": "A factual lookup answered by one entry; the ingest pipeline that links to it is context, not an answer, and the archived throughput figures are noise."
+    },
+    {
+      "id": "h04_howto_with_helpful_link",
+      "category": "graph-helpful",
+      "query": "osprey feed fails validation",
+      "prompt": "what happens when an osprey feed fails validation",
+      "relevant": ["projectd_osprey_ingest", "projectd_quarantine_policy"],
+      "rationale": "The ingest entry's link sentence ('A feed that fails validation is quarantined…') overlaps the prompt and the quarantine policy completes the answer; the archived throughput link does not."
+    },
+    {
+      "id": "h05_archived_neighbour",
+      "category": "stale",
+      "query": "osprey ingest",
+      "prompt": "osprey ingest pipeline overview",
+      "relevant": ["projectd_osprey_ingest"],
+      "rationale": "Overview intent; the archived 2024 throughput neighbour is not relevant and must not be surfaced by expansion."
+    },
+    {
+      "id": "h06_inbound_only",
+      "category": "inbound-only",
+      "query": "osprey alerts",
+      "prompt": "where do osprey ingest alerts go",
+      "relevant": ["projectd_osprey_alerts"],
+      "rationale": "The alerts entry links OUT to the pipeline; the pipeline links nothing back. Expansion from the alerts seed along its outbound link would add the pipeline, which does not answer where alerts go."
+    },
+    {
+      "id": "h07_explicit_previous_model",
+      "category": "stale-intent",
+      "query": "gantry calibration previous",
+      "prompt": "calibration steps for the previous gantry model",
+      "relevant": ["projectc_gantry_calibrate_v1"],
+      "rationale": "The user explicitly asks for the previous model; the superseded entry is the answer even though it is demoted."
+    },
+    {
+      "id": "h08_superseded_neighbour_noise",
+      "category": "graph-harmful",
+      "query": "gantry calibration",
+      "prompt": "run the gantry calibration after maintenance",
+      "relevant": ["projectc_gantry_calibrate"],
+      "rationale": "Current procedure only; the superseded previous-model link is noise for this intent even though its sentence mentions the old procedure."
+    },
+    {
+      "id": "h09_exploratory",
+      "category": "exploratory",
+      "query": "gantry",
+      "prompt": "tell me what we know about the gantry",
+      "relevant": ["projectc_gantry_calibrate", "projectc_gantry_parts"],
+      "rationale": "Broad exploratory intent: both active gantry entries are relevant; the superseded one is not."
+    },
+    {
+      "id": "h10_link_word_mentioned_but_irrelevant",
+      "category": "graph-harmful",
+      "query": "marlin signing",
+      "prompt": "when does the marlin signing key rotate",
+      "relevant": ["projectc_signing_rotation"],
+      "rationale": "Direct answer is the rotation entry. The release entry also matches 'marlin' and links the blackout calendar in a sentence about shipping; that sentence does not overlap this prompt, so expansion should add nothing."
+    },
+    {
+      "id": "h11_negative_known_entity",
+      "category": "negative",
+      "query": "marlin rollback",
+      "prompt": "how do we roll back a shipped marlin build",
+      "relevant": [],
+      "rationale": "The store knows marlin releases but records nothing about rollback; nothing answers the intent. Expansion along the release entry's links would be pure noise."
+    },
+    {
+      "id": "h12_negative_unrelated",
+      "category": "negative",
+      "query": "kubernetes ingress",
+      "prompt": "configure the kubernetes ingress controller",
+      "relevant": [],
+      "rationale": "No entry is about this; every mode must return nothing."
+    },
+    {
+      "id": "h13_reference_unlinked",
+      "category": "reference",
+      "query": "ledger export columns",
+      "prompt": "can I reorder the ledger export columns",
+      "relevant": ["reference_ledger_export"],
+      "rationale": "Single unlinked reference entry; expansion has nothing to follow."
+    },
+    {
+      "id": "h14_user_and_feedback",
+      "category": "type-user",
+      "query": "force-push branch",
+      "prompt": "should I force-push the shared branch to fix the history",
+      "relevant": ["feedback_no_force_push"],
+      "rationale": "Standing feedback answers it; the PR-size preference is unrelated."
+    }
+  ]
+}

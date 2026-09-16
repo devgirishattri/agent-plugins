@@ -14,7 +14,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-manager` | 1.7.6 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.9 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.1 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.22 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `knowledge` | 0.3.23 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.5.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
@@ -196,8 +196,8 @@ enabled by different mechanisms:
 
 - **Recall** is an environment gate. `KNOWLEDGE_AUTO_RECALL=1` enables injection
   at session start and on each prompt (`session` or `prompt` selects just one).
-  `KNOWLEDGE_AUTO_RECALL_GRAPH=1` additionally pulls in backlink neighbors and
-  is deliberately strict, accepting only `1`, `yes`, `on`, or `true`.
+  `KNOWLEDGE_AUTO_RECALL_GRAPH=1` additionally enables selective outgoing-link
+  expansion and is deliberately strict, accepting only `1`, `yes`, `on`, or `true`.
 - **Capture** is a hook gate, not a variable. The retired `KNOWLEDGE_AUTO_CAPTURE`
   variable governs nothing. On Claude you enable capture by adding the opt-in
   `type: "prompt"` Stop-hook snippet from
@@ -533,17 +533,23 @@ Knowledge automatic recall is opt-in and independent of Claude/Codex native
 memory. `KNOWLEDGE_AUTO_RECALL` selects session and/or prompt injection;
 prompt seeds need a strong lexical field score or two distinct prompt terms.
 `KNOWLEDGE_AUTO_RECALL_GRAPH` is a separate strict gate (only `1`, `yes`,
-`on`, or `true`) and adds at most two inbound/outbound depth-one `[[slug]]`
-neighbors from the top two direct seeds, within the overall result and output
-budget caps. Direct results identify matching terms and fields; related results
-identify the seed memory that led to them.
-Invalid graph values and helper failures fail closed without breaking hooks.
+`on`, or `true`). With `KNOWLEDGE_AUTO_RECALL_GRAPH_MODE=selective` (the default),
+it adds at most two active outgoing depth-one neighbours from the top two direct
+seeds, only when a queried prompt term matches the text surrounding the link
+(exactly or by a shared six-letter prefix). Direct hits keep their priority;
+related rows identify the seed and matching link text. `KNOWLEDGE_AUTO_RECALL_GRAPH_MODE=all` restores the prior inbound/outbound
+expansion and stale-node demotion. Both modes retain result and byte caps.
+Invalid graph gates, invalid modes, and helper failures suppress expansion.
+This conservative filter reduces noise; it can miss useful weak-overlap links
+such as “ship” versus “shipping”. See the [evaluation contract](plugins/knowledge/scripts/fixtures/README.md)
+for the frozen original and independent corpora and their limitations.
 
 Once automatic recall and capture are enabled, these tunables bound them. The
 defaults are chosen to keep injected context small, so raise them deliberately.
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
+| `KNOWLEDGE_AUTO_RECALL_GRAPH_MODE` | Yes | Yes | `selective` | With graph enabled, filter outgoing links using queried-term evidence; `all` restores unfiltered expansion. Other values disable graph expansion. |
 | `KNOWLEDGE_AUTO_RECALL_LIMIT` | Yes | Yes | `5` | Maximum recalled memories injected per pass. |
 | `KNOWLEDGE_AUTO_RECALL_TERMS` | Yes | Yes | `4` | Maximum salient prompt terms queried per pass. |
 | `KNOWLEDGE_AUTO_RECALL_BUDGET` | Yes | Yes | `4000` | Byte cap on the injected recall block. |

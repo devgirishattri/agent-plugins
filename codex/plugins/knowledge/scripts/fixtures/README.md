@@ -12,7 +12,7 @@ network). Typical run:
 python3 codex/plugins/knowledge/scripts/eval-retrieval.py \
   --corpus codex/plugins/knowledge/scripts/fixtures/retrieval-eval.json \
   --scripts codex/plugins/knowledge/scripts \
-  --modes search recall hook-off hook-on \
+  --modes search recall hook-off hook-on hook-selective \
   --repeats 3 --warmup 1 --timeout 30 --output report.json
 ```
 
@@ -57,6 +57,34 @@ store. The harness's own tests live in `scripts/test-eval-retrieval.py`.
   vocabulary). Never add a real project, host, or person; the release
   privacy sweep scans this file whenever a non-empty denylist is configured.
 
+## Held-out corpus
+
+`retrieval-eval-holdout.json` is a second, frozen corpus (14 memories, 14
+cases, distinct ProjectC/ProjectD marlin/osprey/gantry vocabulary sharing no
+memory with the tuning set). Its labels were written before any selective
+graph result existed and must never be tuned against; it exists to show
+whether a change that helps the tuning set generalises. Cases probe graph
+routing from both sides: a dependency link with no shared target token, the
+same seed with an unrelated link, factual lookup versus how-to, an archived
+neighbour, an inbound-only link, an explicit previous-model request, a
+superseded neighbour, an exploratory question, a link sentence that merely
+mentions a prompt word, and negatives.
+
+Known limitation, measured (single repeat, hook modes). Tuning set:
+`hook-selective` recall@5 0.958 and returned precision 0.630, against 0.958
+and 0.526 for the unfiltered `hook-on` — every noise expansion on a positive
+case is gone, c26 is kept, and the negative c28 still gains its neighbour
+because "promotion" appears verbatim in the link sentence. Held-out set:
+`hook-selective` equals `hook-off` (recall@5 0.958, returned precision 0.535)
+while `hook-on` reaches recall 1.000 at returned precision 0.486. Selective
+drops every held-out expansion, including the one relevant one, h01, whose
+link sentence overlaps the prompt only as `ship`/`Shipping`, which the
+exact-or-six-letter-prefix rule cannot match. This says nothing about unseen
+data in general, only about these 14 cases.
+The rule is deliberately not loosened: a stem match that joins those two
+also joins `shipped`/`shipping` in a negative held-out case and re-admits
+noise. Run both corpora when changing the graph tier.
+
 ## Categories in the baseline
 
 28 cases over 18 memories: slug, name, tags-only, body-only, multi-relevant,
@@ -85,7 +113,8 @@ tag for that reason.
 | `search` | `memory-search.sh --limit 5 <query>` | TSV slugs (column 2) |
 | `recall` | `memory-search.sh --recall --limit 5 <query>` | `## <slug> (...)` headings |
 | `hook-off` | `inject-recall.sh --prompt` with `KNOWLEDGE_AUTO_RECALL=prompt`, limit 5, terms 4, budget 4000 | `- [slug]` rows |
-| `hook-on` | same, plus `KNOWLEDGE_AUTO_RECALL_GRAPH=true` | `- [slug]` rows, related included |
+| `hook-on` | same, plus `KNOWLEDGE_AUTO_RECALL_GRAPH=true` and `KNOWLEDGE_AUTO_RECALL_GRAPH_MODE=all` (the unfiltered legacy expansion, kept as the baseline) | `- [slug]` rows, related included |
+| `hook-selective` | same, plus `KNOWLEDGE_AUTO_RECALL_GRAPH=true` and `KNOWLEDGE_AUTO_RECALL_GRAPH_MODE=selective` (the default when the graph is enabled) | `- [slug]` rows, only link-evidenced active outgoing neighbours |
 
 Stdin is always provided (the hook reads its JSON there) and every call has a
 timeout. A timeout, a helper error, or nondeterministic output aborts the

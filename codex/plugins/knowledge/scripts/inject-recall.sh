@@ -57,7 +57,8 @@
 #   KNOWLEDGE_AUTO_RECALL_TERMS (max salient terms queried, default 4 — each
 #   is one scorer call, so this bounds per-prompt latency),
 #   KNOWLEDGE_AUTO_RECALL_BUDGET (output byte cap, default 4000), and
-#   KNOWLEDGE_AUTO_RECALL_GRAPH (strict opt-in true/yes/on/1; default off).
+#   KNOWLEDGE_AUTO_RECALL_GRAPH (strict opt-in true/yes/on/1; default off), and
+#   KNOWLEDGE_AUTO_RECALL_GRAPH_MODE (selective by default; all = legacy).
 # Supported platforms: macOS, Linux (prompt mode requires python3).
 set -uo pipefail
 
@@ -92,6 +93,8 @@ _km_graph_gate="${_km_graph_gate%"${_km_graph_gate##*[![:space:]]}"}"
 GRAPH=0
 case "$_km_graph_gate" in 1|yes|on|true) GRAPH=1 ;; esac
 unset _km_graph_gate
+GRAPH_MODE="${KNOWLEDGE_AUTO_RECALL_GRAPH_MODE:-selective}"
+case "$GRAPH_MODE" in selective|all) ;; *) GRAPH=0 ;; esac
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # From here on every failure must be silent.
@@ -213,10 +216,34 @@ ranked="$(printf '%s\n' "$rows" | awk -F'\t' '
 # helper performs one authoritative batched resolver pass; graph failures are
 # intentionally silent and leave direct lexical results intact.
 related=""
+graph_plan=""
 if [ "$GRAPH" -eq 1 ]; then
   seeds="$(printf '%s\n' "$ranked" | head -n 2 | cut -f2)"
+  if [ "$GRAPH_MODE" = selective ]; then
+    # A full direct-result list leaves no output slots for graph rows.
+    direct_count="$(printf '%s\n' "$ranked" | wc -l | tr -d ' ')"
+    if [ "$direct_count" -ge "$LIMIT" ]; then
+      seeds=""
+    else
+      graph_args=(--store "$store")
+      n=0
+      while IFS= read -r slug; do
+        graph_args+=(--direct "$slug")
+        n=$((n + 1))
+        [ "$n" -gt 2 ] || graph_args+=(--seed "$slug")
+      done < <(printf '%s\n' "$ranked" | cut -f2)
+      graph_plan="$(printf '%s\n' "$terms" | head -n "$TERMS_MAX" | python3 -B "$DIR/recall-graph.py" "${graph_args[@]}" 2>/dev/null || true)"
+      [ -n "$graph_plan" ] || seeds=""
+    fi
+  fi
   if [ -n "$seeds" ]; then
     related="$(bash "$DIR/memory-backlinks.sh" --store "$store" expand $seeds 2>/dev/null || true)"
+    if [ "$GRAPH_MODE" = selective ]; then
+      related="$(printf '%s\n' "$related" | KM_GRAPH_PLAN="$graph_plan" awk -F '\t' '
+        BEGIN { n=split(ENVIRON["KM_GRAPH_PLAN"], rows, "\n"); for (i=1; i<=n; i++) { split(rows[i], p, "\t"); allowed[p[1] SUBSEP p[2]]=p[3] } }
+        $1 == "out" && (($3 SUBSEP $2) in allowed) { print $0 "\t" allowed[$3 SUBSEP $2] }
+      ' 2>/dev/null || true)"
+    fi
   fi
 fi
 
@@ -228,7 +255,7 @@ output_rows="$(mktemp 2>/dev/null)" || exit 0
 trap 'rm -f "$output_rows" 2>/dev/null || true' EXIT
 printf '%s\n' "$ranked" | awk -F'\t' '{print "0\t" $0}' > "$output_rows"
 if [ "$GRAPH" -eq 1 ] && [ -n "$related" ]; then
-  printf '%s\n' "$related" | awk -F '\t' '!seen[$2]++' | while IFS="$TAB" read -r _ slug seed; do
+  printf '%s\n' "$related" | awk -F '\t' '!seen[$2]++' | while IFS="$TAB" read -r _ slug seed link_expl; do
     [ -n "$slug" ] || continue
     grep -F -x -q "$slug" <(printf '%s\n' "$ranked" | cut -f2) && continue
     [ -f "$store/$slug.md" ] || continue
@@ -244,13 +271,16 @@ if [ "$GRAPH" -eq 1 ] && [ -n "$related" ]; then
       }
       END { gsub(/[\t\r\n]/, " ", name); gsub(/[\t\r\n]/, " ", desc); gsub(/[\t\r\n]/, " ", typ); gsub(/[\t\r\n]/, " ", st); gsub(/^"|"$/, "", name); gsub(/^"|"$/, "", desc); gsub(/^"|"$/, "", typ); gsub(/^"|"$/, "", st); printf "%s\t%s\t%s\t%s", name, desc, st, typ }
     ' "$store/$slug.md")"
-    IFS="$TAB" read -r _ desc st typ <<EOF
-$meta
-EOF
+    # cut preserves empty fields; Bash IFS read would shift status/type into
+    # an empty description, incorrectly excluding an active selective target.
+    desc="$(printf '%s\n' "$meta" | cut -f2)"
+    st="$(printf '%s\n' "$meta" | cut -f3)"
+    typ="$(printf '%s\n' "$meta" | cut -f4)"
     [ -n "$st" ] || st=active
+    if [ "$GRAPH_MODE" = selective ] && [ "$st" != active ]; then continue; fi
     case "$st" in stale|superseded|archived) rank=2 ;; *) rank=1 ;; esac
     [ -n "$typ" ] || typ=unknown
-    printf '%s\t0\t%s\t%s\t%s\t%s\t%s\n' "$rank" "$slug" "$typ" "$st" "$desc" "$seed" >> "$output_rows"
+    printf '%s\t0\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rank" "$slug" "$typ" "$st" "$desc" "$seed" "${link_expl:-}" >> "$output_rows"
   done
 fi
 
@@ -270,7 +300,7 @@ fi
       if (related >= 2) next
       if (total >= limit) next
       related++; total++
-      printf "- [%s] (%s, %s) — %s (related via [[%s]])\n", $3, $4, $5, $6, $7
+      printf "- [%s] (%s, %s) — %s (related via [[%s]]%s)\n", $3, $4, $5, $6, $7, ($8 != "" ? "; link matched: " $8 : "")
     }
   '
 } | _cap

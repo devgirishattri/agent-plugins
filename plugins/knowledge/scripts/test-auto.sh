@@ -19,7 +19,7 @@ set -uo pipefail
 # or write to a live store, so drop it before anything else runs.
 unset KNOWLEDGE_MEMORY_HOME
 unset KNOWLEDGE_AUTO_RECALL KNOWLEDGE_AUTO_RECALL_LIMIT KNOWLEDGE_AUTO_RECALL_TERMS
-unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_AUTO_RECALL_GRAPH KNOWLEDGE_CONSOLIDATE_NUDGE
+unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_AUTO_RECALL_GRAPH KNOWLEDGE_AUTO_RECALL_GRAPH_MODE KNOWLEDGE_CONSOLIDATE_NUDGE
 unset KNOWLEDGE_AUTO_CAPTURE KNOWLEDGE_AUTO_CAPTURE_LIMIT
 unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
 # KNOWLEDGE_PANE_NAME is deliberately NOT unset: it is the writer's role-detection
@@ -254,7 +254,7 @@ write_canonical "$store/zeta_stale.md" project "Zeta Stale" "stale linked memory
 awk '{ if ($0 == "status: active") print "status: stale"; else print }' "$store/zeta_stale.md" > "$store/.zeta_stale.tmp" && mv "$store/.zeta_stale.tmp" "$store/zeta_stale.md"
 
 graph_prompt() {
-  mkprompt "zephyr calibration" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt KNOWLEDGE_AUTO_RECALL_GRAPH="$1" KNOWLEDGE_AUTO_RECALL_LIMIT="${2:-5}" KNOWLEDGE_AUTO_RECALL_BUDGET="${3:-4000}" bash "$INJECT" --prompt
+  mkprompt "zephyr calibration" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt KNOWLEDGE_AUTO_RECALL_GRAPH="$1" KNOWLEDGE_AUTO_RECALL_GRAPH_MODE=all KNOWLEDGE_AUTO_RECALL_LIMIT="${2:-5}" KNOWLEDGE_AUTO_RECALL_BUDGET="${3:-4000}" bash "$INJECT" --prompt
 }
 out="$(graph_prompt '')"
 assert_not_contains inject_graph_gateoff_no_related "$out" "related via [[gamma_linked]]"
@@ -277,7 +277,7 @@ done
 fallback="$TMP/recall-fallback"; mkdir -p "$fallback"
 cp "$INJECT" "$HERE/lib.sh" "$HERE/memory-search.sh" "$HERE/search-query.py" "$fallback/"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$fallback/memory-backlinks.sh"; chmod +x "$fallback/memory-backlinks.sh"
-out="$(mkprompt "zephyr calibration" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt KNOWLEDGE_AUTO_RECALL_GRAPH=true bash "$fallback/inject-recall.sh" --prompt)"
+out="$(mkprompt "zephyr calibration" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt KNOWLEDGE_AUTO_RECALL_GRAPH=true KNOWLEDGE_AUTO_RECALL_GRAPH_MODE=all bash "$fallback/inject-recall.sh" --prompt)"
 assert_contains inject_graph_helper_failure_direct "$out" "alpha_zephyr"
 assert_not_contains inject_graph_helper_failure_no_related "$out" "related via [["
 
