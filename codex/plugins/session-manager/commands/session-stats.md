@@ -32,7 +32,7 @@ argument-hint: "[project-filter]"
 Rules:
 - This command is read-only — it never modifies session data.
 - Projects are grouped by the session `cwd` recorded in each session file.
-- If a session has no thread title, it shows as `(untitled)`.
+- Session names come from `~/.codex/session_index.jsonl`; a session without an indexed name shows as `(untitled)`.
 - If `$ARGUMENTS` was given, mention that results are filtered to projects matching it.
 - If the output says `No sessions found`, report that and stop.
 - Suggest `$session-manager:session-list <project>` to inspect a specific project's sessions and `$session-manager:session-delete <session-id>` to clean up large ones.

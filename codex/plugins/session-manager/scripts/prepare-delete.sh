@@ -15,7 +15,7 @@ count_session_rows() {
 }
 
 if [ -z "$TARGET" ]; then
-    sessions=$(bash "$SCRIPT_DIR/list-sessions.sh")
+    sessions=$(bash "$SCRIPT_DIR/list-sessions.sh") || exit $?
     row_count=$(printf '%s\n' "$sessions" | count_session_rows)
 
     if [ "$row_count" -eq 0 ]; then
@@ -31,7 +31,7 @@ if [ -z "$TARGET" ]; then
     exit 0
 fi
 
-matches=$(bash "$SCRIPT_DIR/search-sessions.sh" "$TARGET")
+matches=$(bash "$SCRIPT_DIR/search-sessions.sh" "$TARGET") || exit $?
 match_count=$(printf '%s\n' "$matches" | count_session_rows)
 
 case "$match_count" in

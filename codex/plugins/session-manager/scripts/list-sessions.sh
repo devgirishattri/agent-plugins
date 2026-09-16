@@ -4,10 +4,12 @@
 # Output: tab-separated lines: THREAD\tSESSION_ID\tPROJECT\tSIZE\tLAST_MODIFIED
 set -uo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 SESSIONS_DIR="$CODEX_DIR/sessions"
-STATE_DB="$CODEX_DIR/state_5.sqlite"
+SESSION_INDEX="$CODEX_DIR/session_index.jsonl"
 FILTER="${1:-$(pwd)}"
+SESSION_NAMES=""
 
 if [ ! -d "$SESSIONS_DIR" ]; then
     echo "No sessions found (sessions directory does not exist)"
@@ -39,41 +41,35 @@ human_size() {
     fi
 }
 
-thread_title() {
+load_session_names() {
+    [ -f "$SESSION_INDEX" ] || return 0
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: python3 is required to read Codex session names." >&2
+        return 127
+    fi
+    SESSION_NAMES=$(python3 "$SCRIPT_DIR/session-names.py" "$SESSION_INDEX")
+}
+
+session_name() {
     local session_id="$1"
-    local title=""
+    local name=""
 
-    if command -v sqlite3 >/dev/null 2>&1 && [ -f "$STATE_DB" ]; then
-        title=$(sqlite3 "$STATE_DB" "select title from threads where id = '$session_id' limit 1;" 2>/dev/null | head -1)
+    if [ -n "$SESSION_NAMES" ]; then
+        name=$(printf '%s\n' "$SESSION_NAMES" | awk -F '\t' -v wanted="$session_id" '
+            $1 == wanted { name = substr($0, length($1) + 2) }
+            END { printf "%s", name }
+        ')
     fi
 
-    printf '%s' "$title"
+    if [ -z "$name" ]; then
+        name="(untitled)"
+    fi
+
+    printf '%s' "$name" | tr '\t\r\n' '   '
 }
 
-session_title() {
-    local file="$1"
-    local session_id="$2"
-    local title=""
-
-    title=$(thread_title "$session_id")
-
-    if command -v jq >/dev/null 2>&1; then
-        [ -z "$title" ] && title=$(jq -r '
-            select(.type == "event_msg" and .payload.type == "user_message")
-            | .payload.message // .payload.text // empty
-        ' "$file" 2>/dev/null | head -1)
-    fi
-
-    if [ -z "$title" ]; then
-        title=$(grep -a '"type":"user_message"' "$file" 2>/dev/null | head -1 | sed -n 's/.*"message":"\([^"]*\)".*/\1/p')
-    fi
-
-    if [ -z "$title" ]; then
-        title="(untitled)"
-    fi
-
-    printf '%s' "$title" | tr '\t\r\n' '   '
-}
+load_session_names || exit $?
 
 find "$SESSIONS_DIR" -type f -name '*.jsonl' 2>/dev/null | while read -r jsonl_file; do
     session_id=$(json_field "$jsonl_file" '.payload.id')
@@ -100,7 +96,7 @@ find "$SESSIONS_DIR" -type f -name '*.jsonl' 2>/dev/null | while read -r jsonl_f
     fi
 
     printf '%s\t%s\t%s\t%s\t%s\n' \
-        "$(session_title "$jsonl_file" "$session_id")" \
+        "$(session_name "$session_id")" \
         "$session_id" \
         "$project_path" \
         "$(human_size "$file_size")" \

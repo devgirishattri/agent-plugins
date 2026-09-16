@@ -1113,7 +1113,8 @@ list_runtime_scripts() {
     names="$(printf '%s\n' "$names" | sed 's/^messages-clean\.sh$/clean-messages.sh/; s/^messages-list\.sh$/list-messages.sh/')"
   fi
   if [ "$plugin" = "session-manager" ] && [ "$provider" = "codex" ]; then
-    names="$(printf '%s\n' "$names" | grep -vE '^(delete-resolved-session|prepare-delete)\.sh$' || true)"
+    # Native Codex deletion and its session index have provider-specific helpers.
+    names="$(printf '%s\n' "$names" | grep -vE '^((delete-resolved-session|prepare-delete)\.sh|session-names\.py)$' || true)"
   fi
   printf '%s\n' "$names" | sed '/^$/d' | sort -u
 }

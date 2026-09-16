@@ -1,6 +1,6 @@
 ---
 name: session-delete
-description: "Permanently delete one local Codex session by title, ID, or project query, or bulk-delete the current project's sessions with --all. Use only for user-requested deletion and require a separate explicit final confirmation before any destructive command."
+description: "Permanently delete one local Codex session by name, ID, or project query, or bulk-delete the current project's sessions with --all. Use only for user-requested deletion and require a separate explicit final confirmation before any destructive command."
 ---
 
 # Session Delete
@@ -36,15 +36,15 @@ Report the native Codex results. On any other answer, report `Deletion cancelled
 Run the read-only resolver with the supplied target, or an empty argument when none was supplied:
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/prepare-delete.sh" "<session-id-or-title>"
+bash "$PLUGIN_ROOT/scripts/prepare-delete.sh" "<session-id-or-name>"
 ```
 
 Interpret its first line:
 
-- `STATUS<TAB>SELECT`: show the sessions as a numbered table with title and full UUID. Ask the user to select one. If structured input cannot fit all choices, ask for the number or full UUID directly. After selection, resolve the chosen UUID again and continue only if it returns `ONE`.
+- `STATUS<TAB>SELECT`: show the sessions as a numbered table with name and full UUID. Ask the user to select one. If structured input cannot fit all choices, ask for the number or full UUID directly. After selection, resolve the chosen UUID again and continue only if it returns `ONE`.
 - `STATUS<TAB>NONE`: report the message and suggest `$session-manager:session-list` or `$session-manager:session-search <query>`.
-- `STATUS<TAB>MULTIPLE`: show the matches and ask for a more specific title or full UUID. Do not delete.
-- `STATUS<TAB>ONE`: show the title, full UUID, project, and size, then ask the separate final confirmation question.
+- `STATUS<TAB>MULTIPLE`: show the matches and ask for a more specific name or full UUID. Do not delete.
+- `STATUS<TAB>ONE`: show the name, full UUID, project, and size, then ask the separate final confirmation question.
 
 Selection never counts as final confirmation. A message such as `delete <full-uuid>` also starts this flow and never bypasses confirmation.
 
@@ -54,4 +54,4 @@ Only after the user explicitly affirms the final question for the displayed UUID
 bash "$PLUGIN_ROOT/scripts/delete-session.sh" "<full-uuid>" --confirmed
 ```
 
-The helper validates the UUID and delegates to `codex delete --force`, keeping native Codex state consistent. Never pass a title or partial ID to it. Report native output, or `Deletion cancelled.` for every non-affirmative response.
+The helper validates the UUID and delegates to the native `codex delete --force` command. Never pass a name or partial ID to it. Report native output, or `Deletion cancelled.` for every non-affirmative response.

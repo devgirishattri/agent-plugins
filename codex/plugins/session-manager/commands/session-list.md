@@ -1,6 +1,6 @@
 ---
 description: List Codex sessions for the current project, or all projects
-argument-hint: "[all]"
+argument-hint: "[project-path|all]"
 ---
 
 ## Instructions
@@ -10,7 +10,7 @@ argument-hint: "[all]"
 2. Run:
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/list-sessions.sh" $ARGUMENTS
+   bash "$PLUGIN_ROOT/scripts/list-sessions.sh" "$ARGUMENTS"
    ```
 
 3. Present the tab-separated output as a clean markdown table:
@@ -21,8 +21,10 @@ argument-hint: "[all]"
 
 Rules:
 - Sort by Last Modified, most recent first. The script output is already sorted.
+- With no argument, list the current project; with a project path, list that exact project; with `all`, list every project.
 - Show full Session IDs so users can copy them for `$session-manager:session-delete`.
-- If a session has no thread title, show `(untitled)`.
+- Show the latest session name from `~/.codex/session_index.jsonl`.
+- If a session has no indexed name, show `(untitled)`; do not substitute its description or first user message.
 - Show the total count of sessions at the bottom.
 - If the output is empty or says `No sessions found`, report that no sessions were found.
 - Mention that `$session-manager:session-list all` shows sessions across all projects.

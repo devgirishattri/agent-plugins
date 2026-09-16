@@ -9,6 +9,7 @@ TMP_BASE="${TMPDIR:-/tmp}"
 TMP_ROOT=$(mktemp -d "${TMP_BASE%/}/session-manager-test.XXXXXX")
 CODEX_HOME="$TMP_ROOT/codex-home"
 MOCK_BIN="$TMP_ROOT/bin"
+NO_JQ_BIN="$TMP_ROOT/no-jq-bin"
 PROJECT="$TMP_ROOT/project"
 OTHER_PROJECT="$TMP_ROOT/other-project"
 SESSION_MANAGER_TEST_LOG="$TMP_ROOT/codex-calls.log"
@@ -48,8 +49,18 @@ assert_contains() {
     local needle="$2"
     local label="$3"
     case "$haystack" in
-        *"$needle"*) ;;
+        *"$needle"*) ok ;;
         *) fail "$label (missing '$needle')" ;;
+    esac
+}
+
+assert_not_contains() {
+    local haystack="$1"
+    local needle="$2"
+    local label="$3"
+    case "$haystack" in
+        *"$needle"*) fail "$label (unexpected '$needle')" ;;
+        *) ok ;;
     esac
 }
 
@@ -72,7 +83,7 @@ write_session() {
     printf '{"type":"event_msg","payload":{"type":"user_message","message":"%s"}}\n' "$title" >> "$session_file"
 }
 
-mkdir -p "$CODEX_HOME/sessions/2026/07/10" "$MOCK_BIN" "$PROJECT" "$OTHER_PROJECT"
+mkdir -p "$CODEX_HOME/sessions/2026/07/10" "$MOCK_BIN" "$NO_JQ_BIN" "$PROJECT" "$OTHER_PROJECT"
 ln -s "$SCRIPT_DIR/test-codex-mock.sh" "$MOCK_BIN/codex"
 : > "$SESSION_MANAGER_TEST_LOG"
 
@@ -83,6 +94,30 @@ export PATH
 write_session "$UUID_ONE" "$PROJECT" "First session"
 write_session "$UUID_TWO" "$PROJECT" "Second session"
 write_session "$UUID_OTHER" "$OTHER_PROJECT" "Other project session"
+{
+    printf '{"id":"%s","thread_name":"Old session name","updated_at":"2026-07-10T10:00:00Z"}\n' "$UUID_ONE"
+    printf '{"id":"%s","thread_name":"Renamed session","updated_at":"2026-07-10T12:00:00Z"}\n' "$UUID_ONE"
+    printf '{"id":"%s","thread_name":"Stale appended name","updated_at":"2026-07-10T11:00:00Z"}\n' "$UUID_ONE"
+    printf '{"id":"%s","thread_name":"","updated_at":"2026-07-10T11:00:00Z"}\n' "$UUID_TWO"
+} > "$CODEX_HOME/session_index.jsonl"
+
+output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/list-sessions.sh")
+assert_contains "$output" "$(printf 'Renamed session\t%s' "$UUID_ONE")" "list should use the latest indexed session name"
+assert_contains "$output" "$(printf '(untitled)\t%s' "$UUID_TWO")" "list should mark a missing session name as untitled"
+assert_not_contains "$output" "First session" "list should not substitute the first session description"
+assert_not_contains "$output" "Second session" "untitled list entry should not expose its first message"
+
+for tool in awk cut dirname find grep head python3 sed sort stat tr uname; do
+    ln -s "$(command -v "$tool")" "$NO_JQ_BIN/$tool"
+done
+output=$(cd "$PROJECT" && PATH="$NO_JQ_BIN" /bin/bash "$SCRIPT_DIR/list-sessions.sh")
+assert_contains "$output" "$(printf 'Renamed session\t%s' "$UUID_ONE")" "no-jq list should select the greatest updated_at"
+assert_not_contains "$output" "Stale appended name" "no-jq list should not select the last line blindly"
+
+output=$(bash "$SCRIPT_DIR/session-stats.sh")
+assert_contains "$output" "Renamed session" "stats should use the indexed session name"
+assert_contains "$output" "(untitled)" "stats should mark a missing session name as untitled"
+assert_not_contains "$output" "First session" "stats should not substitute the first session description"
 
 output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/prepare-delete.sh" "")
 assert_contains "$output" "$(printf 'STATUS\tSELECT')" "empty target should request selection"
@@ -145,3 +180,4 @@ if grep -qF "$UUID_OTHER" "$SESSION_MANAGER_TEST_LOG"; then
 fi
 
 echo "session-manager smoke tests: $ASSERTIONS passed, 0 failed"
+python3 "$SCRIPT_DIR/test-session-names.py"

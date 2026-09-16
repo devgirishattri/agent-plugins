@@ -19,7 +19,8 @@ fi
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 QUERY_LOWER=$(printf '%s' "$QUERY" | tr '[:upper:]' '[:lower:]')
 
-bash "$SCRIPT_DIR/list-sessions.sh" all | while IFS=$'\t' read -r name session_id project size last_modified; do
+sessions=$(bash "$SCRIPT_DIR/list-sessions.sh" all) || exit $?
+printf '%s\n' "$sessions" | while IFS=$'\t' read -r name session_id project size last_modified; do
     haystack=$(printf '%s\n%s\n%s' "$name" "$session_id" "$project" | tr '[:upper:]' '[:lower:]')
     if printf '%s' "$haystack" | grep -qF "$QUERY_LOWER"; then
         printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$session_id" "$project" "$size" "$last_modified"

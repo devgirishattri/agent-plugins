@@ -1,6 +1,6 @@
 ---
 name: session-search
-description: "Search local Codex sessions by title, session ID, or project path."
+description: "Search local Codex sessions by name, session ID, or project path."
 ---
 
 # Session Search

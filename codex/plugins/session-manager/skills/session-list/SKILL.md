@@ -13,6 +13,7 @@ Run one of:
 
 ```bash
 bash "$PLUGIN_ROOT/scripts/list-sessions.sh"
+bash "$PLUGIN_ROOT/scripts/list-sessions.sh" "<project-path>"
 bash "$PLUGIN_ROOT/scripts/list-sessions.sh" all
 ```
 
@@ -22,4 +23,4 @@ Present tab-separated output as:
 | Thread | Session ID | Project | Size | Last Modified |
 ```
 
-Show full session IDs and a total count. The first column is the Codex thread title from `~/.codex/state_5.sqlite`, falling back to the first user message only when the thread title is unavailable.
+Show full session IDs and a total count. The first column is the latest session name from `~/.codex/session_index.jsonl`. If a session has no indexed name, show `(untitled)`; never substitute its description or first user message.

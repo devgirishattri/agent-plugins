@@ -1,6 +1,6 @@
 ---
-description: Permanently delete a Codex session through native Codex state management (no args = interactive select; --all = current project)
-argument-hint: "[session-id-or-title | --all]"
+description: Permanently delete a Codex session through the native Codex command (no args = interactive select; --all = current project)
+argument-hint: "[session-id-or-name | --all]"
 ---
 
 ## Instructions
@@ -29,8 +29,8 @@ Handle the status:
 
 - `SELECT`: show a numbered table and ask the user to choose a session. Resolve the selected full UUID again; selection is not confirmation.
 - `NONE`: report the message and suggest `$session-manager:session-search` or `$session-manager:session-list`.
-- `MULTIPLE`: show matches and ask for a more specific title or the full UUID.
-- `ONE`: show title, full UUID, project, and size, then ask the separate final confirmation question.
+- `MULTIPLE`: show matches and ask for a more specific name or the full UUID.
+- `ONE`: show name, full UUID, project, and size, then ask the separate final confirmation question.
 
 Only after explicit affirmation of the final question for that displayed UUID, run:
 
@@ -38,4 +38,4 @@ Only after explicit affirmation of the final question for that displayed UUID, r
 bash "$PLUGIN_ROOT/scripts/delete-session.sh" "<full-uuid>" --confirmed
 ```
 
-Never pass a title or partial ID to the destructive helper. On any non-affirmative answer, report `Deletion cancelled.`
+Never pass a name or partial ID to the destructive helper. On any non-affirmative answer, report `Deletion cancelled.`
