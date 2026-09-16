@@ -63,7 +63,7 @@ produce the summary — never try to offload generation to a separate agent.
 
 | Command | Purpose |
 |---|---|
-| `/context-generate [name]` | Summarize the current session and save it (overwrites a same-named snapshot; the previous version is archived). Omit the name to derive one from the session/directory name. |
+| `/context-generate [name] [--handoff] [--expires <UTC-ISO>]` | Summarize the current session and save it (overwrites a same-named snapshot; the previous version is archived). Omit the name to derive one from the session/directory name. `--handoff` writes a structured handoff whose scope, work items, statuses, and evidence follow the [handoff evidence contract](../knowledge/references/handoffs.md). |
 | `/context-list` | List snapshots for this project (name, line count, last modified, history version count). |
 | `/context-load <name>` | Load a snapshot's contents into the current session. Warns if the snapshot is 7 or more days old (override with `SESSION_CONTEXT_STALE_DAYS`). |
 | `/context-diff <name>` | Unified diff of the newest archived version vs. current. `--versions` lists timestamps; pass a timestamp to diff that version. |

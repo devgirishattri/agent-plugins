@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
 # save-context.sh — Save a context snapshot for the current project
-# Usage: save-context.sh <project-name> <snapshot-file> [--handoff] [--expires <UTC-ISO>]
+# Usage: save-context.sh <project-name> <snapshot-file> [--handoff] [--expires <UTC-ISO>] [--handoff-data <json-file>]
 #
 # Phase E (the structured handoff lifecycle): --handoff
 # writes/keeps a `kind: handoff` YAML frontmatter block ahead of the body this
 # script has always copied unchanged. This is the ONLY surface that mutates
 # handoff frontmatter — load/share/diff/list/remove pass the resulting file
 # through untouched, since they only ever read or copy bytes.
+#
+# Handoff v2 (structured evidence): --handoff-data <json-file> carries
+# {"scope": {"repository", "paths"}, "items": [{"id", "summary", "status",
+# "evidence": [...]}]} and is validated + rendered by the shared
+# handoff-data.py helper into a `scope: {json}` line and an `items:` list of
+# one `  - {json}` line per item (a valid YAML subset; existing top-level
+# readers ignore it). Such a file is `handoff_version: 2`. Rules: an existing
+# v2 regenerated without --handoff-data keeps its scope/items (values
+# preserved, formatting canonicalized); an existing v1 handoff given
+# --handoff-data upgrades to v2 keeping its created/expires, while a plain
+# snapshot or new name gets fresh timestamps as always; on a same-name v2
+# the repository is immutable and every prior item id must be retained (mark
+# it cancelled instead). Every helper refusal is exit 2 with the helper's
+# stderr, before anything is archived or written. The v1/plain path never
+# invokes python3.
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
@@ -16,7 +31,7 @@ PROJECT_NAME="${1:-}"
 SNAPSHOT_FILE="${2:-}"
 
 if [ -z "$PROJECT_NAME" ] || [ -z "$SNAPSHOT_FILE" ]; then
-  echo "ERROR: Usage: save-context.sh <project-name> <snapshot-file> [--handoff] [--expires <UTC-ISO>]"
+  echo "ERROR: Usage: save-context.sh <project-name> <snapshot-file> [--handoff] [--expires <UTC-ISO>] [--handoff-data <json-file>]"
   exit 1
 fi
 
@@ -29,11 +44,17 @@ else
 fi
 HANDOFF=0
 EXPIRES_FLAG=""
+HANDOFF_DATA=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --handoff)
       HANDOFF=1
       shift
+      ;;
+    --handoff-data)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "ERROR: --handoff-data requires a non-empty file path" >&2; exit 2; }
+      HANDOFF_DATA="$2"
+      shift 2
       ;;
     --expires)
       [ $# -ge 2 ] || { echo "ERROR: --expires requires a value" >&2; exit 2; }
@@ -50,6 +71,15 @@ if [ -n "$EXPIRES_FLAG" ] && [ "$HANDOFF" -ne 1 ]; then
   echo "ERROR: --expires requires --handoff" >&2
   exit 2
 fi
+if [ -n "$HANDOFF_DATA" ] && [ "$HANDOFF" -ne 1 ]; then
+  echo "ERROR: --handoff-data requires --handoff" >&2
+  exit 2
+fi
+if [ -n "$HANDOFF_DATA" ] && { [ -L "$HANDOFF_DATA" ] || [ ! -f "$HANDOFF_DATA" ]; }; then
+  echo "ERROR: --handoff-data must name a regular non-symlink file: $HANDOFF_DATA" >&2
+  exit 2
+fi
+HANDOFF_HELPER="$(cd "$(dirname "$0")" && pwd)/handoff-data.py"
 UTC_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 if [ -n "$EXPIRES_FLAG" ] && ! [[ "$EXPIRES_FLAG" =~ $UTC_RE ]]; then
   echo "ERROR: --expires must be a UTC timestamp YYYY-MM-DDTHH:MM:SSZ, got '$EXPIRES_FLAG'" >&2
@@ -146,6 +176,7 @@ harden_existing_contexts_dir "$SNAPSHOTS_DIR" >/dev/null || exit 1
 EXISTING_KIND=""
 EXISTING_CREATED=""
 EXISTING_EXPIRES=""
+EXISTING_VERSION=""
 
 # Inspect the existing destination (read-only, no mutation yet): EXISTING_KIND
 # drives both the plain-regeneration refusal below and the --handoff
@@ -160,6 +191,7 @@ if _context_path_exists "$DEST"; then
   if [ "$EXISTING_KIND" = "handoff" ]; then
     EXISTING_CREATED=$(_ctx_fm_get "$DEST" created 2>/dev/null) || EXISTING_CREATED=""
     EXISTING_EXPIRES=$(_ctx_fm_get "$DEST" expires 2>/dev/null) || EXISTING_EXPIRES=""
+    EXISTING_VERSION=$(_ctx_fm_get "$DEST" handoff_version 2>/dev/null) || EXISTING_VERSION=""
   fi
 
   # context-generate without --handoff is byte-identical to the pre-Phase-E
@@ -168,6 +200,12 @@ if _context_path_exists "$DEST"; then
   # refuses instead with the exact literal stderr line below.
   if [ "$HANDOFF" -eq 0 ] && [ "$EXISTING_KIND" = "handoff" ]; then
     echo "handoff exists: re-run with --handoff" >&2
+    exit 2
+  fi
+  # An existing handoff of a version this writer does not know is never
+  # silently rewritten as v1/v2 (that would downgrade a future format).
+  if [ "$EXISTING_KIND" = "handoff" ] && [ "$EXISTING_VERSION" != "1" ] && [ "$EXISTING_VERSION" != "2" ]; then
+    echo "ERROR: existing handoff at $DEST has unsupported handoff_version '${EXISTING_VERSION:-<absent>}' -- refusing to rewrite it. Run doctor for details." >&2
     exit 2
   fi
 fi
@@ -274,6 +312,39 @@ if [ "$HANDOFF" -eq 1 ]; then
     BODY_SOURCE="$body_tmp"
   fi
 
+  # Handoff v2 data: rendered by the shared helper BEFORE anything is
+  # archived or written, so a refusal (bad JSON, grammar, dropped item id,
+  # changed repository, malformed existing v2) leaves the store untouched.
+  # Only --handoff-data, or an existing v2 destination, reaches python3.
+  HANDOFF_VERSION=1
+  DATA_LINES=""
+  if [ -n "$HANDOFF_DATA" ] || { [ "$EXISTING_KIND" = "handoff" ] && [ "$EXISTING_VERSION" = "2" ]; }; then
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "ERROR: python3 is required to write or regenerate a handoff with structured data (handoff_version 2)" >&2
+      exit 1
+    fi
+    if [ ! -f "$HANDOFF_HELPER" ]; then
+      echo "ERROR: missing helper: $HANDOFF_HELPER" >&2
+      exit 1
+    fi
+    helper_args=(render)
+    [ -n "$HANDOFF_DATA" ] && helper_args+=(--data "$HANDOFF_DATA")
+    if [ "$EXISTING_KIND" = "handoff" ] && [ "$EXISTING_VERSION" = "2" ]; then
+      helper_args+=(--previous "$DEST")
+    fi
+    helper_err=$(mktemp "${TMPDIR:-/tmp}/km-ctx-helper.XXXXXX") || {
+      echo "ERROR: cannot create scratch helper file" >&2
+      exit 1
+    }
+    SCRATCH_FILES+=("$helper_err")
+    if ! DATA_LINES=$(python3 "$HANDOFF_HELPER" "${helper_args[@]}" 2> "$helper_err"); then
+      cat "$helper_err" >&2
+      exit 2
+    fi
+    [ -n "$DATA_LINES" ] || { echo "ERROR: handoff data: helper produced no scope/items" >&2; exit 2; }
+    HANDOFF_VERSION=2
+  fi
+
   combined=$(mktemp "${TMPDIR:-/tmp}/km-ctx-combined.XXXXXX") || {
     echo "ERROR: cannot create scratch combined file" >&2
     exit 1
@@ -281,7 +352,7 @@ if [ "$HANDOFF" -eq 1 ]; then
   SCRATCH_FILES+=("$combined")
   {
     echo "---"
-    echo "handoff_version: 1"
+    echo "handoff_version: $HANDOFF_VERSION"
     echo "kind: handoff"
     echo "created: $CREATED"
     echo "updated: $UPDATED"
@@ -290,9 +361,21 @@ if [ "$HANDOFF" -eq 1 ]; then
       echo "tickets:"
       printf '%s\n' "$TICKETS_BLOCK"
     fi
+    if [ -n "$DATA_LINES" ]; then
+      printf '%s\n' "$DATA_LINES"
+    fi
     echo "---"
     cat "$BODY_SOURCE"
   } > "$combined"
+  # Re-validate the assembled v2 file exactly as doctor will read it, still
+  # before anything is archived: a bad timestamp or a rendering slip can
+  # never reach the store.
+  if [ "$HANDOFF_VERSION" = "2" ]; then
+    if ! python3 "$HANDOFF_HELPER" validate "$combined" 2> "$helper_err"; then
+      cat "$helper_err" >&2
+      exit 2
+    fi
+  fi
   SAVE_SOURCE="$combined"
 fi
 

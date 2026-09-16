@@ -753,8 +753,8 @@ _kd_check_handoff() {
   local handoff_version created updated expires expires_ok=1
 
   handoff_version=$(_kd_fm_get "$file" handoff_version) || handoff_version=""
-  if [ "$handoff_version" != "1" ]; then
-    emit WARN context-handoff "malformed handoff frontmatter: '$name' (handoff_version missing or not '1': '${handoff_version:-<absent>}')"
+  if [ "$handoff_version" != "1" ] && [ "$handoff_version" != "2" ]; then
+    emit WARN context-handoff "malformed handoff frontmatter: '$name' (handoff_version missing or not '1'/'2': '${handoff_version:-<absent>}')"
   fi
 
   created=$(_kd_fm_get "$file" created) || created=""
@@ -788,6 +788,35 @@ _kd_check_handoff() {
       if [ "$expires_epoch" -lt "$now_epoch" ]; then
         expired_days=$(( (now_epoch - expires_epoch) / 86400 ))
         emit WARN context-handoff "expired handoff '$name' (expired ${expired_days}d ago, expires $expires) -- eligible for confirmed cleanup via /knowledge:promote; never auto-deleted"
+      fi
+    fi
+  fi
+
+  # Handoff v2 structured data (scope/items): structural validation only via
+  # the shared handoff-data.py helper -- grammar, enums, unique ids, evidence
+  # shape. Evidence is recorded, never verified here: no git execution, no
+  # fetch, no file existence check (that is the context-verify surface).
+  # Absence of python3 is a WARN, never an abort, like every other finding.
+  if [ "$handoff_version" = "2" ]; then
+    if ! _kd_have_python3; then
+      emit WARN context-handoff "cannot validate handoff v2 data: '$name' (python3 not available)"
+    elif [ ! -f "$HERE/handoff-data.py" ]; then
+      emit WARN context-handoff "cannot validate handoff v2 data: '$name' (missing helper handoff-data.py)"
+    else
+      # The helper validates the whole file before printing anything: stdout
+      # carries the summary only on success, stderr the single reason only on
+      # failure, so one combined capture branched on the exit code is exact
+      # and this read-only section writes no scratch file.
+      local v2_out="" v2_rc=0 v2_line
+      v2_out=$(python3 "$HERE/handoff-data.py" validate --summary "$file" 2>&1) || v2_rc=$?
+      if [ "$v2_rc" -ne 0 ]; then
+        v2_line=$(_kd_oneline "$v2_out")
+        emit WARN context-handoff "malformed handoff v2 data: '$name' (${v2_line#ERROR: handoff data: })"
+      else
+        while IFS= read -r v2_line; do
+          [ -n "$v2_line" ] || continue
+          emit INFO context-handoff "handoff '$name' $v2_line"
+        done <<< "$v2_out"
       fi
     fi
   fi

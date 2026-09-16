@@ -1,0 +1,511 @@
+{
+  "schema_version": 1,
+  "notes": "Synthetic retrieval-evaluation corpus (ProjectA/ProjectB, zephyr/quokka/widget vocabulary only — never real project identifiers). Relevance is labelled by INTENT, independent of what the current scorer ranks. See README.md beside this file for the contract.",
+  "memories": [
+    {
+      "slug": "projecta_zephyr_calibration",
+      "name": "Zephyr calibration",
+      "description": "Calibrating zephyr sensors on ProjectA widgets",
+      "tags": [
+        "zephyr",
+        "calibration",
+        "widget"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** zephyr sensors drift after firmware flashing.\n\n**How to apply:** run the calibration procedure after every flash; see [[projecta_widget_firmware]] for the flashing order. The vendor history lives in [[archive_zephyr_vendor_contract]]."
+    },
+    {
+      "slug": "projecta_zephyr_legacy",
+      "name": "Zephyr calibration (legacy)",
+      "description": "Superseded zephyr calibration steps for the v1 widget",
+      "tags": [
+        "zephyr",
+        "calibration",
+        "legacy"
+      ],
+      "type": "project",
+      "status": "stale",
+      "body": "**Why:** the v1 widget used a manual calibration table.\n\n**How to apply:** only when servicing a v1 widget; otherwise use [[projecta_zephyr_calibration]]."
+    },
+    {
+      "slug": "projecta_widget_firmware",
+      "name": "Widget firmware flashing",
+      "description": "How ProjectA widget firmware is flashed and verified",
+      "tags": [
+        "widget",
+        "firmware",
+        "flashing"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** a half-flashed widget bricks silently.\n\n**How to apply:** flash, verify the checksum, then recalibrate via [[projecta_zephyr_calibration]]. Hardware quirks: [[projecta_bootloader_notes]]."
+    },
+    {
+      "slug": "projecta_bootloader_notes",
+      "name": "Bootloader notes",
+      "description": "Bootloader quirks on widget hardware revision C",
+      "tags": [
+        "bootloader",
+        "widget"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** revision C ignores the reset pin during a flash.\n\n**How to apply:** power-cycle before flashing; then continue with the normal flashing order."
+    },
+    {
+      "slug": "projecta_widget_sensor_matrix",
+      "name": "Widget sensor matrix",
+      "description": "Sensor matrix layout for ProjectA widgets",
+      "tags": [
+        "widget",
+        "sensor",
+        "matrix"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** the sensor matrix decides which channels exist.\n\n**How to apply:** consult the matrix before wiring a new sensor channel."
+    },
+    {
+      "slug": "projecta_lantern_orphan",
+      "name": "Lantern telemetry",
+      "description": "Hourly polling rules for lantern telemetry",
+      "tags": [
+        "lantern",
+        "telemetry",
+        "lanternfeed"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** lantern telemetry cadence is hourly, not per event.\n\n**How to apply:** never poll lantern faster than the hourly cadence. Supplier questions: [[reference_sensor_vendor_faq]]."
+    },
+    {
+      "slug": "archive_zephyr_vendor_contract",
+      "name": "Zephyr vendor contract",
+      "description": "Archived vendor contract for zephyr sensor supply",
+      "tags": [
+        "zephyr",
+        "vendor"
+      ],
+      "type": "reference",
+      "status": "archived",
+      "body": "**Why:** historical supply terms for zephyr sensors.\n\n**How to apply:** nothing operational; kept for the audit trail. Calibration itself is [[projecta_zephyr_calibration]]."
+    },
+    {
+      "slug": "projectb_quokka_deploy",
+      "name": "Quokka deploy pipeline",
+      "description": "ProjectB quokka service deploy pipeline and rollback",
+      "tags": [
+        "quokka",
+        "deploy",
+        "rollback"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** quokka deploys go through staging first.\n\n**How to apply:** deploy to staging, watch the metrics, then promote; a failed rollback is documented in [[projectb_quokka_rollback_incident]]. Promotion is paused during the weeks in [[projectb_freeze_calendar]]."
+    },
+    {
+      "slug": "projectb_quokka_rollback_incident",
+      "name": "Quokka rollback incident",
+      "description": "Rollback failed after a quokka deploy in staging",
+      "tags": [
+        "quokka",
+        "incident",
+        "staging"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** the rollback step assumed the previous image still existed.\n\n**How to apply:** pin the previous image before a deploy; pipeline is [[projectb_quokka_deploy]]."
+    },
+    {
+      "slug": "projectb_quokka_metrics",
+      "name": "Quokka metrics dashboard",
+      "description": "Where quokka latency metrics live",
+      "tags": [
+        "quokka",
+        "metrics",
+        "dashboard"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** latency regressions show up here first.\n\n**How to apply:** check the dashboard after every quokka deploy."
+    },
+    {
+      "slug": "projectb_mailbox_retention",
+      "name": "Mailbox retention",
+      "description": "Retention window for ProjectB shared mailboxes",
+      "tags": [
+        "mailbox",
+        "retention"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** shared mailboxes fill up within a week.\n\n**How to apply:** the purgewindow and quotaflag settings control it; keep the window at seven days."
+    },
+    {
+      "slug": "reference_redis_tls_handshake",
+      "name": "Redis TLS handshake",
+      "description": "TLS handshake fix for Redis 7 clients",
+      "tags": [
+        "redis",
+        "tls"
+      ],
+      "type": "reference",
+      "status": "active",
+      "body": "**Why:** Redis 7 rejects the legacy cipher list.\n\n**How to apply:** set the client cipher list explicitly before the TLS handshake."
+    },
+    {
+      "slug": "reference_postgres_vacuum",
+      "name": "Postgres vacuum tuning",
+      "description": "Autovacuum thresholds for large ProjectB tables",
+      "tags": [
+        "postgres",
+        "vacuum",
+        "autovacuum"
+      ],
+      "type": "reference",
+      "status": "active",
+      "body": "**Why:** the default autovacuum thresholds never trigger on large tables.\n\n**How to apply:** lower the scale factor per table."
+    },
+    {
+      "slug": "reference_glossary_widget",
+      "name": "Widget glossary",
+      "description": "Terms used across ProjectA widget docs",
+      "tags": [
+        "glossary"
+      ],
+      "type": "reference",
+      "status": "active",
+      "body": "**Why:** newcomers confuse zephyr, quokka, widget, firmware, and calibration.\n\n**How to apply:** zephyr is the sensor family, quokka is the ProjectB service, widget is the ProjectA device, firmware is what gets flashed, calibration is what follows a flash."
+    },
+    {
+      "slug": "feedback_terse_commits",
+      "name": "Terse commit messages",
+      "description": "Prefer one-line imperative commit messages",
+      "tags": [
+        "commits",
+        "style"
+      ],
+      "type": "feedback",
+      "status": "active",
+      "body": "**Why:** long commit messages hide the change.\n\n**How to apply:** one imperative line, no trailer blocks."
+    },
+    {
+      "slug": "user_prefers_bash",
+      "name": "User prefers bash",
+      "description": "Ship helper scripts as bash, python only for parsing",
+      "tags": [
+        "bash",
+        "scripts",
+        "python"
+      ],
+      "type": "user",
+      "status": "active",
+      "body": "**Why:** the fleet runs without a managed python environment.\n\n**How to apply:** bash entrypoints; python heredocs only where parsing needs it."
+    },
+    {
+      "slug": "projectb_freeze_calendar",
+      "name": "Freeze calendar",
+      "description": "Weeks when ProjectB promotions are frozen",
+      "tags": [
+        "freeze",
+        "calendar"
+      ],
+      "type": "project",
+      "status": "active",
+      "body": "**Why:** month-end weeks are frozen for every ProjectB service.\n\n**How to apply:** no promotions during a listed freeze week; wait for the window to reopen."
+    },
+    {
+      "slug": "reference_sensor_vendor_faq",
+      "name": "Sensor vendor FAQ",
+      "description": "Questions the sensor supplier has answered",
+      "tags": [
+        "vendor",
+        "faq",
+        "supplier"
+      ],
+      "type": "reference",
+      "status": "active",
+      "body": "**Why:** the supplier answers the same lead-time and packaging questions repeatedly.\n\n**How to apply:** check here before emailing the supplier."
+    }
+  ],
+  "cases": [
+    {
+      "id": "c01_slug_exact",
+      "category": "slug",
+      "query": "projecta_zephyr_calibration",
+      "prompt": "what does projecta_zephyr_calibration say about drift",
+      "relevant": [
+        "projecta_zephyr_calibration"
+      ],
+      "rationale": "Exact slug lookup; the stale legacy entry and the archived contract are not the current procedure."
+    },
+    {
+      "id": "c02_name_terms",
+      "category": "name",
+      "query": "zephyr calibration",
+      "prompt": "how do I run the zephyr calibration on the widget",
+      "relevant": [
+        "projecta_zephyr_calibration"
+      ],
+      "rationale": "Only the current procedure answers the intent. The stale legacy steps and the glossary (which merely defines both words) do not."
+    },
+    {
+      "id": "c03_tag_firmware",
+      "category": "tags",
+      "query": "firmware",
+      "prompt": "flash the widget firmware and verify it",
+      "relevant": [
+        "projecta_widget_firmware"
+      ],
+      "rationale": "Single tag term; the glossary and calibration entries mention firmware only in prose."
+    },
+    {
+      "id": "c04_multi_relevant",
+      "category": "multi-relevant",
+      "query": "quokka",
+      "prompt": "tell me everything we know about quokka",
+      "relevant": [
+        "projectb_quokka_deploy",
+        "projectb_quokka_rollback_incident",
+        "projectb_quokka_metrics"
+      ],
+      "rationale": "Broad intent: all three quokka entries are relevant; the glossary is not."
+    },
+    {
+      "id": "c05_two_terms_ordered",
+      "category": "multi-relevant",
+      "query": "quokka rollback",
+      "prompt": "how does a quokka rollback work and when did it fail",
+      "relevant": [
+        "projectb_quokka_rollback_incident",
+        "projectb_quokka_deploy"
+      ],
+      "rationale": "Both the incident and the pipeline answer the intent; metrics does not."
+    },
+    {
+      "id": "c06_body_only_term",
+      "category": "body-only",
+      "query": "cadence",
+      "prompt": "what is the lantern telemetry cadence",
+      "relevant": [
+        "projecta_lantern_orphan"
+      ],
+      "rationale": "Search: body-only term (weight 1). Hook: lantern/telemetry carry it."
+    },
+    {
+      "id": "c07_tags_only",
+      "category": "tags-only",
+      "query": "lanternfeed",
+      "prompt": "lanternfeed polling rules",
+      "relevant": [
+        "projecta_lantern_orphan"
+      ],
+      "rationale": "Term present only in tags (weight 5): never in slug, name, description, or body."
+    },
+    {
+      "id": "c08_phrase",
+      "category": "phrase",
+      "query": "\"tls handshake\"",
+      "prompt": "the redis tls handshake keeps failing",
+      "relevant": [
+        "reference_redis_tls_handshake"
+      ],
+      "rationale": "Phrase atom (search/recall); the hook extractor sees separate terms."
+    },
+    {
+      "id": "c09_prefix",
+      "category": "prefix",
+      "query": "vacu*",
+      "prompt": "autovacuum thresholds for postgres tables",
+      "relevant": [
+        "reference_postgres_vacuum"
+      ],
+      "rationale": "Prefix atom vacu* matches the 'vacuum' token in the slug, name, and tags; 'autovacuum' is a separate token that it does not match."
+    },
+    {
+      "id": "c10_degraded",
+      "category": "degraded",
+      "query": "zephyr nonexistentterm",
+      "prompt": "zephyr nonexistentterm",
+      "relevant": [
+        "projecta_zephyr_calibration"
+      ],
+      "rationale": "The intent is zephyr; only the current calibration entry answers it. The full query has zero hits, so search/recall reach it through the degraded fallback; the hook queries per term and never degrades."
+    },
+    {
+      "id": "c11_stale_intent",
+      "category": "stale",
+      "query": "zephyr calibration legacy",
+      "prompt": "legacy zephyr calibration for the v1 widget",
+      "relevant": [
+        "projecta_zephyr_legacy"
+      ],
+      "rationale": "Intent explicitly asks for the legacy steps; the stale entry is the right answer despite halving."
+    },
+    {
+      "id": "c12_negative_unrelated",
+      "category": "negative",
+      "query": "kubernetes ingress",
+      "prompt": "configure the kubernetes ingress controller",
+      "relevant": [],
+      "rationale": "Nothing in the store is about kubernetes; every mode must return nothing."
+    },
+    {
+      "id": "c13_negative_no_overlap",
+      "category": "negative",
+      "query": "orchestra symphony rehearsal",
+      "prompt": "when is the orchestra symphony rehearsal tonight",
+      "relevant": [],
+      "rationale": "Three-atom query with zero overlap; degraded fallback must not manufacture a hit."
+    },
+    {
+      "id": "c14_distractor_widget",
+      "category": "distractor",
+      "query": "widget sensor",
+      "prompt": "which sensor channels does the widget expose",
+      "relevant": [
+        "projecta_widget_sensor_matrix"
+      ],
+      "rationale": "Four entries carry the widget tag; only the sensor matrix answers the intent."
+    },
+    {
+      "id": "c15_graph_helpful",
+      "category": "graph-helpful",
+      "query": "widget firmware flashing",
+      "prompt": "firmware flashing order",
+      "relevant": [
+        "projecta_widget_firmware",
+        "projecta_bootloader_notes"
+      ],
+      "rationale": "Bootloader notes answer the quirks half of the intent. They match only 'flashing' in the body, below the hook's direct-seed threshold, but are linked from the firmware entry, so graph-on is the only way the hook can reach them."
+    },
+    {
+      "id": "c16_graph_harmful",
+      "category": "graph-harmful",
+      "query": "calibration procedure",
+      "prompt": "calibration procedure after a flash",
+      "relevant": [
+        "projecta_zephyr_calibration"
+      ],
+      "rationale": "Only the current calibration entry answers the intent. The seed links to an archived vendor contract and the firmware entry, which do not; with graph-on they can only add non-relevant rows (fixed-denominator P@5 may be unchanged while returned_precision falls)."
+    },
+    {
+      "id": "c17_user_preference",
+      "category": "type-user",
+      "query": "bash scripts python",
+      "prompt": "should helper scripts be bash or python",
+      "relevant": [
+        "user_prefers_bash"
+      ],
+      "rationale": "Standing user preference; 'scripts' also appears only in the tags of this entry."
+    },
+    {
+      "id": "c18_feedback",
+      "category": "type-feedback",
+      "query": "commit messages",
+      "prompt": "how should I phrase commit messages",
+      "relevant": [
+        "feedback_terse_commits"
+      ],
+      "rationale": "Feedback entry; 'messages' appears only in name/description."
+    },
+    {
+      "id": "c19_stopword_heavy_prompt",
+      "category": "hook-extractor",
+      "query": "retention",
+      "prompt": "what is the retention window we use for the shared mailbox",
+      "relevant": [
+        "projectb_mailbox_retention"
+      ],
+      "rationale": "Prompt is mostly stop words and short tokens; retention/mailbox/shared/window must survive extraction."
+    },
+    {
+      "id": "c20_type_field",
+      "category": "type-field",
+      "query": "reference redis",
+      "prompt": "reference notes on redis",
+      "relevant": [
+        "reference_redis_tls_handshake"
+      ],
+      "rationale": "The type field (weight 3) plus a tag; other reference entries lack redis."
+    },
+    {
+      "id": "c21_glossary",
+      "category": "broad-body",
+      "query": "glossary",
+      "prompt": "is there a glossary of widget terms",
+      "relevant": [
+        "reference_glossary_widget"
+      ],
+      "rationale": "Single-tag hit on an entry whose body would otherwise match many vocabularies."
+    },
+    {
+      "id": "c22_incident_intent",
+      "category": "multi-term",
+      "query": "incident staging rollback",
+      "prompt": "the staging rollback incident details",
+      "relevant": [
+        "projectb_quokka_rollback_incident"
+      ],
+      "rationale": "Three atoms all present on one entry; the deploy pipeline carries only two."
+    },
+    {
+      "id": "c23_negative_stopwords_only",
+      "category": "negative",
+      "query": "please help",
+      "prompt": "please help me with this thing",
+      "relevant": [],
+      "rationale": "Nothing in the store matches. The hook extractor drops 'please'/'help'/'with'/'this' as stop words and keeps 'thing', which matches no entry; search must return nothing."
+    },
+    {
+      "id": "c24_two_weak_body_terms",
+      "category": "body-only",
+      "query": "purgewindow quotaflag",
+      "prompt": "purgewindow quotaflag settings",
+      "relevant": [
+        "projectb_mailbox_retention"
+      ],
+      "rationale": "Two body-only terms; the hook's two-distinct-terms rule should qualify the seed where one term alone would not."
+    },
+    {
+      "id": "c25_hyphenated_token",
+      "category": "hook-extractor",
+      "query": "redis-tls",
+      "prompt": "redis-tls handshake cipher list",
+      "relevant": [
+        "reference_redis_tls_handshake"
+      ],
+      "rationale": "Hyphenated extractor token splits into two scorer atoms; provenance may list both."
+    },
+    {
+      "id": "c26_graph_linked_relevant",
+      "category": "graph-helpful",
+      "query": "quokka pipeline",
+      "prompt": "how does the quokka pipeline promote a build",
+      "relevant": [
+        "projectb_quokka_deploy",
+        "projectb_freeze_calendar"
+      ],
+      "rationale": "Coverage construction: the freeze calendar answers when promotion is allowed, shares no query/prompt token with the case, and is reachable only through the [[projectb_freeze_calendar]] link in the deploy entry. Any mode without graph expansion cannot return it."
+    },
+    {
+      "id": "c27_graph_linked_irrelevant",
+      "category": "graph-harmful",
+      "query": "lantern cadence",
+      "prompt": "lantern telemetry cadence",
+      "relevant": [
+        "projecta_lantern_orphan"
+      ],
+      "rationale": "Coverage construction: the sensor vendor FAQ is linked from the lantern entry but shares no query/prompt token with the case and does not answer the intent. Only graph expansion can add it, so any extra row here is a pure precision loss."
+    },
+    {
+      "id": "c28_negative_lexical_overlap",
+      "category": "negative",
+      "query": "quokka approvers",
+      "prompt": "who approves a quokka deploy before promotion",
+      "relevant": [],
+      "rationale": "The store knows the quokka pipeline but records nothing about approvers, so nothing answers the intent. The strong lexical overlap makes every mode likely to return quokka rows; those are false positives by construction."
+    }
+  ]
+}

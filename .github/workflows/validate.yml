@@ -69,6 +69,21 @@ jobs:
             bash scripts/test-provider-parity.sh
           bash scripts/test-session-workspace-policy-parity.sh
 
+      - name: Validate retrieval evaluation tooling and corpus
+        run: |
+          python3 -B codex/plugins/knowledge/scripts/test-eval-retrieval.py
+          python3 -B plugins/knowledge/scripts/test-eval-retrieval.py
+          python3 -B codex/plugins/knowledge/scripts/eval-retrieval.py --repeats 1 --warmup 0 --output "$RUNNER_TEMP/retrieval-codex.json"
+          python3 -B plugins/knowledge/scripts/eval-retrieval.py --repeats 1 --warmup 0 --output "$RUNNER_TEMP/retrieval-claude.json"
+          python3 -c 'import json,sys; [print(path, json.dumps(json.load(open(path))["summary"], indent=2)) for path in sys.argv[1:]]' "$RUNNER_TEMP/retrieval-codex.json" "$RUNNER_TEMP/retrieval-claude.json"
+
+      - name: Run structured handoff regression tests
+        run: |
+          bash codex/plugins/knowledge/scripts/test-promotion.sh
+          bash plugins/knowledge/scripts/test-promotion.sh
+          bash codex/plugins/knowledge/scripts/test-doctor.sh
+          bash plugins/knowledge/scripts/test-doctor.sh
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest

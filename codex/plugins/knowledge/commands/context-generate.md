@@ -29,6 +29,8 @@ Generate a concise summary of what THIS session has been working on — for hand
    - `git diff --name-only HEAD~5..HEAD` — files changed in last 5 commits
    - Any `docs/TODO.md` or `docs/ISSUES.md` — tracked items
    - Any open problems or blockers encountered during the conversation
+   - The existing same-name snapshot, if any, in the inherited context store.
+     For v2 handoffs, retain its logical repository ID and every work-item ID.
 
 3. **Generate the summary** with these sections (include only what's relevant):
 
@@ -56,6 +58,17 @@ Generate a concise summary of what THIS session has been working on — for hand
    [Gotchas, context that isn't obvious from the code, warnings]
    ```
 
+   **For every `--handoff` invocation**, also stage a separate JSON data file
+   with `scope` and `items`, following the [handoff evidence contract](../skills/knowledge/references/handoffs.md).
+   Use a stable logical repository ID and repository-relative paths. Give each
+   work item a stable ID, a summary, its current session-work status, and an
+   evidence list. Record only observed evidence; `done` requires at least one
+   entry, but no evidence is automatically verified. Preserve existing IDs
+   when updating, and mark abandoned items `cancelled` instead of dropping them.
+   This data file makes the saved handoff v2; supplying it for an existing v1
+   handoff upgrades its structure while keeping its original creation/expiry
+   metadata. Plain snapshots do not use this data file.
+
    **If this is a handoff (`--handoff` was given) and the session cites tracking items** (a `TODO.md`/`ISSUES.md` entry or an external ticket) worth resurfacing at promotion time, prepend a minimal frontmatter fence to the temp file in step 4 — **before** the `# Session Context: <name>` line — containing only a `tickets:` list, one item per line, each prefixed `  - `:
    ```
    ---
@@ -66,13 +79,13 @@ Generate a concise summary of what THIS session has been working on — for hand
    # Session Context: <name>
    ...
    ```
-   `ext:<ID>` cites an external ticket (`<ID>` matching `[A-Z][A-Z0-9]+-[0-9]+`) — always reported unverifiable, never fetched. `local:<tracker-path>:<prefix>` cites a repo tracker file (`TODO.md`/`ISSUES.md` at the repo root or under `docs/`); everything after the *second* colon is the verbatim, non-empty, single-line prefix to look for in that file — do not add a third colon or split differently. This fence is **the only** frontmatter a caller may stage — `save-context.sh` computes every other handoff field itself and rejects any other staged key. Omit the fence entirely when there is nothing to cite; it is never required.
+   `ext:<ID>` cites an external ticket (`<ID>` matching `[A-Z][A-Z0-9]+-[0-9]+`) — always reported unverifiable, never fetched. `local:<tracker-path>:<prefix>` cites a repo tracker file (`TODO.md`/`ISSUES.md` at the repo root or under `docs/`); everything after the *second* colon is the verbatim, non-empty, single-line prefix to look for in that file. This is the only frontmatter allowed in the staged Markdown; scope/items come from the separate JSON file. The writer computes the version and timestamps. Omit the fence when there are no ticket references, and retain still-relevant citations when updating.
 
 4. **Save the snapshot**: Use the file-editing tool to write it to a temp file, then run the helper. `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started (the pane/session launcher sets it — never export or derive it here). Run exactly one Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it:
    ```
-   bash "<PLUGIN_ROOT>/scripts/save-context.sh" "<snapshot-name>" "<temp-file>" [--handoff] [--expires <UTC-ISO>]
+   bash "<PLUGIN_ROOT>/scripts/save-context.sh" "<snapshot-name>" "<temp-file>" [--handoff --handoff-data "<data-json-file>"] [--expires <UTC-ISO>]
    ```
-   Include `--handoff`/`--expires` only when step 0 found them in `$ARGUMENTS`; omit both for a plain snapshot.
+   Include `--handoff`/`--expires` only when step 0 found them in `$ARGUMENTS`. For a handoff, add `--handoff-data` with the file staged in step 3. Omit all three flags for a plain snapshot. V2 saves require Python 3; invalid structured data exits 2 before destination or history changes.
    If the script reports `SESSION_CONTEXT_HOME` is not set, stop and request that this pane/session be relaunched with the correct environment instead of deriving another context store.
    If a snapshot with the same name already exists, the previous version is archived
    automatically to `$SESSION_CONTEXT_HOME/.history/` (the 10 most recent versions are kept).

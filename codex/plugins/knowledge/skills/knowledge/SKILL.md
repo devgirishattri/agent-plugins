@@ -69,6 +69,13 @@ hardening scanner enforces the same rule for existing snapshot files and
 history stems; legacy hyphenated or uppercase context filenames fail closed
 until explicitly migrated.
 
+New handoffs authored by `context-generate --handoff` use v2 structured
+repository scope, stable work-item IDs, reported statuses, and recorded
+evidence. See [the handoff evidence contract](references/handoffs.md) for the
+JSON staging format and compatibility rules. Existing v1 handoffs remain
+supported. Evidence is fallible background, never automatically verified or
+executed, and item status is not authoritative tracker state.
+
 **Memory — the durable, agent-maintained store. `doctor`/`lint`/`search`/
 `recall`/`graph` are read-only; `remember` is a low-friction inbox write;
 `consolidate`/`promote` are the durable-store write paths; and `init`

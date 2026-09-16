@@ -53,7 +53,7 @@ deletion, `retire`, `purge`, or `context-remove`; nothing is silently deleted.
 
 | Command | Purpose |
 |---|---|
-| `/knowledge:context-generate [name] [--handoff] [--expires <UTC-ISO>]` | Summarize the current session and save it. `--handoff` marks it a structured, promotable handoff instead of a point-in-time snapshot. |
+| `/knowledge:context-generate [name] [--handoff] [--expires <UTC-ISO>]` | Summarize the current session and save it. `--handoff` marks it a structured, promotable handoff instead of a point-in-time snapshot; its scope, stable work-item IDs, statuses, and recorded (never verified) evidence follow `references/handoffs.md`. |
 | `/knowledge:context-list` | List snapshot names, line counts, timestamps, history counts, and (for handoffs) kind + expiry. |
 | `/knowledge:context-load <name>` | Load a snapshot's contents into the current session; warns if stale. |
 | `/knowledge:context-diff <name>` | Compare the current snapshot with archived versions. |

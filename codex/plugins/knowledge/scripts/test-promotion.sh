@@ -425,6 +425,158 @@ out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" tix "$TMP/tix_baditem.md" --hand
 assert_rc "malformed_tickets_bad_list_item_exit2" 2 "$rc"
 assert_eq "malformed_tickets_bad_list_item_dest_unchanged" "$before_hash" "$(sha_of "$ctx1/tix.md")"
 
+# 1l. handoff v2 (--handoff-data): create, preserve, upgrade, refusals.
+# The helper's own schema tests run first (python3 -B, no bytecode left
+# behind); they are the single source for grammar/transition rules.
+if python3 -B "$HERE/test-handoff-data.py" > "$TMP/hd_tests.out" 2>&1; then
+  pass "handoff_data_helper_tests"
+else
+  fail "handoff_data_helper_tests" "$(tail -n 5 "$TMP/hd_tests.out")"
+fi
+FULL_SHA=$(printf 'a%.0s' $(seq 40))
+printf '{"scope":{"repository":"projecta","paths":["."]},"items":[{"id":"alpha_fix","summary":"fix alpha","status":"in_progress","evidence":[{"kind":"file","ref":"src/alpha.sh","observed_at":"2026-09-16T10:00:00Z"}]}]}\n' > "$TMP/v2_data.json"
+printf 'v2 body\n' > "$TMP/v2_in.md"
+# --handoff-data without --handoff -> exit 2.
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in.md" --handoff-data "$TMP/v2_data.json" 2>&1); rc=$?
+assert_rc "v2_data_requires_handoff_exit2" 2 "$rc"
+[ -e "$ctx1/v2.md" ] && fail "v2_data_requires_handoff_nothing_written" "v2.md exists" || pass "v2_data_requires_handoff_nothing_written"
+# create v2.
+before_epoch=$(date -u +%s)
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in.md" --handoff --handoff-data "$TMP/v2_data.json" 2>&1); rc=$?
+assert_rc "v2_create_exit0" 0 "$rc"
+assert_eq "v2_create_version" "2" "$(fm_get "$ctx1/v2.md" handoff_version)"
+assert_eq "v2_create_kind" "handoff" "$(fm_get "$ctx1/v2.md" kind)"
+v2file=$(cat "$ctx1/v2.md")
+assert_contains "v2_create_scope_line" "$v2file" 'scope: {"paths": ["."], "repository": "projecta"}'
+assert_contains "v2_create_items_header" "$v2file" $'\nitems:\n  - {'
+assert_contains "v2_create_item_id" "$v2file" '"id": "alpha_fix"'
+assert_contains "v2_create_body" "$v2file" "v2 body"
+v2created=$(fm_get "$ctx1/v2.md" created); v2expires=$(fm_get "$ctx1/v2.md" expires)
+v2created_epoch=$(iso_to_epoch "$v2created")
+[ -n "$v2created_epoch" ] && [ "$v2created_epoch" -ge "$before_epoch" ] && pass "v2_create_created_is_now" || fail "v2_create_created_is_now" "created=$v2created"
+# scope/items lines are invisible to the top-level scalar getter (readers ignore them).
+assert_eq "v2_items_header_has_no_scalar" "" "$(fm_get "$ctx1/v2.md" items 2>/dev/null)"
+# regen without data keeps scope/items and metadata.
+printf 'v2 body regen\n' > "$TMP/v2_in2.md"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in2.md" --handoff 2>&1); rc=$?
+assert_rc "v2_regen_nodata_exit0" 0 "$rc"
+assert_eq "v2_regen_nodata_version_kept" "2" "$(fm_get "$ctx1/v2.md" handoff_version)"
+assert_eq "v2_regen_nodata_created_kept" "$v2created" "$(fm_get "$ctx1/v2.md" created)"
+assert_eq "v2_regen_nodata_expires_kept" "$v2expires" "$(fm_get "$ctx1/v2.md" expires)"
+assert_contains "v2_regen_nodata_items_kept" "$(cat "$ctx1/v2.md")" '"id": "alpha_fix"'
+assert_contains "v2_regen_nodata_body_replaced" "$(cat "$ctx1/v2.md")" "v2 body regen"
+# regen with updated data: status change + new item allowed, ids retained.
+printf '{"scope":{"repository":"projecta","paths":[".","docs"]},"items":[{"id":"alpha_fix","summary":"fix alpha","status":"done","evidence":[{"kind":"commit","ref":"%s","observed_at":"2026-09-16T11:00:00Z","note":"landed"}]},{"id":"beta_followup","summary":"follow up","status":"pending","evidence":[]}]}\n' "$FULL_SHA" > "$TMP/v2_data2.json"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/v2_data2.json" 2>&1); rc=$?
+assert_rc "v2_regen_data_exit0" 0 "$rc"
+assert_contains "v2_regen_data_status_updated" "$(cat "$ctx1/v2.md")" '"status": "done"'
+assert_contains "v2_regen_data_new_item" "$(cat "$ctx1/v2.md")" '"id": "beta_followup"'
+assert_eq "v2_regen_data_created_kept" "$v2created" "$(fm_get "$ctx1/v2.md" created)"
+# refusals: dropped id, changed repository, invalid JSON, bad status -> exit 2,
+# dest byte-unchanged, no spurious history entry.
+before_hash=$(sha_of "$ctx1/v2.md")
+before_hist_count=$(find "$ctx1/.history" -name 'v2.*.md' 2>/dev/null | wc -l | tr -d ' ')
+printf '{"scope":{"repository":"projecta","paths":["."]},"items":[{"id":"beta_followup","summary":"only","status":"pending","evidence":[]}]}\n' > "$TMP/v2_drop.json"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/v2_drop.json" 2>&1); rc=$?
+assert_rc "v2_dropped_id_exit2" 2 "$rc"
+assert_contains "v2_dropped_id_stderr" "$out" "existing item IDs must be retained"
+printf '{"scope":{"repository":"projectb","paths":["."]},"items":[{"id":"alpha_fix","summary":"a","status":"done","evidence":[{"kind":"test","ref":"bash test.sh","observed_at":"2026-09-16T11:00:00Z"}]},{"id":"beta_followup","summary":"b","status":"pending","evidence":[]}]}\n' > "$TMP/v2_repo.json"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/v2_repo.json" 2>&1); rc=$?
+assert_rc "v2_changed_repository_exit2" 2 "$rc"
+assert_contains "v2_changed_repository_stderr" "$out" "cannot change scope.repository"
+printf '{not json\n' > "$TMP/v2_badjson.json"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/v2_badjson.json" 2>&1); rc=$?
+assert_rc "v2_bad_json_exit2" 2 "$rc"
+printf '{"scope":{"repository":"projecta","paths":["."]},"items":[{"id":"alpha_fix","summary":"a","status":"finished","evidence":[]},{"id":"beta_followup","summary":"b","status":"pending","evidence":[]}]}\n' > "$TMP/v2_badstatus.json"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/v2_badstatus.json" 2>&1); rc=$?
+assert_rc "v2_bad_status_exit2" 2 "$rc"
+assert_contains "v2_bad_status_stderr" "$out" "status must be one of"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/does_not_exist.json" 2>&1); rc=$?
+assert_rc "v2_missing_data_file_exit2" 2 "$rc"
+assert_eq "v2_refusals_dest_unchanged" "$before_hash" "$(sha_of "$ctx1/v2.md")"
+after_hist_count=$(find "$ctx1/.history" -name 'v2.*.md' 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "v2_refusals_no_spurious_history" "$before_hist_count" "$after_hist_count"
+# plain regen on a v2 still refuses with the exact v1 wording.
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" v2 "$TMP/v2_in2.md" 2>&1); rc=$?
+assert_rc "v2_plain_regen_exit2" 2 "$rc"
+assert_eq "v2_plain_regen_exact_stderr" "handoff exists: re-run with --handoff" "$out"
+# v1 handoff upgraded to v2 with data keeps created/expires; tickets kept too.
+h1created_before=$(fm_get "$ctx1/tix.md" created); h1expires_before=$(fm_get "$ctx1/tix.md" expires)
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" tix "$TMP/tix_in.md" --handoff --handoff-data "$TMP/v2_data.json" 2>&1); rc=$?
+assert_rc "v1_upgrade_to_v2_exit0" 0 "$rc"
+assert_eq "v1_upgrade_to_v2_version" "2" "$(fm_get "$ctx1/tix.md" handoff_version)"
+assert_eq "v1_upgrade_to_v2_created_kept" "$h1created_before" "$(fm_get "$ctx1/tix.md" created)"
+assert_eq "v1_upgrade_to_v2_expires_kept" "$h1expires_before" "$(fm_get "$ctx1/tix.md" expires)"
+assert_contains "v1_upgrade_to_v2_tickets_kept" "$(cat "$ctx1/tix.md")" "  - ext:ABC-123"
+assert_contains "v1_upgrade_to_v2_items_present" "$(cat "$ctx1/tix.md")" '"id": "alpha_fix"'
+# a v1 handoff whose inherited created timestamp is invalid cannot be upgraded
+# to v2: the assembled file fails the final helper validation before archive.
+printf -- '---\nhandoff_version: 1\nkind: handoff\ncreated: 2020-13-45T00:00:00Z\nupdated: 2020-01-01T00:00:00Z\nexpires: 2030-01-01T00:00:00Z\n---\nbad created\n' > "$ctx1/badcreated.md"
+before_hash=$(sha_of "$ctx1/badcreated.md")
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" badcreated "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/v2_data.json" 2>&1); rc=$?
+assert_rc "v1_upgrade_bad_created_exit2" 2 "$rc"
+assert_contains "v1_upgrade_bad_created_stderr" "$out" "created"
+assert_eq "v1_upgrade_bad_created_dest_unchanged" "$before_hash" "$(sha_of "$ctx1/badcreated.md")"
+[ -n "$(find "$ctx1/.history" -name 'badcreated.*.md' 2>/dev/null)" ] && fail "v1_upgrade_bad_created_no_history" "history entry created" || pass "v1_upgrade_bad_created_no_history"
+rm -f "$ctx1/badcreated.md"
+# a calendar-invalid --expires (passes the regex, fails the helper) on a
+# v1->v2 upgrade refuses before archive.
+before_hash=$(sha_of "$ctx1/h1.md"); before_hist_count=$(find "$ctx1/.history" -name 'h1.*.md' 2>/dev/null | wc -l | tr -d ' ')
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" h1 "$TMP/h1_in2.md" --handoff --handoff-data "$TMP/v2_data.json" --expires 2030-02-30T00:00:00Z 2>&1); rc=$?
+assert_rc "v2_bad_calendar_expires_exit2" 2 "$rc"
+assert_contains "v2_bad_calendar_expires_stderr" "$out" "expires"
+assert_eq "v2_bad_calendar_expires_dest_unchanged" "$before_hash" "$(sha_of "$ctx1/h1.md")"
+assert_eq "v2_bad_calendar_expires_no_history" "$before_hist_count" "$(find "$ctx1/.history" -name 'h1.*.md' 2>/dev/null | wc -l | tr -d ' ')"
+# --handoff-data with an empty value is an error, never a silent v1 save.
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" emptyval "$TMP/v2_in2.md" --handoff --handoff-data "" 2>&1); rc=$?
+assert_rc "v2_empty_data_value_exit2" 2 "$rc"
+[ -e "$ctx1/emptyval.md" ] && fail "v2_empty_data_value_nothing_written" "emptyval.md exists" || pass "v2_empty_data_value_nothing_written"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" emptyval "$TMP/v2_in2.md" --handoff --handoff-data 2>&1); rc=$?
+assert_rc "v2_missing_data_value_exit2" 2 "$rc"
+# a malformed existing v2 (bad status on disk) refuses to regenerate, with or
+# without new data, leaving content and history unchanged.
+printf -- '---\nhandoff_version: 2\nkind: handoff\ncreated: 2020-01-01T00:00:00Z\nupdated: 2020-01-01T00:00:00Z\nexpires: 2030-01-01T00:00:00Z\nscope: {"paths": ["."], "repository": "projecta"}\nitems:\n  - {"evidence": [], "id": "alpha_fix", "status": "finished", "summary": "fix alpha"}\n---\nmalformed v2\n' > "$ctx1/badv2.md"
+before_hash=$(sha_of "$ctx1/badv2.md")
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" badv2 "$TMP/v2_in2.md" --handoff 2>&1); rc=$?
+assert_rc "malformed_existing_v2_nodata_exit2" 2 "$rc"
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" badv2 "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/v2_data.json" 2>&1); rc=$?
+assert_rc "malformed_existing_v2_data_exit2" 2 "$rc"
+assert_eq "malformed_existing_v2_dest_unchanged" "$before_hash" "$(sha_of "$ctx1/badv2.md")"
+[ -n "$(find "$ctx1/.history" -name 'badv2.*.md' 2>/dev/null)" ] && fail "malformed_existing_v2_no_history" "history entry created" || pass "malformed_existing_v2_no_history"
+rm -f "$ctx1/badv2.md"
+# python-free compatibility promise: a fake python3 first on PATH records any
+# invocation and fails; plain saves and v1 handoff saves must never call it,
+# while a v2 save through the same PATH must (proving the shim is live).
+mkdir -p "$TMP/fakebin"
+printf '#!/usr/bin/env bash\necho called >> "%s/python3.calls"\nexit 1\n' "$TMP" > "$TMP/fakebin/python3"
+chmod +x "$TMP/fakebin/python3"
+rm -f "$TMP/python3.calls"
+out=$(PATH="$TMP/fakebin:$PATH" SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" nopy_plain "$TMP/v2_in2.md" 2>&1); rc=$?
+assert_rc "python_free_plain_save_exit0" 0 "$rc"
+out=$(PATH="$TMP/fakebin:$PATH" SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" nopy_v1 "$TMP/v2_in2.md" --handoff 2>&1); rc=$?
+assert_rc "python_free_v1_save_exit0" 0 "$rc"
+assert_eq "python_free_v1_save_version" "1" "$(fm_get "$ctx1/nopy_v1.md" handoff_version)"
+out=$(PATH="$TMP/fakebin:$PATH" SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" nopy_v1 "$TMP/v2_in2.md" --handoff 2>&1); rc=$?
+assert_rc "python_free_v1_regen_exit0" 0 "$rc"
+[ -e "$TMP/python3.calls" ] && fail "python_free_plain_and_v1_never_call_python3" "python3 was invoked: $(cat "$TMP/python3.calls" | wc -l | tr -d ' ') time(s)" || pass "python_free_plain_and_v1_never_call_python3"
+out=$(PATH="$TMP/fakebin:$PATH" SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" nopy_v2 "$TMP/v2_in2.md" --handoff --handoff-data "$TMP/v2_data.json" 2>&1); rc=$?
+assert_rc "python_shim_live_v2_fails_exit2" 2 "$rc"
+[ -e "$TMP/python3.calls" ] && pass "python_shim_live_v2_calls_python3" || fail "python_shim_live_v2_calls_python3" "shim never invoked; the control proves nothing"
+[ -e "$ctx1/nopy_v2.md" ] && fail "python_shim_live_v2_nothing_written" "nopy_v2.md exists" || pass "python_shim_live_v2_nothing_written"
+rm -f "$ctx1/nopy_plain.md" "$ctx1/nopy_v1.md"
+# an existing handoff with an unknown version is never rewritten.
+printf -- '---\nhandoff_version: 7\nkind: handoff\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\nexpires: 2030-01-01T00:00:00Z\n---\nfuture format\n' > "$ctx1/fut.md"
+before_hash=$(sha_of "$ctx1/fut.md")
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" fut "$TMP/v2_in2.md" --handoff 2>&1); rc=$?
+assert_rc "unknown_version_refused_exit2" 2 "$rc"
+assert_contains "unknown_version_refused_stderr" "$out" "unsupported handoff_version '7'"
+assert_eq "unknown_version_refused_dest_unchanged" "$before_hash" "$(sha_of "$ctx1/fut.md")"
+# a v1 handoff regenerated without data stays v1 (python-free path untouched).
+out=$(SESSION_CONTEXT_HOME="$ctx1" bash "$SAVE" h1 "$TMP/h1_in2.md" --handoff 2>&1); rc=$?
+assert_rc "v1_regen_stays_v1_exit0" 0 "$rc"
+assert_eq "v1_regen_stays_v1_version" "1" "$(fm_get "$ctx1/h1.md" handoff_version)"
+rm -f "$ctx1/fut.md"
+
 # ===========================================================================
 # 2. LIST-CONTEXTS.SH COLUMN EXACTNESS
 # ===========================================================================

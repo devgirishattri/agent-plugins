@@ -868,7 +868,7 @@ write_handoff "$ho_ctx/clean_handoff.md" "2020-01-01T00:00:00Z" "2020-01-01T00:0
 # missing expires.
 cat > "$ho_ctx/malformed_handoff.md" <<'EOF'
 ---
-handoff_version: 2
+handoff_version: 3
 kind: handoff
 created: not-a-timestamp
 ---
@@ -886,6 +886,52 @@ write_handoff "$ho_ctx/expired_handoff.md" "2020-01-01T00:00:00Z" "2020-01-01T00
 write_handoff "$ho_ctx/citations_handoff.md" "2020-01-01T00:00:00Z" "2020-01-01T00:00:00Z" "$future_expires" \
   $'  - ext:not-valid\n  - local:NOTES.md:something\n  - local:ISSUES.md:\n  - local:docs/TODO.md:anything\n  - not-a-recognized-scheme' \
   "citations"
+
+# -- 6. handoff v2: a valid one reports one INFO per item (recorded, never
+# verified) and no WARN; a malformed one (bad status enum) is a single WARN
+# from the helper; a v2 without scope/items is a WARN too.
+cat > "$ho_ctx/v2_clean_handoff.md" <<EOF
+---
+handoff_version: 2
+kind: handoff
+created: 2020-01-01T00:00:00Z
+updated: 2020-01-01T00:00:00Z
+expires: $future_expires
+tickets:
+  - ext:PROJ-7
+scope: {"paths": ["."], "repository": "projecta"}
+items:
+  - {"evidence": [{"kind": "file", "observed_at": "2026-09-16T10:00:00Z", "ref": "src/alpha.sh"}], "id": "alpha_fix", "status": "in_progress", "summary": "fix alpha"}
+  - {"evidence": [], "id": "beta_followup", "status": "pending", "summary": "follow up"}
+---
+# Session Context: v2 clean
+body
+EOF
+cat > "$ho_ctx/v2_bad_handoff.md" <<EOF
+---
+handoff_version: 2
+kind: handoff
+created: 2020-01-01T00:00:00Z
+updated: 2020-01-01T00:00:00Z
+expires: $future_expires
+scope: {"paths": ["."], "repository": "projecta"}
+items:
+  - {"evidence": [], "id": "alpha_fix", "status": "finished", "summary": "fix alpha"}
+---
+# Session Context: v2 bad
+body
+EOF
+cat > "$ho_ctx/v2_empty_handoff.md" <<EOF
+---
+handoff_version: 2
+kind: handoff
+created: 2020-01-01T00:00:00Z
+updated: 2020-01-01T00:00:00Z
+expires: $future_expires
+---
+# Session Context: v2 empty
+body
+EOF
 
 # -- 5. mtime-tier AND expires-tier both firing on the SAME file.
 write_handoff "$ho_ctx/both_tiers_handoff.md" "2020-01-01T00:00:00Z" "2020-01-01T00:00:00Z" "$past_expires" "" "both"
@@ -911,7 +957,7 @@ assert_contains "handoff_clean_local_verified_info" "$out" "handoff 'clean_hando
 assert_not_contains "handoff_clean_not_stale" "$out" "stale context snapshot 'clean_handoff'"
 
 # malformed handoff: one WARN per broken/missing field.
-assert_contains "handoff_malformed_version" "$out" "malformed handoff frontmatter: 'malformed_handoff' (handoff_version missing or not '1': '2')"
+assert_contains "handoff_malformed_version" "$out" "malformed handoff frontmatter: 'malformed_handoff' (handoff_version missing or not '1'/'2': '3')"
 assert_contains "handoff_malformed_created" "$out" "malformed handoff frontmatter: 'malformed_handoff' (created is not a UTC timestamp"
 assert_contains "handoff_malformed_missing_updated" "$out" "malformed handoff frontmatter: 'malformed_handoff' (missing required field: updated)"
 assert_contains "handoff_malformed_missing_expires" "$out" "malformed handoff frontmatter: 'malformed_handoff' (missing required field: expires)"
@@ -931,6 +977,16 @@ assert_contains "handoff_citation_absent_tracker_file" "$out" "docs/TODO.md (tra
 assert_contains "handoff_citation_unrecognized_scheme" "$out" "unrecognized citation grammar: 'not-a-recognized-scheme'"
 citation_error_count=$(printf '%s\n' "$out" | awk -F'\t' '$2=="context-handoff" && $1=="ERROR"' | grep -c . || true)
 [ "$citation_error_count" = "0" ] && pass "handoff_citations_never_error_level" || fail "handoff_citations_never_error_level" "found ERROR-level context-handoff findings"
+
+# handoff v2 structural checks (helper-backed, structure only).
+v2_clean_warn=$(printf '%s\n' "$out" | grep "'v2_clean_handoff'" | awk -F'\t' '$1=="WARN"||$1=="ERROR"' | grep -c . || true)
+[ "$v2_clean_warn" = "0" ] && pass "handoff_v2_clean_no_warn" || fail "handoff_v2_clean_no_warn" "$(printf '%s\n' "$out" | grep "'v2_clean_handoff'")"
+assert_contains "handoff_v2_clean_item_info" "$out" "handoff 'v2_clean_handoff' item alpha_fix (in_progress): 1 evidence entries recorded, not verified"
+assert_contains "handoff_v2_clean_item_info_zero" "$out" "handoff 'v2_clean_handoff' item beta_followup (pending): 0 evidence entries recorded, not verified"
+assert_contains "handoff_v2_clean_tickets_still_classified" "$out" "handoff 'v2_clean_handoff' cites external ticket PROJ-7 -- unverifiable, never fetched"
+assert_contains "handoff_v2_bad_status_warn" "$out" "malformed handoff v2 data: 'v2_bad_handoff' (item alpha_fix status must be one of"
+assert_contains "handoff_v2_empty_warn" "$out" "malformed handoff v2 data: 'v2_empty_handoff'"
+assert_not_contains "handoff_v2_bad_no_item_info" "$out" "handoff 'v2_bad_handoff' item"
 
 # both tiers on one file.
 assert_contains "handoff_both_tiers_mtime_warn" "$out" "stale context snapshot 'both_tiers_handoff'"

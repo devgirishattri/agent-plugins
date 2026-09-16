@@ -14,7 +14,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-manager` | 1.7.6 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.9 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.18 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `knowledge` | 0.3.19 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.5.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
@@ -39,6 +39,7 @@ rather than assumed: the `session-scheduler` suite passes 72/72 under 3.2.57.
 | `tmux` | `knowledge` | Optional. Only for pane-identity provenance; `KNOWLEDGE_PANE_NAME` substitutes. |
 | `git` | `knowledge` | Hard. Store resolution and `init` both require a repository. |
 | `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
+| `python3` | `knowledge` v2 handoffs | Required to save or regenerate structured scope/items. Legacy v1 and plain snapshot writes retain their existing behavior. |
 | `python3` | `session-manager` on Codex | Required to read names from `session_index.jsonl` for listing, search, deletion selection, and statistics. |
 | `python3` | `session-workspace` harness policy | Hard only when a schema-v2/v3/v4 `harness.enabled` policy is active. Hooks launched inactive remain no-ops; stale active launcher identity/config/guard drift intentionally fails closed. |
 | `python3` | `knowledge` doctor, `session-chat` message surfacing | Optional. Both degrade rather than fail. |
@@ -388,6 +389,14 @@ columns means both implementations read the variable for the stated purpose;
 provider-specific differences are called out explicitly.
 
 ### Knowledge (context snapshots)
+
+Structured v2 handoffs record repository scope, stable work-item IDs, reported
+status, and evidence references. The context-generation workflow stages a JSON
+data file for `save-context.sh --handoff --handoff-data <file>`; direct legacy
+calls without data still produce v1. Doctor checks the structure and labels
+evidence as recorded, not verified. See the handoff contracts for
+[Claude](plugins/knowledge/skills/knowledge/references/handoffs.md) and
+[Codex](codex/plugins/knowledge/skills/knowledge/references/handoffs.md).
 
 These variables keep the `SESSION_CONTEXT_*` names they had under the retired
 `session-context` plugin, but they are now read by `knowledge`.
