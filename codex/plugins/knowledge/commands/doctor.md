@@ -23,7 +23,9 @@ For `context-handoff`, v1 remains supported. V2 scope/items are structurally
 validated with `handoff-data.py`; malformed data produces a WARN. Valid work
 items are reported with evidence counts labelled `recorded, not verified`.
 This does not check file existence, commit membership, test results, or evidence
-freshness, and it never executes or fetches evidence references.
+freshness, and it never executes or fetches evidence references. For local path
+and commit checks, use `$knowledge:context-verify <name> --repository-id <id>`
+against an explicitly bound repository.
 
 Each finding is one tab-separated line: `<LEVEL>\t<section>\t<message>` with `LEVEL` in `INFO` (informational — review-queue entries, capability-matrix rows, confirmations), `WARN` (an actionable defect: stale snapshot, dangling/convention-drift link, index drift, misconfiguration, orphaned lock/claim/journal/staged file, stale doc, provider capability mismatch), or `ERROR` (a store-integrity violation: slug collision, unsafe permissions, a store that isn't gitignored, unparseable frontmatter). `section` is a short identifier, e.g. `docs-taxonomy`, `docs-todos`, `docs-links`, `docs-freshness`, `memory-resolve`, `memory-lint`, `memory-index`, `memory-backlinks`, `memory-inbox`, `memory-review-queue`, `memory-hardening`, `memory-lock`, `context`, `agents-md`, `capability-matrix`, `capability-claude`, `capability-codex`, `capability-recall`, `duplicate-plugin`.
 

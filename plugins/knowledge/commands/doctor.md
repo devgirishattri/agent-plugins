@@ -26,7 +26,10 @@ For `context-handoff`, v1 remains supported. V2 scope/items are structurally
 validated with `handoff-data.py`; malformed data produces a WARN. Valid work
 items are reported with evidence counts labelled `recorded, not verified`.
 This does not check file existence, commit membership, test results, or evidence
-freshness, and it never executes or fetches evidence references.
+freshness, and it never executes or fetches evidence references. The narrow
+local checks (path existence and type, commit presence and `HEAD` ancestry)
+are `/knowledge:context-verify`'s job, run per handoff against an explicitly
+bound repository.
 
 Do not attempt to fix anything based on these findings yourself — this command is report-only. `/knowledge:lint`, `/knowledge:consolidate`, and `/knowledge:promote` are the write paths for the issues it surfaces in the memory store; docs findings are fixed by editing the doc directly; lock/journal/staged findings name the exact recovery command to run.
 

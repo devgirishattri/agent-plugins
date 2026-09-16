@@ -1,6 +1,6 @@
 ---
 name: knowledge
-description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 18 commands to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
+description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 19 commands to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
 ---
 
 # Knowledge
@@ -57,6 +57,7 @@ deletion, `retire`, `purge`, or `context-remove`; nothing is silently deleted.
 | `/knowledge:context-list` | List snapshot names, line counts, timestamps, history counts, and (for handoffs) kind + expiry. |
 | `/knowledge:context-load <name>` | Load a snapshot's contents into the current session; warns if stale. |
 | `/knowledge:context-diff <name>` | Compare the current snapshot with archived versions. |
+| `/knowledge:context-verify <name> --repository-id <id> [--repo <path>] [--json]` | Read-only check of a v2 handoff's recorded local evidence against a bound repository: path/file existence and type, commit objects and `HEAD` ancestry. `test`/`reference` evidence and symlinks stay unverified; only fixed read-only Git queries run (never a recorded command, never a fetch), and no completion or freshness claim is made. |
 | `/knowledge:context-search <pattern> [--list]` | Read-only search of snapshot contents across local projects. |
 | `/knowledge:context-share <session> [name]` | Notify another named pane that a shared snapshot is available (does not copy the file). |
 | `/knowledge:context-remove <name>` | Preview, explicitly confirm, and delete one snapshot (and its history). |

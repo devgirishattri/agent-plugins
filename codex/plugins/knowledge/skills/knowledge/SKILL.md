@@ -1,6 +1,6 @@
 ---
 name: knowledge
-description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 18 commands to reach for. Use this before invoking any $knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
+description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 19 commands to reach for. Use this before invoking any $knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
 ---
 
 # Knowledge
@@ -56,6 +56,7 @@ workflow:**
 |---|---|
 | `$knowledge:context-generate [name] [--handoff] [--expires <UTC-ISO>]` | Summarize the current session and save it. `--handoff` marks it a structured, promotable handoff instead of a point-in-time snapshot. |
 | `$knowledge:context-list` | List snapshot names, line counts, timestamps, history counts, and (for handoffs) kind + expiry. |
+| `$knowledge:context-verify <name> --repository-id <id> [--repo <path>] [--json]` | Read-only local path and commit checks for a v2 handoff. Recorded test/reference evidence remains unverified. |
 | `$knowledge:context-load <name>` | Load a snapshot's contents into the current session; warns if stale. |
 | `$knowledge:context-diff <name>` | Compare the current snapshot with archived versions. |
 | `$knowledge:context-search <pattern> [--list]` | Read-only search of snapshot contents across local projects. |
@@ -221,7 +222,7 @@ these commands:
   sequence `$knowledge:promote` follows.
 - `skills/docs-create/SKILL.md` — the full structured docs-authoring
   process (reference-based notation, templates, validation scripts).
-- The seven same-named `skills/context-*/SKILL.md` surfaces — the full
+- The eight same-named `skills/context-*/SKILL.md` surfaces — the full
   context-snapshot lifecycle, sharing prerequisites, and staleness rules.
 
 ## Non-goals (always)

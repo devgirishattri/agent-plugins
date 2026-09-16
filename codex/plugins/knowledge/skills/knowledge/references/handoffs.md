@@ -104,6 +104,47 @@ and labels recorded item evidence as not verified. Its existing timestamp,
 expiry, and ticket checks still run. It does not compare IDs against history
 or assess evidence freshness or truth.
 
+## Verifying recorded evidence
+
+`context-verify <name> --repository-id <snake_case> [--repo <path>] [--json]`
+(`verify-context.sh` → `context-verify.py`, which imports the shared parser)
+performs local checks of the structured evidence, and it is deliberately
+narrow, local, and read-only. It runs fixed Git queries (object type, `HEAD`,
+ancestry, shallow state) and never a recorded command; it never fetches:
+
+- The caller binds the repository explicitly. `--repository-id` is compared to
+  the saved `scope.repository` and a mismatch is an input error (exit 2); it
+  is never derived from a directory name or remote URL. `--repo` (default:
+  the current git toplevel) is resolved to its toplevel, which the report
+  names.
+- `scope.paths` and `file` evidence: exists under the toplevel and is a
+  regular file (a directory is acceptable for scope paths). A symlink on the
+  path is reported `unverified` and is never followed; contents are never
+  read.
+- `commit` evidence: the object exists locally, is a commit, and is an
+  ancestor of `HEAD`. Present-but-not-ancestor and wrong-object-type are
+  mismatches. In a shallow clone a present, reachable commit is still
+  `verified`; only what the truncated history cannot establish is
+  `unverified`. An unborn `HEAD` prevents the ancestry check only; path and
+  object-type checks still run.
+- `test` and `reference` evidence, and items with no evidence, are reported
+  `unverified`; nothing is executed, fetched, or resolved.
+- Ticket citations are doctor's concern. This verifier does not assess
+  freshness or completion (doctor reports handoff expiry).
+
+Exit `0` means every local check passed and nothing was left unverified;
+`1` means at least one check is missing, mismatched, or unverified; `2` is an
+input, schema, or environment error (including a plain snapshot or a v1
+handoff, which carry no structured evidence — regenerate with `--handoff` to
+get a v2). The JSON report (`report_version: 1`) lists every check with its
+category, reference, status (`verified|missing|mismatch|unverified`), detail,
+and owning item, plus `head`, `shallow`, summary counts, and a notice
+restating these limits. The human report prints the notice, the resolved
+repository and `HEAD`, one `STATUS <item-id>/<category> "<ref>": <detail>`
+line per check (the repository-binding and `scope` checks carry no item id),
+and a summary line. The store is opened through the same read-only gate
+doctor uses, never through the hardening resolver.
+
 Load, list, share, diff, and remove continue using the existing context
 mechanics. Promotion should consider the recorded scope, item statuses, and
 evidence as background and preserve relevant provenance in its proposal;

@@ -53,6 +53,7 @@ produce the summary — never try to offload generation to a separate agent.
 /context-load <name>       → read a snapshot back into the current session
   ↓ (optional)
 /context-diff <name>       → compare the current snapshot with an archived version
+/context-verify <name> --repository-id <id> → verify a v2 handoff's local evidence (read-only)
   ↓ (optional)
 /context-share <session> [name]  → notify the named pane a shared snapshot is available
   ↓ (when stale)
@@ -67,6 +68,7 @@ produce the summary — never try to offload generation to a separate agent.
 | `/context-list` | List snapshots for this project (name, line count, last modified, history version count). |
 | `/context-load <name>` | Load a snapshot's contents into the current session. Warns if the snapshot is 7 or more days old (override with `SESSION_CONTEXT_STALE_DAYS`). |
 | `/context-diff <name>` | Unified diff of the newest archived version vs. current. `--versions` lists timestamps; pass a timestamp to diff that version. |
+| `/context-verify <name> --repository-id <id> [--repo <path>] [--json]` | Read-only verification of a v2 handoff's `file`/`commit` evidence and `scope.paths` against the bound repository (existence and type, commit presence and `HEAD` ancestry) using fixed read-only Git queries; `test`/`reference` evidence and symlinks stay unverified. `--repository-id` must match the saved `scope.repository`. Exit 1 when anything is missing, mismatched, or left unverified. See the [handoff evidence contract](../knowledge/references/handoffs.md). |
 | `/context-search <pattern> [--list]` | Read-only search of snapshot *contents* across local projects (current repo always; other roots best-effort via decoded session paths — lossy for hyphenated directory names). |
 | `/context-share <session> [name]` | Notify another pane that a shared snapshot is available (same store; not a file copy). |
 | `/context-remove <name>` | Delete a snapshot. |

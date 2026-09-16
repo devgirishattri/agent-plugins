@@ -127,7 +127,11 @@ def validate_data(data):
 
 
 def load_saved(path):
-    lines = read_regular(path).splitlines()
+    return parse_saved(read_regular(path))
+
+
+def parse_saved(text):
+    lines = text.splitlines()
     if not lines or lines[0] != "---":
         fail("saved handoff needs a leading frontmatter fence")
     try:

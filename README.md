@@ -14,7 +14,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-manager` | 1.7.6 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.9 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.19 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `knowledge` | 0.3.20 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.5.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
@@ -394,7 +394,9 @@ Structured v2 handoffs record repository scope, stable work-item IDs, reported
 status, and evidence references. The context-generation workflow stages a JSON
 data file for `save-context.sh --handoff --handoff-data <file>`; direct legacy
 calls without data still produce v1. Doctor checks the structure and labels
-evidence as recorded, not verified. See the handoff contracts for
+evidence as recorded, not verified. `context-verify <name> --repository-id <id>`
+checks local paths and commit ancestry against an explicitly bound repository;
+recorded test results and external references remain unverified. See the handoff contracts for
 [Claude](plugins/knowledge/skills/knowledge/references/handoffs.md) and
 [Codex](codex/plugins/knowledge/skills/knowledge/references/handoffs.md).
 
