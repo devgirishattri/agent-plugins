@@ -194,7 +194,7 @@ def aggregate(rows):
 
 def evaluate(args):
     corpus_hash = hashlib.sha256(args.corpus.read_bytes()).hexdigest()
-    helper_names = ("memory-search.sh", "inject-recall.sh", "memory-backlinks.sh", "memory-lint.sh", "lib.sh")
+    helper_names = ("memory-search.sh", "search-query.py", "inject-recall.sh", "memory-backlinks.sh", "memory-lint.sh", "lib.sh")
     hashes = {name: hashlib.sha256((args.scripts / name).read_bytes()).hexdigest() for name in helper_names}
     corpus = load_corpus(args.corpus)
     known = {m["slug"] for m in corpus["memories"]}

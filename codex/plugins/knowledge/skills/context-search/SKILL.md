@@ -5,6 +5,8 @@ description: "Search the contents of session context snapshots across local proj
 
 # Context Search
 
+For grouped local docs, memory, and configured context results, use `$knowledge:find`; this command retains its cross-project snapshot search scope.
+
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
 Resolve the absolute plugin root from this selected skill's installed source

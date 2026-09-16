@@ -3,6 +3,8 @@ description: Search context snapshot contents across local projects
 argument-hint: <pattern> [--list]
 ---
 
+For grouped local docs, memory, and configured context results, use `$knowledge:find`; this command retains its existing single-surface search scope.
+
 ## Instructions
 
 1. If `$ARGUMENTS` is empty, tell the user: `Usage: $knowledge:context-search <pattern> [--list]`.

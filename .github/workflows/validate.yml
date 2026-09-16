@@ -69,6 +69,11 @@ jobs:
             bash scripts/test-provider-parity.sh
           bash scripts/test-session-workspace-policy-parity.sh
 
+      - name: Validate unified knowledge search
+        run: |
+          python3 -B codex/plugins/knowledge/scripts/test-knowledge-find.py
+          python3 -B plugins/knowledge/scripts/test-knowledge-find.py
+
       - name: Validate retrieval evaluation tooling and corpus
         run: |
           python3 -B codex/plugins/knowledge/scripts/test-eval-retrieval.py

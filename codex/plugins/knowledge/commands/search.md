@@ -3,6 +3,8 @@ description: "Deterministic lexical ranked search over the memory store (read-on
 argument-hint: "[--store <path>] [--limit N] [--json] [--explain] <query>"
 ---
 
+For grouped local docs, memory, and configured context results, use `$knowledge:find`; this command retains its existing single-surface search scope.
+
 ## Instructions
 
 Resolve `PLUGIN_ROOT` from this command resource's installed absolute source path: its parent is `<plugin-root>/commands`, so go up one directory. Substitute that absolute path literally in every helper invocation below; never infer it from the project working directory or hardcode a marketplace cache version.

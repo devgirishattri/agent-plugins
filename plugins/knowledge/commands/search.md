@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-`memory-search.sh` is read-only: it never writes to the store. Run exactly one literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection):
+`memory-search.sh` is read-only: it never writes to the store. This command ranks the memory store alone; for docs, memory, and context snapshots side by side, use `/knowledge:find`. Run exactly one literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection):
 
 ```
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-search.sh" [--store <path>] [--limit N] [--json] [--explain] '<query>'

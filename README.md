@@ -14,7 +14,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-manager` | 1.7.6 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.9 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.21 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `knowledge` | 0.3.22 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.5.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
@@ -389,6 +389,14 @@ columns means both implementations read the variable for the stated purpose;
 provider-specific differences are called out explicitly.
 
 ### Knowledge (context snapshots)
+
+`knowledge:find` searches the current repository’s README/docs, resolved memory
+store, and inherited context store together. Results stay grouped by source with
+authority and lifetime labels; memory retains its native ranking and any degraded
+query notice. The read-only command supports source selection, per-source limits,
+and JSON output, reports partial/unavailable sources, and caps output at 64 KiB.
+See the command contracts for [Claude](plugins/knowledge/commands/find.md) and
+[Codex](codex/plugins/knowledge/commands/find.md).
 
 Structured v2 handoffs record repository scope, stable work-item IDs, reported
 status, and evidence references. The context-generation workflow stages a JSON

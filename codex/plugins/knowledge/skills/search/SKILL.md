@@ -7,6 +7,8 @@ description: "Deterministic lexical ranked search over the memory store (read-on
 
 Run only the accepted helper workflow below and return its formatted result or the shortest actionable failure.
 
+For grouped local docs, memory, and configured context results, use `$knowledge:find`; this command retains its existing single-surface search scope.
+
 ## Instructions
 
 Resolve `PLUGIN_ROOT` from this selected skill's installed absolute source path: it is the directory two levels above this `SKILL.md`. Substitute that absolute path literally in every helper invocation below; never infer it from the project working directory or hardcode a marketplace cache version.

@@ -275,7 +275,7 @@ for bad in '' false 0 invalid; do
   assert_not_contains "inject_graph_gate_invalid_$bad" "$out" "related via [["
 done
 fallback="$TMP/recall-fallback"; mkdir -p "$fallback"
-cp "$INJECT" "$HERE/lib.sh" "$HERE/memory-search.sh" "$fallback/"
+cp "$INJECT" "$HERE/lib.sh" "$HERE/memory-search.sh" "$HERE/search-query.py" "$fallback/"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$fallback/memory-backlinks.sh"; chmod +x "$fallback/memory-backlinks.sh"
 out="$(mkprompt "zephyr calibration" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt KNOWLEDGE_AUTO_RECALL_GRAPH=true bash "$fallback/inject-recall.sh" --prompt)"
 assert_contains inject_graph_helper_failure_direct "$out" "alpha_zephyr"

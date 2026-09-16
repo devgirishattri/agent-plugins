@@ -26,7 +26,7 @@ Present the tab-separated output:
   | Project Root | Snapshot |
 
 Rules:
-- This command is read-only.
+- This command is read-only. It sweeps snapshot contents across other local projects; for the current repository's docs, memory, and context together, use `/knowledge:find`.
 - If `$ARGUMENTS` is empty, tell the user: Usage: `/context-search <pattern> [--list]`
 - If no matches were found, report that and suggest `/context-list` to see snapshots for the current project.
 - To load a cross-project match, the pane must have inherited that project's absolute context-store path as `SESSION_CONTEXT_HOME` — merely changing directories does not switch stores. Relaunch the pane through that project's launcher with the correct environment, then `/context-load <snapshot>`.

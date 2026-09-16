@@ -1,6 +1,6 @@
 ---
 name: knowledge
-description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 19 commands to reach for. Use this before invoking any $knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
+description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 20 commands to reach for. Use this before invoking any $knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
 ---
 
 # Knowledge
@@ -41,6 +41,8 @@ forward. Obsolete material is handled by explicit lifecycle actions:
 deletion, `retire`, `purge`, or `context-remove`; nothing is silently deleted.
 
 ## Which command, when
+
+`$knowledge:find [--source all|docs|memory|context] [--store <path>] [--limit N] <query>` searches local docs, resolved memory, and configured context together, grouped by source with authority/lifetime labels. See the installed `find` skill for bounds and partial-result handling.
 
 **Docs — see each installed command skill for the full process:**
 
