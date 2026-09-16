@@ -28,6 +28,98 @@ def saved(data):
 
 
 class HandoffDataTests(unittest.TestCase):
+    def test_assessment_skew_boundaries_and_temporal_order(self):
+        doc = DATA.parse_document(saved(fixture()))
+        doc["items"][0]["evidence"][0]["observed_at"] = "2026-09-16T10:05:00Z"
+        self.assertFalse(any(level == "WARN" for level, _ in DATA.assess(doc, "2026-09-16T10:00:00Z", 7)))
+        doc["items"][0]["evidence"][0]["observed_at"] = "2026-09-16T10:05:01Z"
+        rows = DATA.assess(doc, "2026-09-16T10:00:00Z", 7)
+        self.assertEqual(sum(level == "WARN" for level, _ in rows), 2)
+        doc["created"] = "2026-09-16T10:06:00Z"
+        doc["updated"] = "2026-09-16T10:05:01Z"
+        messages = "\n".join(message for _, message in DATA.assess(doc, "2026-09-16T10:00:00Z", 7))
+        self.assertIn("created timestamp is after updated", messages)
+        self.assertIn("updated timestamp is more than 300s in the future", messages)
+
+    def test_evidence_age_uses_newest_and_only_started_open_items(self):
+        doc = DATA.parse_document(saved(fixture()))
+        for status in DATA.STATUSES:
+            doc["items"][0]["status"] = status
+            messages = "\n".join(message for _, message in DATA.assess(doc, "2026-09-23T10:00:00Z", 7))
+            self.assertEqual("newest recorded evidence" in messages, status in {"in_progress", "blocked"})
+        doc["items"][0]["status"] = "in_progress"
+        self.assertNotIn("newest recorded evidence", str(DATA.assess(doc, "2026-09-23T09:59:59Z", 7)))
+        doc["items"][0]["evidence"].append(dict(kind="file", ref="src/recent.py", observed_at="2026-09-23T09:00:00Z"))
+        self.assertNotIn("newest recorded evidence", str(DATA.assess(doc, "2026-09-23T10:00:00Z", 7)))
+
+    def test_expired_open_and_closed_claims(self):
+        doc = DATA.parse_document(saved(fixture()))
+        self.assertIn("expired handoff still reports 1 open", str(DATA.assess(doc, "2026-10-01T10:00:00Z", 7)))
+        doc["items"][0]["status"] = "done"
+        doc["items"][0]["evidence"][0].update(kind="test", ref="test_identifier")
+        rows = DATA.assess(doc, "2026-10-01T10:00:00Z", 7)
+        self.assertFalse(any(level == "WARN" for level, _ in rows))
+        self.assertIn("all items reported done or cancelled", str(rows))
+        self.assertIn("completion asserted with only test/reference", str(rows))
+        doc["items"][0]["evidence"].append(dict(kind="file", ref="src/test.py", observed_at="2026-09-16T10:00:00Z"))
+        self.assertNotIn("completion asserted with only", str(DATA.assess(doc, "2026-10-01T10:00:00Z", 7)))
+
+    def test_assessment_empty_pending_and_clock_validation(self):
+        doc = DATA.parse_document(saved(fixture()))
+        doc["items"][0].update(status="pending", evidence=[])
+        self.assertEqual(len(DATA.assess(doc, "2026-09-16T10:00:00Z", 0)), 1)
+        with self.assertRaises(ValueError):
+            DATA.assess(doc, "invalid", 7)
+        with self.assertRaises(ValueError):
+            DATA.assess(doc, "2026-09-16T10:00:00Z", -1)
+
+    def test_explicit_memory_links_only_and_malformed_links(self):
+        doc = DATA.parse_document(saved(fixture()))
+        entry = doc["items"][0]["evidence"][0]
+        for ref, expected in [("memory:reference_a", "MEMORY"), ("memory:../escape", "WARN"),
+                              ("memory:", "WARN"), ("reference_a", None)]:
+            entry.update(kind="reference", ref=ref)
+            rows = DATA.assess(doc, "2026-09-16T10:00:00Z", 7)
+            extras = [row for row in rows if row[0] != "INFO"]
+            self.assertEqual(extras[0][0] if extras else None, expected)
+        entry.update(kind="test", ref="memory:reference_a")
+        self.assertNotIn("MEMORY", str(DATA.assess(doc, "2026-09-16T10:00:00Z", 7)))
+
+    def test_memory_status_reads_only_explicit_scalar_safely(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "memory.md"
+            for status in ["active", "stale", "superseded", "archived"]:
+                path.write_text(f"---\nstatus: '{status}'\n---\nBody\n")
+                self.assertEqual(DATA.memory_status(path), status)
+            path.write_text("---\nmetadata:\n  status: stale\n---\n")
+            self.assertEqual(DATA.memory_status(path), "unknown")
+            for text in ["plain", "---\nstatus: unknown\n---\n", "---\nstatus: active\nstatus: stale\n---\n"]:
+                path.write_text(text)
+                with self.assertRaises(ValueError):
+                    DATA.memory_status(path)
+            link = Path(temporary) / "link.md"
+            link.symlink_to(path)
+            with self.assertRaises(OSError):
+                DATA.memory_status(link)
+
+    def test_assess_cli_deterministic_read_only_and_no_partial_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "handoff.md"
+            path.write_text(saved(fixture()))
+            before = (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_mode)
+            command = [sys.executable, "-B", str(HERE / "handoff-data.py"), "validate", "--assess", str(path)]
+            for args in [[], ["--now", "invalid"], ["--now", "2026-09-16T10:00:00Z", "--stale-days", "-1"]]:
+                result = subprocess.run(command + args, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+            args = ["--now", "2026-09-23T10:00:00Z", "--stale-days", "7"]
+            first = subprocess.run(command + args, capture_output=True, text=True)
+            second = subprocess.run(command + args, capture_output=True, text=True)
+            self.assertEqual(first.returncode, 0)
+            self.assertEqual(first.stdout, second.stdout)
+            self.assertIn("INFO\titem retry_fix", first.stdout)
+            self.assertEqual(before, (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_mode))
+
     def test_roundtrip_and_canonical_keys(self):
         data = fixture()
         data["items"][0]["summary"] = 'Repair café "retry" behavior'

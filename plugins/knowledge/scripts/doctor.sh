@@ -27,7 +27,7 @@
 #                     other memory-store command (explicit >
 #                     KNOWLEDGE_MEMORY_HOME > canonical discovery under
 #                     <repo-root>/.agents/memory/). Governs ONLY the memory-
-#                     module + lock-diagnostics sections; docs/context/
+#                     module + lock-diagnostics and explicit memory-link checks; docs/
 #                     AGENTS.md/capability-matrix sections
 #                     always target the repository root, matching "docs
 #                     commands target the repo root" in the zero-config
@@ -741,14 +741,45 @@ _kd_classify_citation() {
   esac
 }
 
-# _kd_check_handoff <file> <name> -- Phase E additions layered on top of the
+# Resolve only a structured, explicit memory reference; never infer an item match.
+_kd_check_memory_reference() {
+  local name="$1" item="$2" slug="$3" status_out="" status_rc=0
+  local label="handoff '$name' item $item references memory:$slug"
+  if [ -z "$STORE" ]; then
+    emit INFO context-handoff "$label -- unverified (memory store unavailable; no fallback)"
+    return 0
+  fi
+  if ! km_validate_store_dir "$STORE" >/dev/null 2>&1; then
+    emit WARN context-handoff "$label -- unverified (memory store is unsafe or unavailable)"
+    return 0
+  fi
+  if [ ! -e "$STORE/$slug.md" ] && [ ! -L "$STORE/$slug.md" ]; then
+    emit WARN context-handoff "$label -- linked memory is missing"
+    return 0
+  fi
+  status_out=$(python3 -B "$HERE/handoff-data.py" memory-status "$STORE/$slug.md" 2>&1) || status_rc=$?
+  if [ "$status_rc" -ne 0 ]; then
+    emit WARN context-handoff "$label -- cannot assess lifecycle: $(_kd_oneline "$status_out")"
+    return 0
+  fi
+  case "$status_out" in
+    stale|superseded|archived)
+      emit WARN context-handoff "$label -- linked memory reports status $status_out; review this reference (not a work-item status contradiction)" ;;
+    active)
+      emit INFO context-handoff "$label -- linked memory reports status active; contents and completion remain unverified" ;;
+    *)
+      emit INFO context-handoff "$label -- linked memory has no explicit status; lifecycle unverified" ;;
+  esac
+}
+
+# _kd_check_handoff <file> <name> <stale-days> -- Phase E additions layered on top of the
 # mtime tier in section_context: required-field validation, expiry, and
 # ticket-citation checks for a snapshot whose `kind: handoff` frontmatter
 # key the caller already confirmed. Every malformed/missing field is its
 # own ordinary WARN and never aborts the remaining checks for this file or
 # any other (same "report, don't abort" rule as every other section).
 _kd_check_handoff() {
-  local file="$1" name="$2"
+  local file="$1" name="$2" evidence_stale_days="${3:-7}"
   local utc_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
   local handoff_version created updated expires expires_ok=1
 
@@ -792,10 +823,11 @@ _kd_check_handoff() {
     fi
   fi
 
-  # Handoff v2 structured data (scope/items): structural validation only via
+  # Handoff v2 structured data: structural validation and metadata assessment via
   # the shared handoff-data.py helper -- grammar, enums, unique ids, evidence
-  # shape. Evidence is recorded, never verified here: no git execution, no
-  # fetch, no file existence check (that is the context-verify surface).
+  # shape and deterministic freshness cues. Explicit memory references inspect
+  # only named lifecycle metadata. No git execution, no
+  # fetch, no file/commit evidence check (that is context-verify).
   # Absence of python3 is a WARN, never an abort, like every other finding.
   if [ "$handoff_version" = "2" ]; then
     if ! _kd_have_python3; then
@@ -807,15 +839,29 @@ _kd_check_handoff() {
       # carries the summary only on success, stderr the single reason only on
       # failure, so one combined capture branched on the exit code is exact
       # and this read-only section writes no scratch file.
-      local v2_out="" v2_rc=0 v2_line
-      v2_out=$(python3 "$HERE/handoff-data.py" validate --summary "$file" 2>&1) || v2_rc=$?
+      local v2_out="" v2_rc=0 v2_line v2_level v2_slug memory_skipped=0
+      v2_out=$(python3 -B "$HERE/handoff-data.py" validate --assess --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --stale-days "$evidence_stale_days" "$file" 2>&1) || v2_rc=$?
       if [ "$v2_rc" -ne 0 ]; then
         v2_line=$(_kd_oneline "$v2_out")
         emit WARN context-handoff "malformed handoff v2 data: '$name' (${v2_line#ERROR: handoff data: })"
       else
-        while IFS= read -r v2_line; do
+        while IFS=$'\t' read -r v2_level v2_line v2_slug; do
           [ -n "$v2_line" ] || continue
-          emit INFO context-handoff "handoff '$name' $v2_line"
+          if [ "$v2_level" = MEMORY ]; then
+            if [ -z "$STORE" ]; then
+              if [ "$memory_skipped" -eq 0 ]; then
+                emit INFO context-handoff "handoff '$name' memory links not assessed: no usable memory store; unverified, no fallback"
+                memory_skipped=1
+              fi
+            else
+              _kd_check_memory_reference "$name" "$v2_line" "$v2_slug"
+            fi
+          else
+            case "$v2_level" in
+              INFO|WARN) emit "$v2_level" context-handoff "handoff '$name' $v2_line" ;;
+              *) emit WARN context-handoff "handoff '$name' assessment returned an unrecognized finding level" ;;
+            esac
+          fi
         done <<< "$v2_out"
       fi
     fi
@@ -911,6 +957,10 @@ section_context() {
   fi
 
   local stale_days="${SESSION_CONTEXT_STALE_DAYS:-7}"
+  if ! [[ "$stale_days" =~ ^[0-9]{1,6}$ ]]; then
+    emit WARN context "invalid SESSION_CONTEXT_STALE_DAYS (expected 0-999999); using 7 days for file and evidence age"
+    stale_days=7
+  fi
   local now
   now=$(_kd_now_epoch)
   local f base mtime age_days kind
@@ -927,7 +977,7 @@ section_context() {
 
     kind=$(_kd_fm_get "$f" kind) || kind=""
     if [ "$kind" = "handoff" ]; then
-      _kd_check_handoff "$f" "$base"
+      _kd_check_handoff "$f" "$base" "$stale_days"
     fi
   done < <(find "$ctx_dir" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/null | LC_ALL=C sort)
 

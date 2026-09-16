@@ -27,6 +27,7 @@ set -uo pipefail
 # stage a synthetic candidate into the REAL .inbox. Tests must never resolve
 # or write to a live store, so drop it before anything else runs.
 unset KNOWLEDGE_MEMORY_HOME
+unset SESSION_CONTEXT_STALE_DAYS
 unset KNOWLEDGE_AUTO_RECALL KNOWLEDGE_AUTO_RECALL_LIMIT KNOWLEDGE_AUTO_RECALL_TERMS
 unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_AUTO_RECALL_GRAPH KNOWLEDGE_CONSOLIDATE_NUDGE
 unset KNOWLEDGE_AUTO_CAPTURE KNOWLEDGE_AUTO_CAPTURE_LIMIT
@@ -895,13 +896,13 @@ cat > "$ho_ctx/v2_clean_handoff.md" <<EOF
 handoff_version: 2
 kind: handoff
 created: 2020-01-01T00:00:00Z
-updated: 2020-01-01T00:00:00Z
+updated: $(iso_now_offset_days 0)
 expires: $future_expires
 tickets:
   - ext:PROJ-7
 scope: {"paths": ["."], "repository": "projecta"}
 items:
-  - {"evidence": [{"kind": "file", "observed_at": "2026-09-16T10:00:00Z", "ref": "src/alpha.sh"}], "id": "alpha_fix", "status": "in_progress", "summary": "fix alpha"}
+  - {"evidence": [{"kind": "file", "observed_at": "$(iso_now_offset_days 0)", "ref": "src/alpha.sh"}], "id": "alpha_fix", "status": "in_progress", "summary": "fix alpha"}
   - {"evidence": [], "id": "beta_followup", "status": "pending", "summary": "follow up"}
 ---
 # Session Context: v2 clean
@@ -931,6 +932,22 @@ expires: $future_expires
 ---
 # Session Context: v2 empty
 body
+EOF
+
+cat > "$ho_ctx/v2_assessed_handoff.md" <<EOF
+---
+handoff_version: 2
+kind: handoff
+created: 2020-01-01T00:00:00Z
+updated: $(iso_now_offset_days 0)
+expires: $past_expires
+scope: {"paths": ["."], "repository": "projecta"}
+items:
+  - {"evidence": [{"kind": "file", "observed_at": "$(iso_now_offset_days -30)", "ref": "src/a.sh"}], "id": "old_work", "status": "blocked", "summary": "old work"}
+  - {"evidence": [{"kind": "file", "observed_at": "$(iso_now_offset_days 1)", "ref": "src/a.sh"}], "id": "future_work", "status": "in_progress", "summary": "future work"}
+  - {"evidence": [{"kind": "test", "observed_at": "$(iso_now_offset_days 0)", "ref": "test_identifier"}], "id": "claimed_done", "status": "done", "summary": "claimed done"}
+---
+Body
 EOF
 
 # -- 5. mtime-tier AND expires-tier both firing on the SAME file.
@@ -987,12 +1004,62 @@ assert_contains "handoff_v2_clean_tickets_still_classified" "$out" "handoff 'v2_
 assert_contains "handoff_v2_bad_status_warn" "$out" "malformed handoff v2 data: 'v2_bad_handoff' (item alpha_fix status must be one of"
 assert_contains "handoff_v2_empty_warn" "$out" "malformed handoff v2 data: 'v2_empty_handoff'"
 assert_not_contains "handoff_v2_bad_no_item_info" "$out" "handoff 'v2_bad_handoff' item"
+assert_contains "handoff_evidence_age" "$out" "item old_work (blocked): newest recorded evidence is 30d old"
+assert_contains "handoff_evidence_future" "$out" "item future_work (in_progress) evidence 1: observed_at is more than 300s in the future"
+assert_contains "handoff_evidence_after_updated" "$out" "item future_work (in_progress) evidence 1: observed_at is more than 300s after handoff updated"
+assert_contains "handoff_expired_open" "$out" "expired handoff still reports 2 open item(s)"
+assert_contains "handoff_completion_claim" "$out" "completion asserted with only test/reference evidence"
+assert_not_contains "handoff_fresh_file_old_evidence" "$out" "stale context snapshot 'v2_assessed_handoff'"
 
 # both tiers on one file.
 assert_contains "handoff_both_tiers_mtime_warn" "$out" "stale context snapshot 'both_tiers_handoff'"
 assert_contains "handoff_both_tiers_expiry_warn" "$out" "expired handoff 'both_tiers_handoff'"
 
 echo "--- memory-resolve: not-yet-initialized (INFO) vs. ambiguous (WARN) ---"
+
+linked_repo="$TMP/linked_repo"
+linked_store=$(bootstrap_store "$linked_repo")
+linked_ctx="$TMP/linked_ctx"
+mkdir -p "$linked_ctx"
+for lifecycle in active stale superseded archived; do
+  write_canonical "$linked_store/link_$lifecycle.md" reference "Link $lifecycle" "fixture link" "2020-01-01" "2020-01-02" "status: $lifecycle"
+done
+write_canonical "$linked_store/link_implicit.md" reference "Implicit status" "fixture link"
+ln -s "$linked_store/link_active.md" "$linked_store/link_symlink.md"
+cat > "$linked_ctx/memory_links.md" <<EOF
+---
+handoff_version: 2
+kind: handoff
+created: 2020-01-01T00:00:00Z
+updated: $(iso_now_offset_days 0)
+expires: $future_expires
+scope: {"paths": ["."], "repository": "projecta"}
+items:
+  - {"id":"linked_work","summary":"Linked work","status":"pending","evidence":[{"kind":"reference","ref":"memory:link_active","observed_at":"$(iso_now_offset_days 0)"},{"kind":"reference","ref":"memory:link_stale","observed_at":"$(iso_now_offset_days 0)"},{"kind":"reference","ref":"memory:link_superseded","observed_at":"$(iso_now_offset_days 0)"},{"kind":"reference","ref":"memory:link_archived","observed_at":"$(iso_now_offset_days 0)"},{"kind":"reference","ref":"memory:link_missing","observed_at":"$(iso_now_offset_days 0)"},{"kind":"reference","ref":"memory:../escape","observed_at":"$(iso_now_offset_days 0)"},{"kind":"reference","ref":"memory:link_symlink","observed_at":"$(iso_now_offset_days 0)"},{"kind":"reference","ref":"memory:link_implicit","observed_at":"$(iso_now_offset_days 0)"}]}
+---
+Body
+EOF
+cp "$ho_ctx/v2_clean_handoff.md" "$linked_ctx/unlinked.md"
+before_links=$(tree_hash "$linked_repo")
+before_link_ctx=$(tree_hash "$linked_ctx")
+# Explicit --store selects linked memory; context remains in the inherited store.
+out_links=$(cd "$ho_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$linked_ctx" bash "$DOCTOR" --store "$linked_store" 2>&1)
+assert_eq "linked_memory_store_read_only" "$before_links" "$(tree_hash "$linked_repo")"
+assert_eq "linked_context_read_only" "$before_link_ctx" "$(tree_hash "$linked_ctx")"
+for lifecycle in active stale superseded archived; do
+  assert_contains "linked_status_$lifecycle" "$out_links" "memory:link_$lifecycle -- linked memory reports status $lifecycle"
+done
+assert_contains "linked_missing" "$out_links" "memory:link_missing -- linked memory is missing"
+assert_contains "linked_malformed" "$out_links" "malformed memory reference"
+assert_contains "linked_symlink_refused" "$out_links" "memory:link_symlink -- cannot assess lifecycle"
+assert_contains "linked_implicit_unknown" "$out_links" "memory:link_implicit -- linked memory has no explicit status"
+assert_not_contains "unlinked_no_inference" "$out_links" "handoff 'unlinked' item alpha_fix references memory:"
+out_no_links_store=$(cd "$ho_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$linked_ctx" bash "$DOCTOR" 2>&1)
+assert_contains "linked_unavailable_store_no_fallback" "$out_no_links_store" "memory links not assessed: no usable memory store; unverified, no fallback"
+assert_not_contains "linked_unavailable_does_not_read_other_store" "$out_no_links_store" "linked memory reports status"
+out_bad_age=$(cd "$ho_repo" && HOME="$clean_home" CODEX_HOME="$clean_home/.codex" SESSION_CONTEXT_HOME="$linked_ctx" SESSION_CONTEXT_STALE_DAYS=invalid bash "$DOCTOR" 2>&1)
+assert_contains "invalid_age_threshold_fallback" "$out_bad_age" "using 7 days for file and evidence age"
+assert_contains "invalid_age_does_not_suppress_handoff" "$out_bad_age" "memory links not assessed: no usable memory store"
 
 uninit_repo="$TMP/uninit_repo"
 new_repo "$uninit_repo"

@@ -131,6 +131,11 @@ def load_saved(path):
 
 
 def parse_saved(text):
+    values = parse_document(text)
+    return {"scope": values["scope"], "items": values["items"]}
+
+
+def parse_document(text):
     lines = text.splitlines()
     if not lines or lines[0] != "---":
         fail("saved handoff needs a leading frontmatter fence")
@@ -164,7 +169,76 @@ def parse_saved(text):
         fail("expected handoff_version: 2 and kind: handoff")
     for key in ("created", "updated", "expires"):
         timestamp(values.get(key), key)
-    return validate_data({"scope": values.get("scope"), "items": values.get("items")})
+    validate_data({"scope": values.get("scope"), "items": values.get("items")})
+    return values
+
+
+def assess(document, now, stale_days):
+    """Metadata review cues, never evidence truth or cross-store identity claims."""
+    timestamp(now, "now")
+    if stale_days < 0:
+        fail("stale-days must be a nonnegative integer")
+    def instant(value):
+        return datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    current = instant(now)
+    updated = instant(document["updated"])
+    skew = datetime.timedelta(seconds=300)
+    rows = []
+    def add(level, message):
+        rows.append((level, message))
+    if instant(document["created"]) > updated:
+        add("WARN", "created timestamp is after updated timestamp")
+    if updated > current + skew:
+        add("WARN", "updated timestamp is more than 300s in the future")
+    items = document["items"]
+    open_items = [item for item in items if item["status"] in {"pending", "in_progress", "blocked"}]
+    if instant(document["expires"]) < current and open_items:
+        add("WARN", f"expired handoff still reports {len(open_items)} open item(s); review unresolved work")
+    if not open_items:
+        add("INFO", "all items reported done or cancelled; review for promotion or separately confirmed cleanup")
+    for item in items:
+        evidence = item["evidence"]
+        label = f"item {item['id']} ({item['status']})"
+        add("INFO", f"{label}: {len(evidence)} evidence entries recorded, not verified")
+        for index, entry in enumerate(evidence):
+            observed = instant(entry["observed_at"])
+            if observed > current + skew:
+                add("WARN", f"{label} evidence {index + 1}: observed_at is more than 300s in the future")
+            if observed > updated + skew:
+                add("WARN", f"{label} evidence {index + 1}: observed_at is more than 300s after handoff updated")
+            if entry["kind"] == "reference" and entry["ref"].startswith("memory:"):
+                slug = entry["ref"][len("memory:"):]
+                if ID.fullmatch(slug):
+                    add("MEMORY", f"{item['id']}\t{slug}")
+                else:
+                    add("WARN", f"{label} evidence {index + 1}: malformed memory reference; expected memory:<canonical_snake_case_slug>")
+        if item["status"] in {"in_progress", "blocked"} and evidence:
+            newest = max(instant(entry["observed_at"]) for entry in evidence)
+            age = (current - newest).total_seconds()
+            if age >= stale_days * 86400:
+                add("INFO", f"{label}: newest recorded evidence is {int(age // 86400)}d old (threshold {stale_days}d); review freshness, not proof of staleness")
+        if item["status"] == "done" and all(entry["kind"] in {"test", "reference"} for entry in evidence):
+            add("INFO", f"{label}: completion asserted with only test/reference evidence; no locally checkable file or commit evidence recorded")
+    return rows
+
+
+def memory_status(path):
+    """Read only an explicit top-level lifecycle scalar; never infer status."""
+    lines = read_regular(path).splitlines()
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        fail("linked memory has no complete frontmatter")
+    end = lines.index("---", 1)
+    values = [line.partition(":")[2].strip() for line in lines[1:end] if line.startswith("status:")]
+    if not values:
+        return "unknown"
+    if len(values) != 1:
+        fail("linked memory has duplicate status fields")
+    value = values[0]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    if value not in {"active", "stale", "superseded", "archived"}:
+        fail("linked memory status is not a recognized lifecycle scalar")
+    return value
 
 
 def validate_transition(previous, updated):
@@ -190,14 +264,27 @@ def main():
     validator = commands.add_parser("validate", help="validate a saved v2 handoff, without checking evidence truth")
     validator.add_argument("handoff", type=Path)
     validator.add_argument("--summary", action="store_true", help="print item evidence counts, explicitly unverified")
+    validator.add_argument("--assess", action="store_true", help="print metadata freshness/consistency review cues")
+    validator.add_argument("--now", help="required UTC clock for --assess")
+    validator.add_argument("--stale-days", type=int, default=7, help="nonnegative evidence age threshold for --assess")
     renderer = commands.add_parser("render", help="render validated scope/items for the save-context writer")
     renderer.add_argument("--data", type=Path)
     renderer.add_argument("--previous", type=Path)
+    memory = commands.add_parser("memory-status", help="read an explicitly linked memory's top-level lifecycle status")
+    memory.add_argument("file", type=Path)
     args = parser.parse_args()
     try:
-        if args.command == "validate":
-            data = load_saved(args.handoff)
-            if args.summary:
+        if args.command == "memory-status":
+            print(memory_status(args.file))
+        elif args.command == "validate":
+            document = parse_document(read_regular(args.handoff))
+            data = {"scope": document["scope"], "items": document["items"]}
+            if args.assess:
+                if not args.now:
+                    fail("--assess requires --now UTC timestamp")
+                for level, message in assess(document, args.now, args.stale_days):
+                    print(f"{level}\t{message}")
+            elif args.summary:
                 for item in data["items"]:
                     print(f"item {item['id']} ({item['status']}): {len(item['evidence'])} evidence entries recorded, not verified")
         else:

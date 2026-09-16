@@ -56,7 +56,7 @@ and malformed values before replacing the destination or adding history.
 | `item.status` | `pending`, `in_progress`, `blocked`, `done`, or `cancelled`. This describes session work, not the authoritative state of an external ticket. |
 | `item.evidence` | Required list; it may be empty unless status is `done`. A done item requires at least one recorded evidence entry, which remains unverified. |
 | `evidence.kind` | `file`, `commit`, `test`, or `reference`. |
-| `evidence.ref` | File: a relative path under the same path rules as scope. Commit: full lowercase 40- or 64-hex object ID. Test: a command or test identifier stored as text. Reference: a citation stored as text. All must be nonempty and single-line. |
+| `evidence.ref` | File: a relative path under the same path rules as scope. Commit: full lowercase 40- or 64-hex object ID. Test: a command or test identifier stored as text. Reference: a citation stored as text; the convention `memory:<slug>` (canonical `snake_case` slug) names an entry in the memory store explicitly and lets doctor report that entry's lifecycle status (see "Freshness and consistency"). All must be nonempty and single-line. |
 | `evidence.observed_at` | Required valid UTC calendar timestamp, exactly `YYYY-MM-DDTHH:MM:SSZ`, recording when the supporting observation was made. |
 | `evidence.note` | Optional nonempty single-line observation, such as the recorded test result. |
 
@@ -102,7 +102,61 @@ preserved, and each structured value stays on one physical line.
 `doctor.sh` accepts both handoff versions, reports malformed v2 data as a WARN,
 and labels recorded item evidence as not verified. Its existing timestamp,
 expiry, and ticket checks still run. It does not compare IDs against history
-or assess evidence freshness or truth.
+or assess evidence truth; freshness and consistency cues are described in
+the next section.
+
+## Freshness and consistency
+
+`doctor` assesses every valid v2 handoff with `handoff-data.py validate
+--assess --now <UTC> --stale-days <N>` (N is `SESSION_CONTEXT_STALE_DAYS`,
+default 7, the same knob as the file-age tier; a value outside 0–999999 is
+reported as a `WARN` and both tiers fall back to 7). The assessment is a pure
+function of the file and the supplied clock, so it is deterministic and
+testable; it reads nothing else and makes no truth claim.
+
+| Level | Finding | Rule |
+|---|---|---|
+| WARN | evidence in the future | `observed_at` later than now + 300 s |
+| WARN | evidence after update | `observed_at` later than the handoff `updated` + 300 s (the writer validates each timestamp's calendar form, not their relative order) |
+| WARN | timestamps out of order | `created` later than `updated`, or `updated` later than now + 300 s |
+| WARN | expired with open items | `expires` has passed and at least one item is `pending`, `in_progress`, or `blocked` |
+| INFO | stale open item | an `in_progress` or `blocked` item whose newest `observed_at` is N days old or more; `pending` items and items without evidence are not stale (nothing has started), closed items are excluded |
+| INFO | done, unverifiable only | a `done` item whose evidence is entirely `test`/`reference`; expected for work that has no local artefact, not an integrity defect |
+| INFO | all items closed | every item is `done` or `cancelled`; the handoff is a candidate for promotion |
+
+Findings keep the existing per-item summary lines and are reported under
+doctor's `context-handoff` section, separately from the mtime and expiry
+tiers.
+
+**Explicit memory links.** The metadata assessment above reads only the
+handoff. One further check touches the filesystem: a `reference` evidence
+whose `ref` is `memory:<slug>` names a memory entry explicitly — for example
+`{"kind": "reference", "ref": "memory:project_widget_firmware", "observed_at": "2026-09-16T10:00:00Z"}`,
+written only when the session actually consulted that entry — and doctor
+reads that entry's top-level `status:` scalar from the memory store it has
+already resolved (the store `--store` selects, or the discovered one). It
+never follows a symlink, never reads a candidate in `.inbox/`, and never
+looks anywhere else when the store is unavailable.
+
+| Level | Finding | Rule |
+|---|---|---|
+| INFO | linked memory active | the file exists and its `status` is `active` (contents and completion remain unverified) |
+| INFO | lifecycle unverified | the file exists but has no explicit `status`; or the memory store is unavailable, in which case one INFO per handoff says its links were not assessed and no fallback store is tried |
+| WARN | linked memory stale / superseded / archived | the file's `status` is one of those; a cue to review the reference, not a contradiction of the work item |
+| WARN | linked memory missing | nothing exists at `<store>/<slug>.md` |
+| WARN | cannot assess lifecycle | the path exists but is a symlink, a special file, or not owned by the user, or the file has no complete frontmatter, a duplicate `status`, or an unrecognised value; or the store fails its safety validation |
+| WARN | malformed memory link | `memory:` followed by anything other than a canonical slug |
+
+A memory link is still `reference` evidence: it counts toward the
+"done, unverifiable only" cue and `context-verify` reports it `unverified`.
+
+Deliberately absent: any link inferred from names (item IDs are
+handoff-local; only an explicit `memory:` reference is followed), any
+comparison between two handoffs, any tracker-line matching, and any
+verification of `file` or `commit` evidence against a repository (that is
+`context-verify`, which needs an explicit repository binding doctor does not
+have; doctor's own store resolution still uses Git to find the repository
+root).
 
 ## Verifying recorded evidence
 
@@ -130,7 +184,8 @@ ancestry, shallow state) and never a recorded command; it never fetches:
 - `test` and `reference` evidence, and items with no evidence, are reported
   `unverified`; nothing is executed, fetched, or resolved.
 - Ticket citations are doctor's concern. This verifier does not assess
-  freshness or completion (doctor reports handoff expiry).
+  completion; freshness and internal timestamp consistency are doctor's
+  assessment (see "Freshness and consistency").
 
 Exit `0` means every local check passed and nothing was left unverified;
 `1` means at least one check is missing, mismatched, or unverified; `2` is an

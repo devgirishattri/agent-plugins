@@ -60,7 +60,13 @@ Generate a concise summary of what THIS session has been working on — for hand
    Use a stable logical repository ID and repository-relative paths. Give each
    work item a stable ID, a summary, its current session-work status, and an
    evidence list. Record only observed evidence; `done` requires at least one
-   entry, but no evidence is automatically verified. Preserve existing IDs
+   entry, but no evidence is automatically verified. When the session actually
+   consulted a memory entry for an item, cite it as `reference` evidence with
+   `ref` set to `memory:<slug>` (the entry's canonical `snake_case` file stem,
+   e.g. `memory:project_widget_firmware`) so `/knowledge:doctor` can report
+   that entry's lifecycle status; never guess or search for a slug to cite,
+   and never cite an entry you did not read — nothing matches items to
+   memories by name on its own. Preserve existing IDs
    when updating, and mark abandoned items `cancelled` instead of dropping them.
    This data file makes the saved handoff v2; supplying it for an existing v1
    handoff upgrades its structure while keeping its original creation/expiry

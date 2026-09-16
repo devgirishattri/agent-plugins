@@ -14,7 +14,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-manager` | 1.7.6 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.9 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.20 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `knowledge` | 0.3.21 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.5.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
@@ -393,8 +393,10 @@ provider-specific differences are called out explicitly.
 Structured v2 handoffs record repository scope, stable work-item IDs, reported
 status, and evidence references. The context-generation workflow stages a JSON
 data file for `save-context.sh --handoff --handoff-data <file>`; direct legacy
-calls without data still produce v1. Doctor checks the structure and labels
-evidence as recorded, not verified. `context-verify <name> --repository-id <id>`
+calls without data still produce v1. Doctor checks the structure, timestamp consistency, expired open work, and
+recorded evidence age. Explicit `reference` evidence of the form `memory:<slug>`
+also lets doctor flag missing, stale, superseded, or archived memory entries in the resolved memory
+store. These are review cues; evidence remains unverified. `context-verify <name> --repository-id <id>`
 checks local paths and commit ancestry against an explicitly bound repository;
 recorded test results and external references remain unverified. See the handoff contracts for
 [Claude](plugins/knowledge/skills/knowledge/references/handoffs.md) and
@@ -406,7 +408,7 @@ These variables keep the `SESSION_CONTEXT_*` names they had under the retired
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
 | `SESSION_CONTEXT_HOME` | Yes | Yes | Required (inherited) | Snapshot store root. Must already be present in the environment a pane/agent inherits at startup; context commands and skills never export or derive it, and most scripts fail closed when it is unset. Claude's `context-search` uses it only as an override for the current project's store (its cross-project scan runs regardless), while Codex's requires it. The SessionStart detection hook derives a git-root default for its own banner only. |
-| `SESSION_CONTEXT_STALE_DAYS` | Yes | Yes | `7` | Age at which `context-load` warns that a snapshot is stale. |
+| `SESSION_CONTEXT_STALE_DAYS` | Yes | Yes | `7` | Age at which `context-load` warns that a snapshot is stale. Doctor also uses it for file age and newest evidence age on in-progress/blocked handoff items; doctor accepts 0-999999 and warns/falls back to 7 for invalid values. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the `session-chat` dependency used by `context-share`. |
 | `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for the `session-chat` dependency. |
 

@@ -54,8 +54,10 @@ Only the narrow local checks below, per the
 - Ticket citations are not checked here; `/knowledge:doctor` classifies them.
   Nothing this command reports proves an item is complete, current, or true:
   `verified` means "the referenced local object is present and consistent
-  with the repository right now". This verifier does not assess freshness
-  (doctor reports handoff expiry).
+  with the repository right now". This verifier does not assess freshness;
+  `/knowledge:doctor` reports handoff expiry and the metadata-based freshness
+  and consistency cues (evidence age, timestamp order, open items past
+  expiry).
 
 ## Output
 
