@@ -18,13 +18,16 @@ silently (never breaks or stalls a session).
   distinct prompt terms), and injects the top-N. Tunables:
   `KNOWLEDGE_AUTO_RECALL_LIMIT` (top-N, default 5),
   `KNOWLEDGE_AUTO_RECALL_TERMS` (max terms queried, default 4 — bounds
-  per-prompt latency), `KNOWLEDGE_AUTO_RECALL_BUDGET` (output char cap,
+  per-prompt latency), `KNOWLEDGE_AUTO_RECALL_BUDGET` (output byte cap,
   default 4000), and `KNOWLEDGE_AUTO_RECALL_GRAPH` (strict opt-in: `1`,
   `yes`, `on`, or `true`; all other values are OFF). When enabled, at most
   two direct seeds add at most two active/stale-demoted inbound or outbound
   `[[slug]]` neighbors at depth one, within the same result and budget caps.
-  Related rows include concise `related via [[seed]]` provenance. Script:
-  `scripts/inject-recall.sh`.
+  Direct rows end in `(matched: term(field,field);term2(field))` — the
+  scorer's own explanation of exactly which fields each distinct prompt
+  term hit, in queried-term order (a dotted or hyphenated term can split
+  into several atoms, each listed); related rows keep the concise
+  `related via [[seed]]` provenance. Script: `scripts/inject-recall.sh`.
 
   **Which value to use.** On Claude, if `autoMemoryDirectory` points at this
   store the harness already loads `MEMORY.md` every session, so `1` injects a

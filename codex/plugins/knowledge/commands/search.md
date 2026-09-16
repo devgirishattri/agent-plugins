@@ -1,6 +1,6 @@
 ---
 description: "Deterministic lexical ranked search over the memory store (read-only)"
-argument-hint: "[--store <path>] [--limit N] [--json] <query>"
+argument-hint: "[--store <path>] [--limit N] [--json] [--explain] <query>"
 ---
 
 ## Instructions
@@ -10,13 +10,14 @@ Resolve `PLUGIN_ROOT` from this command resource's installed absolute source pat
 `memory-search.sh` is read-only: it never writes to the store. Run exactly one literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection):
 
 ```
-bash "<PLUGIN_ROOT>/scripts/memory-search.sh" [--store <path>] [--limit N] [--json] '<query>'
+bash "<PLUGIN_ROOT>/scripts/memory-search.sh" [--store <path>] [--limit N] [--json] [--explain] '<query>'
 ```
 
 Build the query from `$ARGUMENTS`:
 - Pass `--store <path>` only if the user supplied one; otherwise omit it and let the script resolve the store itself (explicit target > `KNOWLEDGE_MEMORY_HOME` > canonical discovery under `.agents/memory/`).
 - Pass `--limit <n>` only if the user asked for a specific result count (default 10, hard cap 50).
 - Pass `--json` only if the user wants the raw JSON object instead of the default TSV rows.
+- Pass `--explain` when the user asks why results matched; it appends provenance to TSV. JSON always includes provenance, so combining the flags has no additional effect.
 - **Always wrap the query text itself in single quotes**, verbatim as the user typed it — including any `"quoted phrase"` syntax or a trailing `*` prefix wildcard. The script implements its own tiny query language (`"..."` = phrase, trailing `*` = prefix, whitespace-separated terms = implicit AND, no OR/NOT); single-quoting the whole query keeps those literal characters intact instead of letting the outer shell consume them. If the query itself contains a single quote, tell the user that's not supported in v1 rather than guessing at escaping.
 
 Query grammar reference: lowercase + non-alphanumeric-split tokenization; `"quoted text"` is one phrase atom (substring match, no separate scoring for its words unless they also appear on their own); a trailing `*` on a bare word is a prefix match; results are weighted by field (slug 8, name 6, tags 5, description 4, type 3, headings 2, backlink slugs 2, body 1) and summed per matching field; `stale`/`superseded`/`archived` files have their total halved (rounded down); ordering is score desc then slug asc. Publishing these weights is for writers as much as readers: put the load-bearing words of an entry in `tags`/`name` (weights 5 and 6), not only in prose, to make it reliably findable.
@@ -25,7 +26,11 @@ Exit codes: `0` success (including zero hits — an empty TSV result is normal, 
 
 ## Output
 
-Default (TSV): one result per line, `<score>\t<slug>\t<type>\t<status>\t<description (first 120 chars)>`, highest score first. `--json` emits one object `{"results":[...], "truncated":<n>}` where each result also carries `file` (the bare basename). Zero hits print nothing (TSV) or an empty `results` array (JSON) — say so plainly rather than treating it as a failure. If stderr contains a `truncated: <n> more` line, mention that more results exist than were shown (raise `--limit` or narrow the query). Present results to the user grouped/summarized rather than dumping raw TSV; cite slugs so the user can `$knowledge:recall` or open the file directly.
+Default (TSV): one result per line, `<score>\t<slug>\t<type>\t<status>\t<description (first 120 chars)>`, highest score first. `--json` emits one object `{"results":[...], "truncated":<n>}` where each result also carries `file` (the bare basename) and `matches`: an array of `{"atom":"redis","fields":["name","tags"]}` objects.
+
+Atoms are normalized and ordered as in the query, with phrase quotes and prefix `*` preserved; fields follow the published weight-table order. `--explain` adds a sixth TSV column such as `redis(name,tags);tls(body)` while default TSV keeps its five columns. Explanations describe only the scored atoms, including only the winning subset after degraded fallback. Provenance counts toward the existing output budget.
+
+Zero hits print nothing (TSV) or an empty `results` array (JSON) — say so plainly rather than treating it as a failure. If stderr contains a `truncated: <n> more` line, mention that more results exist than were shown (raise `--limit` or narrow the query). Present results to the user grouped/summarized rather than dumping raw TSV; cite slugs so the user can `$knowledge:recall` or open the file directly.
 
 **Degraded fallback.** A query of 2+ atoms that gets zero full-query hits automatically falls back to the best-matching subset of atoms instead of reporting an indistinguishable "nothing stored" zero (a single-atom zero-hit query is never degraded, and any query with >=1 full-query hit is completely unaffected). When this happens: TSV gets one stderr line before any `truncated:` line, `degraded: 0 results for the full query; showing <N> for: <subset text>`; `--json` gains a top-level `"degraded": {"matched": "<subset text>", "dropped": "<dropped text>"}` object (absent entirely on the normal path — its presence alone tells you the result set was widened). Relay the degraded line/key to the user plainly — it means the exact query matched nothing and what's shown is a narrower substitute, not the full picture.
 

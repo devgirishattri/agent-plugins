@@ -193,6 +193,17 @@ assert_contains     inject_prompt_hit          "$out" "alpha_zephyr"
 assert_contains     inject_prompt_untrusted    "$out" "untrusted background context"
 assert_not_contains inject_prompt_only_relevant "$out" "beta_quokka"
 
+# Direct provenance lists each distinct matched term as term(fields) in
+# queried-term order (the extractor queries longer terms first, so
+# calibration precedes zephyr), never repeats a repeated atom, and never
+# lists a term that hit nothing. The generic label is gone.
+out="$(mkprompt "zephyr calibration zephyr absentterm" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
+assert_contains inject_prompt_exact_provenance "$out" "(matched: calibration(description);zephyr(slug,name,description))"
+assert_not_contains inject_prompt_no_generic_label "$out" "direct lexical match"
+assert_not_contains inject_prompt_no_unmatched_provenance "$out" "absentterm("
+out_again="$(mkprompt "zephyr calibration zephyr absentterm" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
+assert_eq inject_prompt_provenance_deterministic "$out" "$out_again"
+
 out="$(mkprompt "zephyr calibration widget" | KNOWLEDGE_MEMORY_HOME="$store" bash "$INJECT" --prompt)"
 assert_empty inject_prompt_gateoff "$out"
 
@@ -217,6 +228,14 @@ out="$(mkprompt "noiseonly" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECA
 assert_not_contains inject_body_one_term_noise_suppressed "$out" "body_noise"
 out="$(mkprompt "weakalpha weakbeta" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
 assert_contains inject_two_weak_terms_retained "$out" "weak_pair"
+assert_contains inject_two_weak_terms_provenance "$out" "(matched: weakalpha(body);weakbeta(body))"
+
+# An empty description is a valid search result field. It must not shift the
+# explanation into the description when the hook reads its TSV rows (bash
+# `read` with a tab IFS would collapse the adjacent tabs; the hook uses awk).
+write_canonical "$store/blank_description.md" project "Needleblank" ""
+out="$(mkprompt "needleblank" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
+assert_contains inject_empty_description_provenance "$out" "- [blank_description] (project, active, score 6) —  (matched: needleblank(name))"
 
 # lexical qualification + bounded explicit-link expansion. Alpha is a strong
 # direct seed; related nodes are one-hop only, deduplicated, and count toward

@@ -18,7 +18,7 @@ silently (never breaks or stalls a session).
   distinct prompt terms), and injects the top-N. Tunables:
   `KNOWLEDGE_AUTO_RECALL_LIMIT` (top-N, default 5),
   `KNOWLEDGE_AUTO_RECALL_TERMS` (max terms queried, default 4 — bounds
-  per-prompt latency), `KNOWLEDGE_AUTO_RECALL_BUDGET` (output char cap,
+  per-prompt latency), `KNOWLEDGE_AUTO_RECALL_BUDGET` (output byte cap,
   default 4000), and `KNOWLEDGE_AUTO_RECALL_GRAPH` (strict opt-in: `1`,
   `yes`, `on`, or `true`; all other values are OFF). When enabled, at most
   two direct seeds add at most two active/stale-demoted inbound or outbound
@@ -58,3 +58,8 @@ The five write-capable agent surfaces — `docs-create`, `init`, `remember`,
 `consolidate`, and `promote` — are explicit-only on both providers. Their Codex
 skills set `policy.allow_implicit_invocation: false`; invoke them only through
 their corresponding `$knowledge:*` command.
+
+Direct prompt hits report scored terms and their matching fields, such as
+`(matched: redis(name,tags);tls(body))`, in queried-term order. Related hits
+retain `(related via [[seed]])`. Explanations count toward the existing byte
+budget; matching thresholds, result ordering, and graph limits are unchanged.

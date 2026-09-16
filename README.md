@@ -14,7 +14,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-manager` | 1.7.6 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.9 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.17 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `knowledge` | 0.3.18 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.5.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
@@ -514,8 +514,9 @@ prompt seeds need a strong lexical field score or two distinct prompt terms.
 `KNOWLEDGE_AUTO_RECALL_GRAPH` is a separate strict gate (only `1`, `yes`,
 `on`, or `true`) and adds at most two inbound/outbound depth-one `[[slug]]`
 neighbors from the top two direct seeds, within the overall result and output
-budget caps. Output labels direct lexical versus related-via-seed results;
-invalid graph values and helper failures fail closed without breaking hooks.
+budget caps. Direct results identify matching terms and fields; related results
+identify the seed memory that led to them.
+Invalid graph values and helper failures fail closed without breaking hooks.
 
 Once automatic recall and capture are enabled, these tunables bound them. The
 defaults are chosen to keep injected context small, so raise them deliberately.
@@ -524,7 +525,7 @@ defaults are chosen to keep injected context small, so raise them deliberately.
 |----------|--------|-------|---------|---------|
 | `KNOWLEDGE_AUTO_RECALL_LIMIT` | Yes | Yes | `5` | Maximum recalled memories injected per pass. |
 | `KNOWLEDGE_AUTO_RECALL_TERMS` | Yes | Yes | `4` | Maximum salient prompt terms queried per pass. |
-| `KNOWLEDGE_AUTO_RECALL_BUDGET` | Yes | Yes | `4000` | Character cap on the injected recall block. |
+| `KNOWLEDGE_AUTO_RECALL_BUDGET` | Yes | Yes | `4000` | Byte cap on the injected recall block. |
 | `KNOWLEDGE_AUTO_CAPTURE_LIMIT` | Yes | Yes | `3` | Maximum candidates accepted into the capture inbox per pass. |
 | `KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING` | Yes | Yes | `20` | Skip the whole capture pass once the inbox holds this many pending items. |
 | `KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES` | Yes | Yes | `4096` | Hard per-candidate raw-byte cap. |

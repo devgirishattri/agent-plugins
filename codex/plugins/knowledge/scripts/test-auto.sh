@@ -198,6 +198,15 @@ assert_contains     inject_prompt_hit          "$out" "alpha_zephyr"
 assert_contains     inject_prompt_untrusted    "$out" "untrusted background context"
 assert_not_contains inject_prompt_only_relevant "$out" "beta_quokka"
 
+# Direct provenance follows queried-term order, retains every matching field,
+# and does not repeat an atom when the prompt repeats it.
+out="$(mkprompt "zephyr calibration zephyr absentterm" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
+assert_contains inject_prompt_exact_provenance "$out" "(matched: calibration(description);zephyr(slug,name,description))"
+assert_not_contains inject_prompt_no_generic_label "$out" "direct lexical match"
+assert_not_contains inject_prompt_no_unmatched_provenance "$out" "absentterm("
+out_again="$(mkprompt "zephyr calibration zephyr absentterm" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
+assert_eq inject_prompt_provenance_deterministic "$out" "$out_again"
+
 out="$(mkprompt "zephyr calibration widget" | KNOWLEDGE_MEMORY_HOME="$store" bash "$INJECT" --prompt)"
 assert_empty inject_prompt_gateoff "$out"
 
@@ -222,6 +231,13 @@ out="$(mkprompt "noiseonly" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECA
 assert_not_contains inject_body_one_term_noise_suppressed "$out" "body_noise"
 out="$(mkprompt "weakalpha weakbeta" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
 assert_contains inject_two_weak_terms_retained "$out" "weak_pair"
+assert_contains inject_two_weak_terms_provenance "$out" "(matched: weakalpha(body);weakbeta(body))"
+
+# An empty description is a valid search result field. It must not shift the
+# new explanation into the description when the hook reads its TSV rows.
+write_canonical "$store/blank_description.md" project "Needleblank" ""
+out="$(mkprompt "needleblank" | KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=prompt bash "$INJECT" --prompt)"
+assert_contains inject_empty_description_provenance "$out" "- [blank_description] (project, active, score 6) —  (matched: needleblank(name))"
 
 # lexical qualification + bounded explicit-link expansion controls
 cat >> "$store/alpha_zephyr.md" <<'EOF'

@@ -25,9 +25,22 @@
 # first-paragraph text when no atom anchors in the body at all (e.g. an
 # entry that matched only via slug/name/tags/type/backlinks).
 #
+# Match provenance (0.3.18): every scored result records, per query atom,
+# the exact fields that atom matched (field names as in FIELD_WEIGHTS, in
+# weight order; atoms in query order; a degraded result lists only the
+# winning subset's atoms, never a dropped one). It is recorded during the
+# single scoring pass (no re-scan) and surfaces as: the additive `matches`
+# array on every JSON result object (always present); an opt-in 6th TSV
+# column via --explain (default 5-column TSV is byte-identical without it);
+# and a `matched <compact>` item inside every recall heading. The compact
+# rendering is `atom(field,field);atom2(field)` with atoms rendered by
+# render_atom (phrases keep quotes, prefixes keep `*`). --explain is
+# accepted and ignored with --json and with --recall so callers can pass it
+# uniformly.
+#
 # Usage:
-#   memory-search.sh [--store <path>] [--limit N] [--json] <query...>
-#   memory-search.sh --recall [--store <path>] [--limit N] <query...>
+#   memory-search.sh [--store <path>] [--limit N] [--json] [--explain] <query...>
+#   memory-search.sh --recall [--store <path>] [--limit N] [--explain] <query...>
 # (--recall is an internal mode flag used by the /knowledge:recall command
 # wrapper; it is not part of the public search/recall command surface, whose
 # argv is documented in commands/search.md and commands/recall.md.)
@@ -52,12 +65,13 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
 
-USAGE="usage: memory-search.sh [--store <path>] [--limit N] [--json] <query...>"
+USAGE="usage: memory-search.sh [--store <path>] [--limit N] [--json] [--explain] <query...>"
 
 store_arg=""
 limit=10
 json_mode=0
 recall_mode=0
+explain_mode=0
 declare -a query_parts=()
 
 while [ $# -gt 0 ]; do
@@ -78,6 +92,10 @@ while [ $# -gt 0 ]; do
       ;;
     --recall)
       recall_mode=1
+      shift
+      ;;
+    --explain)
+      explain_mode=1
       shift
       ;;
     --)
@@ -170,6 +188,7 @@ export KM_FILES="$files_list"
 export KM_LIMIT="$limit"
 export KM_JSON="$json_mode"
 export KM_RECALL="$recall_mode"
+export KM_EXPLAIN="$explain_mode"
 export KM_QUERY="$raw_query"
 
 python3 <<'PYEOF'
@@ -184,6 +203,7 @@ files = [f for f in os.environ.get("KM_FILES", "").split("\n") if f]
 limit = int(os.environ["KM_LIMIT"])
 json_mode = os.environ["KM_JSON"] == "1"
 recall_mode = os.environ["KM_RECALL"] == "1"
+explain_mode = os.environ.get("KM_EXPLAIN", "0") == "1"
 raw_query = os.environ.get("KM_QUERY", "")
 
 BUDGET = 4000
@@ -379,6 +399,20 @@ def render_atom(atom):
     return value
 
 
+# --- match provenance: which atoms matched which fields for one result.
+# `indices` are the atom indices that scored this result (all atoms for a
+# full-query hit; the winning subset for a degraded hit), in query order.
+def match_list(stem, indices):
+    return [
+        {"atom": render_atom(atoms[i]), "fields": list(atom_hit_fields[i].get(stem, []))}
+        for i in indices
+    ]
+
+
+def render_matches(matches):
+    return ";".join("{}({})".format(m["atom"], ",".join(m["fields"])) for m in matches)
+
+
 # --- query-anchored snippet: earliest position `atom` anchors in `haystack`
 # (already snip_src.lower()), or None. Boundary rules per atom kind mirror
 # the scoring contract's tokenization (tokens are always [a-z0-9]+).
@@ -463,6 +497,10 @@ n_atoms = len(atoms)
 # computed once here so a subset score (below) is a pure intersection +
 # weight-sum over data already gathered by this pass -- never a re-scan.
 atom_hit_files = [dict() for _ in range(n_atoms)]
+# atom_hit_fields[idx][stem] = [field names atom idx matched in stem], in
+# FIELD_WEIGHTS order. Filled in the same pass as atom_hit_files; the
+# match-provenance surfaces read it and never re-score.
+atom_hit_fields = [dict() for _ in range(n_atoms)]
 file_meta = {}
 
 for fname in files:
@@ -515,17 +553,22 @@ for fname in files:
     # atom's weight is computed unconditionally (no early break) because a
     # degraded subset may still need an atom that fails the full-query AND.
     atom_weights = []
+    atom_fields = []
     for atom in atoms:
         w = 0
+        hit_fields = []
         for fname2, weight in FIELD_WEIGHTS:
             if atom_matches(atom, field_tok[fname2], field_joined[fname2]):
                 w += weight
+                hit_fields.append(fname2)
         atom_weights.append(w)
+        atom_fields.append(hit_fields)
 
     any_hit = False
     for idx, w in enumerate(atom_weights):
         if w > 0:
             atom_hit_files[idx][stem] = w
+            atom_hit_fields[idx][stem] = atom_fields[idx]
             any_hit = True
     if any_hit:
         file_meta[stem] = {
@@ -547,6 +590,7 @@ for fname in files:
                 "status": status,
                 "description": description,
                 "file": fname,
+                "matches": match_list(stem, range(n_atoms)),
             })
 
 results.sort(key=lambda r: (-r["score"], r["slug"]))
@@ -606,6 +650,7 @@ if not results and n_atoms >= 2:
                     "status": meta["status"],
                     "description": meta["description"],
                     "file": meta["file"],
+                    "matches": match_list(stem, winning_combo),
                 })
         subset_results.sort(key=lambda r: (-r["score"], r["slug"]))
 
@@ -634,8 +679,9 @@ if recall_mode:
         snippet = anchored_snippet(body, scored_atoms)
         if snippet is None:
             snippet = first_paragraph(body)
-        heading_line = "## {} (score {}, {}, {})".format(
-            sanitize(r["slug"]), r["score"], sanitize(r["type"]), sanitize(r["status"])
+        heading_line = "## {} (score {}, {}, {}, matched {})".format(
+            sanitize(r["slug"]), r["score"], sanitize(r["type"]), sanitize(r["status"]),
+            sanitize(render_matches(r["matches"])),
         )
         desc_line = sanitize(r["description"])
         block_texts.append("\n".join([heading_line, desc_line, snippet]))
@@ -670,6 +716,7 @@ if json_mode:
                     "status": r["status"],
                     "description": r["description"],
                     "file": r["file"],
+                    "matches": r["matches"],
                 }
                 for r in subset
             ],
@@ -689,9 +736,12 @@ emitted = 0
 out_lines = []
 for r in selected:
     desc = sanitize(r["description"])[:120]
-    row = "{}\t{}\t{}\t{}\t{}\n".format(
+    row = "{}\t{}\t{}\t{}\t{}".format(
         r["score"], sanitize(r["slug"]), sanitize(r["type"]), sanitize(r["status"]), desc
     )
+    if explain_mode:
+        row += "\t" + sanitize(render_matches(r["matches"]))
+    row += "\n"
     if used + len(row) > BUDGET:
         break
     out_lines.append(row)
