@@ -951,6 +951,14 @@ else
   fail "review_no_duplicate_dispatch" "disp1=$disp1 out1=$out1 out2=$out2"
 fi
 
+# Release/reclaim safety under a concurrent rename-release (the ownerless
+# lock wedge from CI run 35104849303, and a stale reclaim crossing lock
+# generations) is covered by the shared cross-provider suite
+# scripts/test-scheduler-locks.py, which drives the REAL helpers with
+# injected barriers against both libraries. Hand-replayed shell sequences are
+# deliberately not duplicated here: they cannot detect loss of the cd -P
+# anchoring and would give false confidence.
+
 # --- Test 42: reassignment clears the review-dispatch marker (fresh cycle) ---
 SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-assign.sh" worker-2 "$RND_ID" --reviewer auditor --force "reassigned work" >/dev/null 2>&1
 disp_after=$(jq -r '.meta.review_dispatched_at // "cleared"' "$SESSION_SCHEDULER_HOME/tasks/$RND_ID.json")

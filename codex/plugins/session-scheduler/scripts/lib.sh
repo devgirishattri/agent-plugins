@@ -121,6 +121,32 @@ ensure_dirs() {
 }
 
 # Non-reentrant, cross-provider task transaction lock. Never hold over transport.
+_scheduler_reclaim_lock() (
+  # Keep every access on this directory generation, even if release renames it.
+  local path="$1" expected="$2" result=1
+  [ ! -L "$path" ] && cd -P "$path" 2>/dev/null || return 1
+  mkdir reclaim 2>/dev/null || return 1
+  if [ "$(cat pid 2>/dev/null)" = "$expected" ]; then
+    printf '%s\n' "$$" > pid 2>/dev/null && result=0
+  fi
+  rmdir reclaim 2>/dev/null || true
+  return "$result"
+)
+
+_scheduler_release_lock() {
+  local path="$1" retired
+  [ ! -L "$path" ] && [ ! -L "$path/pid" ] || return 1
+  [ "$(cat "$path/pid" 2>/dev/null)" = "$$" ] || return 1
+  retired=$(mktemp -d "$LOCKS_DIR/.release.XXXXXXXX") || return 1
+  # The destination does not exist. Rename detaches pid and reclaim together;
+  # no waiter can observe an ownerless directory at the acquisition path.
+  if ! mv "$path" "$retired/lock"; then
+    rmdir "$retired" 2>/dev/null || true
+    return 1
+  fi
+  rm -rf "$retired"
+}
+
 acquire_task_lock() {
   local id="$1" path holder diagnostic start timeout
   validate_task_id "$id" || return 1
@@ -141,23 +167,7 @@ acquire_task_lock() {
     if [[ "$holder" =~ ^[1-9][0-9]*$ ]]; then
       diagnostic=$(LC_ALL=C kill -0 "$holder" 2>&1)
       if [ $? -ne 0 ] && [[ "$diagnostic" == *"No such process"* ]]; then
-        # Serialize stale reclamation and recheck the pid after claiming it.
-        if mkdir "$path/reclaim" 2>/dev/null; then
-          if [ "$(cat "$path/pid" 2>/dev/null)" = "$holder" ]; then
-            # Take over in place. Removing pid and then the directory leaves
-            # a torn window in which another reclaim marker can strand it.
-            if ! printf '%s\n' "$$" > "$path/pid"; then
-              rmdir "$path/reclaim" 2>/dev/null || true
-              echo "ERROR: could not take over task lock: $path" >&2
-              return 1
-            fi
-            rmdir "$path/reclaim" 2>/dev/null || true
-            return 0
-          else
-            rmdir "$path/reclaim" 2>/dev/null || true
-          fi
-          continue
-        fi
+        _scheduler_reclaim_lock "$path" "$holder" && return 0
       fi
     fi
     if [ $(( $(now_epoch) - start )) -ge "$timeout" ]; then
@@ -172,11 +182,7 @@ acquire_task_lock() {
 }
 
 release_task_lock() {
-  local path="$LOCKS_DIR/$1.lock"
-  [ ! -L "$path" ] && [ ! -L "$path/pid" ] || return 1
-  [ "$(cat "$path/pid" 2>/dev/null)" = "$$" ] || return 1
-  rm -f "$path/pid"
-  rmdir "$path" 2>/dev/null
+  _scheduler_release_lock "$LOCKS_DIR/$1.lock"
 }
 
 lock_task_for_command() {

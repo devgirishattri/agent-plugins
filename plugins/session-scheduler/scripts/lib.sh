@@ -417,6 +417,51 @@ _sched_pid_alive() {
   ps -p "$pid" >/dev/null 2>&1
 }
 
+# Stale-lock takeover and release helpers. Bodies are IDENTICAL to the Codex
+# scheduler lib (byte-for-byte), so both providers share one lock protocol on
+# a shared ledger directory.
+#
+# _scheduler_reclaim_lock <lock-path> <expected-dead-pid> -> 0 only on a
+# successful takeover. It is a subshell anchored with `cd -P` to the lock
+# directory's real inode: the release path renames the whole directory away,
+# so a waiter that is mid-reclaim keeps operating on the OLD generation (its
+# marker, its pid file) and can never create, read, or remove anything in a
+# NEW generation that appears at the same path. `$$` inside the subshell is
+# still the caller's pid, so the recorded holder is correct.
+_scheduler_reclaim_lock() (
+  # Keep every access on this directory generation, even if release renames it.
+  local path="$1" expected="$2" result=1
+  [ ! -L "$path" ] && cd -P "$path" 2>/dev/null || return 1
+  mkdir reclaim 2>/dev/null || return 1
+  if [ "$(cat pid 2>/dev/null)" = "$expected" ]; then
+    printf '%s\n' "$$" > pid 2>/dev/null && result=0
+  fi
+  rmdir reclaim 2>/dev/null || true
+  return "$result"
+)
+
+# _scheduler_release_lock <lock-path>: ONE atomic rename of the whole lock
+# directory into a private retirement directory, then deletion of that copy.
+# The pid file stays in place until the rename, so no waiter ever observes
+# the canonical path as a directory without a holder. The old two-step
+# release (rm pid; rmdir) left exactly that window: a waiter's transient
+# reclaim marker made the rmdir fail silently and stranded an ownerless lock
+# that every later waiter waited on until timeout (CI run 35104849303,
+# task_lock_serializes_and_reclaims).
+_scheduler_release_lock() {
+  local path="$1" retired
+  [ ! -L "$path" ] && [ ! -L "$path/pid" ] || return 1
+  [ "$(cat "$path/pid" 2>/dev/null)" = "$$" ] || return 1
+  retired=$(mktemp -d "$LOCKS_DIR/.release.XXXXXXXX") || return 1
+  # The destination does not exist. Rename detaches pid and reclaim together;
+  # no waiter can observe an ownerless directory at the acquisition path.
+  if ! mv "$path" "$retired/lock"; then
+    rmdir "$retired" 2>/dev/null || true
+    return 1
+  fi
+  rm -rf "$retired"
+}
+
 task_lock() {
   local id="$1" lock deadline holder timeout
   lock=$(task_lock_path "$id")
@@ -438,26 +483,10 @@ task_lock() {
     fi
     holder=$(cat "$lock/pid" 2>/dev/null)
     if [[ "$holder" =~ ^[0-9]+$ ]] && ! _sched_pid_alive "$holder"; then
-      # Stale reclaim, serialized through a `reclaim` marker (the SAME protocol
-      # the Codex side uses on this directory): claim the reclaim, re-read the
-      # pid, and dismantle the lock only if it is still the same dead holder.
-      # Without the recheck, two stale waiters could both read the dead pid,
-      # one reclaim and re-acquire, and the other then delete the new live
-      # holder's pid file — two holders at once.
-      # The winner TAKES OVER the lock in place (overwrites the dead pid with
-      # its own) rather than dismantling it: dismantling (rm pid, rmdir) opens
-      # a window where the directory exists with no pid — another waiter's
-      # transient reclaim marker can then make the final rmdir fail and leave
-      # an ownerless lock that every waiter waits on until timeout.
-      if mkdir "$lock/reclaim" 2>/dev/null; then
-        if [ "$(cat "$lock/pid" 2>/dev/null)" = "$holder" ] \
-           && printf '%s\n' "$$" > "$lock/pid" 2>/dev/null; then
-          rmdir "$lock/reclaim" 2>/dev/null || true
-          return 0
-        fi
-        rmdir "$lock/reclaim" 2>/dev/null || true
-        continue
-      fi
+      # Stale reclaim (same protocol as the Codex side): take over in place
+      # through _scheduler_reclaim_lock, which is anchored to the lock's inode
+      # so a concurrent rename-release can never make it touch a newer lock.
+      _scheduler_reclaim_lock "$lock" "$holder" && return 0
     fi
     if [ "$(epoch_now)" -ge "$deadline" ]; then
       echo "ERROR: could not lock task $id within ${timeout}s (held by pid ${holder:-unknown}; lock: $lock)." >&2
@@ -471,12 +500,7 @@ task_lock() {
 # Release only a lock THIS process holds (pid file == $$), so a caller that
 # timed out, or a stale-reclaim loser, can never release someone else's lock.
 task_unlock() {
-  local lock
-  lock=$(task_lock_path "$1")
-  [ ! -L "$lock" ] && [ ! -L "$lock/pid" ] || return 1
-  [ "$(cat "$lock/pid" 2>/dev/null)" = "$$" ] || return 1
-  rm -f "$lock/pid" 2>/dev/null
-  rmdir "$lock" 2>/dev/null || true
+  _scheduler_release_lock "$(task_lock_path "$1")"
 }
 
 # Read a task field via jq. Usage: task_get <id> <jq-expr>
