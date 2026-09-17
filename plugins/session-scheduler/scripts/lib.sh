@@ -478,6 +478,9 @@ task_lock() {
       return 0
     fi
     if [ -L "$lock" ] || { [ -e "$lock" ] && { [ ! -d "$lock" ] || [ ! -O "$lock" ]; }; }; then
+      # The holder may have released between the stat calls above; retry
+      # rather than reporting a vanished lock as unsafe.
+      [ ! -e "$lock" ] && [ ! -L "$lock" ] && continue
       echo "ERROR: unsafe task lock (symlink, not a directory, or not owned by you): $lock" >&2
       return 1
     fi

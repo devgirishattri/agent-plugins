@@ -90,6 +90,30 @@ acquire || exit 1
 release
 ''')
 
+    def test_release_between_safety_checks_retries(self):
+        for provider in ("codex", "claude"):
+            with self.subTest(provider=provider):
+                self.run_case(provider, '''
+mkdir "$lock"
+printf '%s\\n' "$$" > "$lock/pid"
+released=0
+# Deterministically release after mkdir failed, at the directory stat. On
+# Claude this also follows the successful existence stat in the same guard.
+function [() {
+  if [[ "$#" = 4 && "$1" = '!' && "$2" = -d && "$3" = "$lock" && "$released" = 0 ]]; then
+    command rm -rf "$lock"
+    released=1
+  fi
+  builtin [ "$@"
+}
+acquire || exit 1
+[[ "$released" = 1 ]] || exit 2
+unset -f '['
+[ "$(cat "$lock/pid")" = "$$" ]
+release
+[ ! -e "$lock" ]
+''')
+
     def test_release_with_inflight_reclaim_marker(self):
         for provider in ("codex", "claude"):
             with self.subTest(provider=provider):
