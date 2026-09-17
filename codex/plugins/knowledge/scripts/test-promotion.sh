@@ -62,7 +62,7 @@ SHARECTX="$HERE/share-context.sh"
 PROMOTE_SKILL_MD="$HERE/../skills/promote/SKILL.md"
 PROMOTE_COMMAND_MD="$HERE/../commands/promote.md"
 CONTEXT_GENERATE_MD="$HERE/../commands/context-generate.md"
-CONTEXT_LIST_MD="$HERE/../commands/context-list.md"
+CONTEXT_LIST_MD="$HERE/../skills/context-list/SKILL.md"
 
 PASS=0
 FAIL=0
@@ -947,6 +947,10 @@ echo "--- 11. zero network egress (static) ---"
 
 egress_hit=""
 for f in "$SAVE" "$LISTCTX" "$PROMOTE_SKILL_MD" "$PROMOTE_COMMAND_MD" "$CONTEXT_GENERATE_MD" "$CONTEXT_LIST_MD"; do
+  if [ ! -f "$f" ]; then
+    fail "promotion_surface_exists" "missing: $f"
+    continue
+  fi
   if grep -Eniq 'curl|wget|[^a-zA-Z]nc[[:space:]]|http\.client|urllib|requests\.|socket\.connect' "$f" 2>/dev/null; then
     egress_hit="$egress_hit $f"
   fi

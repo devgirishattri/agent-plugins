@@ -882,6 +882,8 @@ for task_doc in task-assign task-review task-done task-block; do
   for doc in \
     "$PLUGIN_DOC_ROOT/commands/$task_doc.md" \
     "$PLUGIN_DOC_ROOT/skills/$task_doc/SKILL.md"; do
+    # Command wrappers are optional; canonical skills remain required.
+    [ "$doc" != "$PLUGIN_DOC_ROOT/commands/$task_doc.md" ] || [ -f "$doc" ] || continue
     grep -F 'on the first attempt' "$doc" >/dev/null \
       && ok || fail "transport doc missing first-attempt escalation guidance: $doc"
     grep -F 'one literal Bash segment' "$doc" >/dev/null \
@@ -894,6 +896,7 @@ for terminal_doc in task-done task-block; do
   for doc in \
     "$PLUGIN_DOC_ROOT/commands/$terminal_doc.md" \
     "$PLUGIN_DOC_ROOT/skills/$terminal_doc/SKILL.md"; do
+    [ "$doc" != "$PLUGIN_DOC_ROOT/commands/$terminal_doc.md" ] || [ -f "$doc" ] || continue
     grep -F 'never rerun' "$doc" >/dev/null \
       && ok || fail "terminal transport doc missing replay prohibition: $doc"
   done
@@ -901,6 +904,7 @@ done
 for doc in \
   "$PLUGIN_DOC_ROOT/commands/task-review.md" \
   "$PLUGIN_DOC_ROOT/skills/task-review/SKILL.md"; do
+  [ "$doc" != "$PLUGIN_DOC_ROOT/commands/task-review.md" ] || [ -f "$doc" ] || continue
   grep -F 'never duplicate' "$doc" >/dev/null \
     && ok || fail "review transport doc missing duplicate-delivery prohibition: $doc"
 done
