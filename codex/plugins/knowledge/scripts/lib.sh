@@ -937,6 +937,8 @@ acquire_context_store_lock() {
   local attempts=0 reclaim_rc
   while ! mkdir -m 700 "$lock_dir" 2>/dev/null; do
     if [ -L "$lock_dir" ] || { _context_path_exists "$lock_dir" && [ ! -d "$lock_dir" ]; }; then
+      # A concurrent release can remove the lock between the stat calls.
+      _context_path_exists "$lock_dir" || continue
       _context_store_error "writer lock is not a safe directory: $lock_dir"
       return 1
     fi

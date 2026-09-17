@@ -18,8 +18,10 @@ jobs:
       - name: Run release validation
         run: bash scripts/validate-release.sh
 
-      - name: Test scheduler lock interleavings
-        run: python3 -B scripts/test-scheduler-locks.py
+      - name: Test scheduler and context lock interleavings
+        run: |
+          python3 -B scripts/test-scheduler-locks.py
+          python3 -B scripts/test-context-locks.py
 
       - name: Run Codex plugin smoke tests
         run: |
