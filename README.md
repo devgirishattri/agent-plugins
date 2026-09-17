@@ -11,7 +11,7 @@ Every plugin below ships for both providers at the same version number.
 
 | Plugin | Version | Purpose |
 |--------|---------|---------|
-| `session-manager` | 1.7.7 | List, search, and delete local agent session data |
+| `session-manager` | 1.7.8 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.10 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.25 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
@@ -174,8 +174,20 @@ three names are rejected if written directly into an `env.groups` block, so
 
 It reads the session data your runtime already writes. On Codex, install
 Python 3 to read session names; deletion execs the native `codex` CLI, so that
-binary must also be on `PATH`. Names come from the latest matching entry in
-`session_index.jsonl`; sessions without a name display `(untitled)`.
+binary must also be on `PATH`. Listing uses native metadata through an existing
+Codex daemon's WebSocket control socket when available. It never starts a daemon.
+If the CLI or socket is unavailable, it reports a warning and falls back to local
+session files and the latest names in `session_index.jsonl`; missing names display
+`(untitled)`. Native metadata supplies names when available, and native-only
+history has an unknown physical size until a local file is found.
+
+`SESSION_MANAGER_BACKEND=filesystem codex-ls` explicitly selects local files and
+skips the native connection attempt (when using the shell alias). The same
+environment setting applies to `scripts/list-sessions.sh` and
+`scripts/session-stats.sh`; `auto` is the default and `native` fails instead of
+falling back. The isolated real-daemon regression can be run with
+`python3 -B scripts/test-session-metadata-live.py`; it requires Codex CLI 0.154.0,
+uses synthetic histories, makes no model calls, and stops its disposable daemon.
 
 ### chronos
 

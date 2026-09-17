@@ -6,7 +6,9 @@ State-DB-only listing avoids the API's optional rollout repair. Legacy files fil
 coverage gaps, and physical bytes remain distinct from native logical sessions.
 """
 import argparse
+import base64
 from datetime import datetime
+import hashlib
 import importlib.util
 import json
 import math
@@ -26,6 +28,13 @@ UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 
 
 class RPC:
+    """RFC 6455 text messages over the CLI's byte-transparent Unix proxy.
+
+    No daemon lifecycle operations: closing this object only stops our proxy.
+    Both reads and writes share bounded deadlines, including the HTTP upgrade.
+    """
+    MAX_MESSAGE = 8_000_000
+
     def __init__(self, command=None, timeout=3):
         self.errors = tempfile.TemporaryFile()
         try:
@@ -35,37 +44,146 @@ class RPC:
             self.errors.close()
             raise
         self.selector = selectors.DefaultSelector()
+        os.set_blocking(self.process.stdout.fileno(), False)
+        os.set_blocking(self.process.stdin.fileno(), False)
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self.writer = selectors.DefaultSelector()
+        self.writer.register(self.process.stdin, selectors.EVENT_WRITE)
         self.buffer = b""
         self.sequence = 0
         self.timeout = timeout
         self.deadline = time.monotonic() + 15
+        self.upgraded = False
 
-    def send(self, value):
-        self.process.stdin.write((json.dumps(value) + "\n").encode())
-        self.process.stdin.flush()
+    def _wait(self, selector, deadline):
+        remaining = min(deadline, self.deadline) - time.monotonic()
+        if remaining <= 0 or not selector.select(remaining):
+            raise RuntimeError("native metadata timeout")
+
+    def _write(self, data, deadline):
+        data = memoryview(data)
+        while data:
+            self._wait(self.writer, deadline)
+            try:
+                count = os.write(self.process.stdin.fileno(), data)
+            except BlockingIOError:
+                continue
+            data = data[count:]
+
+    def _read(self, count, deadline):
+        while len(self.buffer) < count:
+            self._wait(self.selector, deadline)
+            try:
+                data = os.read(self.process.stdout.fileno(), 65536)
+            except BlockingIOError:
+                continue
+            if not data:
+                self.errors.seek(0)
+                lines = self.errors.read(4096).decode(errors="replace").splitlines()
+                detail = next((line.strip() for line in lines if line.startswith("Error:")),
+                              next((line.strip() for line in reversed(lines) if line.strip()),
+                                   "native server closed connection"))
+                raise RuntimeError(detail[:500])
+            self.buffer += data
+        result, self.buffer = self.buffer[:count], self.buffer[count:]
+        return result
+
+    def _upgrade(self, deadline):
+        if self.upgraded:
+            return
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        request = ("GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+                   "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                   f"Sec-WebSocket-Key: {key}\r\n\r\n")
+        self._write(request.encode("ascii"), deadline)
+        header = bytearray()
+        while not header.endswith(b"\r\n\r\n"):
+            if len(header) >= 16384:
+                raise RuntimeError("oversized native WebSocket upgrade")
+            header.extend(self._read(1, deadline))
+        lines = header.decode("latin-1").split("\r\n")
+        headers = {}
+        # Codex emits one of each handshake header; reject ambiguous duplicates.
+        for line in lines[1:]:
+            if not line:
+                continue
+            name, sep, value = line.partition(":")
+            if not sep or name.lower() in headers:
+                raise RuntimeError("invalid native WebSocket upgrade headers")
+            headers[name.lower()] = value.strip()
+        expected = base64.b64encode(hashlib.sha1(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
+        if (lines[0].split()[:2] != ["HTTP/1.1", "101"]
+                or headers.get("upgrade", "").lower() != "websocket"
+                or "upgrade" not in [s.strip().lower() for s in headers.get("connection", "").split(",")]
+                or headers.get("sec-websocket-accept") != expected
+                or "sec-websocket-extensions" in headers
+                or "sec-websocket-protocol" in headers):
+            raise RuntimeError("invalid native WebSocket upgrade")
+        self.upgraded = True
+
+    def _frame(self, payload, opcode, deadline):
+        length = len(payload)
+        if length > self.MAX_MESSAGE:
+            raise RuntimeError("oversized native request")
+        header = bytes([0x80 | opcode])
+        if length < 126:
+            header += bytes([0x80 | length])
+        elif length <= 65535:
+            header += b"\xfe" + length.to_bytes(2, "big")
+        else:
+            header += b"\xff" + length.to_bytes(8, "big")
+        mask = os.urandom(4)
+        self._write(header + mask + bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload)), deadline)
+
+    def _message(self, deadline):
+        fragments = bytearray()
+        started = False
+        while True:
+            first, second = self._read(2, deadline)
+            final, opcode, length = bool(first & 0x80), first & 15, second & 127
+            if first & 0x70 or second & 0x80:
+                raise RuntimeError("invalid native WebSocket frame")
+            if length == 126:
+                length = int.from_bytes(self._read(2, deadline), "big")
+                if length < 126:
+                    raise RuntimeError("invalid native WebSocket length")
+            elif length == 127:
+                length = int.from_bytes(self._read(8, deadline), "big")
+                if length < 65536:
+                    raise RuntimeError("invalid native WebSocket length")
+            if opcode >= 8:
+                if not final or length > 125 or opcode not in (8, 9, 10):
+                    raise RuntimeError("invalid native WebSocket control frame")
+                payload = self._read(length, deadline)
+                if opcode == 8:
+                    raise RuntimeError("native server closed WebSocket")
+                if opcode == 9:
+                    self._frame(payload, 10, deadline)
+                continue
+            if opcode not in (0, 1) or (opcode == 0) != started:
+                raise RuntimeError("invalid native WebSocket text sequence")
+            if len(fragments) + length > self.MAX_MESSAGE:
+                raise RuntimeError("oversized native response")
+            fragments.extend(self._read(length, deadline))
+            started = True
+            if final:
+                return json.loads(fragments.decode("utf-8"))
+
+    def send(self, value, deadline=None):
+        deadline = deadline or min(self.deadline, time.monotonic() + self.timeout)
+        self._upgrade(deadline)
+        self._frame(json.dumps(value).encode("utf-8"), 1, deadline)
 
     def call(self, method, params):
         self.sequence += 1
         ident = self.sequence
-        self.send(dict(id=ident, method=method, params=params))
         deadline=min(self.deadline,time.monotonic()+self.timeout)
+        self.send(dict(id=ident, method=method, params=params), deadline)
         while time.monotonic() < deadline:
-            if b"\n" not in self.buffer:
-                if not self.selector.select(max(0, deadline-time.monotonic())):
-                    break
-                data = os.read(self.process.stdout.fileno(), 65536)
-                if not data:
-                    self.errors.seek(0)
-                    lines=self.errors.read(4096).decode(errors="replace").splitlines()
-                    detail=lines[-1][:300] if lines else "native server unavailable"
-                    raise RuntimeError(detail)
-                self.buffer += data
-                if len(self.buffer) > 8_000_000:
-                    raise RuntimeError("oversized native response")
-                continue
-            line, self.buffer = self.buffer.split(b"\n", 1)
-            response = json.loads(line)
+            response = self._message(deadline)
+            if not isinstance(response, dict):
+                raise RuntimeError("invalid native RPC response")
             if response.get("id") != ident:
                 continue
             if "error" in response:
@@ -75,6 +193,7 @@ class RPC:
 
     def close(self):
         self.selector.close()
+        self.writer.close()
         try:
             self.process.stdin.close()
         except OSError:
@@ -101,9 +220,11 @@ def native_rows(rpc, archived=False):
         for _ in range(1000):
             result = rpc.call("thread/list", {"limit":100,"cursor":cursor,
                 "archived":archive,"sourceKinds":SOURCES,"useStateDbOnly":True})
-            if not isinstance(result.get("data"), list):
+            if not isinstance(result, dict) or not isinstance(result.get("data"), list):
                 raise RuntimeError("invalid native metadata result")
             for item in result["data"]:
+                if not isinstance(item, dict):
+                    raise RuntimeError("invalid native session identity")
                 ident, cwd = item.get("id"), item.get("cwd")
                 if not isinstance(ident,str) or not UUID.fullmatch(ident) or not isinstance(cwd,str):
                     raise RuntimeError("invalid native session identity")
