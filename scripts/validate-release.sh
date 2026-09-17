@@ -2,6 +2,7 @@
 # Validate provider plugin metadata before publishing.
 
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 ROOT="${1:-}"
 if [ -z "$ROOT" ]; then
@@ -83,6 +84,7 @@ import subprocess
 import sys
 
 root = pathlib.Path.cwd()
+sys.path.insert(0, str(root / "scripts"))
 
 
 def fail(message: str) -> None:
@@ -97,7 +99,15 @@ def load_json(path: pathlib.Path):
         fail(f"{path}: {exc}")
 
 
+def canonical_doc(path: pathlib.Path) -> pathlib.Path:
+    """A migrated public command keeps its contract in the same-named skill."""
+    if not path.is_file() and path.parent.name == "commands":
+        return path.parent.parent / "skills" / path.stem / "SKILL.md"
+    return path
+
+
 def require_tokens(path: pathlib.Path, *tokens: str) -> None:
+    path = canonical_doc(path)
     if not path.is_file():
         fail(f"missing parity contract file: {path}")
     text = path.read_text()
@@ -109,6 +119,7 @@ def require_tokens(path: pathlib.Path, *tokens: str) -> None:
 def require_phrases(path: pathlib.Path, *phrases: str) -> None:
     """Like require_tokens, but whitespace-normalized so a phrase may wrap
     across lines in prose while still being contractually present."""
+    path = canonical_doc(path)
     if not path.is_file():
         fail(f"missing parity contract file: {path}")
     text = re.sub(r"\s+", " ", path.read_text())
@@ -118,6 +129,7 @@ def require_phrases(path: pathlib.Path, *phrases: str) -> None:
 
 
 def require_one_of(path: pathlib.Path, *tokens: str) -> None:
+    path = canonical_doc(path)
     if not path.is_file():
         fail(f"missing parity contract file: {path}")
     text = path.read_text()
@@ -126,6 +138,7 @@ def require_one_of(path: pathlib.Path, *tokens: str) -> None:
 
 
 def reject_pattern(path: pathlib.Path, pattern: str, label: str) -> None:
+    path = canonical_doc(path)
     if not path.is_file():
         fail(f"missing parity contract file: {path}")
     match = re.search(pattern, path.read_text(), flags=re.MULTILINE)
@@ -136,13 +149,15 @@ def reject_pattern(path: pathlib.Path, pattern: str, label: str) -> None:
 def validate_tracked_markdown_links() -> None:
     """Validate local .md links in public/tracked docs, excluding ignored plans."""
     output = subprocess.check_output(
-        ["git", "ls-files", "-z", "--", "*.md"], text=True
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md"], text=True
     )
     markdown_link = re.compile(r"\[[^\]]*\]\(([^)]+\.md(?:#[^)]+)?)\)")
     related_ref = re.compile(r"`([^`]+\.md)`")
     broken = []
     for raw in filter(None, output.split("\0")):
         path = root / raw
+        if not path.is_file():
+            continue  # Working-tree deletions are absent from the release too.
         text = path.read_text()
         refs = [match.group(1) for match in markdown_link.finditer(text)]
         for line in text.splitlines():
@@ -165,6 +180,7 @@ validate_tracked_markdown_links()
 
 
 def require_order(path: pathlib.Path, first: str, second: str) -> None:
+    path = canonical_doc(path)
     if not path.is_file():
         fail(f"missing parity contract file: {path}")
     text = path.read_text()
@@ -332,48 +348,16 @@ def validate_codex_interface(codex_dir: pathlib.Path, manifest: dict) -> None:
             require_relative_file(codex_dir, "screenshots", screenshot)
 
 def validate_codex_hooks(codex_dir: pathlib.Path) -> None:
-    # Documented Codex location is hooks/hooks.json (a root hooks.json is
-    # NOT loaded by the runtime — proven empirically; see peer review).
+    from hook_contracts import validate_codex
     hooks_path = codex_dir / "hooks" / "hooks.json"
-    legacy_path = codex_dir / "hooks.json"
-    if legacy_path.exists():
-        fail(f"{legacy_path}: root hooks.json is not loaded by the Codex runtime; move it to hooks/hooks.json")
+    if (codex_dir / "hooks.json").exists():
+        fail(f"{codex_dir}: root hooks.json is not loaded; use hooks/hooks.json")
     if not hooks_path.exists():
         return
-
-    hooks_doc = load_json(hooks_path)
-    hooks = hooks_doc.get("hooks")
-    if not isinstance(hooks, dict) or not hooks:
-        fail(f"{hooks_path}: missing non-empty hooks object")
-
-    for event_name, entries in hooks.items():
-        if not isinstance(event_name, str) or not event_name:
-            fail(f"{hooks_path}: hook event names must be non-empty strings")
-        if not isinstance(entries, list) or not entries:
-            fail(f"{hooks_path}: event {event_name} must be a non-empty array")
-        for entry in entries:
-            if not isinstance(entry, dict):
-                fail(f"{hooks_path}: event {event_name} entries must be objects")
-            if "matcher" in entry and not isinstance(entry["matcher"], str):
-                fail(f"{hooks_path}: event {event_name} matcher must be a string")
-            commands = entry.get("hooks")
-            if not isinstance(commands, list) or not commands:
-                fail(f"{hooks_path}: event {event_name} entry missing hooks array")
-            for command_hook in commands:
-                if not isinstance(command_hook, dict):
-                    fail(f"{hooks_path}: command hooks must be objects")
-                if command_hook.get("type") != "command":
-                    fail(f"{hooks_path}: only command hooks are supported")
-                if not isinstance(command_hook.get("command"), str) or not command_hook["command"].strip():
-                    fail(f"{hooks_path}: command hook missing command string")
-                command = command_hook["command"]
-                if "CODEX_PLUGIN_ROOT" in command or "/plugins/cache/" in command:
-                    fail(f"{hooks_path}: hook command uses a legacy or cache-derived plugin root")
-                if "$PLUGIN_ROOT" not in command and "${PLUGIN_ROOT}" not in command:
-                    fail(f"{hooks_path}: hook command must use the runtime-provided PLUGIN_ROOT")
-                timeout = command_hook.get("timeout")
-                if timeout is not None and not isinstance(timeout, (int, float)):
-                    fail(f"{hooks_path}: command hook timeout must be numeric")
+    try:
+        validate_codex(load_json(hooks_path))
+    except ValueError as exc:
+        fail(f"{hooks_path}: {exc}")
 
 claude_marketplace = load_json(root / ".claude-plugin" / "marketplace.json")
 codex_marketplace = load_json(root / ".agents" / "plugins" / "marketplace.json")
@@ -431,6 +415,13 @@ for name in sorted(claude_plugins):
     require_codex_companion(codex_manifest, codex_dir, "apps", ".app.json", "file")
     validate_codex_interface(codex_dir, codex_manifest)
     validate_codex_hooks(codex_dir)
+    claude_hooks = claude_dir / "hooks" / "hooks.json"
+    if claude_hooks.is_file():
+        from hook_contracts import validate_claude
+        try:
+            validate_claude(load_json(claude_hooks))
+        except ValueError as exc:
+            fail(f"{claude_hooks}: {exc}")
     claude_has_hooks = (claude_dir / "hooks" / "hooks.json").is_file()
     codex_has_hooks = (codex_dir / "hooks" / "hooks.json").is_file()
     if claude_has_hooks != codex_has_hooks:
@@ -445,10 +436,14 @@ for name in sorted(claude_plugins):
         fail(f"plugin {name} ships no commands, skills, agents, or hooks on the Claude side")
     if not (codex_commands or skill_names(codex_dir) or codex_has_hooks):
         fail(f"plugin {name} ships no commands, skills, or hooks on the Codex side")
-    if claude_commands != codex_commands:
+    # Canonical authored skills may replace commands without losing an invocation.
+    overview_names = {name, "context"} if name == "knowledge" else {name}
+    claude_capabilities = (claude_commands | skill_names(claude_dir)) - overview_names
+    codex_capabilities = (codex_commands | skill_names(codex_dir)) - overview_names
+    if claude_capabilities != codex_capabilities:
         fail(
-            f"command parity mismatch for {name}: "
-            f"claude={sorted(claude_commands)} codex={sorted(codex_commands)}"
+            f"public capability parity mismatch for {name}: "
+            f"claude={sorted(claude_capabilities)} codex={sorted(codex_capabilities)}"
         )
 
     codex_skills = skill_names(codex_dir)
@@ -460,7 +455,7 @@ for name in sorted(claude_plugins):
             f"Codex command skills missing for {name}: "
             f"missing={sorted(missing_command_skills)}"
         )
-    if extra_skills - allowed_overview_skills:
+    if extra_skills - allowed_overview_skills - claude_capabilities:
         fail(
             f"Unexpected Codex skill without matching command for {name}: "
             f"extra={sorted(extra_skills - allowed_overview_skills)}"
@@ -743,7 +738,7 @@ require_tokens(
     "claude plugin marketplace update girishattri-plugins",
     "claude plugin update <plugin-name>@girishattri-plugins",
 )
-reject_pattern(root / "README.md", r"/reload-plugins", "undocumented plugin reload command")
+require_tokens(root / "README.md", "run `/reload-plugins` in open Claude Code sessions")
 reject_pattern(root / "README.md", r"claude plugin upgrade", "unsupported Claude plugin command")
 require_tokens(root / ".shellcheckrc", "CI gates on --severity=warning")
 require_tokens(
@@ -800,8 +795,8 @@ for provider_context in (
     root / "codex/plugins/knowledge",
 ):
     context_docs = sorted((provider_context / "commands").glob("context-*.md"))
+    context_docs += sorted((provider_context / "skills").glob("context-*/SKILL.md"))
     if provider_context == root / "codex/plugins/knowledge":
-        context_docs += sorted((provider_context / "skills").glob("context-*/SKILL.md"))
         context_docs.append(provider_context / "skills/knowledge/SKILL.md")
     for context_doc in context_docs:
         reject_pattern(
@@ -1095,6 +1090,17 @@ PY
 # ---------------------------------------------------------------------------
 
 echo "-- normalized mirror parity checks (blocking) --"
+python3 scripts/test-codex-pane-identity.py
+python3 scripts/test-hook-contracts.py
+python3 scripts/test-session-metadata.py
+python3 scripts/test-plugin-evals.py
+python3 scripts/plugin-evals.py
+python3 scripts/test-shared-helpers.py
+python3 scripts/package-shared-helpers.py
+python3 scripts/test-context-transport.py
+if [ -f plugins/session-chat/scripts/test-auto-name-pane.sh ]; then
+  bash plugins/session-chat/scripts/test-auto-name-pane.sh
+fi
 
 # Print sorted basenames of files directly inside a directory matching a glob.
 # Empty output when the directory does not exist.
@@ -1114,7 +1120,7 @@ list_runtime_scripts() {
   fi
   if [ "$plugin" = "session-manager" ] && [ "$provider" = "codex" ]; then
     # Native Codex deletion and its session index have provider-specific helpers.
-    names="$(printf '%s\n' "$names" | grep -vE '^((delete-resolved-session|prepare-delete)\.sh|session-names\.py)$' || true)"
+    names="$(printf '%s\n' "$names" | grep -vE '^((delete-resolved-session|prepare-delete)\.sh|session-(names|metadata)\.py)$' || true)"
   fi
   printf '%s\n' "$names" | sed '/^$/d' | sort -u
 }
@@ -1143,10 +1149,8 @@ for claude_plugin_dir in plugins/*/; do
   codex_plugin_dir="codex/plugins/$plugin_name"
   [ -d "$codex_plugin_dir" ] || continue
 
-  # Command basenames in commands/ on each side.
-  claude_commands="$(list_basenames "$claude_plugin_dir/commands" '*.md')"
-  codex_commands="$(list_basenames "$codex_plugin_dir/commands" '*.md')"
-  require_set_equal "$plugin_name" "commands" "$claude_commands" "$codex_commands"
+  # Public command/skill capability parity is checked by Python above; layouts
+  # intentionally differ when an authored skill replaces a migrated command.
 
   # Hooks presence: both providers keep hooks/hooks.json.
   claude_has_hooks=false

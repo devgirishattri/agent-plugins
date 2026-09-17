@@ -11,12 +11,12 @@ Every plugin below ships for both providers at the same version number.
 
 | Plugin | Version | Purpose |
 |--------|---------|---------|
-| `session-manager` | 1.7.6 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.9 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.6.1 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.23 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.5.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
-| `chronos` | 0.1.2 | Inject fresh current date/time context with every prompt for time/day-aware agents |
+| `session-manager` | 1.7.7 | List, search, and delete local agent session data |
+| `session-chat` | 0.17.10 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.6.2 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `knowledge` | 0.3.24 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-workspace` | 0.5.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `chronos` | 0.1.3 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
 plugin manifests and the two marketplace files. `scripts/validate-release.sh`
@@ -36,7 +36,7 @@ rather than assumed: the `session-scheduler` suite passes 72/72 under 3.2.57.
 | `curl` | `session-workspace` browser integration | Hard only when a top-level `browser` block is configured; used for DevTools readiness checks. |
 | `tmux` | `session-chat`, `session-workspace` | Hard. `session-chat` additionally requires that the agent itself be running inside a tmux pane, not merely that tmux be installed. |
 | `tmux` | `session-scheduler` | Hard in practice. The ledger itself does not touch tmux, but every notify path goes through `session-chat`. |
-| `tmux` | `knowledge` | Optional. Only for pane-identity provenance; `KNOWLEDGE_PANE_NAME` substitutes. |
+| `tmux` | `knowledge` | Required for `context-share`, inside an active tmux session. Otherwise optional for pane identity, where `KNOWLEDGE_PANE_NAME` substitutes. |
 | `git` | `knowledge` | Hard. Store resolution and `init` both require a repository. |
 | `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
 | `python3` | `knowledge` v2 handoffs | Required to save or regenerate structured scope/items. Legacy v1 and plain snapshot writes retain their existing behavior. |
@@ -75,10 +75,11 @@ Upgrade the configured marketplace after new plugin versions are published:
 codex plugin marketplace upgrade girishattri-plugins
 ```
 
-Start a new Codex session after installing or upgrading so the updated plugin
-skills and tools are loaded. These trust and session-pickup behaviors are
-documented in [OpenAI's Codex plugin guide](https://learn.chatgpt.com/docs/plugins).
-Verify installed and enabled versions with:
+Verify the installed version and that the intended skills, tools and hooks are
+visible after upgrading. Start a new Codex session if the running session still
+shows stale plugin content. Review changed hook trust separately; installation
+does not grant trust. See [OpenAI's Codex plugin guide](https://learn.chatgpt.com/docs/plugins).
+Check installed and enabled versions with:
 
 ```bash
 codex plugin list --json
@@ -118,7 +119,15 @@ claude plugin update <plugin-name>@girishattri-plugins
 ```
 
 Repeat the second command for each installed plugin you want to update, then
-restart Claude Code so it loads the updated plugin version.
+run `/reload-plugins` in open Claude Code sessions to load the updated hooks,
+commands, skills and MCP/LSP servers. If the new commands remain unavailable,
+restart the session. Monitors require a full restart. This is the documented
+[Claude reload behavior](https://code.claude.com/docs/en/plugins-reference);
+verify the installed version after updating.
+
+Reloading plugins does not change launch-inherited environment variables such
+as `SESSION_CONTEXT_HOME` or `SESSION_SCHEDULER_HOME`. Relaunch the pane after
+changing those variables.
 
 For local development, add a checkout path instead:
 
@@ -395,8 +404,8 @@ store, and inherited context store together. Results stay grouped by source with
 authority and lifetime labels; memory retains its native ranking and any degraded
 query notice. The read-only command supports source selection, per-source limits,
 and JSON output, reports partial/unavailable sources, and caps output at 64 KiB.
-See the command contracts for [Claude](plugins/knowledge/commands/find.md) and
-[Codex](codex/plugins/knowledge/commands/find.md).
+See the command contracts for [Claude](plugins/knowledge/skills/find/SKILL.md) and
+[Codex](codex/plugins/knowledge/skills/find/SKILL.md).
 
 Structured v2 handoffs record repository scope, stable work-item IDs, reported
 status, and evidence references. The context-generation workflow stages a JSON
@@ -435,7 +444,7 @@ rule as the scheduler's transport-bearing helpers.
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
 | `SESSION_SCHEDULER_HOME` | Yes | Yes | Required (inherited) | Shared task ledger root. Must already be present in the environment a pane/agent inherits at startup; scheduler commands and skills never export or derive it, and scripts fail closed when it is unset. |
-| `SESSION_CONTEXT_HOME` | Yes | Yes | Required (inherited) | Resolves an attached session-context snapshot for the scheduler under the same contract: inherited at agent startup, required whenever a context is attached. |
+| `SESSION_CONTEXT_HOME` | Yes | Yes | Required for explicit context (inherited) | Resolves an explicit `--context NAME` snapshot. `--context auto` uses scheduler-owned handoffs and does not require this variable. |
 | `SESSION_SCHEDULER_STALE_MINUTES` | Yes | Yes | `30` | Age after which assigned or review tasks are marked `STALE`. |
 | `SESSION_SCHEDULER_FORCE` | Yes | Yes | `0` | Set to `1` to permit otherwise illegal status transitions. Prefer the `--force` option. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the scheduler's `session-chat` dependency. |
@@ -638,5 +647,21 @@ Claude likewise reads the Claude marketplace and Claude manifests. It should not
 - `claude plugin validate <path>` checks a single plugin or marketplace manifest
   against the Claude schema, which is a faster inner-loop check than a full
   release validation.
+- `python3 -B scripts/test-codex-install.py` installs all six plugins into a
+  disposable Codex home and checks skill names, duplicate wrappers, and helper
+  references. It makes no model calls.
+- `python3 -B scripts/plugin-evals.py` validates portable `evals/*/case.json`
+  scenarios without model calls. Opt into bounded Codex probes with
+  `--plugin knowledge --run --max-cases 3 --timeout 90 --output <local-report.json>`.
+  Probes use disposable stores, disable external integrations, and retain the
+  child workspace sandbox. On macOS, run from a normal terminal if an enclosing
+  sandbox prevents the child sandbox from starting. Model grades are report-only;
+  deterministic script suites remain the blocking checks. Native hook injection
+  requires separately established hook trust; the runner does not bypass it.
+- Claude's matching scenarios include native prompts, graders, and scaffolds.
+  Run from the plugin directory with `claude plugin eval . --scaffold --no-publish
+  --runs 1 --ablation none --max-cost-usd 3`; use the native trust/tool options
+  appropriate to the reviewed fixture. Generated `evals/results/` reports stay
+  local and are gitignored.
 - `session-scheduler` is intentionally a file-backed ledger layered on `session-chat`; keep scheduling state out of the transport plugin.
 - `session-workspace` owns tmux lifecycle, the optional executable role-policy harness, and schema-v4's fixed `reviewed-git-v1` coordination lifecycle. A project's root `workspace.sh` remains a logic-free bootstrap. `workspace.json` supplies validated pane/Git coordinates only; correlated session-chat replies plus the pinned scheduler ledger carry machine-verifiable gate evidence, while product-specific build/test requirements remain in `AGENTS.md` and explicit user confirmations remain conversational rather than harness-enforced.

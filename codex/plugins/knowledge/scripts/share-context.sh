@@ -15,7 +15,7 @@ if [ -z "$PROJECT_NAME" ] || [ -z "$TARGET_SESSION" ]; then
 fi
 
 validate_context_name "$PROJECT_NAME" || exit 1
-validate_label "$TARGET_SESSION" || exit 1
+kc_validate_label "$TARGET_SESSION" || exit 1
 
 ensure_tmux
 

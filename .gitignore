@@ -30,3 +30,9 @@ docs/
 # Real project/client identifiers for the privacy sweep (machine-local; must
 # never be committed to this public repo)
 .privacy-denylist
+
+# Local native evaluation reports (may contain model transcripts).
+plugins/*/evals/results/
+codex/plugins/*/evals/results/
+plugins/*/evals/**/results/
+codex/plugins/*/evals/**/results/

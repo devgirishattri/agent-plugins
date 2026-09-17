@@ -23,4 +23,13 @@ Present tab-separated output as:
 | Thread | Session ID | Project | Size | Last Modified |
 ```
 
-Show full session IDs and a total count. The first column is the latest session name from `~/.codex/session_index.jsonl`. If a session has no indexed name, show `(untitled)`; never substitute its description or first user message.
+Show full session IDs and a total count. Native metadata supplies the title when
+available; the compatibility backend uses the latest indexed name. Missing
+names remain `(untitled)`; never substitute a description or first user message.
+The helper connects only to an existing local Codex daemon and falls back to
+filesystem metadata. Relay backend diagnostics from stderr. `unknown` size
+means native history has no known local file size, not zero storage.
+For explicit archive requests append `--archived`; for machine-readable requests
+append `--json` (includes per-row source and nullable physical bytes). The
+launch environment may select `SESSION_MANAGER_BACKEND=auto|native|filesystem`;
+do not change it implicitly. Native deletion remains a separate workflow.

@@ -499,14 +499,14 @@ chmod +x "$MOCK_BIN/tmux"
 : > "$TMP/invalid-label.capture"
 if TMUX_CAPTURE="$TMP/invalid-label.capture" MOCK_SENDER='bad sender' \
   PATH="$MOCK_BIN:$PATH" TMUX=mock TMUX_PANE=%1 \
-  bash -c 'source "$1"; send_message target-test hello' _ "$SCRIPT_DIR/lib.sh" \
+  bash -c 'source "$1"; kc_send_message target-test hello' _ "$SCRIPT_DIR/lib.sh" \
     > "$TMP/invalid-sender.out" 2>&1; then
   fail "fallback accepted an invalid externally assigned sender label"
 fi
-assert_contains "$TMP/invalid-sender.out" "Label must contain only"
+assert_contains "$TMP/invalid-sender.out" "unsafe characters"
 if TMUX_CAPTURE="$TMP/invalid-label.capture" \
   PATH="$MOCK_BIN:$PATH" TMUX=mock TMUX_PANE=%1 \
-  bash -c 'source "$1"; send_message "bad target" hello' _ "$SCRIPT_DIR/lib.sh" \
+  bash -c 'source "$1"; kc_send_message "bad target" hello' _ "$SCRIPT_DIR/lib.sh" \
     > "$TMP/invalid-target.out" 2>&1; then
   fail "fallback accepted an invalid target label"
 fi

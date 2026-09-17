@@ -1,0 +1,20 @@
+{
+  "id": "scheduler-task-new-positive",
+  "kind": "positive",
+  "prompt": "Create a scheduler task titled \"rotate logs\" for the ops executor.",
+  "expectations": {
+    "regex": [
+      "SESSION_SCHEDULER_HOME"
+    ],
+    "tool_used": [
+      "task-new.sh"
+    ],
+    "tool_used_any": [],
+    "forbidden_skills": [],
+    "files": {}
+  },
+  "unset_env": [
+    "SESSION_SCHEDULER_HOME"
+  ],
+  "note": "Missing-env contract: the runner must NOT pre-export SESSION_SCHEDULER_HOME for this case; the observable is the documented fail-closed error. A provider-specific positive case with a fixture home is a separate case."
+}

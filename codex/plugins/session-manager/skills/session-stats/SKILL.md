@@ -32,4 +32,11 @@ The output has three sections; present them as:
    | Size | Project | Name |
    ```
 
-The command is read-only. Projects are grouped by the session `cwd` recorded in each session file, and names come from the latest matching entry in `~/.codex/session_index.jsonl`. Sessions without an indexed name display as `(untitled)`. Suggest `$session-manager:session-list` to inspect a project and `$session-manager:session-delete` to clean up large sessions.
+The command is read-only. Projects are grouped by canonical session cwd. Native
+metadata supplies names when present; filesystem compatibility uses the latest
+indexed name. Missing names display as `(untitled)`. Relay backend diagnostics.
+Size describes known physical files; `+ unknown` means some logical sessions
+have no known file size. Do not describe that as a complete storage total.
+`--json` includes row provenance and nullable byte sizes; `--archived` includes
+archives. Suggest `$session-manager:session-list` to inspect a project and the
+separate `$session-manager:session-delete` workflow for cleanup.

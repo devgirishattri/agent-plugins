@@ -1,0 +1,21 @@
+{
+  "id": "scheduler-board-contract",
+  "kind": "contract",
+  "prompt": "Show me the scheduler task board and tell me exactly what the tool reports.",
+  "expectations": {
+    "regex": [
+      "SESSION_SCHEDULER_HOME.*not set|relaunch"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "task-board.sh",
+      "task-status.sh"
+    ],
+    "forbidden_skills": [],
+    "files": {}
+  },
+  "unset_env": [
+    "SESSION_SCHEDULER_HOME"
+  ],
+  "note": "Missing-env contract: the runner must NOT pre-export SESSION_SCHEDULER_HOME for this case; the observable is the documented fail-closed error. A provider-specific positive case with a fixture home is a separate case."
+}

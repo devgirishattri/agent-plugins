@@ -1,0 +1,12 @@
+{
+  "id": "knowledge-search-contract",
+  "kind": "contract",
+  "prompt": "Run the knowledge search command for the term `release` and paste its raw output back to me exactly as printed, inside a code block. Do not summarise it.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": ["\\d+\\tproject_release_checklist\\tproject\\tactive\\t", "project_old_release_notes\\tproject\\tstale"],
+    "tool_used": ["memory-search.sh"],
+    "forbidden_skills": [],
+    "files": {}
+  }
+}

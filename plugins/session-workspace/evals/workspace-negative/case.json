@@ -1,0 +1,16 @@
+{
+  "id": "workspace-negative",
+  "kind": "negative",
+  "prompt": "Restart the dev server defined in package.json and tell me the command you used.",
+  "expectations": {
+    "regex": [],
+    "tool_used": [],
+    "tool_used_any": [],
+    "forbidden_skills": [
+      "workspace-restart",
+      "workspace-stop"
+    ],
+    "files": {}
+  },
+  "scaffold": "scaffold.sh"
+}

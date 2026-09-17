@@ -1,0 +1,20 @@
+{
+  "id": "workspace-status-positive",
+  "kind": "positive",
+  "prompt": "What is the current state of the tmux workspace lifecycle for this project? Use the workspace config at .agent-workspace/workspace.json.",
+  "expectations": {
+    "regex": [
+      "(?i)fixture-main|not running|inactive|no tmux|status"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "workspace-status",
+      "lifecycle.sh",
+      "workspace-plan.sh",
+      "harness-status.sh"
+    ],
+    "forbidden_skills": [],
+    "files": {}
+  },
+  "scaffold": "scaffold.sh"
+}

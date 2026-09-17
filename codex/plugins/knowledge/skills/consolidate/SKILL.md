@@ -1,6 +1,6 @@
 ---
 name: consolidate
-description: This skill drains the memory capture inbox and this session's learnings into reviewed create/update diffs against MEMORY.md, applying nothing until the user approves every diff. User-run only because this performs durable store writes; paired Codex invocation policy forbids implicit invocation.
+description: Review captured learnings and memory inbox items, propose durable create/update diffs, and apply approved changes. User-run only; nothing is written without explicit approval.
 ---
 
 # Consolidate

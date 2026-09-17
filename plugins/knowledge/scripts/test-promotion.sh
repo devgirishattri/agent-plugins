@@ -61,7 +61,7 @@ REMOVECTX="$HERE/remove-context.sh"
 SHARECTX="$HERE/share-context.sh"
 PROMOTE_SKILL_MD="$HERE/../skills/promote/SKILL.md"
 PROMOTE_COMMAND_MD="$HERE/../commands/promote.md"
-CONTEXT_GENERATE_MD="$HERE/../commands/context-generate.md"
+CONTEXT_GENERATE_MD="$HERE/../skills/context-generate/SKILL.md"
 CONTEXT_LIST_MD="$HERE/../commands/context-list.md"
 
 PASS=0

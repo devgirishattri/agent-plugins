@@ -9,6 +9,13 @@ An independent verification pass over documentation. The goal is to confirm that
 
 ## Required delegation
 
+When a native `doc_reviewer` role is already configured, prefer its read-only
+sandbox. An optional [role template](assets/doc-reviewer.toml) ships with this
+skill; it is not automatically registered and this workflow does not install
+project configuration. Otherwise use the available delegation tool with the
+read-only worker instructions below. Give a bounded target and report any
+budget-limited or incomplete coverage instead of retrying without limit.
+
 The initially invoked agent must delegate the worker process below to a fresh subagent, wait for it to finish, and relay its report. Use isolated/no inherited conversation context when supported. Give the worker only the target path, resolved absolute plugin root, and worker process below—not prior conclusions or an intended verdict—and explicitly say: `You are the independent reviewer worker; do not delegate again and do not edit files.`
 
 If the task prompt already identifies you as that independent reviewer worker, do not spawn another agent; perform the worker process directly. If and only if the runtime exposes no subagent/delegation capability, the initially invoked agent may perform the worker process directly, but it must state that the result is a non-independent fallback. A busy or inconvenient delegation path is not a reason to skip delegation.

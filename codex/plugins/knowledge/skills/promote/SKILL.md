@@ -1,6 +1,6 @@
 ---
 name: promote
-description: This skill promotes a stabilized context/handoff item or an existing memory file into a durable destination — a memory create/UPDATE (staged through memory-write.sh apply) or a docs decision-record patch (proposed only, never written by this skill) — then, only after a separate confirmation, deletes the source. User-run only because this performs durable store writes and destructive source deletions; paired Codex invocation policy forbids implicit invocation.
+description: Promote stable context or memory into a durable destination, with separate confirmation before deleting the source. User-run only; nothing is written without explicit approval.
 ---
 
 # Promote

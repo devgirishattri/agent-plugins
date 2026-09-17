@@ -1,0 +1,19 @@
+{
+  "id": "knowledge-recall-positive",
+  "kind": "positive",
+  "prompt": "Before I cut a release, what do we already know about our release checklist? Check the project's knowledge store first and cite what you find.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "project_release_checklist",
+      "(?i)manifest|validat|tag"
+    ],
+    "tool_used": [],
+    "forbidden_skills": [],
+    "files": {},
+    "tool_used_any": [
+      "memory-search.sh",
+      "find-knowledge.sh"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "knowledge-negative",
+  "kind": "negative",
+  "prompt": "Rename the variable `count` to `total` in this snippet and show me the result:\n\n```python\ncount = 0\nfor item in items:\n    count += item.size\nprint(count)\n```",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": ["total \\+= item\\.size"],
+    "tool_used": [],
+    "forbidden_skills": ["consolidate", "promote", "remember", "docs-create", "init"],
+    "files": {}
+  }
+}

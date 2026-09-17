@@ -88,6 +88,8 @@ ln -s "$SCRIPT_DIR/test-codex-mock.sh" "$MOCK_BIN/codex"
 : > "$SESSION_MANAGER_TEST_LOG"
 
 export CODEX_HOME SESSION_MANAGER_TEST_LOG
+# Native RPC has isolated root contract tests; this suite must not hit a daemon.
+export SESSION_MANAGER_BACKEND=filesystem
 PATH="$MOCK_BIN:$PATH"
 export PATH
 

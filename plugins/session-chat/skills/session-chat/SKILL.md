@@ -127,7 +127,11 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 Plugin updates do not auto-reload running sessions. After `claude plugin update session-chat@girishattri-plugins`:
 
 1. The new version is unpacked under `~/.claude/plugins/cache/girishattri-plugins/session-chat/<version>/`. Confirm with `ls ~/.claude/plugins/cache/girishattri-plugins/session-chat/`.
-2. Reload in the current session: `/reload-plugins`.
-3. Verify: `/panes` and `/incoming-mode` should respond from the new version. If `/incoming-mode` is "unknown command," reload didn't pick up the new commands — check the cache path.
+2. Reload in the current session: `/reload-plugins`. This switches the plugin's hooks, commands, skills, and any MCP/LSP servers to the new version's path without a restart. Only monitors need a full session restart.
+3. Verify: `/panes` and `/incoming-mode` should respond from the new version. If `/incoming-mode` is "unknown command," reload didn't pick up the new commands — check the cache path, then restart Claude Code as the fallback.
+
+What a reload does **not** refresh: environment variables the pane inherited at launch (`SESSION_CHAT_INCOMING_MODE`, `SESSION_CHAT_TARGET_MESSAGES_DIR`, the context and scheduler homes). Changing those still requires relaunching the pane with the new environment.
+
+For a plugin loaded in place from a local-directory marketplace (development checkouts), edits to `SKILL.md` apply immediately; edits to hooks or scripts apply at the next `/reload-plugins` or session start, with no version bump.
 
 For codex-side parity, run `codex plugin marketplace upgrade girishattri-plugins`, then start a **new Codex session** so the update is loaded. Its cache is under `~/.codex/plugins/cache/...`.

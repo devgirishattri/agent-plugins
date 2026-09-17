@@ -31,7 +31,7 @@ ensure_tmux() {
 
 KNOWLEDGE_CANONICAL_NAME_REGEX='^[a-z0-9]+(_[a-z0-9]+)*$'
 
-validate_label() {
+kc_validate_label() {
   local label="$1"
   if [ -z "$label" ]; then
     echo "ERROR: Label cannot be empty." >&2
@@ -57,14 +57,6 @@ validate_knowledge_name() {
 
 validate_context_name() {
   validate_knowledge_name "$1" "Context snapshot name"
-}
-
-# --- Message directory ---
-
-MESSAGES_DIR="$HOME/.claude/messages"
-
-ensure_messages_dir() {
-  mkdir -p "$MESSAGES_DIR"
 }
 
 # --- Context snapshots directory (project-local) ---
@@ -1102,128 +1094,107 @@ list_snapshot_names() {
 # kept only as a fallback when session-chat isn't installed. Locator mirrors the
 # session-scheduler resolver: test override, then versioned cache, then sibling.
 session_chat_root() {
+  # A candidate only counts when its send-message.sh exists and is readable;
+  # a stray directory (or a newest-version entry whose files are missing)
+  # must fall through to the next candidate, never win by name alone.
+  _sc_candidate_ok() { [ -d "$1" ] && [ -r "$1/scripts/send-message.sh" ] && [ -f "$1/scripts/send-message.sh" ]; }
   if [ -n "${SESSION_CHAT_ROOT_OVERRIDE:-}" ]; then
+    # Test/operator override is authoritative even when it points nowhere:
+    # a bad override means "no session-chat", not "search elsewhere".
     printf '%s\n' "$SESSION_CHAT_ROOT_OVERRIDE"
     return 0
   fi
-  local versioned
-  versioned=$(ls -1 "$HOME/.claude/plugins/cache/girishattri-plugins/session-chat" 2>/dev/null | sort -V | tail -1)
-  if [ -n "$versioned" ]; then
-    printf '%s/.claude/plugins/cache/girishattri-plugins/session-chat/%s\n' "$HOME" "$versioned"
-    return 0
+  local cache="$HOME/.claude/plugins/cache/girishattri-plugins/session-chat" versioned
+  if [ -d "$cache" ]; then
+    while IFS= read -r versioned; do
+      [ -n "$versioned" ] || continue
+      if _sc_candidate_ok "$cache/$versioned"; then
+        printf '%s/%s\n' "$cache" "$versioned"
+        return 0
+      fi
+    done < <(ls -1 "$cache" 2>/dev/null | sort -rV)
   fi
   local here
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-  if [ -d "$here/session-chat" ]; then
+  if _sc_candidate_ok "$here/session-chat"; then
     printf '%s/session-chat\n' "$here"
     return 0
   fi
   return 1
 }
 
-# --- Pane naming (smux @name pattern) ---
+# --- Minimal fallback transport (used ONLY when session-chat is absent) ---
+# share-context.sh prefers session-chat's send-message.sh (see
+# session_chat_root above): that transport verifies the paste landed, retries,
+# rejects shell targets, and queues to a durable inbox when the recipient is
+# busy. The kc_* helpers below are a deliberately minimal stand-in with NONE of
+# those guarantees: one literal paste plus Enter, no verification, no inbox.
+# They are provider-neutral (no runtime-specific paths) and must stay that
+# way; kc_validate_label is byte-identical to session-chat's validate_label
+# and is the only body shared across plugins (root packaging gate).
 
-set_pane_name() {
-  local pane_id="$1"
-  local name="$2"
-  tmux set-option -p -t "$pane_id" @name "$name"
+kc_get_my_name() {
+  tmux display-message -p -t "${TMUX_PANE:-}" '#{@name}' 2>/dev/null
 }
 
-get_pane_name() {
-  local pane_id="$1"
-  tmux display-message -p -t "$pane_id" '#{@name}' 2>/dev/null
-}
-
-get_my_name() {
-  get_pane_name "${TMUX_PANE:-}"
-}
-
-# --- Pane resolution (searches ALL tmux sessions) ---
-
-resolve_pane() {
+# Resolve a pane label to exactly one pane id across every tmux session.
+# Zero matches and duplicate matches are both errors: sending to "the first
+# pane called X" silently mislabels traffic when two panes share a name.
+kc_resolve_pane() {
   local label="$1"
-  local result
-  result=$(tmux list-panes -a -F '#{pane_id} #{@name}' 2>/dev/null | while read -r pid pname; do
-    if [ "$pname" = "$label" ]; then
-      echo "$pid"
-      break
-    fi
-  done)
-  if [ -z "$result" ]; then
-    echo "ERROR: No pane named '$label'. Run /panes to see available." >&2
+  local matches
+  local listing
+  listing=$(tmux list-panes -a -F '#{pane_id} #{@name}' 2>/dev/null) || {
+    echo "ERROR: tmux list-panes failed; cannot resolve '$label'." >&2
+    return 1
+  }
+  matches=$(printf '%s\n' "$listing" | awk -v l="$label" '$2 == l { print $1 }')
+  if [ -z "$matches" ]; then
+    echo "ERROR: No pane named '$label'. Name the target pane first (session-chat: /whoami <name>)." >&2
     return 1
   fi
-  echo "$result"
+  if [ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" -ne 1 ]; then
+    echo "ERROR: Multiple panes named '$label'; rename one before sharing." >&2
+    return 1
+  fi
+  printf '%s' "$matches"
 }
 
-# --- Communication ---
-
-send_text() {
+# Literal paste, then Enter. Propagates a tmux failure instead of announcing
+# success: either send-keys failing means the recipient did not get the text.
+kc_send_text() {
   local pane_id="$1"
   local text="$2"
-  # Literal mode + split text/Enter for TUI safety (smux pattern)
-  tmux send-keys -t "$pane_id" -l -- "$text"
+  tmux send-keys -t "$pane_id" -l -- "$text" || return 1
   sleep 0.1
-  tmux send-keys -t "$pane_id" Enter
+  tmux send-keys -t "$pane_id" Enter || return 1
 }
 
-send_message() {
+kc_send_message() {
   local target_name="$1"
   local message="$2"
   local my_name
-  my_name=$(get_my_name)
+  my_name=$(kc_get_my_name) || {
+    echo "ERROR: cannot query this pane's name (tmux display-message failed)." >&2
+    return 1
+  }
   if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
+    echo "ERROR: This pane has no name; name it first (session-chat: /whoami <name>)." >&2
     return 1
   fi
-  # Both names go into the notification line; reject an unsafe target label or an
-  # externally/manually-set @name (slashes, .., whitespace) before sending, so a
-  # hostile label can't enter the notification.
-  if ! validate_label "$target_name" 2>/dev/null; then
+  # Both names enter the notification line; reject an unsafe target label or
+  # an externally set @name before sending.
+  if ! kc_validate_label "$target_name" 2>/dev/null; then
     echo "ERROR: invalid target name '$target_name' (letters, digits, _, - only)." >&2
     return 1
   fi
-  if ! validate_label "$my_name" 2>/dev/null; then
-    echo "ERROR: this pane's name ('$my_name') has unsafe characters; rename it with /whoami <name> before sharing." >&2
+  if ! kc_validate_label "$my_name" 2>/dev/null; then
+    echo "ERROR: this pane's name ('$my_name') has unsafe characters; rename it before sharing." >&2
     return 1
   fi
   local target_pane
-  target_pane=$(resolve_pane "$target_name") || return 1
-  local formatted="[from:${my_name} pane:${TMUX_PANE:-}] ${message}"
-  send_text "$target_pane" "$formatted"
-}
-
-dispatch_message() {
-  local target_name="$1"
-  local message="$2"
-  local my_name
-  my_name=$(get_my_name)
-  if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
-    return 1
-  fi
-  local target_pane
-  target_pane=$(resolve_pane "$target_name") || return 1
-
-  # Write full message to file (handles multi-line + special chars)
-  ensure_messages_dir
-  local msg_id
-  msg_id="$(date +%s)-${my_name}-to-${target_name}"
-  local msg_file="$MESSAGES_DIR/${msg_id}.md"
-  cat > "$msg_file" <<EOF
-$message
-EOF
-
-  # Send single-line notification with file reference
-  local preview
-  preview=$(echo "$message" | head -1 | cut -c1-80)
-  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file}] ${preview}"
-}
-
-read_pane() {
-  local pane_id="$1"
-  local lines="${2:-50}"
-  tmux capture-pane -t "$pane_id" -p | tail -"$lines"
+  target_pane=$(kc_resolve_pane "$target_name") || return 1
+  kc_send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-}] ${message}"
 }
 
 # Resolve the configured IANA timezone and fail closed on typos instead of

@@ -1,0 +1,16 @@
+{
+  "id": "chronos-contract",
+  "kind": "contract",
+  "prompt": "Read the file notes.txt in this workspace, then tell me the current date and time from your context.",
+  "expectations": {
+    "regex": [
+      "\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}|(20\\d{2}).{0,40}(UTC|GMT|IST|[+-]\\d{2}:\\d{2})|(UTC|GMT|IST|[+-]\\d{2}:\\d{2}).{0,40}(20\\d{2})"
+    ],
+    "tool_used": [],
+    "tool_used_any": [],
+    "forbidden_skills": [],
+    "files": {}
+  },
+  "scaffold": "scaffold.sh",
+  "note": "Capability limitation: a timestamp regex on the final message cannot prove the value came from the hook injection rather than the model; the deterministic hook suite (test-chronos.sh) is the injection gate. This case only checks the mid-turn path still yields a formatted time after a tool call."
+}

@@ -1,0 +1,17 @@
+{
+  "id": "session-chat-send-positive",
+  "kind": "positive",
+  "prompt": "Tell the pane named reviewer-1 that the build is green.",
+  "expectations": {
+    "regex": [
+      "(?i)not inside a tmux session|no pane named|not in tmux|tmux (is )?(required|not)|(requires|needs|must).*tmux"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "send-message.sh",
+      "dispatch-to-session.sh"
+    ],
+    "forbidden_skills": [],
+    "files": {}
+  }
+}

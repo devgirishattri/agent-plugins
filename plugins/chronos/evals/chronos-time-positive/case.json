@@ -1,0 +1,15 @@
+{
+  "id": "chronos-time-positive",
+  "kind": "positive",
+  "prompt": "What is the current date and time? Answer from the context you already have, do not run any command.",
+  "expectations": {
+    "regex": [
+      "\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}|(20\\d{2}).{0,40}(UTC|GMT|IST|[+-]\\d{2}:\\d{2})|(UTC|GMT|IST|[+-]\\d{2}:\\d{2}).{0,40}(20\\d{2})"
+    ],
+    "tool_used": [],
+    "tool_used_any": [],
+    "forbidden_skills": [],
+    "files": {}
+  },
+  "note": "Capability limitation: regex cannot distinguish hook-injected time from a model guess; treat as report-only unless the runner records the hook output."
+}

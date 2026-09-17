@@ -231,5 +231,94 @@ if jq -e . "$HOOKS" >/dev/null 2>&1; then pass; else fail "hooks.json is valid J
 bad=$(jq -r '[.hooks[]?[]?.hooks[]?.command // empty] | map(select(test("CLAUDE_PLUGIN_ROOT") | not)) | join(" | ")' "$HOOKS" 2>/dev/null)
 check "every hook command goes through \${CLAUDE_PLUGIN_ROOT}" "" "$bad"
 
+# --- 13. cross-session PreToolUse throttling never leaks between sessions -----
+run PreToolUse cross-a
+if [ -n "$RUN_OUT" ]; then pass; else fail "cross-a first PreToolUse emits" "empty"; fi
+run PreToolUse cross-b
+if [ -n "$RUN_OUT" ]; then pass; else fail "cross-b first PreToolUse emits (not suppressed by cross-a)" "empty"; fi
+run PreToolUse cross-a
+if [ -z "$RUN_OUT" ]; then pass; else fail "cross-a second call within the interval is throttled" "$RUN_OUT"; fi
+run PreToolUse cross-b
+if [ -z "$RUN_OUT" ]; then pass; else fail "cross-b second call within the interval is throttled" "$RUN_OUT"; fi
+
+# --- 14. jq parses structurally: key order and nested/escaped text never win --
+# (a) tool_input carries its own session_id/hook_event_name BEFORE the real
+# top-level keys in the serialized object. A textual/positional scan could be
+# fooled; jq's `.session_id`/`.hook_event_name` cannot be, because they only
+# ever address the top level regardless of where in the byte stream it sits.
+top_session_a="top-real-a"
+payload_a=$(jq -cn --arg top "$top_session_a" \
+	'{tool_input: {session_id: "nested-x", hook_event_name: "UserPromptSubmit"}, hook_event_name: "PreToolUse", session_id: $top}')
+printf '%s' "$payload_a" | env TMPDIR="$TMPROOT" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
+rc=$?
+check "reordered/nested payload exits 0" "0" "$rc"
+check "top-level hook_event_name wins over a nested one" "PreToolUse" \
+	"$(printf '%s' "$(cat "$TMPROOT/out")" | jq -r '.hookSpecificOutput.hookEventName // empty')"
+if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-$top_session_a" ]; then
+	pass
+else
+	fail "top-level session_id wins over a nested tool_input.session_id" \
+		"expected state file last-$top_session_a"
+fi
+if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-nested-x" ]; then
+	fail "the nested session_id must never be used for state" "last-nested-x exists"
+else
+	pass
+fi
+
+# (b) an escaped `"session_id":"fake"` string sitting inside a tool argument's
+# value must not be mistaken for a real key.
+top_session_b="top-real-b"
+payload_b=$(jq -cn --arg top "$top_session_b" \
+	'{hook_event_name: "PreToolUse", session_id: $top, tool_input: {command: "echo \"session_id\":\"fake\""}}')
+printf '%s' "$payload_b" | env TMPDIR="$TMPROOT" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
+rc=$?
+check "escaped-text payload exits 0" "0" "$rc"
+if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-$top_session_b" ]; then
+	pass
+else
+	fail "top-level session_id wins over escaped text inside a tool argument" \
+		"expected state file last-$top_session_b"
+fi
+if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-fake" ]; then
+	fail "escaped session_id-shaped text inside a value must never be used" "last-fake exists"
+else
+	pass
+fi
+
+# (c) malformed JSON still exits 0 and falls back to today's defaults
+# (UserPromptSubmit, last-default) rather than breaking the turn.
+malformed='{"hook_event_name":"PreToolUse", "session_id":'
+out=$(printf '%s' "$malformed" | env TMPDIR="$TMPROOT" bash "$SCRIPT" 2>"$TMPROOT/err")
+rc=$?
+check "malformed JSON exits 0" "0" "$rc"
+check "malformed JSON falls back to the default event" "UserPromptSubmit" \
+	"$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // empty')"
+if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-default" ]; then
+	pass
+else
+	fail "malformed JSON falls back to the default state file" "no last-default state file"
+fi
+
+# --- 15. control: jq hidden AND there is no session_id to read at all ---------
+mkdir -p "$TMPROOT/nojqbin"
+for bin in date cat mkdir; do
+	ln -sf "$(command -v "$bin")" "$TMPROOT/nojqbin/$bin"
+done
+if ( hash -r; PATH="$TMPROOT/nojqbin" command -v jq >/dev/null 2>&1 ); then
+	fail "control setup: jq unexpectedly reachable on the stripped PATH" ""
+else
+	out=$(printf '{"hook_event_name":"PreToolUse"}' |
+		env PATH="$TMPROOT/nojqbin" TMPDIR="$TMPROOT" "$(command -v bash)" "$SCRIPT" 2>"$TMPROOT/err")
+	rc=$?
+	check "jq-hidden, no-session_id control exits 0" "0" "$rc"
+	if [ -n "$out" ]; then pass; else fail "jq-hidden control still emits" "empty"; fi
+	if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-default" ]; then
+		pass
+	else
+		fail "jq-hidden control uses the default state file" "no last-default state file"
+	fi
+fi
+
 printf 'chronos tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

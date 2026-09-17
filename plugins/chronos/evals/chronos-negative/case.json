@@ -1,0 +1,14 @@
+{
+  "id": "chronos-negative",
+  "kind": "negative",
+  "prompt": "Convert epoch seconds 1700000000 to a UTC ISO-8601 date by reasoning, without running commands.",
+  "expectations": {
+    "regex": [
+      "2023-11-14"
+    ],
+    "tool_used": [],
+    "tool_used_any": [],
+    "forbidden_skills": [],
+    "files": {}
+  }
+}

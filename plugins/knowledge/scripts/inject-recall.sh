@@ -19,6 +19,13 @@
 # term on its own (a one-term AND query = "this term must appear") and unioning
 # the results gives OR-like recall without changing the core scorer contract.
 #
+# Batched scoring (0.3.24): the per-term union above used to cost one
+# memory-search.sh process per term (store resolution, file listing, and
+# per-file parsing all repeated). All terms are now scored in a single
+# batched scorer process (memory-search.sh --batch), so
+# KNOWLEDGE_AUTO_RECALL_TERMS now bounds work done inside that one process
+# rather than the number of processes started.
+#
 # OFF BY DEFAULT (spec: "off by default until latency/context-budget/
 # prompt-injection/false-positive evaluations pass"). Fails SILENTLY
 # (exit 0, no output, no stderr) on ANY error, or on an absent/unsafe store —
@@ -54,8 +61,9 @@
 # hardening section). Zero network egress.
 #
 # Tunables (env): KNOWLEDGE_AUTO_RECALL_LIMIT (top-N, default 5),
-#   KNOWLEDGE_AUTO_RECALL_TERMS (max salient terms queried, default 4 — each
-#   is one scorer call, so this bounds per-prompt latency),
+#   KNOWLEDGE_AUTO_RECALL_TERMS (max salient terms queried, default 4 — all
+#   terms are scored in ONE batched scorer process since 0.3.24, so this
+#   bounds the work inside that process, not the process count),
 #   KNOWLEDGE_AUTO_RECALL_BUDGET (output byte cap, default 4000), and
 #   KNOWLEDGE_AUTO_RECALL_GRAPH (strict opt-in true/yes/on/1; default off), and
 #   KNOWLEDGE_AUTO_RECALL_GRAPH_MODE (selective by default; all = legacy).
@@ -174,21 +182,13 @@ for t in seen[:64]:
 ' 2>/dev/null || true)"
 [ -n "$terms" ] || exit 0
 
-# Query each salient term (capped) and collect TSV rows (score/slug/type/
-# status/description/explanation/term). A single-word arg is a clean one-atom
-# AND query; dotted/hyphenated terms can split into several scored atoms,
-# so the --explain column may contain multiple `atom(fields)` entries.
-rows="$(
-  n=0
-  while IFS= read -r term; do
-    [ -n "$term" ] || continue
-    n=$((n + 1))
-    [ "$n" -le "$TERMS_MAX" ] || break
-    bash "$DIR/memory-search.sh" --store "$store" --limit "$LIMIT" --explain "$term" 2>/dev/null | awk -F '\t' -v t="$term" 'NF >= 6 { print $0 "\t" t }' || true
-  done <<EOF
-$terms
-EOF
-)"
+# Query each salient term (capped) via a single batched scorer process
+# (score/slug/type/status/description/explanation/term). A single-word arg is
+# a clean one-atom AND query; dotted/hyphenated terms can split into several
+# scored atoms, so the --explain column may contain multiple `atom(fields)`
+# entries. Store resolution, file listing, and per-file parsing happen once
+# inside memory-search.sh --batch rather than once per term.
+rows="$(printf '%s\n' "$terms" | head -n "$TERMS_MAX" | bash "$DIR/memory-search.sh" --batch --store "$store" --limit "$LIMIT" --explain 2>/dev/null || true)"
 [ -n "$rows" ] || exit 0
 
 # Aggregate distinct matched prompt terms per slug. A direct seed needs either

@@ -1,0 +1,16 @@
+{
+  "id": "session-list-positive",
+  "kind": "positive",
+  "prompt": "Which agent sessions exist for this project? List them.",
+  "expectations": {
+    "regex": [
+      "(?i)No sessions found|session"
+    ],
+    "tool_used": [
+      "list-sessions.sh"
+    ],
+    "tool_used_any": [],
+    "forbidden_skills": [],
+    "files": {}
+  }
+}

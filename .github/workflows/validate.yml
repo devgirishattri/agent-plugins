@@ -81,6 +81,10 @@ jobs:
 
       - name: Validate retrieval evaluation tooling and corpus
         run: |
+          bash codex/plugins/knowledge/scripts/test-batch-search.sh
+          bash plugins/knowledge/scripts/test-batch-search.sh
+          bash codex/plugins/knowledge/scripts/test-retrieval.sh
+          bash plugins/knowledge/scripts/test-retrieval.sh
           python3 -B codex/plugins/knowledge/scripts/test-eval-retrieval.py
           python3 -B plugins/knowledge/scripts/test-eval-retrieval.py
           python3 -B codex/plugins/knowledge/scripts/eval-retrieval.py --repeats 1 --warmup 0 --output "$RUNNER_TEMP/retrieval-codex.json"

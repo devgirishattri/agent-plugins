@@ -280,6 +280,105 @@ else
   fail "builtin_fallback_delivers" "out=$fallback_out; cap=$recipient_cap"
 fi
 
+# --- Test 6b: fallback refuses a duplicated pane name (ambiguity is an error) ---
+# A third pane takes the recipient's @name; kc_resolve_pane must refuse rather
+# than pick "the first one", and share-context must report failure, not success.
+tmux -L "$SOCKET" split-window -t "$SESSION" -v "cat"
+DUP_PANE=$(tmux -L "$SOCKET" list-panes -t "$SESSION" -F '#{pane_id}' | tail -1)
+tmux -L "$SOCKET" set-option -p -t "$DUP_PANE" @name "sctx-recipient"
+dup_out=$(
+  TMUX="test-socket,0,0" \
+  TMUX_PANE="$SENDER_PANE" \
+  SESSION_CHAT_ROOT_OVERRIDE="$NO_SC" \
+  SESSION_CONTEXT_HOME="$SESSION_CONTEXT_HOME" \
+  bash -c '
+    tmux() { command tmux -L "'"$SOCKET"'" "$@"; }
+    export -f tmux
+    bash "'"$HERE"'/share-context.sh" sctx-recipient proj_1 2>&1
+  '
+)
+dup_rc=$?
+if [ "$dup_rc" -ne 0 ] && echo "$dup_out" | grep -q "Multiple panes named" \
+   && ! echo "$dup_out" | grep -q "^Shared "; then
+  pass "builtin_fallback_rejects_duplicate_pane"
+else
+  fail "builtin_fallback_rejects_duplicate_pane" "rc=$dup_rc out=$dup_out"
+fi
+tmux -L "$SOCKET" kill-pane -t "$DUP_PANE" 2>/dev/null || true
+
+# --- Test 6c: a failing tmux send propagates as failure (never "Shared") ---
+sendfail_out=$(
+  TMUX="test-socket,0,0" \
+  TMUX_PANE="$SENDER_PANE" \
+  SESSION_CHAT_ROOT_OVERRIDE="$NO_SC" \
+  SESSION_CONTEXT_HOME="$SESSION_CONTEXT_HOME" \
+  bash -c '
+    tmux() {
+      if [ "$1" = "send-keys" ]; then return 1; fi
+      command tmux -L "'"$SOCKET"'" "$@"
+    }
+    export -f tmux
+    bash "'"$HERE"'/share-context.sh" sctx-recipient proj_1 2>&1
+  '
+)
+sf_rc=$?
+if [ "$sf_rc" -ne 0 ] && echo "$sendfail_out" | grep -q "fallback transport" \
+   && ! echo "$sendfail_out" | grep -q "^Shared "; then
+  pass "builtin_fallback_send_failure_propagates"
+else
+  fail "builtin_fallback_send_failure_propagates" "rc=$sf_rc out=$sendfail_out"
+fi
+
+# --- Test 6d: the dead transport helpers are gone from knowledge lib ---
+if ! grep -qE '^(dispatch_message|read_pane|set_pane_name|get_pane_name|ensure_messages_dir|send_text|send_message|resolve_pane|get_my_name)\(\)' "$HERE/lib.sh" \
+   && ! grep -q '^MESSAGES_DIR=' "$HERE/lib.sh"; then
+  pass "dead_transport_helpers_removed"
+else
+  fail "dead_transport_helpers_removed" "a removed helper name is back in lib.sh"
+fi
+
+# --- Test 6e: session_chat_root candidate order and validity checks ---
+# Fake HOME with a versioned cache: the highest semver wins only when it carries
+# a readable send-message.sh; a bare newer directory and a non-directory entry
+# are skipped; an empty/missing cache falls to the sibling checkout, and with no
+# sibling the resolver fails (-> fallback transport).
+RES_HOME="$TMP/res-home"
+RES_CACHE="$RES_HOME/.claude/plugins/cache/girishattri-plugins/session-chat"
+mkdir -p "$RES_CACHE/0.9.0/scripts" "$RES_CACHE/0.10.0/scripts" "$RES_CACHE/0.11.0"
+printf '#!/bin/bash\n' > "$RES_CACHE/0.9.0/scripts/send-message.sh"
+printf '#!/bin/bash\n' > "$RES_CACHE/0.10.0/scripts/send-message.sh"
+: > "$RES_CACHE/0.12.0"   # a FILE named like a newer version
+res_pick=$(env -u SESSION_CHAT_ROOT_OVERRIDE HOME="$RES_HOME" bash -c 'source "'"$HERE"'/lib.sh"; session_chat_root')
+if [ "$res_pick" = "$RES_CACHE/0.10.0" ]; then
+  pass "resolver_highest_valid_semver_wins"
+else
+  fail "resolver_highest_valid_semver_wins" "got [$res_pick] expected 0.10.0 (0.11.0 has no script, 0.12.0 is a file)"
+fi
+RES_HOME2="$TMP/res-home2"
+mkdir -p "$RES_HOME2"
+res_none=$(env -u SESSION_CHAT_ROOT_OVERRIDE HOME="$RES_HOME2" bash -c 'source "'"$HERE"'/lib.sh"; session_chat_root'); res_rc=$?
+# The repository checkout has a sibling plugins/session-chat, so the sibling
+# branch resolves here; assert it is the sibling and that it carries the script.
+if [ "$res_rc" -eq 0 ] && [ "$res_none" = "$(cd "$HERE/../.." && pwd)/session-chat" ] && [ -r "$res_none/scripts/send-message.sh" ]; then
+  pass "resolver_missing_cache_falls_to_sibling"
+else
+  fail "resolver_missing_cache_falls_to_sibling" "rc=$res_rc got [$res_none]"
+fi
+# Copy lib.sh into an isolated tree with no sibling: resolver must fail.
+ISO="$TMP/iso/plugins/knowledge/scripts"; mkdir -p "$ISO"; cp "$HERE/lib.sh" "$ISO/lib.sh"
+res_fail=$(env -u SESSION_CHAT_ROOT_OVERRIDE HOME="$RES_HOME2" bash -c 'source "'"$ISO"'/lib.sh"; session_chat_root'); res_frc=$?
+if [ "$res_frc" -ne 0 ] && [ -z "$res_fail" ]; then
+  pass "resolver_no_candidates_fails"
+else
+  fail "resolver_no_candidates_fails" "rc=$res_frc got [$res_fail]"
+fi
+res_ovr=$(SESSION_CHAT_ROOT_OVERRIDE="/nonexistent/override" HOME="$RES_HOME" bash -c 'source "'"$HERE"'/lib.sh"; session_chat_root')
+if [ "$res_ovr" = "/nonexistent/override" ]; then
+  pass "resolver_override_is_authoritative"
+else
+  fail "resolver_override_is_authoritative" "got [$res_ovr]"
+fi
+
 # --- Test 7: TMUX unset -> clean 'must run inside tmux' error, never a crash ---
 # Guards the ${TMUX:-} runtime guard: under set -u an unguarded $TMUX read would
 # abort with "unbound variable" instead of the intended graceful refusal.

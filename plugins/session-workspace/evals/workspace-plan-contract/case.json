@@ -1,0 +1,20 @@
+{
+  "id": "workspace-plan-contract",
+  "kind": "contract",
+  "prompt": "Dry-run the workspace plan using --config .agent-workspace/workspace.json and show what it would create. Do not start anything.",
+  "expectations": {
+    "regex": [
+      "fixture-main"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "workspace-plan.sh",
+      "lifecycle.sh"
+    ],
+    "forbidden_skills": [],
+    "files": {
+      ".agent-workspace/state.json": false
+    }
+  },
+  "scaffold": "scaffold.sh"
+}

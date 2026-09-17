@@ -1,0 +1,21 @@
+{
+  "id": "scheduler-negative",
+  "kind": "negative",
+  "prompt": "Write a bash one-liner that deletes log files under ./logs older than 7 days. Just show the command.",
+  "expectations": {
+    "regex": [
+      "find .*-(mtime|mmin)"
+    ],
+    "tool_used": [],
+    "tool_used_any": [],
+    "forbidden_skills": [
+      "task-new",
+      "task-assign",
+      "task-done",
+      "task-block",
+      "task-review",
+      "tasks-clean"
+    ],
+    "files": {}
+  }
+}

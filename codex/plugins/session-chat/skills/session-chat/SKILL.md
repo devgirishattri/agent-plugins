@@ -108,4 +108,9 @@ This source tree may be newer than the running Codex plugin cache. To make the r
 codex plugin marketplace upgrade girishattri-plugins
 ```
 
-Then start a new Codex session so the updated plugin is loaded. Verify the installed version with `codex plugin list --json`, or inspect `$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/` when diagnosing cache contents.
+Verify the installed version with `codex plugin list --json` and check that the
+intended skills and hooks are visible in the running session. Start a new Codex
+session if content remains stale; review changed hook trust separately. Plugin
+refresh does not replace launch-inherited environment, which requires relaunch.
+Inspect `$HOME/.codex/plugins/cache/girishattri-plugins/session-chat/` only when
+diagnosing installed contents; never patch that cache manually.

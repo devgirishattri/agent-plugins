@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: knowledge-negative
+tags: [knowledge, negative, contract]
+context:
+  scaffold_script: scaffold.sh

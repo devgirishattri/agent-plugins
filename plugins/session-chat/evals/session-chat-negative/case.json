@@ -1,0 +1,19 @@
+{
+  "id": "session-chat-negative",
+  "kind": "negative",
+  "prompt": "In one sentence, what is a tmux pane?",
+  "expectations": {
+    "regex": [
+      "(?i)pane"
+    ],
+    "tool_used": [],
+    "tool_used_any": [],
+    "forbidden_skills": [
+      "send",
+      "dispatch",
+      "broadcast",
+      "reply"
+    ],
+    "files": {}
+  }
+}

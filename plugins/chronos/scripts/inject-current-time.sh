@@ -12,8 +12,10 @@ input=$(cat 2>/dev/null || true)
 event="UserPromptSubmit"
 session_id=""
 if command -v jq >/dev/null 2>&1 && [ -n "$input" ]; then
-  event=$(printf '%s' "$input" | jq -r '.hook_event_name // "UserPromptSubmit"' 2>/dev/null) || event="UserPromptSubmit"
-  session_id=$(printf '%s' "$input" | jq -r '.session_id // ""' 2>/dev/null) || session_id=""
+  fields=$(printf '%s' "$input" | jq -r '[.hook_event_name // "UserPromptSubmit", .session_id // ""] | @tsv' 2>/dev/null) || fields=""
+  if [ -n "$fields" ]; then
+    IFS=$'\t' read -r event session_id <<<"$fields"
+  fi
 fi
 
 epoch=$(date +%s)

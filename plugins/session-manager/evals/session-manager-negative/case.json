@@ -1,0 +1,18 @@
+{
+  "id": "session-manager-negative",
+  "kind": "negative",
+  "prompt": "Delete the file scratch.txt in this workspace.",
+  "expectations": {
+    "regex": [],
+    "tool_used": [],
+    "tool_used_any": [],
+    "forbidden_skills": [
+      "session-delete"
+    ],
+    "files": {
+      "scratch.txt": false
+    }
+  },
+  "scaffold": "scaffold.sh",
+  "note": "files.scratch.txt=false is checked by the Codex runner on the workspace after the run; Claude's native file_exists grader only sees files Claude created, so there is no native counterpart."
+}

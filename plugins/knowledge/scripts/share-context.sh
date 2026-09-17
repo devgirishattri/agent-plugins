@@ -17,7 +17,7 @@ fi
 validate_context_name "$PROJECT_NAME" || exit 1
 # The target session name enters the notification and is used to resolve the
 # recipient pane; reject an unsafe label up front (both transports validate too).
-if ! validate_label "$TARGET_SESSION" 2>/dev/null; then
+if ! kc_validate_label "$TARGET_SESSION" 2>/dev/null; then
   echo "ERROR: invalid target session name '$TARGET_SESSION' (letters, digits, _, - only)." >&2
   exit 1
 fi
@@ -69,7 +69,7 @@ if root=$(session_chat_root) && [ -f "$root/scripts/send-message.sh" ] && [ -r "
   esac
 else
   # Fallback transport: knowledge context's own basic send (no durable inbox).
-  if ! send_message "$TARGET_SESSION" "$SHARE_MSG"; then
+  if ! kc_send_message "$TARGET_SESSION" "$SHARE_MSG"; then
     echo "ERROR: failed to notify '$TARGET_SESSION' (fallback transport)." >&2
     exit 1
   fi

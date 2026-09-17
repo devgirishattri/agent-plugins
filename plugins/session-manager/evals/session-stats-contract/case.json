@@ -1,0 +1,16 @@
+{
+  "id": "session-stats-contract",
+  "kind": "contract",
+  "prompt": "Show session statistics for this machine, read-only, and paste the header line of the report.",
+  "expectations": {
+    "regex": [
+      "PROJECT|SESSIONS|No sessions"
+    ],
+    "tool_used": [
+      "session-stats.sh"
+    ],
+    "tool_used_any": [],
+    "forbidden_skills": [],
+    "files": {}
+  }
+}

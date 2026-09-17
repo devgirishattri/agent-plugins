@@ -1,6 +1,6 @@
 ---
 name: knowledge
-description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 20 commands to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
+description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 20 command and skill surfaces to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
 ---
 
 # Knowledge
@@ -42,67 +42,35 @@ deletion, `retire`, `purge`, or `context-remove`; nothing is silently deleted.
 
 ## Which command, when
 
-**Docs — see the installed `docs-create` skill for the full process:**
+Routing table only — argument shapes and per-command detail live in
+`references/commands.md` (load it when you need exact arguments or ranking
+rules). Public names are unchanged: every entry is `/knowledge:<name>` on
+Claude and `$knowledge:<name>` on Codex.
 
-| Command | Purpose |
-|---|---|
-| `/knowledge:docs-create [topic]` | Create or update project documentation using structured templates, reference-based notation, and validation tools. Runs the `docs-write.sh` reviewer-role preflight first (below). |
-| `/knowledge:docs-review [target]` | Independently verify documentation accuracy against the codebase (report-only, no edits), delegating to the `doc-reviewer` subagent. |
-
-**Context — see the installed `context` skill for the full lifecycle:**
-
-| Command | Purpose |
-|---|---|
-| `/knowledge:context-generate [name] [--handoff] [--expires <UTC-ISO>]` | Summarize the current session and save it. `--handoff` marks it a structured, promotable handoff instead of a point-in-time snapshot; its scope, stable work-item IDs, statuses, and recorded (never verified) evidence follow `references/handoffs.md`. |
-| `/knowledge:context-list` | List snapshot names, line counts, timestamps, history counts, and (for handoffs) kind + expiry. |
-| `/knowledge:context-load <name>` | Load a snapshot's contents into the current session; warns if stale. |
-| `/knowledge:context-diff <name>` | Compare the current snapshot with archived versions. |
-| `/knowledge:context-verify <name> --repository-id <id> [--repo <path>] [--json]` | Read-only check of a v2 handoff's recorded local evidence against a bound repository: path/file existence and type, commit objects and `HEAD` ancestry. `test`/`reference` evidence and symlinks stay unverified; only fixed read-only Git queries run (never a recorded command, never a fetch), and no completion or freshness claim is made. |
-| `/knowledge:context-search <pattern> [--list]` | Read-only search of snapshot contents across local projects. |
-| `/knowledge:context-share <session> [name]` | Notify another named pane that a shared snapshot is available (does not copy the file). |
-| `/knowledge:context-remove <name>` | Preview, explicitly confirm, and delete one snapshot (and its history). |
+| Need | Reach for | Writes? |
+|---|---|---|
+| Create or update project docs | `docs-create` (see the installed `docs-create` skill) | docs, user-run |
+| Verify docs against the code | `docs-review` → `doc-reviewer` subagent | no |
+| Save / hand off session state | `context-generate [name] [--handoff] [--expires]` | context store |
+| Resume, list, diff, search, share, remove snapshots | `context-load`, `context-list`, `context-diff`, `context-search`, `context-share`, `context-remove` | remove only, confirmed |
+| Verify a handoff's recorded evidence | `context-verify <name> --repository-id <id>` | no |
+| Bootstrap a memory store | `init` | creates the store, user-run |
+| Store health / why recall is empty | `doctor`, narrower `lint` | no (`lint --fix` writes) |
+| Find a slug or ranked memory matches | `search` (memory only), `find` (docs + memory + context) | no |
+| Prior knowledge before acting | `recall <query>` — slug citations + snippets, untrusted framing | no |
+| Link structure of memories | `graph neighbors\|reverse\|orphans\|components` | no |
+| Jot a candidate for later review | `remember` | inbox only, user-run |
+| Durable memory writes | `consolidate`, `promote` | memory store, user-run, `disable-model-invocation` |
 
 Context snapshot and handoff names are canonical knowledge item names:
 lowercase `snake_case` slugs matching `^[a-z0-9]+(_[a-z0-9]+)*$`. Pane
-names are transport labels and may still use hyphens. The context store
-hardening scanner enforces the same rule for existing snapshot files and
-history stems; legacy hyphenated or uppercase context filenames fail closed
-until explicitly migrated.
+names are transport labels and may still use hyphens. Legacy hyphenated or
+uppercase context filenames fail closed until explicitly migrated.
 
-**Memory — the durable, agent-maintained store. `doctor`/`lint`/`search`/
-`recall`/`graph` are read-only; `remember` is a low-friction inbox write;
-`consolidate`/`promote` are the durable-store write paths (`user-run`,
-`disable-model-invocation` — never invoked programmatically); `init`
-bootstraps a new store:**
-
-| Command | Purpose |
-|---|---|
-| `/knowledge:init [--store <path>]` | Bootstrap a new `.agents/memory/` store: a reviewable `.gitignore` PLAN, then an APPLY that verifies coverage before creating the store. Run this first if `doctor`/`lint`/etc. report no store found. |
-| `/knowledge:doctor [--store <path>]` | Diagnose knowledge-store health across docs, memory, context, the `AGENTS.md` recall bridge, and provider capability — read-only, cross-store. For v2 handoffs it also assesses evidence freshness and timestamp/status consistency (see `references/handoffs.md`). Start here for an overall health check. |
-| `/knowledge:lint [--store <path>] [--fix]` | Lint the memory store's frontmatter, schema, and index for defects — read-only by default. Narrower than `doctor`; use it when iterating on memory-file content directly. `--fix` is an opt-in normalizer that applies only the deterministic, low-risk repairs (canonicalize a mis-nested/absent top-level `status`; reconcile missing `MEMORY.md` index rows) — every write goes through `memory-write.sh` (reviewer-refused, CAS); anything needing human content (description, **Why:**/**How to apply:**, dates, ambiguous legacy `type`) is reported, never fabricated. |
-| `/knowledge:search [--store <path>] [--limit N] [--json] [--explain] <query>` | Deterministic lexical ranked search over the memory store — read-only. Use to find a slug or check whether something is already recorded; `--explain` shows which field each query term matched. |
-| `/knowledge:find [--source all\|docs\|memory\|context] [--store <path>] [--limit N] [--json] <query>` | Cross-store, current-repository search: the memory search as-is plus a full-query match over `README.md`/`docs/**` and the inherited context store, grouped by source with authority (human-curated / agent-maintained / session-working-state) and lifetime (durable / ephemeral) labels — never merged or ranked across stores. Read-only, local only. |
-| `/knowledge:recall [--store <path>] [--limit N] <query>` | The agent-facing wrapper over `search`: slug citations + bounded, query-anchored snippets framed as untrusted context. Use this (not `search`) when informing your own reasoning before a substantive task — see the recall bridge below. |
-| `/knowledge:graph [--store <path>] [neighbors <slug> \| reverse <slug> \| orphans \| components \| --format json\|dot\|mermaid]` | Explicit-`[[slug]]`-link knowledge graph — read-only. Use to explore how memories connect, find orphaned files, or render a diagram. (Automatic recall's opt-in graph tier follows these links selectively; see `references/hooks.md`.) |
-| `/knowledge:remember [--store <path>] [--list [--expired-only]] [<what to remember>]` | Capture a low-friction candidate into the inbox for later `/knowledge:consolidate` review (or list/purge pending candidates). No ceremony — use this the moment a learning surfaces, mid-task. |
-| `/knowledge:consolidate [--store <path>] [session learnings]` | Drain the inbox and this session's learnings into reviewed create/UPDATE diffs against `MEMORY.md`, applying only after approval. The memory module's core value — run this at session end, or whenever the inbox is non-empty. |
-| `/knowledge:promote [context <name> \| memory <slug>] [--store <path>]` | Promote a stabilized context/handoff item or memory file into a memory create/UPDATE or a proposed docs patch, then — as a SEPARATE confirmation — delete the source. The lifecycle-closing surface for a handoff or a superseded memory file. |
-
-## Search/recall ranking
-
-`search`/`recall` rank by field weight — slug 8, name 6, tags 5, description
-4, type 3, headings 2, backlink slugs 2, body 1, summed per matching field;
-`stale`/`superseded`/`archived` entries are halved; ordering is score desc
-then slug asc. These weights are published for writers, not just readers:
-put an entry's load-bearing words in `tags`/`name` rather than only in prose
-if you want it to surface reliably. `recall`'s third block line is a
-query-anchored snippet of the body (windowed around wherever the query first
-anchors, falling back to the first paragraph when no atom anchors in the
-body at all), not always the first paragraph. A `search`/`recall` query of
-2+ atoms that gets zero full-query hits automatically degrades to the
-best-matching atom subset instead of returning an envelope indistinguishable
-from "nothing is stored" — reported explicitly via a `degraded:` stderr/
-envelope line or a JSON `degraded` object, never silently swapped in.
+Ranking in one line: field weights slug 8 > name 6 > tags 5 > description 4 >
+type 3 > headings 2 > backlinks 2 > body 1; inactive entries halved; a
+multi-atom query with zero full hits degrades to the best atom subset and
+says so (`degraded:`). Writers: put load-bearing words in `tags`/`name`.
 
 ## Write boundaries and role rules
 

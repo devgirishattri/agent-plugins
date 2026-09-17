@@ -1,6 +1,6 @@
 {
   "name": "session-chat",
-  "version": "0.17.9",
+  "version": "0.17.10",
   "description": "Private, durable messaging and trusted task dispatch between Codex sessions via tmux.",
   "author": {
     "name": "Girish Attri",
@@ -9,7 +9,13 @@
   "homepage": "https://github.com/devgirishattri/agent-plugins",
   "repository": "https://github.com/devgirishattri/agent-plugins",
   "license": "MIT",
-  "keywords": ["dispatch", "tmux", "messaging", "parallel", "multi-agent"],
+  "keywords": [
+    "dispatch",
+    "tmux",
+    "messaging",
+    "parallel",
+    "multi-agent"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Session Chat",
@@ -17,7 +23,10 @@
     "longDescription": "Codex skills and hooks for naming panes, private durable messaging, trusted bounded task inlining, pane-location health, and multi-session tmux coordination.",
     "developerName": "Girish Attri",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "websiteURL": "https://github.com/devgirishattri/agent-plugins",
     "defaultPrompt": [
       "List named Codex panes.",

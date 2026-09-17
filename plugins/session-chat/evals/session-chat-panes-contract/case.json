@@ -1,0 +1,16 @@
+{
+  "id": "session-chat-panes-contract",
+  "kind": "contract",
+  "prompt": "List the named panes I can message right now. Run the plugin's pane listing and report exactly what it says.",
+  "expectations": {
+    "regex": [
+      "(?i)not inside a tmux session|no named panes|tmux"
+    ],
+    "tool_used": [
+      "list-panes.sh"
+    ],
+    "tool_used_any": [],
+    "forbidden_skills": [],
+    "files": {}
+  }
+}

@@ -3,7 +3,7 @@
 # reverse links, orphans, weakly-connected components, and whole-graph
 # JSON/DOT/Mermaid output (read-only). ONE authority for link parsing,
 # slug normalization, and graph output schemas. Implements the `graph`
-# command surface (commands/graph.md); also exposes a "report" mode (the
+# command surface (skills/graph/SKILL.md); also exposes a "report" mode (the
 # per-link convention-drift/dangling warning lines) for future callers
 # (e.g. a Phase C doctor) — this mode is this script's own extension of the
 # spec's shared-resolver emission contract, not itself bound to a v1
