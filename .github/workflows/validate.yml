@@ -23,46 +23,46 @@ jobs:
 
       - name: Run Codex plugin smoke tests
         run: |
-          bash codex/plugins/session-manager/scripts/test-session-manager.sh
-          bash codex/plugins/knowledge/scripts/test-docs-create.sh
-          bash codex/plugins/knowledge/scripts/test-context.sh
-          bash codex/plugins/chronos/scripts/test-chronos.sh
+          python3 scripts/ci-smoke.py bash codex/plugins/session-manager/scripts/test-session-manager.sh
+          python3 scripts/ci-smoke.py bash codex/plugins/knowledge/scripts/test-docs-create.sh
+          python3 scripts/ci-smoke.py bash codex/plugins/knowledge/scripts/test-context.sh
+          python3 scripts/ci-smoke.py bash codex/plugins/chronos/scripts/test-chronos.sh
           mkdir -p "$RUNNER_TEMP/codex-session-chat"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-chat" \
-            bash codex/plugins/session-chat/scripts/test-session-chat.sh
+            python3 scripts/ci-smoke.py bash codex/plugins/session-chat/scripts/test-session-chat.sh
           mkdir -p "$RUNNER_TEMP/codex-session-scheduler"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-scheduler" \
-            bash codex/plugins/session-scheduler/scripts/test-session-scheduler.sh
+            python3 scripts/ci-smoke.py bash codex/plugins/session-scheduler/scripts/test-session-scheduler.sh
           mkdir -p "$RUNNER_TEMP/codex-session-workspace"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-workspace" \
-            bash codex/plugins/session-workspace/scripts/test-session-workspace.sh
-          bash codex/plugins/session-workspace/scripts/test-harness-policy.sh
+            python3 scripts/ci-smoke.py bash codex/plugins/session-workspace/scripts/test-session-workspace.sh
+          python3 scripts/ci-smoke.py bash codex/plugins/session-workspace/scripts/test-harness-policy.sh
 
       - name: Run Claude parity smoke tests
         run: |
-          bash plugins/session-manager/scripts/test-session-manager.sh
-          bash plugins/knowledge/scripts/test-docs-create.sh
-          bash plugins/chronos/scripts/test-chronos.sh
+          python3 scripts/ci-smoke.py bash plugins/session-manager/scripts/test-session-manager.sh
+          python3 scripts/ci-smoke.py bash plugins/knowledge/scripts/test-docs-create.sh
+          python3 scripts/ci-smoke.py bash plugins/chronos/scripts/test-chronos.sh
           mkdir -p "$RUNNER_TEMP/claude-session-chat"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-chat" \
-            bash plugins/session-chat/scripts/test-session-chat.sh
+            python3 scripts/ci-smoke.py bash plugins/session-chat/scripts/test-session-chat.sh
           mkdir -p "$RUNNER_TEMP/claude-context"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-context" \
-            bash plugins/knowledge/scripts/test-context.sh
+            python3 scripts/ci-smoke.py bash plugins/knowledge/scripts/test-context.sh
           mkdir -p "$RUNNER_TEMP/claude-session-scheduler"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-scheduler" \
-            bash plugins/session-scheduler/scripts/test-session-scheduler.sh
+            python3 scripts/ci-smoke.py bash plugins/session-scheduler/scripts/test-session-scheduler.sh
           mkdir -p "$RUNNER_TEMP/claude-session-workspace"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-workspace" \
-            bash plugins/session-workspace/scripts/test-session-workspace.sh
-          bash plugins/session-workspace/scripts/test-harness-policy.sh
+            python3 scripts/ci-smoke.py bash plugins/session-workspace/scripts/test-session-workspace.sh
+          python3 scripts/ci-smoke.py bash plugins/session-workspace/scripts/test-harness-policy.sh
 
       - name: Run cross-provider scheduler/context parity test
         run: |
