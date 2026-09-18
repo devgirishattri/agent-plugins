@@ -1360,6 +1360,61 @@ assert_file_absent "purge_prefix_replan_apply_purged" "$store/.inbox/${second_id
 out=$(KNOWLEDGE_PANE_NAME=fleet-reviewer bash "$WRITER" purge --store "$store" --expired 2>&1); rc=$?
 assert_rc "purge_reviewer_refused_exit6" 6 "$rc"
 
+# --- security: a replaced manifest must not name anything outside the
+#     approved candidate set or outside .inbox. Each negative runs on its OWN
+#     fresh store so that, on an unfixed writer, a successful exploit cannot
+#     consume the fixtures the controls need — controls must pass on both. ---
+# purge_sec_store <dir> -> sets store, k8, k9, raw8, raw9, cr9, dn_sha, dn_created
+purge_sec_store() {
+  local d="$1"
+  store=$(bootstrap_store "$d")
+  write_canonical "$store/durable_note.md" project "Durable Note" "must survive"
+  printf -- '- [Durable Note](durable_note.md) -- must survive\n' >> "$store/MEMORY.md"
+  dn_sha=$(sha_of "$store/durable_note.md")
+  dn_created=$(grep -m1 '^created: ' "$store/durable_note.md" | sed 's/^created: //')
+  k8=$(capture_synthetic "$store" "sess-p8" "Purge G" "g" project)
+  k9=$(capture_synthetic "$store" "sess-p9" "Purge H" "h" project)
+  raw8=$(sha_of "$store/.inbox/${k8}.md")
+  raw9=$(sha_of "$store/.inbox/${k9}.md")
+  cr9=$(grep -m1 '^created: ' "$store/.inbox/${k9}.md" | sed 's/^created: //')
+}
+# negative 1: traversal id pointing at a durable memory file, with its real hash/created
+purge_sec_store "$TMP/purge_sec_trav"
+printf '%s %s %s active\n' "../durable_note" "$dn_sha" "$dn_created" > "$TMP/purge_trav.txt"
+out=$(bash "$WRITER" purge --store "$store" --ids "$k8" --manifest "$TMP/purge_trav.txt" --confirm "$store" 2>&1); rc=$?
+assert_rc "purge_manifest_traversal_rejected_exit2" 2 "$rc"
+assert_file_present "purge_manifest_traversal_durable_intact" "$store/durable_note.md"
+assert_file_absent "purge_manifest_traversal_lock_released" "$store/.lock"
+# negative 2: a valid, existing candidate that is NOT in the typed --ids set
+purge_sec_store "$TMP/purge_sec_unapproved"
+printf '%s %s %s active\n' "$k9" "$raw9" "$cr9" > "$TMP/purge_unapproved.txt"
+out=$(bash "$WRITER" purge --store "$store" --ids "$k8" --manifest "$TMP/purge_unapproved.txt" --confirm "$store" 2>&1); rc=$?
+assert_rc "purge_manifest_unapproved_id_rejected_exit2" 2 "$rc"
+assert_file_present "purge_manifest_unapproved_id_retained" "$store/.inbox/${k9}.md"
+# negative 3: symlinked .inbox is refused before any path is built
+purge_sec_store "$TMP/purge_sec_symlink"
+d="$TMP/purge_sec_symlink"
+bash "$WRITER" purge --store "$store" --ids "$k8" > "$TMP/purge_plan_sym.txt" 2>/dev/null
+mv "$store/.inbox" "$d/real_inbox" && ln -s "$d/real_inbox" "$store/.inbox"
+out=$(bash "$WRITER" purge --store "$store" --ids "$k8" --manifest "$TMP/purge_plan_sym.txt" --confirm "$store" 2>&1); rc=$?
+assert_rc "purge_manifest_symlinked_inbox_rejected_exit4" 4 "$rc"
+assert_file_present "purge_manifest_symlinked_inbox_candidate_retained" "$d/real_inbox/${k8}.md"
+# control: on a fresh store the approved candidate purges cleanly through plan/apply
+purge_sec_store "$TMP/purge_sec_control"
+bash "$WRITER" purge --store "$store" --ids "$k8" > "$TMP/purge_plan8.txt"
+assert_contains "purge_manifest_control_plan_lists_k8" "$(cat "$TMP/purge_plan8.txt")" "$k8 $raw8"
+out=$(bash "$WRITER" purge --store "$store" --ids "$k8" --manifest "$TMP/purge_plan8.txt" --confirm "$store" 2>&1); rc=$?
+assert_rc "purge_manifest_control_exit0" 0 "$rc"
+assert_file_absent "purge_manifest_control_purged" "$store/.inbox/${k8}.md"
+assert_file_present "purge_manifest_control_other_retained" "$store/.inbox/${k9}.md"
+assert_file_present "purge_manifest_control_durable_intact" "$store/durable_note.md"
+assert_clean_store "purge_manifest_control_clean" "$store"
+# control 2: --expired mode still purges an expired candidate (no approved set to bind to)
+KNOWLEDGE_INBOX_RETENTION_DAYS=0 bash "$WRITER" purge --store "$store" --expired > "$TMP/purge_plan9.txt"
+out=$(KNOWLEDGE_INBOX_RETENTION_DAYS=0 bash "$WRITER" purge --store "$store" --expired --manifest "$TMP/purge_plan9.txt" --confirm "$store" 2>&1); rc=$?
+assert_rc "purge_manifest_expired_control_exit0" 0 "$rc"
+assert_file_absent "purge_manifest_expired_control_purged" "$store/.inbox/${k9}.md"
+
 # ===========================================================================
 # 11. Security audit: argv containment (retire --slug traversal, purge
 #     --ids format) and duplicate-flag rejection ahead of role/store guards.

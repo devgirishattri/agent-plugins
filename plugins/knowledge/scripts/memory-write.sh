@@ -1195,6 +1195,7 @@ _km_inbox_select() {
       find "$store/.inbox" -mindepth 1 -maxdepth 1 -name '*.md' 2>/dev/null | while IFS= read -r f; do
         [ -L "$f" ] && continue
         cid=$(basename "$f" .md)
+        _km_is_sha256 "$cid" || continue
         created=$(_km_candidate_created "$f")
         verdict=$(_km_candidate_verdict "$created" "$retention_days")
         [ "$verdict" = "expired" ] && printf '%s\n' "$cid"
@@ -1223,10 +1224,26 @@ _km_purge_plan() {
   fi
 }
 
+# _km_purge_apply <store> <have_ids> <retention_days> <manifest> <approved_ids_csv>
+# The manifest is a caller-supplied file that may have been replaced between
+# PLAN and APPLY by any same-uid pane, so every replayed value is gated to
+# the exact shape PLAN emits before it can name a path: ids and hashes are
+# sha256, and in --ids mode each manifest id must belong to the typed,
+# already-validated approved set. Candidates resolve only under a real
+# (non-symlink) .inbox directory.
 _km_purge_apply() {
-  local store="$1" have_ids="$2" retention_days="$3" manifest="$4"
+  local store="$1" have_ids="$2" retention_days="$3" manifest="$4" approved_csv="${5:-}"
   local line
   local -a mlines=()
+  local inbox="$store/.inbox"
+  if [ -L "$inbox" ] || [ ! -d "$inbox" ]; then
+    km_error "inbox is not a real directory (inspect/remove manually): $inbox"
+    return 4
+  fi
+  local approved_list=""
+  if [ "$have_ids" -eq 1 ]; then
+    approved_list=$(printf '%s' "$approved_csv" | tr ',' ' ')
+  fi
   if [ ! -f "$manifest" ] || [ -L "$manifest" ]; then
     km_error "manifest is not a regular file: $manifest"
     return 2
@@ -1249,6 +1266,18 @@ _km_purge_apply() {
       return 2
     fi
     id="$1"; raw="$2"; created="$3"; verdict="$4"
+    if ! _km_is_sha256 "$id"; then
+      km_error "manifest id is not a 64-char lowercase-hex candidate id: $id"
+      return 2
+    fi
+    if ! _km_is_sha256 "$raw"; then
+      km_error "manifest hash is not a sha256 for candidate: $id"
+      return 2
+    fi
+    if [ "$have_ids" -eq 1 ] && ! _km_in_list "$id" "$approved_list"; then
+      km_error "manifest id is not in the approved --ids set: $id"
+      return 2
+    fi
     case "$verdict" in
       expired | active) : ;;
       *) km_error "invalid verdict vocabulary: $verdict"; return 2 ;;
@@ -1786,7 +1815,7 @@ cmd_purge() {
   km_require_non_reviewer "memory" || return 6
   local store
   store=$(km_resolve_store "$store_arg") || return $?
-  _km_purge_apply "$store" "$have_ids" "$retention_days" "$manifest"
+  _km_purge_apply "$store" "$have_ids" "$retention_days" "$manifest" "$ids"
 }
 
 # ---------------------------------------------------------------------------
