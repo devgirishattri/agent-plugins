@@ -87,12 +87,38 @@ threshold_seconds=$(duration_to_seconds "$OLDER_THAN") || {
 }
 
 ensure_messages_dir || exit 1
+MESSAGES_DIR=$(cd "$MESSAGES_DIR" && pwd -P) || exit 1
+shopt -s nullglob dotglob
+
+validate_cleanup_file() {
+  local file="$1" base="${1##*/}" parent
+  # Exact dispatch grammar: epoch-pid-randomhex-sender-to-recipient.md.
+  # Validate the whole basename before parsing timestamps or resolving paths.
+  if ! [[ "$base" =~ ^(0|[1-9][0-9]{0,17})-[0-9]+-[0-9a-f]{8,16}-[a-zA-Z0-9_-]+-to-[a-zA-Z0-9_-]+\.md$ ]]; then
+    echo "ERROR: Refusing non-conforming message filename: $file" >&2
+    return 1
+  fi
+  parent=$(cd "${file%/*}" && pwd -P) || return 1
+  if [ "$parent" != "$MESSAGES_DIR" ] || [ -L "$file" ] || [ ! -f "$file" ] || [ ! -O "$file" ]; then
+    echo "ERROR: Refusing unsafe message file: $file" >&2
+    return 1
+  fi
+}
+
+# Quoted glob preserves embedded newlines on BSD and GNU systems alike.
+# Preflight every candidate so a bad entry cannot cause a partial cleanup.
+for file in "$MESSAGES_DIR"/*.md; do
+  [ -e "$file" ] || [ -L "$file" ] || continue
+  validate_cleanup_file "$file" || exit 1
+done
 now=$(date +%s)
 count=0
 total_size=0
 
-while IFS= read -r file; do
-  base=$(basename "$file")
+for file in "$MESSAGES_DIR"/*.md; do
+  [ -e "$file" ] || [ -L "$file" ] || continue
+  validate_cleanup_file "$file" || exit 1
+  base=${file##*/}
   parse_message_name "$base"
   case "$MSG_TS" in
     ''|*[!0-9]*) age=0 ;;
@@ -105,12 +131,13 @@ while IFS= read -r file; do
   count=$((count + 1))
   total_size=$((total_size + size))
   if [ "$APPLY" -eq 1 ]; then
-    rm -f "$file"
+    validate_cleanup_file "$file" || exit 1
+    rm -f -- "$file" || exit 1
     printf 'Deleted\t%s\n' "$file"
   else
     printf 'Would delete\t%s\n' "$file"
   fi
-done < <(find "$MESSAGES_DIR" -maxdepth 1 -type f -name '*.md' -print | sort)
+done
 
 if [ "$APPLY" -eq 1 ]; then
   printf 'Summary\tdeleted=%s\ttotal_bytes=%s\n' "$count" "$total_size"

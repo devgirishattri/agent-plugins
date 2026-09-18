@@ -784,6 +784,13 @@ assert_file_contains "$TEST_HOME/incoming-auto.txt" "export SESSION_CHAT_INCOMIN
 
 CODEX_HOME="$TEST_HOME" bash "$SCRIPT_DIR/list-messages.sh" > "$TEST_HOME/list.txt"
 assert_file_contains "$TEST_HOME/list.txt" "Summary"
+# The dispatch-body tests deliberately use hand-written names and unsafe file
+# types. Keep those fixtures separate from cleanup's generated dispatch files;
+# malformed cleanup inputs are covered by test-deletion-boundaries.py.
+mkdir -p "$TEST_HOME/dispatch-fixtures"
+for fixture in queued-reply.md trusted-auto.md evil.md hardlinked.md loose.md big.md huge.md utf8-boundary.md; do
+  mv "$TEST_HOME/messages/$fixture" "$TEST_HOME/dispatch-fixtures/$fixture"
+done
 CODEX_HOME="$TEST_HOME" bash "$SCRIPT_DIR/clean-messages.sh" --older-than 0s > "$TEST_HOME/clean-dry-run.txt"
 assert_file_contains "$TEST_HOME/clean-dry-run.txt" "Dry run only"
 CODEX_HOME="$TEST_HOME" bash "$SCRIPT_DIR/clean-messages.sh" --older-than 0s --apply > "$TEST_HOME/clean-apply.txt"

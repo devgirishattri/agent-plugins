@@ -311,6 +311,32 @@ def safe(value):
     return re.sub(r"[\x00-\x1f\x7f]"," ",str(value))
 
 
+def verify_project(ident, project):
+    """Fresh native-only binding check for a project-scoped mutation.
+
+    Never use collect(): even its native backend merges unverified transcript
+    rows to support read-only discovery. The filesystem backend cannot authorize
+    deletion, and a native outage must not downgrade this check to transcripts.
+    """
+    if not UUID.fullmatch(ident) or not project or not os.path.isabs(project):
+        raise RuntimeError("invalid UUID or expected absolute project path")
+    backend = os.environ.get("SESSION_MANAGER_BACKEND", "auto")
+    if backend not in {"auto", "native"}:
+        raise RuntimeError("bulk deletion requires native metadata; filesystem fallback cannot authorize deletion")
+    rpc = None
+    try:
+        rpc = RPC()
+        rows = native_rows(rpc)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        raise RuntimeError(f"bulk deletion requires native metadata: {safe(exc)}") from exc
+    finally:
+        if rpc is not None:
+            rpc.close()
+    row = rows.get(ident)
+    if row is None or not os.path.isabs(row["cwd"]) or os.path.realpath(row["cwd"]) != os.path.realpath(project):
+        raise RuntimeError("native session does not belong to the approved project; deletion refused")
+
+
 def matches(row, query, mode):
     if mode=="list":
         return query=="all" or os.path.realpath(row["cwd"])==os.path.realpath(query)
@@ -336,11 +362,15 @@ def age(stamp):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("mode",choices=["list","stats"])
+    parser.add_argument("mode",choices=["list","stats","verify-project"])
     parser.add_argument("filter",nargs="?")
     parser.add_argument("--archived",action="store_true",help="include archived sessions")
     parser.add_argument("--json",action="store_true",help="metadata rows with source and nullable physical bytes")
+    parser.add_argument("--project",help="expected absolute project for verify-project")
     args=parser.parse_args()
+    if args.mode == "verify-project":
+        verify_project(args.filter or "", args.project)
+        return
     home=Path(os.environ.get("CODEX_HOME",str(Path.home()/".codex")))
     rows=list(collect(home,os.environ.get("SESSION_MANAGER_BACKEND","auto"),args.archived).values())
     cwd=os.getcwd()

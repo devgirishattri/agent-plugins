@@ -171,15 +171,18 @@ assert_log_empty "unconfirmed bulk deletion"
 assert_session_file_exists "$UUID_ONE" "unconfirmed bulk deletion"
 assert_session_file_exists "$UUID_TWO" "unconfirmed bulk deletion"
 
-output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/delete-all-sessions.sh" --confirmed)
-assert_contains "$output" "Sessions: 2 processed | 2 fully deleted | 0 with failures" "confirmed bulk summary"
-call_count=$(wc -l < "$SESSION_MANAGER_TEST_LOG" | tr -d ' ')
-assert_eq "2" "$call_count" "bulk native invocation count"
-grep -qF "$(printf '\tdelete\t--force\t%s' "$UUID_ONE")" "$SESSION_MANAGER_TEST_LOG" && ok || fail "bulk delete missed first project UUID"
-grep -qF "$(printf '\tdelete\t--force\t%s' "$UUID_TWO")" "$SESSION_MANAGER_TEST_LOG" && ok || fail "bulk delete missed second project UUID"
-if grep -qF "$UUID_OTHER" "$SESSION_MANAGER_TEST_LOG"; then
-    fail "bulk delete crossed the current-project boundary"
-fi
+# Read-only filesystem discovery cannot authorize a project-scoped mutation.
+# The native-confirmed positive control lives in test-deletion-boundaries.py.
+set +e
+output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/delete-all-sessions.sh" --confirmed 2>&1)
+status=$?
+set -e
+assert_eq "1" "$status" "filesystem-only bulk deletion must fail closed"
+assert_contains "$output" "requires native metadata" "bulk deletion explains its native requirement"
+assert_contains "$output" "Sessions: 2 processed | 0 fully deleted | 2 with failures" "refused bulk summary"
+assert_log_empty "filesystem-only bulk deletion"
+assert_session_file_exists "$UUID_ONE" "filesystem-only bulk deletion"
+assert_session_file_exists "$UUID_TWO" "filesystem-only bulk deletion"
 
 echo "session-manager smoke tests: $ASSERTIONS passed, 0 failed"
 python3 "$SCRIPT_DIR/test-session-names.py"

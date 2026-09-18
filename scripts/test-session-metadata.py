@@ -197,6 +197,18 @@ def wire_fixture(mode):
     first, payload = read_frame()
     assert first == 129
     request = json.loads(payload)
+    if mode == "sessions":
+        assert request["method"] == "initialize"
+        frame(json.dumps({"id": request["id"], "result": {}}).encode())
+        _, payload = read_frame()
+        assert json.loads(payload)["method"] == "initialized"
+        _, payload = read_frame()
+        request = json.loads(payload)
+        assert request["method"] == "thread/list"
+        assert request["params"]["useStateDbOnly"] is True
+        rows = json.loads(Path(os.environ["SESSION_MANAGER_TEST_NATIVE_ROWS"]).read_text())
+        frame(json.dumps({"id": request["id"], "result": {"data": rows, "nextCursor": None}}).encode())
+        return
     result = {"ok": True}
     if mode in ("extended16", "extended64"): result["padding"] = "x" * (200 if mode == "extended16" else 70000)
     response = json.dumps({"id": request["id"], "result": result}).encode()

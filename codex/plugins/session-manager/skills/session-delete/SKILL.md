@@ -31,6 +31,11 @@ bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh" --confirmed
 
 Report the native Codex results. On any other answer, report `Deletion cancelled.`
 
+Bulk deletion rechecks each UUID against native metadata immediately before
+deleting it and requires an exact match to the approved project. Filesystem
+fallback rows are for discovery only: unavailable native metadata, a changed
+project binding, or `SESSION_MANAGER_BACKEND=filesystem` refuses deletion.
+
 ## Delete one session
 
 Run the read-only resolver with the supplied target, or an empty argument when none was supplied:

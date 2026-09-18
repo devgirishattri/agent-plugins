@@ -1093,6 +1093,7 @@ echo "-- normalized mirror parity checks (blocking) --"
 python3 scripts/test-codex-pane-identity.py
 python3 scripts/test-hook-contracts.py
 python3 scripts/test-session-metadata.py
+python3 scripts/test-deletion-boundaries.py
 python3 scripts/test-plugin-evals.py
 python3 scripts/plugin-evals.py
 python3 scripts/test-shared-helpers.py

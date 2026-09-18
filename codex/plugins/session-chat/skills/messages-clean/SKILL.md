@@ -32,3 +32,7 @@ bash "$PLUGIN_ROOT/scripts/clean-messages.sh" <confirmed filters including --app
 Supported filters are `--older-than`, `--sender`, and `--recipient`. Never honor
 `--apply` without the separate confirmation. Report cancellation or the
 deleted count and bytes.
+
+The Codex helper refuses non-conforming message filenames or unsafe file paths
+with a non-zero exit; leave those entries for inspection rather than retrying
+with broader filters.

@@ -4,8 +4,8 @@
 #   No project-path arg: uses the current working directory's project.
 # SAFETY:
 #   - Scoped to one project path; refuses "all"/global wipes.
-#   - Enumerates session UUIDs through list-sessions.sh, then delegates each
-#     removal to native Codex through delete-session.sh.
+#   - Enumerates candidates through list-sessions.sh, then rechecks each UUID's
+#     project against native state before delegating removal to delete-session.sh.
 #   - Requires an explicit confirmation token supplied only after user consent.
 set -uo pipefail
 
@@ -32,17 +32,13 @@ if echo "$FILTER" | grep -qE '(^|/)\.\.(/|$)'; then
     exit 1
 fi
 
-if [ ! -d "$SESSIONS_DIR" ]; then
-    echo "No sessions found (sessions directory does not exist)"
-    exit 0
-fi
+FILTER=$(cd "$FILTER" && pwd -P) || { echo "ERROR: Project directory is unavailable." >&2; exit 1; }
 
-session_ids=$(
-    bash "$SCRIPT_DIR/list-sessions.sh" "$FILTER" 2>/dev/null \
-        | awk -F '\t' 'NF >= 5 { print $2 }' \
-        | grep -E '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
-        | sort -u
-)
+listing=$(bash "$SCRIPT_DIR/list-sessions.sh" "$FILTER") || {
+    echo "ERROR: Cannot enumerate sessions; bulk deletion refused." >&2
+    exit 1
+}
+session_ids=$(printf '%s\n' "$listing" | awk -F '\t' 'NF >= 5 { print $2 }' | sort -u)
 
 if [ -z "$session_ids" ]; then
     echo "No sessions found for project: $FILTER"
@@ -60,7 +56,8 @@ fail=0
 while IFS= read -r sid; do
     [ -z "$sid" ] && continue
     echo ""
-    if bash "$SCRIPT_DIR/delete-session.sh" "$sid" --confirmed; then
+    if python3 "$SCRIPT_DIR/session-metadata.py" verify-project "$sid" --project "$FILTER" \
+        && bash "$SCRIPT_DIR/delete-session.sh" "$sid" --confirmed; then
         ok=$(( ok + 1 ))
     else
         fail=$(( fail + 1 ))
