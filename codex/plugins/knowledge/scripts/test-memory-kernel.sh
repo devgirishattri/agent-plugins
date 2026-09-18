@@ -995,6 +995,170 @@ for point in forward:pre-candidate forward:pre-cleanup; do
 done
 
 # ===========================================================================
+# 8b. Hostile journal / hostile generation names (security regressions)
+#     Every negative case has an adjacent positive control that proves the
+#     same code path still succeeds on a well-formed input.
+# ===========================================================================
+echo "--- security: planted journal + newline generation names ---"
+
+# plant_meta <store> <target> <marker> <before_target> <before_index> \
+#            <after_target> <after_index> <candidate_id> <candidate_raw_sha> <staged_dir>
+plant_meta() {
+  local store="$1"
+  mkdir -p "$store/.journal"
+  {
+    echo "version: 1"
+    echo "target: $2"
+    echo "marker: $3"
+    echo "before_target: $4"
+    echo "before_index: $5"
+    echo "after_target: $6"
+    echo "after_index: $7"
+    echo "candidate_id: $8"
+    echo "candidate_raw_sha: $9"
+    echo "staged_dir: ${10}"
+    echo "pid: 1"
+    echo "timestamp: 2026-01-01T00:00:00Z"
+  } > "$store/.journal/meta"
+}
+ZERO_SHA=0000000000000000000000000000000000000000000000000000000000000000
+GOOD_HEX32=0123456789abcdef0123456789abcdef
+
+# --- F1a: forward-recovery staged_dir traversal ---------------------------
+d="$TMP/sec_journal_fwd"
+store=$(bootstrap_store "$d")
+mkdir -p "$d/victim_dir"; echo keep > "$d/victim_dir/file"
+cur=$(sha_of "$store/MEMORY.md")
+# store is <repo>/.agents/memory, so ../../victim_dir is <repo>/victim_dir
+plant_meta "$store" NONE NONE NONE "HASH $cur" NONE "HASH $cur" - - "../../victim_dir"
+trigger_recovery_noop "$store" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_journal_fwd_traversal_rejected_exit4" 4 "$rc"
+assert_file_absent "sec_journal_fwd_traversal_lock_released" "$store/.lock"
+assert_file_present "sec_journal_fwd_traversal_victim_intact" "$d/victim_dir/file"
+assert_file_present "sec_journal_fwd_traversal_journal_retained" "$store/.journal/meta"
+rm -rf "$store/.journal"
+# control: same forward journal with a grammar-valid staged_dir recovers cleanly
+mkdir -p "$store/.staged.1.$GOOD_HEX32"
+plant_meta "$store" NONE NONE NONE "HASH $cur" NONE "HASH $cur" - - ".staged.1.$GOOD_HEX32"
+trigger_recovery_noop "$store" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_journal_fwd_control_exit0" 0 "$rc"
+assert_clean_store "sec_journal_fwd_control_clean" "$store"
+assert_file_present "sec_journal_fwd_control_victim_intact" "$d/victim_dir/file"
+
+# --- F1b: rollback target traversal (overwrite a file outside the store) ---
+d="$TMP/sec_journal_rb"
+store=$(bootstrap_store "$d")
+echo original > "$d/victim.md"
+vic_before=$(sha_of "$d/victim.md")
+mkdir -p "$store/.journal"
+echo attacker > "$store/.journal/before-target"
+cp "$store/MEMORY.md" "$store/.journal/before-index"
+bt=$(sha_of "$store/.journal/before-target")
+bi=$(sha_of "$store/MEMORY.md")
+plant_meta "$store" "../../victim.md" HASH "HASH $bt" "HASH $bi" "HASH $ZERO_SHA" "HASH $ZERO_SHA" - - ".staged.1.$GOOD_HEX32"
+trigger_recovery_noop "$store" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_journal_rb_traversal_rejected_exit4" 4 "$rc"
+assert_file_absent "sec_journal_rb_traversal_lock_released" "$store/.lock"
+vic_after=$(sha_of "$d/victim.md")
+if [ "$vic_before" = "$vic_after" ]; then pass "sec_journal_rb_traversal_victim_unchanged"; else fail "sec_journal_rb_traversal_victim_unchanged" "victim.md was overwritten"; fi
+rm -rf "$store/.journal"
+# control: same rollback journal naming an in-store basename restores it
+mkdir -p "$store/.journal"
+echo restored > "$store/.journal/before-target"
+cp "$store/MEMORY.md" "$store/.journal/before-index"
+bt=$(sha_of "$store/.journal/before-target")
+plant_meta "$store" "rb_item.md" HASH "HASH $bt" "HASH $bi" "HASH $ZERO_SHA" "HASH $ZERO_SHA" - - ".staged.1.$GOOD_HEX32"
+trigger_recovery_noop "$store" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_journal_rb_control_exit0" 0 "$rc"
+assert_file_present "sec_journal_rb_control_target_restored" "$store/rb_item.md"
+assert_clean_store "sec_journal_rb_control_clean" "$store"
+
+# --- F1c: candidate_id traversal + symlinked journal ----------------------
+d="$TMP/sec_journal_cand"
+store=$(bootstrap_store "$d")
+echo keep > "$d/victim_note.md"
+cur=$(sha_of "$store/MEMORY.md")
+vsha=$(sha_of "$d/victim_note.md")
+plant_meta "$store" NONE NONE NONE "HASH $cur" NONE "HASH $cur" "../../victim_note" "$vsha" ".staged.1.$GOOD_HEX32"
+trigger_recovery_noop "$store" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_journal_candidate_traversal_rejected_exit4" 4 "$rc"
+assert_file_absent "sec_journal_candidate_traversal_lock_released" "$store/.lock"
+assert_file_present "sec_journal_candidate_traversal_victim_intact" "$d/victim_note.md"
+rm -rf "$store/.journal"
+mkdir -p "$d/elsewhere"
+plant_meta "$d/elsewhere" NONE NONE NONE "HASH $cur" NONE "HASH $cur" - - ".staged.1.$GOOD_HEX32"
+ln -s "$d/elsewhere/.journal" "$store/.journal"
+trigger_recovery_noop "$store" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_journal_symlink_rejected_exit4" 4 "$rc"
+assert_file_absent "sec_journal_symlink_lock_released" "$store/.lock"
+rm -f "$store/.journal"
+# control: an ordinary self-consistent write still succeeds on this store
+trigger_recovery_noop "$store" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_journal_cand_control_exit0" 0 "$rc"
+
+# --- F2: newline-containing generation name must not become an rm operand --
+d="$TMP/sec_newline"
+store=$(bootstrap_store "$d")
+mkdir -p "$d/cwd/victim_dir"; echo keep > "$d/cwd/victim_dir/file"
+nl_name=".staged.1.$GOOD_HEX32"$'\n'"victim_dir"
+mkdir -p "$store/$nl_name"
+cur=$(sha_of "$store/MEMORY.md")
+(cd "$d/cwd" && bash "$WRITER" index --store "$store" --staged-index "$store/MEMORY.md" --expect-index "$cur") > /dev/null 2>&1
+rc=$?
+assert_rc "sec_newline_generation_rejected_exit4" 4 "$rc"
+assert_file_absent "sec_newline_generation_lock_released" "$store/.lock"
+assert_file_present "sec_newline_generation_cwd_victim_intact" "$d/cwd/victim_dir/file"
+assert_file_present "sec_newline_generation_entry_retained" "$store/$nl_name"
+rm -rf "${store:?}/${nl_name:?}"
+# control: a correctly named dead generation IS swept and the write proceeds
+mkdir -p "$store/.staged.1.$GOOD_HEX32" "$store/.journal.tmp.1.$GOOD_HEX32"
+(cd "$d/cwd" && bash "$WRITER" index --store "$store" --staged-index "$store/MEMORY.md" --expect-index "$cur") > /dev/null 2>&1
+rc=$?
+assert_rc "sec_newline_control_exit0" 0 "$rc"
+assert_clean_store "sec_newline_control_swept" "$store"
+assert_file_present "sec_newline_control_cwd_victim_intact" "$d/cwd/victim_dir/file"
+
+# --- argv gate == journal gate: a value apply accepts must be one recovery
+#     accepts, and traversal-shaped ids/targets are rejected on argv too ---
+d="$TMP/sec_argv_parity"
+store=$(bootstrap_store "$d")
+echo keep > "$d/victim_note.md"
+vsha=$(sha_of "$d/victim_note.md")
+write_canonical "$TMP/sec_argv_target.md" project "Argv Parity" "fixture"
+printf -- '- [Argv Parity](argv_parity.md) -- fixture\n' > "$TMP/sec_argv_index.md"
+ei=$(sha_of "$store/MEMORY.md")
+bash "$WRITER" apply --store "$store" --target "argv_parity.md" \
+  --staged-target "$TMP/sec_argv_target.md" --staged-index "$TMP/sec_argv_index.md" \
+  --expect-target absent --expect-index "$ei" --candidate "../../victim_note" --expect-candidate "$vsha" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_argv_candidate_traversal_rejected_exit2" 2 "$rc"
+assert_file_present "sec_argv_candidate_traversal_victim_intact" "$d/victim_note.md"
+assert_file_absent "sec_argv_candidate_traversal_no_write" "$store/argv_parity.md"
+bash "$WRITER" apply --store "$store" --target 'back\slash.md' \
+  --staged-target "$TMP/sec_argv_target.md" --staged-index "$TMP/sec_argv_index.md" \
+  --expect-target absent --expect-index "$ei" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_argv_backslash_target_rejected_exit2" 2 "$rc"
+# control: a real 64-hex candidate id and a plain target apply cleanly
+key=$(capture_synthetic "$store" "sess-argv" "Argv Parity" "fixture" project)
+ec=$(sha_of "$store/.inbox/${key}.md")
+bash "$WRITER" apply --store "$store" --target "argv_parity.md" \
+  --staged-target "$TMP/sec_argv_target.md" --staged-index "$TMP/sec_argv_index.md" \
+  --expect-target absent --expect-index "$ei" --candidate "$key" --expect-candidate "$ec" > /dev/null 2>&1
+rc=$?
+assert_rc "sec_argv_control_exit0" 0 "$rc"
+assert_file_present "sec_argv_control_target_written" "$store/argv_parity.md"
+assert_file_absent "sec_argv_control_candidate_consumed" "$store/.inbox/${key}.md"
+assert_clean_store "sec_argv_control_clean" "$store"
+
+# ===========================================================================
 # 9. Locking: contention, paused-owner interleavings, unlock
 # ===========================================================================
 echo "--- locking ---"

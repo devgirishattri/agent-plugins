@@ -173,14 +173,68 @@ _km_lock_release() {
   KM_LOCK_CLAIM=""
 }
 
+# _km_is_generation_name <basename> <prefix>
+# True iff basename is exactly "<prefix>.<pid>.<hex32>" — the only shape this
+# writer ever mints for a staged generation (".staged"), a pre-publish
+# journal (".journal.tmp"), or a recovery restore leg ("restore.tmp"). Every
+# sweep below deletes ONLY names that pass this gate.
+_km_is_generation_name() {
+  local name="$1" prefix="$2" rest
+  case "$name" in
+    "$prefix".*) rest=${name#"$prefix".} ;;
+    *) return 1 ;;
+  esac
+  [[ "$rest" =~ ^[0-9]+\.[0-9a-f]{32}$ ]]
+}
+
+# _km_is_sha256 <value>
+_km_is_sha256() {
+  [[ "$1" =~ ^[0-9a-f]{64}$ ]]
+}
+
+# _km_is_valid_target_name <basename>
+# The ONE predicate for a mutation target, applied identically to the argv
+# `--target` of apply and to the `target` field replayed from a journal.
+# Keeping both sides on the same predicate is what guarantees a legitimate
+# crash can never leave a journal that recovery then refuses.
+_km_is_valid_target_name() {
+  local name="$1"
+  _km_is_safe_bare_component "$name" || return 1
+  case "$name" in
+    MEMORY.md | .*) return 1 ;;
+    *.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# _km_sweep_generation_dirs <dir> <prefix>
+# Remove abandoned generations "<dir>/<prefix>.<pid>.<hex32>". Enumerates
+# with a quoted glob (never `find | while read`: a name containing a newline
+# would split into extra records, and the second record — resolved against
+# the caller's cwd — would become an rm -rf argument outside the store). Any
+# entry that matches the glob but not the exact grammar is a foreign object
+# planted in the store: fail closed (exit 4) and leave it for inspection.
+_km_sweep_generation_dirs() {
+  local dir="$1" prefix="$2" f name
+  for f in "$dir"/"$prefix".*; do
+    if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+      continue
+    fi
+    name=${f##*/}
+    if ! _km_is_generation_name "$name" "$prefix"; then
+      km_error "refusing to sweep an entry outside the generation grammar (inspect/remove manually): $dir/$name"
+      return 4
+    fi
+    rm -rf "$f"
+  done
+  return 0
+}
+
 _km_sweep_dead_generations() {
-  local store="$1" f
-  find "$store" -mindepth 1 -maxdepth 1 -name '.journal.tmp.*' 2>/dev/null | while IFS= read -r f; do
-    rm -rf "$f"
-  done
-  find "$store" -mindepth 1 -maxdepth 1 -name '.staged.*' 2>/dev/null | while IFS= read -r f; do
-    rm -rf "$f"
-  done
+  local store="$1"
+  _km_sweep_generation_dirs "$store" ".journal.tmp" || return 4
+  _km_sweep_generation_dirs "$store" ".staged" || return 4
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -215,6 +269,97 @@ _km_meta_validate_grammar() {
   return 0
 }
 
+# _km_meta_validate_values <meta>
+# Every replayed field must carry exactly the shape the serializer in
+# _km_transaction_body writes. The journal lives in a store shared by every
+# pane and subagent of the same uid, so a planted meta is attacker input:
+# without this gate `target`/`staged_dir`/`candidate_id` reach rm -rf / mv -f
+# / rm -f as raw path fragments. Grammar per field:
+#   target            NONE | bare non-dot "*.md" basename, never MEMORY.md
+#   marker            HASH | ABSENT | NONE
+#   before_target     NONE | ABSENT | "HASH <sha256>"
+#   before_index      "HASH <sha256>"
+#   after_target      NONE | ABSENT | "HASH <sha256>"
+#   after_index       "HASH <sha256>"
+#   candidate_id      - | <sha256>
+#   candidate_raw_sha - | <sha256>
+#   staged_dir        .staged.<pid>.<hex32>
+#   pid               digits
+# Any mismatch fails closed (exit 4) and leaves the journal untouched.
+_km_meta_validate_values() {
+  local meta="$1" v
+  local sha='[0-9a-f]{64}'
+
+  v=$(_km_meta_get "$meta" target) || return 4
+  if [ "$v" != "NONE" ] && ! _km_is_valid_target_name "$v"; then
+    km_error "journal target is not a bare, non-reserved *.md basename (inspect/remove manually): $meta"
+    return 4
+  fi
+
+  v=$(_km_meta_get "$meta" marker) || return 4
+  case "$v" in
+    HASH | ABSENT | NONE) : ;;
+    *) km_error "journal marker outside {HASH,ABSENT,NONE} (inspect/remove manually): $meta"; return 4 ;;
+  esac
+
+  local key
+  for key in before_target after_target; do
+    v=$(_km_meta_get "$meta" "$key") || return 4
+    if [ "$v" != "NONE" ] && [ "$v" != "ABSENT" ] && ! [[ "$v" =~ ^HASH\ $sha$ ]]; then
+      km_error "journal $key is not NONE|ABSENT|HASH <sha256> (inspect/remove manually): $meta"
+      return 4
+    fi
+  done
+  for key in before_index after_index; do
+    v=$(_km_meta_get "$meta" "$key") || return 4
+    if ! [[ "$v" =~ ^HASH\ $sha$ ]]; then
+      km_error "journal $key is not HASH <sha256> (inspect/remove manually): $meta"
+      return 4
+    fi
+  done
+  for key in candidate_id candidate_raw_sha; do
+    v=$(_km_meta_get "$meta" "$key") || return 4
+    if [ "$v" != "-" ] && ! _km_is_sha256 "$v"; then
+      km_error "journal $key is not - or a sha256 (inspect/remove manually): $meta"
+      return 4
+    fi
+  done
+
+  v=$(_km_meta_get "$meta" staged_dir) || return 4
+  if ! _km_is_generation_name "$v" ".staged"; then
+    km_error "journal staged_dir is not .staged.<pid>.<hex32> (inspect/remove manually): $meta"
+    return 4
+  fi
+  v=$(_km_meta_get "$meta" pid) || return 4
+  if ! [[ "$v" =~ ^[0-9]+$ ]]; then
+    km_error "journal pid is not numeric (inspect/remove manually): $meta"
+    return 4
+  fi
+  return 0
+}
+
+# _km_journal_validate_shape <journal-dir>
+# The journal directory and each leg it may carry must be exactly what the
+# writer publishes: a real directory (never a symlink — `-d` follows links)
+# holding regular, non-symlink files. cp/mv in the rollback path follow
+# symlinks, so a planted link would redirect a restore.
+_km_journal_validate_shape() {
+  local jd="$1" leg
+  if [ -L "$jd" ] || [ ! -d "$jd" ]; then
+    km_error "journal is not a real directory (inspect/remove manually): $jd"
+    return 4
+  fi
+  for leg in meta before-target before-index; do
+    if [ -e "$jd/$leg" ] || [ -L "$jd/$leg" ]; then
+      if [ -L "$jd/$leg" ] || [ ! -f "$jd/$leg" ]; then
+        km_error "journal leg is not a regular file (inspect/remove manually): $jd/$leg"
+        return 4
+      fi
+    fi
+  done
+  return 0
+}
+
 _km_consume_candidate() {
   local store="$1" candidate_id="$2" expect_raw_sha="$3" cfile raw
   [ "$candidate_id" != "-" ] || return 0
@@ -245,13 +390,17 @@ _km_run_recovery() {
   local candidate_id candidate_raw_sha staged_dir
   jd="$store/.journal"
   meta="$jd/meta"
-  [ -d "$jd" ] || return 0
+  if [ ! -e "$jd" ] && [ ! -L "$jd" ]; then
+    return 0
+  fi
 
-  find "$jd" -mindepth 1 -maxdepth 1 -name 'restore.tmp.*' 2>/dev/null | while IFS= read -r f; do
-    rm -rf "$f"
-  done
-
+  # Validate everything BEFORE the first mutation: the journal is attacker-
+  # writable by any same-uid pane, so shape and value gates come first and
+  # the restore-leg sweep only runs against a journal that passed them.
+  _km_journal_validate_shape "$jd" || return 4
   _km_meta_validate_grammar "$meta" || return 4
+  _km_meta_validate_values "$meta" || return 4
+  _km_sweep_generation_dirs "$jd" "restore.tmp" || return 4
   target=$(_km_meta_get "$meta" target) || { km_error "unreadable journal meta: $meta"; return 4; }
   marker=$(_km_meta_get "$meta" marker) || return 4
   before_target=$(_km_meta_get "$meta" before_target) || return 4
@@ -349,8 +498,8 @@ _km_transaction_body() {
   local store="$1" target="$2" marker="$3" staged_target="$4" staged_index="$5"
   local expect_target="$6" expect_index="$7" candidate_id="$8" expect_candidate="$9"
 
-  _km_sweep_dead_generations "$store"
-  if [ -d "$store/.journal" ]; then
+  _km_sweep_dead_generations "$store" || return 4
+  if [ -e "$store/.journal" ] || [ -L "$store/.journal" ]; then
     _km_run_recovery "$store" || return 4
   fi
   _km_maybe_die "2"
@@ -1411,10 +1560,25 @@ cmd_apply() {
     .*) km_error "--target may not be dot-prefixed (reserved)"; return 2 ;;
   esac
   case "$target" in
-    */*) km_error "--target must be a bare basename"; return 2 ;;
+    */* | *'\'*) km_error "--target must be a bare basename"; return 2 ;;
     *.md) : ;;
     *) km_error "--target must end in .md"; return 2 ;;
   esac
+  if ! _km_is_valid_target_name "$target"; then
+    km_error "--target is not a valid mutation target: $target"
+    return 2
+  fi
+  # Candidate ids are content-addressed sha256 stems under .inbox/. Gate them
+  # here with the same predicate recovery applies to a replayed journal, so a
+  # value that reaches the journal is always one recovery will accept.
+  if [ "$candidate_id" != "-" ] && ! _km_is_sha256 "$candidate_id"; then
+    km_error "--candidate must be a 64-char lowercase-hex candidate id: $candidate_id"
+    return 2
+  fi
+  if [ "$expect_candidate" != "-" ] && ! _km_is_sha256 "$expect_candidate"; then
+    km_error "--expect-candidate must be a 64-char lowercase-hex sha256"
+    return 2
+  fi
 
   km_require_non_reviewer "memory" || return 6
   local store
