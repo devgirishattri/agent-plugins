@@ -39,9 +39,11 @@ command -v jq >/dev/null 2>&1 || {
 	exit 1
 }
 
-# Private TMPDIR: the script keeps per-session throttle state under
-# $TMPDIR/chronos-$USER. Without this the suite would read and WRITE the real
-# state directory and could throttle a live session's next injection.
+# Private state root: the script keeps per-session throttle state under
+# $XDG_RUNTIME_DIR/chronos (falling back to XDG_CACHE_HOME, then ~/.cache).
+# Pointing XDG_RUNTIME_DIR at a scratch dir keeps the suite from reading and
+# WRITING the real state directory, which could throttle a live session's next
+# injection. TMPDIR is pointed there too so nothing leaks into the shared tmp.
 TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/chronos-test.XXXXXX")
 cleanup() {
 	case "$TMPROOT" in
@@ -64,7 +66,7 @@ run() {
 	payload=$(jq -cn --arg e "$event" --arg s "$session" \
 		'{hook_event_name: $e, session_id: $s}')
 	printf '%s' "$payload" |
-		env TMPDIR="$TMPROOT" "$@" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
+		env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" "$@" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
 	RUN_RC=$?
 	RUN_OUT=$(cat "$TMPROOT/out")
 	RUN_ERR=$(cat "$TMPROOT/err")
@@ -174,21 +176,26 @@ run PreToolUse interval-bad CHRONOS_INTERVAL_MIN=not-a-number
 if [ -z "$RUN_OUT" ]; then pass; else fail "a non-numeric CHRONOS_INTERVAL_MIN falls back to the default" "$RUN_OUT"; fi
 
 # --- 8. degenerate input never breaks the turn ---------------------------------
-out=$(printf '' | env TMPDIR="$TMPROOT" bash "$SCRIPT" 2>/dev/null)
+out=$(printf '' | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" 2>/dev/null)
 rc=$?
 check "empty stdin exits 0" "0" "$rc"
 if [ -n "$out" ]; then pass; else fail "empty stdin still emits (defaults to UserPromptSubmit)" "empty"; fi
 
-out=$(printf 'not json at all' | env TMPDIR="$TMPROOT" bash "$SCRIPT" 2>/dev/null)
+out=$(printf 'not json at all' | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" 2>/dev/null)
 rc=$?
 check "non-JSON stdin exits 0" "0" "$rc"
 if [ -n "$out" ]; then pass; else fail "non-JSON stdin still emits" "empty"; fi
 
-# --- 9. state is written where TMPDIR points, never to the real directory ------
-if [ -d "$TMPROOT/chronos-${USER:-$(id -u)}" ]; then
+# --- 9. state is written where XDG_RUNTIME_DIR points, never to the real dir --
+if [ -d "$TMPROOT/xdg/chronos" ]; then
 	pass
 else
-	fail "throttle state honours TMPDIR" "no chronos state dir under $TMPROOT"
+	fail "throttle state honours XDG_RUNTIME_DIR" "no chronos state dir under $TMPROOT/xdg"
+fi
+if [ ! -e "$TMPROOT/chronos-${USER:-$(id -u)}" ]; then
+	pass
+else
+	fail "no state is written under the shared temp root any more" "$TMPROOT/chronos-* exists"
 fi
 
 # --- 10. the no-jq fallback still emits parseable JSON -------------------------
@@ -199,7 +206,7 @@ if PATH=/usr/bin:/bin command -v jq >/dev/null 2>&1; then
 	printf 'SKIP: jq is present in /usr/bin:/bin; cannot exercise the no-jq branch\n' >&2
 else
 	out=$(printf '{"hook_event_name":"UserPromptSubmit","session_id":"nojq"}' |
-		env -i PATH=/usr/bin:/bin TMPDIR="$TMPROOT" HOME="$TMPROOT" bash "$SCRIPT" 2>/dev/null)
+		env -i PATH=/usr/bin:/bin TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" HOME="$TMPROOT" bash "$SCRIPT" 2>/dev/null)
 	rc=$?
 	check "no-jq fallback exits 0" "0" "$rc"
 	if printf '%s' "$out" | jq -e . >/dev/null 2>&1; then
@@ -249,18 +256,18 @@ if [ -z "$RUN_OUT" ]; then pass; else fail "cross-b second call within the inter
 top_session_a="top-real-a"
 payload_a=$(jq -cn --arg top "$top_session_a" \
 	'{tool_input: {session_id: "nested-x", hook_event_name: "UserPromptSubmit"}, hook_event_name: "PreToolUse", session_id: $top}')
-printf '%s' "$payload_a" | env TMPDIR="$TMPROOT" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
+printf '%s' "$payload_a" | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
 rc=$?
 check "reordered/nested payload exits 0" "0" "$rc"
 check "top-level hook_event_name wins over a nested one" "PreToolUse" \
 	"$(printf '%s' "$(cat "$TMPROOT/out")" | jq -r '.hookSpecificOutput.hookEventName // empty')"
-if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-$top_session_a" ]; then
+if [ -f "$TMPROOT/xdg/chronos/last-$top_session_a" ]; then
 	pass
 else
 	fail "top-level session_id wins over a nested tool_input.session_id" \
 		"expected state file last-$top_session_a"
 fi
-if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-nested-x" ]; then
+if [ -f "$TMPROOT/xdg/chronos/last-nested-x" ]; then
 	fail "the nested session_id must never be used for state" "last-nested-x exists"
 else
 	pass
@@ -271,16 +278,16 @@ fi
 top_session_b="top-real-b"
 payload_b=$(jq -cn --arg top "$top_session_b" \
 	'{hook_event_name: "PreToolUse", session_id: $top, tool_input: {command: "echo \"session_id\":\"fake\""}}')
-printf '%s' "$payload_b" | env TMPDIR="$TMPROOT" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
+printf '%s' "$payload_b" | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
 rc=$?
 check "escaped-text payload exits 0" "0" "$rc"
-if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-$top_session_b" ]; then
+if [ -f "$TMPROOT/xdg/chronos/last-$top_session_b" ]; then
 	pass
 else
 	fail "top-level session_id wins over escaped text inside a tool argument" \
 		"expected state file last-$top_session_b"
 fi
-if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-fake" ]; then
+if [ -f "$TMPROOT/xdg/chronos/last-fake" ]; then
 	fail "escaped session_id-shaped text inside a value must never be used" "last-fake exists"
 else
 	pass
@@ -289,12 +296,12 @@ fi
 # (c) malformed JSON still exits 0 and falls back to today's defaults
 # (UserPromptSubmit, last-default) rather than breaking the turn.
 malformed='{"hook_event_name":"PreToolUse", "session_id":'
-out=$(printf '%s' "$malformed" | env TMPDIR="$TMPROOT" bash "$SCRIPT" 2>"$TMPROOT/err")
+out=$(printf '%s' "$malformed" | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" 2>"$TMPROOT/err")
 rc=$?
 check "malformed JSON exits 0" "0" "$rc"
 check "malformed JSON falls back to the default event" "UserPromptSubmit" \
 	"$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // empty')"
-if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-default" ]; then
+if [ -f "$TMPROOT/xdg/chronos/last-default" ]; then
 	pass
 else
 	fail "malformed JSON falls back to the default state file" "no last-default state file"
@@ -309,16 +316,72 @@ if ( hash -r; PATH="$TMPROOT/nojqbin" command -v jq >/dev/null 2>&1 ); then
 	fail "control setup: jq unexpectedly reachable on the stripped PATH" ""
 else
 	out=$(printf '{"hook_event_name":"PreToolUse"}' |
-		env PATH="$TMPROOT/nojqbin" TMPDIR="$TMPROOT" "$(command -v bash)" "$SCRIPT" 2>"$TMPROOT/err")
+		env PATH="$TMPROOT/nojqbin" TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" "$(command -v bash)" "$SCRIPT" 2>"$TMPROOT/err")
 	rc=$?
 	check "jq-hidden, no-session_id control exits 0" "0" "$rc"
 	if [ -n "$out" ]; then pass; else fail "jq-hidden control still emits" "empty"; fi
-	if [ -f "$TMPROOT/chronos-${USER:-$(id -u)}/last-default" ]; then
+	if [ -f "$TMPROOT/xdg/chronos/last-default" ]; then
 		pass
 	else
 		fail "jq-hidden control uses the default state file" "no last-default state file"
 	fi
 fi
+
+# --- 16. security: the state write must never follow a planted symlink --------
+# Attack model: another local user pre-creates the (old, predictable) state
+# directory and plants a symlink where the per-session state file goes. Both
+# the legacy location ($TMPDIR/chronos-$USER) and the current location are
+# seeded so the assertion holds against either layout.
+victim="$TMPROOT/victim.txt"
+printf 'keep' >"$victim"
+mkdir -p "$TMPROOT/chronos-${USER:-$(id -u)}" "$TMPROOT/xdg/chronos"
+ln -s "$victim" "$TMPROOT/chronos-${USER:-$(id -u)}/last-sym-a"
+ln -s "$victim" "$TMPROOT/xdg/chronos/last-sym-a"
+run UserPromptSubmit sym-a
+check "planted-symlink run still exits 0" "0" "$RUN_RC"
+if [ -n "$(ctx)" ]; then pass; else fail "planted-symlink run still emits context" "empty"; fi
+check "planted symlink is never followed (victim intact)" "keep" "$(cat "$victim")"
+if [ -L "$TMPROOT/xdg/chronos/last-sym-a" ]; then
+	pass
+else
+	fail "planted symlink is left in place, not replaced or removed" "state entry changed type"
+fi
+# a state DIRECTORY that is itself a symlink is refused too
+mkdir -p "$TMPROOT/elsewhere"
+rm -rf "$TMPROOT/xdg2" && mkdir -p "$TMPROOT/xdg2" && ln -s "$TMPROOT/elsewhere" "$TMPROOT/xdg2/chronos"
+payload=$(jq -cn '{hook_event_name:"UserPromptSubmit", session_id:"sym-dir"}')
+printf '%s' "$payload" | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg2" bash "$SCRIPT" >"$TMPROOT/out" 2>/dev/null
+check "symlinked state dir run still exits 0" "0" "$?"
+if [ ! -e "$TMPROOT/elsewhere/last-sym-dir" ]; then
+	pass
+else
+	fail "symlinked state dir is refused (nothing written through it)" "last-sym-dir written into the link target"
+fi
+# control: an ordinary session on the same root gets a real 0700 dir and a digit-only file
+run UserPromptSubmit ctrl-a
+check "control run exits 0" "0" "$RUN_RC"
+if [ -f "$TMPROOT/xdg/chronos/last-ctrl-a" ] && [ ! -L "$TMPROOT/xdg/chronos/last-ctrl-a" ]; then
+	pass
+else
+	fail "control writes a regular state file" "missing or not a regular file"
+fi
+case "$(cat "$TMPROOT/xdg/chronos/last-ctrl-a")" in
+	*[!0-9]*|'') fail "control state file holds an epoch" "$(cat "$TMPROOT/xdg/chronos/last-ctrl-a")" ;;
+	*) pass ;;
+esac
+# Explicit platform branch: GNU stat first (`-c`), BSD (`-f`) otherwise. A
+# BSD-first fallback is not Linux-safe: GNU `stat -f` is a filesystem report.
+if stat -c '%a' / >/dev/null 2>&1; then
+	mode=$(stat -c '%a' "$TMPROOT/xdg/chronos")
+else
+	mode=$(stat -f '%Lp' "$TMPROOT/xdg/chronos")
+fi
+check "control state dir is owner-only (0700)" "700" "$mode"
+run PreToolUse ctrl-a
+check "control throttle: PreToolUse inside the window emits nothing" "" "$(ctx)"
+printf '0' >"$TMPROOT/xdg/chronos/last-ctrl-a"
+run PreToolUse ctrl-a
+if [ -n "$(ctx)" ]; then pass; else fail "control throttle: PreToolUse after the window emits" "empty"; fi
 
 printf 'chronos tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

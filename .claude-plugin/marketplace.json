@@ -67,7 +67,7 @@
     {
       "name": "chronos",
       "description": "Ambient time/day awareness for agents: injects the current date/time as context with every prompt, and refreshes it during long turns via a throttled PreToolUse hook. No explicit invocation needed.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "author": {
         "name": "Girish Attri"
       },
