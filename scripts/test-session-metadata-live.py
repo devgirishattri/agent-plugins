@@ -125,12 +125,9 @@ def main():
                 assert not (codex_home / "app-server-control/app-server-control.sock").exists()
                 if not failed:
                     assert M.collect(codex_home, "auto"), "filesystem fallback lost fixture histories"
-                    try:
-                        M.collect(codex_home, "native")
-                    except RuntimeError:
-                        pass
-                    else:
-                        raise AssertionError("native-only mode succeeded with no daemon")
+                    assert M.collect(codex_home, "native"), "temporary native connection lost fixture histories"
+                    assert not (codex_home / "app-server-control/app-server-control.sock").exists()
+                    print("PASS: temporary native connection works without a daemon", flush=True)
                 print("fixture daemon stopped", flush=True)
             except Exception as error:
                 if not failed:

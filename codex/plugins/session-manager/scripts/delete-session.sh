@@ -25,4 +25,10 @@ if ! command -v codex >/dev/null 2>&1; then
 fi
 
 # Native deletion keeps rollout files, shell snapshots, and state_5.sqlite in sync.
-exec codex delete --force "$SESSION_ID"
+if codex delete --force "$SESSION_ID"; then
+    exit 0
+else
+    status=$?
+    echo "ERROR: Native deletion failed for $SESSION_ID (exit $status)." >&2
+    exit "$status"
+fi

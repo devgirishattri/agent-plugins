@@ -13,11 +13,16 @@ Use `request_user_input` for selections and confirmations when it is available i
 
 If `$ARGUMENTS` is exactly `--all`:
 
-1. Run `bash "$PLUGIN_ROOT/scripts/list-sessions.sh"`.
-2. If there are no session rows, report that and stop.
-3. Show the rows and exact count. Warn that the active session is included and may be rewritten when it exits.
+1. Run `bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh" --plan`.
+2. If native preflight fails or there are no ELIGIBLE rows, report that and stop.
+3. Show the project and eligible rows/count; show SKIP rows and their reasons separately. Warn that eligible active sessions may fail deletion while in use.
 4. Ask a separate final confirmation with `No, cancel (Recommended)` and `Yes, delete all`.
 5. Only after an explicit affirmative response, run `bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh" --confirmed` and report the native results.
+
+Native lookup uses an existing shared server or a temporary stdio server;
+manual daemon startup is not required. The batch rechecks each eligible UUID's
+project before deletion. Report deleted, failed, and skipped counts and failed
+UUIDs separately; never treat file-only skipped rows as deleted.
 
 For every other target, including empty input, run:
 

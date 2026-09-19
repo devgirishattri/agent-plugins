@@ -14,7 +14,8 @@ import unittest
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
-SPEC=importlib.util.spec_from_file_location("metadata",ROOT/"codex/plugins/session-manager/scripts/session-metadata.py")
+PLUGIN_ROOT=Path(os.environ.get("SESSION_DELETION_TEST_CODEX_ROOT", ROOT/"codex/plugins"))
+SPEC=importlib.util.spec_from_file_location("metadata",PLUGIN_ROOT/"session-manager/scripts/session-metadata.py")
 M=importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(M)
 SID="11111111-1111-4111-8111-111111111111"
@@ -31,6 +32,35 @@ class Fake:
 def row(ident=SID): return dict(id=ident,cwd="/project",name="Native title",updatedAt=123)
 
 class Metadata(unittest.TestCase):
+    def test_stdio_wire_and_native_error_detail(self):
+        for mode in ("normal", "error", "partial"):
+            with self.subTest(mode=mode):
+                rpc=M.StdioRPC([sys.executable,"-u",__file__,"--stdio-fixture",mode],timeout=0.3)
+                try:
+                    if mode == "normal":
+                        self.assertTrue(rpc.call("initialize",{})["ok"])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "active writer" if mode == "error" else "timeout"):
+                            rpc.call("initialize",{})
+                finally:
+                    rpc.close()
+                self.assertIsNotNone(rpc.process.poll())
+
+    def test_shared_server_fallback_closes_both_children(self):
+        shared=Fake([]); shared.close=unittest.mock.Mock()
+        owned=Fake([dict(data=[row()])]); owned.close=unittest.mock.Mock()
+        with patch.object(M,"RPC",return_value=shared),patch.object(M,"StdioRPC",return_value=owned),patch.object(shared,"call",side_effect=OSError("offline")):
+            self.assertIn(SID,M.native_snapshot())
+        shared.close.assert_called_once(); owned.close.assert_called_once()
+
+    def test_verify_project_distinguishes_missing_and_mismatch(self):
+        for rows, error in (({}, "missing"), ({SID:dict(cwd="/different")}, "different project")):
+            with patch.object(M,"native_snapshot",return_value=rows),patch.dict(os.environ,SESSION_MANAGER_BACKEND="auto"):
+                with self.assertRaisesRegex(RuntimeError, SID + ":.*" + error):
+                    M.verify_project(SID,"/project")
+        with patch.object(M,"native_snapshot",return_value={SID:dict(cwd="/project")}),patch.dict(os.environ,SESSION_MANAGER_BACKEND="auto"):
+            M.verify_project(SID,"/project")
+
     def test_raw_jsonl_is_not_websocket(self):
         result = subprocess.run([sys.executable, "-u", __file__, "--wire-fixture", "normal"],
                                 input=b'{"id":1,"method":"initialize","params":{}}\n',
@@ -128,7 +158,7 @@ class Metadata(unittest.TestCase):
             self.assertGreater(result[SID]["bytes"],0)
             self.assertIsNone(result[OTHER]["bytes"])
     def test_unavailable_fallback(self):
-        with tempfile.TemporaryDirectory() as temp,patch.object(M,"RPC",side_effect=OSError("missing")):
+        with tempfile.TemporaryDirectory() as temp,patch.object(M,"RPC",side_effect=OSError("missing")),patch.object(M,"StdioRPC",side_effect=OSError("missing")):
             self.assertEqual(M.collect(Path(temp)),{})
             with self.assertRaises(RuntimeError): M.collect(Path(temp),"native")
     def test_filesystem_never_connects(self):
@@ -232,6 +262,24 @@ def wire_fixture(mode):
         frame(response)
 
 
+def stdio_fixture(mode):
+    if mode == "partial":
+        sys.stdin.readline(); print('{',end='',flush=True); time.sleep(5); return
+    for line in sys.stdin:
+        request=json.loads(line)
+        if "id" not in request: continue
+        if mode == "error":
+            response=dict(id=request["id"],error=dict(code=-1,message="thread has an active writer"))
+        elif mode == "sessions":
+            result={} if request["method"] == "initialize" else dict(data=json.loads(Path(os.environ["SESSION_MANAGER_TEST_NATIVE_ROWS"]).read_text()),nextCursor=None)
+            response=dict(id=request["id"],result=result)
+        else:
+            print(json.dumps(dict(method="notification")),flush=True)
+            response=dict(id=request["id"],result=dict(ok=True))
+        print(json.dumps(response),flush=True)
+
+
 if __name__=="__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--wire-fixture": wire_fixture(sys.argv[2])
+    elif len(sys.argv) == 3 and sys.argv[1] == "--stdio-fixture": stdio_fixture(sys.argv[2])
     else: unittest.main()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only session metadata adapter with an explicit filesystem fallback.
 
-Connects only to an already-running local server: never starts/restarts a daemon.
+Uses an existing local server or a temporary stdio server; never starts a daemon.
 State-DB-only listing avoids the API's optional rollout repair. Legacy files fill
 coverage gaps, and physical bytes remain distinct from native logical sessions.
 """
@@ -187,7 +187,9 @@ class RPC:
             if response.get("id") != ident:
                 continue
             if "error" in response:
-                raise RuntimeError("native metadata capability unavailable")
+                error = response["error"]
+                detail = error.get("message", "unknown error") if isinstance(error, dict) else error
+                raise RuntimeError(f"native {method}: {safe(detail)}")
             return response["result"]
         raise RuntimeError("native metadata timeout")
 
@@ -209,6 +211,48 @@ class RPC:
                 self.process.wait()
         self.process.stdout.close()
         self.errors.close()
+
+
+class StdioRPC(RPC):
+    """An owned, short-lived app server using newline-delimited JSON, not WS."""
+
+    def __init__(self, command=None, timeout=5):
+        super().__init__(command or ["codex", "app-server", "--listen", "stdio://"], timeout)
+
+    def send(self, value, deadline=None):
+        deadline = deadline or min(self.deadline, time.monotonic() + self.timeout)
+        data = json.dumps(value).encode("utf-8") + b"\n"
+        if len(data) > self.MAX_MESSAGE:
+            raise RuntimeError("oversized native request")
+        self._write(data, deadline)
+
+    def _message(self, deadline):
+        message = bytearray()
+        while True:
+            first = self._read(1, deadline)
+            chunk, separator, rest = (first + self.buffer).partition(b"\n")
+            self.buffer = rest if separator else b""
+            message.extend(chunk)
+            if len(message) > self.MAX_MESSAGE:
+                raise RuntimeError("oversized native response")
+            if separator:
+                return json.loads(message.decode("utf-8"))
+
+
+def native_snapshot(archived=False):
+    """Try the shared server first, then an owned server; always close children."""
+    failures = []
+    for factory in (RPC, StdioRPC):
+        rpc = None
+        try:
+            rpc = factory()
+            return native_rows(rpc, archived)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            failures.append(safe(exc))
+        finally:
+            if rpc is not None:
+                rpc.close()
+    raise RuntimeError("shared server: " + failures[0] + "; temporary server: " + failures[1])
 
 
 def native_rows(rpc, archived=False):
@@ -283,18 +327,13 @@ def collect(home, backend="auto", archived=False):
     legacy=filesystem_rows(home,archived)
     if backend=="filesystem":
         return legacy
-    rpc=None
     try:
-        rpc=RPC()
-        native=native_rows(rpc,archived)
+        native=native_snapshot(archived)
     except (OSError,ValueError,KeyError,TypeError,RuntimeError) as exc:
         if backend=="native":
             raise RuntimeError(f"native metadata unavailable: {exc}") from exc
         print(f"session-manager: native metadata unavailable ({safe(exc)}); using filesystem compatibility backend",file=sys.stderr)
         return legacy
-    finally:
-        if rpc is not None:
-            rpc.close()
     for ident,row in native.items():
         if ident in legacy:
             row["bytes"]=legacy[ident]["bytes"]
@@ -311,6 +350,35 @@ def safe(value):
     return re.sub(r"[\x00-\x1f\x7f]"," ",str(value))
 
 
+def deletion_rows():
+    if os.environ.get("SESSION_MANAGER_BACKEND", "auto") not in {"auto", "native"}:
+        raise RuntimeError("bulk deletion requires native metadata; use SESSION_MANAGER_BACKEND=auto or native")
+    try:
+        return native_snapshot()
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        raise RuntimeError(f"bulk deletion requires native metadata: {safe(exc)}; check the Codex CLI installation and retry") from exc
+
+
+def deletion_plan(home, project):
+    """Native preflight is mandatory, including for an empty/file-only project."""
+    if not project or not os.path.isabs(project):
+        raise RuntimeError("expected absolute project path")
+    native = deletion_rows()
+    legacy = filesystem_rows(home)
+    candidates = set(ident for ident, row in native.items() if matches(row, project, "list"))
+    candidates.update(ident for ident, row in legacy.items() if matches(row, project, "list"))
+    for ident in sorted(candidates):
+        row = native.get(ident)
+        if row is None:
+            state, reason = "SKIP", "missing from active native metadata (filesystem-only)"
+        elif not os.path.isabs(row["cwd"]) or not matches(row, project, "list"):
+            state, reason = "SKIP", "native session belongs to a different project"
+        else:
+            state, reason = "ELIGIBLE", "native project verified"
+        row = row or legacy[ident]
+        print("\t".join(map(safe, [state, ident, row["name"], reason])))
+
+
 def verify_project(ident, project):
     """Fresh native-only binding check for a project-scoped mutation.
 
@@ -320,21 +388,12 @@ def verify_project(ident, project):
     """
     if not UUID.fullmatch(ident) or not project or not os.path.isabs(project):
         raise RuntimeError("invalid UUID or expected absolute project path")
-    backend = os.environ.get("SESSION_MANAGER_BACKEND", "auto")
-    if backend not in {"auto", "native"}:
-        raise RuntimeError("bulk deletion requires native metadata; filesystem fallback cannot authorize deletion")
-    rpc = None
-    try:
-        rpc = RPC()
-        rows = native_rows(rpc)
-    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-        raise RuntimeError(f"bulk deletion requires native metadata: {safe(exc)}") from exc
-    finally:
-        if rpc is not None:
-            rpc.close()
+    rows = deletion_rows()
     row = rows.get(ident)
-    if row is None or not os.path.isabs(row["cwd"]) or os.path.realpath(row["cwd"]) != os.path.realpath(project):
-        raise RuntimeError("native session does not belong to the approved project; deletion refused")
+    if row is None:
+        raise RuntimeError(f"{ident}: session missing from active native metadata; deletion refused")
+    if not os.path.isabs(row["cwd"]) or os.path.realpath(row["cwd"]) != os.path.realpath(project):
+        raise RuntimeError(f"{ident}: native session belongs to a different project; deletion refused")
 
 
 def matches(row, query, mode):
@@ -362,7 +421,7 @@ def age(stamp):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("mode",choices=["list","stats","verify-project"])
+    parser.add_argument("mode",choices=["list","stats","verify-project","delete-plan"])
     parser.add_argument("filter",nargs="?")
     parser.add_argument("--archived",action="store_true",help="include archived sessions")
     parser.add_argument("--json",action="store_true",help="metadata rows with source and nullable physical bytes")
@@ -372,6 +431,9 @@ def main():
         verify_project(args.filter or "", args.project)
         return
     home=Path(os.environ.get("CODEX_HOME",str(Path.home()/".codex")))
+    if args.mode == "delete-plan":
+        deletion_plan(home, args.project)
+        return
     rows=list(collect(home,os.environ.get("SESSION_MANAGER_BACKEND","auto"),args.archived).values())
     cwd=os.getcwd()
     logical=os.environ.get("PWD","")

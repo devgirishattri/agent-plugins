@@ -26,8 +26,10 @@ Present tab-separated output as:
 Show full session IDs and a total count. Native metadata supplies the title when
 available; the compatibility backend uses the latest indexed name. Missing
 names remain `(untitled)`; never substitute a description or first user message.
-The helper connects only to an existing local Codex daemon and falls back to
-filesystem metadata. Relay backend diagnostics from stderr. `unknown` size
+The helper tries the existing local Codex daemon, then a temporary stdio app
+server that it closes after lookup. It never starts a persistent daemon. If both
+native connections fail, auto mode falls back to filesystem metadata. Relay
+backend diagnostics from stderr. `unknown` size
 means native history has no known local file size, not zero storage.
 For explicit archive requests append `--archived`; for machine-readable requests
 append `--json` (includes per-row source and nullable physical bytes). The

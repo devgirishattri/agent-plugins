@@ -179,7 +179,7 @@ status=$?
 set -e
 assert_eq "1" "$status" "filesystem-only bulk deletion must fail closed"
 assert_contains "$output" "requires native metadata" "bulk deletion explains its native requirement"
-assert_contains "$output" "Sessions: 2 processed | 0 fully deleted | 2 with failures" "refused bulk summary"
+assert_not_contains "$output" "Bulk-deleting" "filesystem-only preflight must refuse before the batch"
 assert_log_empty "filesystem-only bulk deletion"
 assert_session_file_exists "$UUID_ONE" "filesystem-only bulk deletion"
 assert_session_file_exists "$UUID_TWO" "filesystem-only bulk deletion"

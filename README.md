@@ -11,7 +11,7 @@ Every plugin below ships for both providers at the same version number.
 
 | Plugin | Version | Purpose |
 |--------|---------|---------|
-| `session-manager` | 1.7.9 | List, search, and delete local agent session data |
+| `session-manager` | 1.7.10 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.11 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.27 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
@@ -174,24 +174,34 @@ three names are rejected if written directly into an `env.groups` block, so
 
 It reads the session data your runtime already writes. On Codex, install
 Python 3 to read session names; deletion execs the native `codex` CLI, so that
-binary must also be on `PATH`. Listing uses native metadata through an existing
-Codex daemon's WebSocket control socket when available. It never starts a daemon.
-If the CLI or socket is unavailable, it reports a warning and falls back to local
+binary must also be on `PATH`. Native lookup tries an existing Codex daemon's
+WebSocket control socket, then a temporary stdio app server that it closes after
+lookup. No manual daemon startup is required; it never starts a persistent daemon.
+If both native connections fail, auto mode reports a warning and falls back to local
 session files and the latest names in `session_index.jsonl`; missing names display
 `(untitled)`. Native metadata supplies names when available, and native-only
 history has an unknown physical size until a local file is found.
 
-Codex bulk deletion requires a fresh native UUID-to-project match before each
-removal; unavailable native metadata or filesystem-only mode refuses deletion.
-Transcript fallback remains available for read-only listing.
+Codex bulk deletion preflights native access before starting, then requires a
+fresh native UUID-to-project match before each removal. Preview with
+`scripts/delete-all-sessions.sh --plan [project-path]`: it separates eligible
+sessions from skipped filesystem-only or conflicting records. Unavailable
+native metadata or filesystem-only mode refuses the batch before deletion.
+The result includes deleted, failed, and skipped counts, with UUIDs and specific
+reasons for failures. Skips or failures make a confirmed batch exit nonzero.
+Transcript fallback remains available for read-only listing; native deletion
+continues through `codex delete --force`.
 
 `SESSION_MANAGER_BACKEND=filesystem codex-ls` explicitly selects local files and
 skips the native connection attempt (when using the shell alias). The same
 environment setting applies to `scripts/list-sessions.sh` and
 `scripts/session-stats.sh`; `auto` is the default and `native` fails instead of
 falling back. The isolated real-daemon regression can be run with
-`python3 -B scripts/test-session-metadata-live.py`; it requires Codex CLI 0.154.0,
+`python3 -B scripts/test-session-metadata-live.py`; CI pins Codex CLI 0.155.0,
 uses synthetic histories, makes no model calls, and stops its disposable daemon.
+`python3 -B scripts/test-session-deletion-live.py` verifies preview and native
+deletion without a daemon in an isolated home, including preservation of another
+project's history. The temporary-connection deletion path is verified on 0.155.0.
 
 ### chronos
 

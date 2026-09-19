@@ -46,6 +46,7 @@ class Boundaries(unittest.TestCase):
         mock.write_text('#!/bin/sh\n'
                         'if [ "$1" = app-server ]; then\n'
                         '  [ "${SESSION_MANAGER_TEST_OFFLINE:-0}" = 1 ] && exit 1\n'
+                        f'  [ "$2" = --listen ] && exec {python} -B {fixture} --stdio-fixture sessions\n'
                         f'  exec {python} -B {fixture} --wire-fixture sessions\n'
                         'fi\n'
                         '[ "$1" = delete ] && [ "$2" = --force ] || exit 2\n'
@@ -110,21 +111,70 @@ class Boundaries(unittest.TestCase):
         self.assertIn("native", result.stdout + result.stderr)
 
     def test_bulk_rechecks_native_binding_after_enumeration(self):
-        # Force fallback enumeration, but leave native state available for the
-        # independent check immediately preceding mutation.
+        # Preflight matches; the binding changes before the mutation check.
         self.transcript(self.project)
-        self.native.write_text(json.dumps([dict(id=SID, cwd=str(self.other), updatedAt=1)]))
+        self.native.write_text(json.dumps([dict(id=SID, cwd=str(self.project), updatedAt=1)]))
+        changed=self.root / "changed.json"
+        changed.write_text(json.dumps([dict(id=SID,cwd=str(self.other),updatedAt=1)]))
         mock = self.bin / "codex"
         code = mock.read_text()
         marker = shlex.quote(str(self.root / "first-proxy"))
         code = code.replace('if [ "$1" = app-server ]; then\n',
                             'if [ "$1" = app-server ]; then\n'
-                            f'  if [ ! -e {marker} ]; then : > {marker}; exit 1; fi\n')
+                            f'  if [ -e {marker} ]; then SESSION_MANAGER_TEST_NATIVE_ROWS={shlex.quote(str(changed))}; export SESSION_MANAGER_TEST_NATIVE_ROWS; else : > {marker}; fi\n')
         mock.write_text(code)
         result = self.bulk()
         self.assert_no_delete()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("project", result.stdout + result.stderr)
+        self.assertIn(SID + ": native session belongs to a different project", result.stderr)
+
+    def test_bulk_offline_preflight_is_once_before_batch(self):
+        self.transcript(self.project)
+        second="22222222-2222-4222-8222-222222222222"
+        (self.home/"sessions"/f"rollout-{second}.jsonl").write_text(json.dumps({"type":"session_meta","payload":{"id":second,"cwd":str(self.project)}})+"\n")
+        self.env["SESSION_MANAGER_TEST_OFFLINE"]="1"
+        result=self.bulk()
+        self.assertNotEqual(result.returncode,0)
+        self.assert_no_delete()
+        self.assertEqual(result.stderr.count("bulk deletion requires native metadata"),1)
+        self.assertNotIn("Bulk-deleting",result.stdout)
+
+    def test_bulk_file_only_skipped_and_native_control_deleted(self):
+        self.transcript(self.project)
+        other="22222222-2222-4222-8222-222222222222"
+        self.native.write_text(json.dumps([dict(id=other,cwd=str(self.project),updatedAt=1)]))
+        result=self.bulk()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("SKIP\t" + SID,result.stdout)
+        self.assertIn("filesystem-only",result.stdout)
+        self.assertIn("1 processed | 1 fully deleted | 0 with failures | 1 skipped",result.stdout)
+        self.assertEqual(self.log.read_text().splitlines(),[other])
+
+    def test_bulk_plan_never_deletes(self):
+        self.native.write_text(json.dumps([dict(id=SID,cwd=str(self.project),updatedAt=1)]))
+        result=self.run_script("session-manager","delete-all-sessions.sh","--plan",str(self.project))
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn("ELIGIBLE\t"+SID,result.stdout)
+        self.assert_no_delete()
+
+    def test_bulk_temporary_connection_control(self):
+        self.native.write_text(json.dumps([dict(id=SID,cwd=str(self.project),updatedAt=1)]))
+        mock=self.bin/"codex"
+        mock.write_text(mock.read_text().replace('if [ "$1" = app-server ]; then\n','if [ "$1" = app-server ]; then\n  [ "$2" = proxy ] && exit 1\n'))
+        result=self.bulk()
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(),[SID])
+
+    def test_bulk_native_failure_keeps_uuid_and_diagnostic(self):
+        self.native.write_text(json.dumps([dict(id=SID,cwd=str(self.project),updatedAt=1)]))
+        mock=self.bin/"codex"
+        mock.write_text(mock.read_text()+'echo "Error: active writer fixture" >&2\nexit 7\n')
+        result=self.bulk()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("active writer fixture",result.stderr)
+        self.assertIn("Native deletion failed for "+SID+" (exit 7)",result.stderr)
+        self.assertIn("Failed UUID: "+SID,result.stdout)
 
     def test_bulk_native_control(self):
         self.transcript(self.project)

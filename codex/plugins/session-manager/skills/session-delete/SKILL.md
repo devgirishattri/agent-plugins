@@ -20,10 +20,15 @@ For a selection or confirmation:
 When the target is exactly `--all`, run:
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/list-sessions.sh"
+bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh" --plan
 ```
 
-If no rows are returned, report that no sessions were found and stop. Otherwise, show the rows and exact count, warn that the active session is included and may be rewritten when it exits, then ask the final confirmation question. Only after an explicit affirmative answer, run:
+If preflight fails, report its diagnostic and stop. Show the project, ELIGIBLE
+rows and count, and SKIP rows with their reasons separately. If there are no
+eligible rows, report that and stop without asking for deletion confirmation.
+Warn that eligible active sessions may fail deletion while in use, then ask the
+final confirmation question for the eligible sessions in this project. Only
+after an explicit affirmative answer, run:
 
 ```bash
 bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh" --confirmed
@@ -31,10 +36,18 @@ bash "$PLUGIN_ROOT/scripts/delete-all-sessions.sh" --confirmed
 
 Report the native Codex results. On any other answer, report `Deletion cancelled.`
 
-Bulk deletion rechecks each UUID against native metadata immediately before
-deleting it and requires an exact match to the approved project. Filesystem
-fallback rows are for discovery only: unavailable native metadata, a changed
-project binding, or `SESSION_MANAGER_BACKEND=filesystem` refuses deletion.
+Bulk deletion performs a native preflight before beginning the batch, then
+rechecks each eligible UUID immediately before deletion and requires an exact
+match to the approved project. Filesystem-only rows are skipped, with reasons;
+they never authorize deletion. Missing native metadata and a changed project
+binding have distinct errors. Report the final deleted, failed, and skipped
+counts and failed UUIDs; do not describe skipped sessions as deleted.
+
+Native lookup first tries the existing shared server, then a temporary stdio
+app server that is closed after the lookup. No manual daemon startup is needed.
+If both connections fail, or `SESSION_MANAGER_BACKEND=filesystem` is selected,
+preflight refuses the batch. Relay the diagnostic; do not change the backend
+environment implicitly. Deletion itself stays with the native Codex CLI.
 
 ## Delete one session
 
