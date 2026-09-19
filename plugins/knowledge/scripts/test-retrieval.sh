@@ -539,6 +539,77 @@ run_search "$S13" totally_missing_slug
 assert_rc drift_search_silent_zero_hit_rc 0 "$RS_RC"
 assert_eq drift_search_silent_stderr_empty "" "$(cat "$RS_ERR")"
 
+# Code is excluded by the shared extractor in every graph mode. Real prose
+# links and a dangling link after the closing fence are positive controls.
+echo "--- code-aware backlink extraction ---"
+SC=$(new_store "$TMP/code_links")
+mk_canonical "$SC" alpha_feedback "Alpha feedback" "real target" feedback <<'EOF'
+A real target.
+EOF
+mk_canonical "$SC" code_source "Code source" "code examples and prose" project <<'EOF'
+Real prose [[alpha_feedback]].
+```bash
+generated[[:space:]]+(with|by)[[:space:]]+
+[[not_a_real_slug]]
+```
+Inline `[[also_not_a_link]]` and another `[[second_inline]]`.
+~~~
+[[tilde_fenced]]
+~~~
+[[missing_after_fence]]
+EOF
+run_bl "$SC" report
+assert_rc code_report_rc 0 "$RB_RC"
+assert_file_eq code_report_one_dangling "$RB_ERR" $'dangling: [[missing_after_fence]]\n'
+for fmt in json dot mermaid; do
+  run_bl "$SC" graph --format "$fmt"
+  assert_rc "code_graph_${fmt}_rc" 0 "$RB_RC"
+  assert_file_eq "code_graph_${fmt}_count" "$RB_ERR" $'dangling: 1\n'
+  assert_contains "code_graph_${fmt}_real_source" "$(cat "$RB_OUT")" code_source
+  assert_contains "code_graph_${fmt}_real_target" "$(cat "$RB_OUT")" alpha_feedback
+  for fake in space not_a_real_slug also_not_a_link second_inline tilde_fenced; do
+    assert_not_contains "code_graph_${fmt}_excludes_${fake}" "$(cat "$RB_OUT")" "$fake"
+  done
+done
+run_bl "$SC" neighbors alpha_feedback
+assert_file_eq code_neighbors_inbound "$RB_OUT" $'in\tcode_source\n'
+run_bl "$SC" reverse alpha_feedback
+assert_file_eq code_reverse_inbound "$RB_OUT" $'code_source\n'
+run_bl "$SC" expand alpha_feedback
+assert_file_eq code_expand_inbound "$RB_OUT" $'in\tcode_source\talpha_feedback\n'
+run_bl "$SC" orphans
+assert_file_eq code_source_not_orphan "$RB_OUT" ''
+run_bl "$SC" components
+assert_contains code_components_source "$(cat "$RB_OUT")" code_source
+assert_contains code_components_target "$(cat "$RB_OUT")" alpha_feedback
+
+# Fence state: indent, longer delimiters, wrong character, shorter runs,
+# longer closers, and an unclosed fence consuming the remainder.
+mk_canonical "$SC" code_source "Code source" "fence boundaries" project <<'EOF'
+  ````bash
+[[long_fence]]
+```
+[[short_does_not_close]]
+~~~~
+[[wrong_character]]
+  `````
+[[alpha_feedback]] and `[[hidden]]` then [[missing_after_fence]].
+  ~~~~text
+[[tilde_long]]
+~~~
+[[tilde_short_does_not_close]]
+````
+[[tilde_wrong_character]]
+~~~~~
+[[alpha_feedback]]
+```unclosed
+[[unclosed_is_code]]
+EOF
+run_bl "$SC" report
+assert_file_eq code_boundaries_report "$RB_ERR" $'dangling: [[missing_after_fence]]\n'
+run_bl "$SC" neighbors alpha_feedback
+assert_file_eq code_boundaries_real_edge "$RB_OUT" $'in\tcode_source\n'
+
 # ===========================================================================
 # 14. graph subcommands: self-loop both-rows, unresolved slug exit 2 bytes,
 #     components ordering (already exercised above in section 13/15 too)

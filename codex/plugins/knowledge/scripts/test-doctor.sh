@@ -282,6 +282,17 @@ write_canonical "$clean_store/redis_tls_incident.md" project "Redis TLS incident
   "2020-01-01" "2020-01-02" $'tags:\n  - redis\n  - tls'
 write_canonical "$clean_store/alpha_feedback.md" feedback "ProjectA feedback" "how to run the deploy script" \
   "2020-01-01" "2020-01-02" "" $'**Why:** synthetic.\n\n**How to apply:** see [[redis_tls_incident]].'
+cat >> "$clean_store/alpha_feedback.md" <<'EOF'
+
+```bash
+generated[[:space:]]+(with|by)[[:space:]]+
+[[not_a_real_slug]]
+```
+Inline code: `[[also_not_a_link]]`.
+~~~
+[[tilde_fenced]]
+~~~
+EOF
 chmod 600 "$clean_store"/*.md
 chmod 700 "$clean_store"
 : > "$clean_store/MEMORY.md"
@@ -303,6 +314,10 @@ status: accepted
 # Use synthetic fixtures in tests
 
 Status: Accepted
+EOF
+cat > "$clean_repo/docs/decisions/README.md" <<'EOF'
+# Decisions
+- [Use synthetic fixtures](adopt_clean_fixtures.md)
 EOF
 cat > "$clean_repo/docs/reference.md" <<'EOF'
 # Reference
@@ -343,6 +358,8 @@ after_repo=$(tree_hash "$clean_repo")
 after_home=$(tree_hash "$clean_home")
 
 assert_rc "clean_fixture_exit0" 0 "$rc"
+assert_not_contains "clean_fixture_no_taxonomy" "$out" $'\tdocs-taxonomy\t'
+assert_not_contains "clean_fixture_no_backlinks" "$out" $'WARN\tmemory-backlinks\t'
 assert_eq "clean_fixture_repo_tree_unchanged" "$before_repo" "$after_repo"
 assert_eq "clean_fixture_home_tree_unchanged" "$before_home" "$after_home"
 assert_contains "clean_fixture_memory_resolved" "$out" "memory store resolved: $clean_store"
@@ -418,6 +435,9 @@ cat > "$bad_repo/docs/decisions/bad-name.md" <<'EOF'
 # Not snake_case
 
 Status: Accepted
+EOF
+cat > "$bad_repo/docs/decisions/Readme.md" <<'EOF'
+# Different case is still a decision record
 EOF
 cat > "$bad_repo/docs/DEC-2020-02-02-misplaced.md" <<'EOF'
 # Misplaced decision record
@@ -500,6 +520,8 @@ assert_contains "bad_lock_orphaned_claim" "$out" "orphaned claim file: $bad_stor
 assert_contains "bad_lock_orphaned_journal_tmp" "$out" "orphaned journal temp: $bad_store/.journal.tmp.999999999"
 assert_contains "bad_lock_orphaned_staged" "$out" "orphaned staged directory: $bad_store/.staged.999999999"
 assert_contains "bad_docs_bad_decision_naming" "$out" "bad decision naming: docs/decisions/bad-name.md"
+assert_contains "bad_docs_readme_case_naming" "$out" "bad decision naming: docs/decisions/Readme.md"
+assert_contains "bad_docs_readme_case_metadata" "$out" "decision metadata missing: docs/decisions/Readme.md"
 assert_contains "bad_docs_misplaced" "$out" "misplaced legacy decision record: docs/DEC-2020-02-02-misplaced.md"
 assert_contains "bad_docs_broken_link" "$out" "reference.md -> nope.md"
 assert_contains "bad_docs_embedded_marker" "$out" "TODO"
@@ -510,6 +532,25 @@ assert_contains "bad_capability_resolver_divergence" "$out" "diverges from the r
 assert_contains "bad_capability_project_local_observed" "$out" "autoMemoryDirectory (project-local settings"
 assert_contains "bad_capability_project_local_divergence" "$out" "project-local settings: /tmp/project-local-divergent-path"
 assert_contains "bad_context_stale" "$out" "stale context snapshot 'old'"
+
+# Use a separate pass: README.md and Readme.md cannot coexist on a
+# case-insensitive filesystem. Retain the original decision filename control.
+(cd "$bad_repo" && git mv docs/decisions/Readme.md docs/decisions/index_tmp &&
+  git mv docs/decisions/index_tmp docs/decisions/README.md)
+cat > "$bad_repo/docs/decisions/README.md" <<'EOF'
+# Decisions
+Broken: [nope](./missing_index_target.md)
+TODO: repair index
+References `src/thing.ts`.
+EOF
+(cd "$bad_repo" && git add -A && GIT_AUTHOR_DATE="2020-01-01T00:00:00" GIT_COMMITTER_DATE="2020-01-01T00:00:00" git commit -q -m "old index") >/dev/null 2>&1
+out=$(cd "$bad_repo" && HOME="$bad_home" CODEX_HOME="$bad_home/.codex" \
+  SESSION_CONTEXT_HOME="$bad_ctx" bash "$DOCTOR" --store "$bad_store" 2>&1)
+assert_not_contains "bad_docs_index_no_naming" "$out" "bad decision naming: docs/decisions/README.md"
+assert_not_contains "bad_docs_index_no_metadata" "$out" "decision metadata missing: docs/decisions/README.md"
+assert_contains "bad_docs_index_links" "$(printf '%s\n' "$out" | awk -F'\t' '$2=="docs-links"')" "README.md ->"
+assert_contains "bad_docs_index_todos" "$(printf '%s\n' "$out" | awk -F'\t' '$2=="docs-todos"')" "decisions/README.md"
+assert_contains "bad_docs_index_freshness" "$(printf '%s\n' "$out" | awk -F'\t' '$2=="docs-freshness"')" "decisions/README.md"
 
 echo "--- AGENTS.md variants ---"
 

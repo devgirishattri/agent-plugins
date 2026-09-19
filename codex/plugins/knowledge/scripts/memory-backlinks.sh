@@ -125,9 +125,30 @@ _km_bl_body_of() {
   ' "$1"
 }
 
-# --- one raw [[link]] target per line (may repeat) ---
+# --- one raw [[link]] target per line (may repeat), excluding fenced code
+# and inline code spans. All graph modes share this shell-only extractor. ---
 _km_bl_extract_links() {
-  _km_bl_body_of "$1" | grep -oE '\[\[[^]]+\]\]' | sed -E 's/^\[\[//; s/\]\]$//'
+  _km_bl_body_of "$1" | awk '
+    {
+      line=$0
+      sub(/^[[:blank:]]*/, "", line)
+      if (match(line, /^```+|^~~~+/)) {
+        char=substr(line, 1, 1)
+        count=RLENGTH
+        if (fence == "") {
+          fence=char
+          width=count
+        } else if (char == fence && count >= width &&
+                   substr(line, count + 1) ~ /^[[:blank:]]*$/) {
+          fence=""
+        }
+        next
+      }
+      if (fence != "") next
+      gsub(/`[^`]*`/, "")
+      print
+    }
+  ' | grep -oE '\[\[[^]]+\]\]' | sed -E 's/^\[\[//; s/\]\]$//'
 }
 
 links_raw="$WORKDIR/links_raw.tsv"

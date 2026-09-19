@@ -295,7 +295,7 @@ section_docs() {
   fi
 
   # --- decision-record naming: docs/decisions/<snake_case>.md, with dates in
-  # metadata instead of the filename.
+  # metadata instead of the filename; the README.md folder index is exempt.
   local dec_dir="$docs_dir/decisions"
   local dec_re='^[a-z0-9]+(_[a-z0-9]+)*\.md$'
   local dec_date_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
@@ -304,6 +304,7 @@ section_docs() {
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       base=$(basename "$f")
+      [ "$base" = "README.md" ] && continue
       if [[ ! "$base" =~ $dec_re ]]; then
         emit WARN docs-taxonomy "bad decision naming: docs/decisions/$base (expected snake_case.md; put dates in decided: metadata, not the filename)"
       fi

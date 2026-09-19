@@ -34,6 +34,8 @@ allowed-tools: Bash(bash:*)
 
 Exit codes: `0` success (including empty results); `2` a bad/unresolvable slug — for `neighbors`/`reverse` this means stderr said `unknown slug: <arg>` (the slug doesn't resolve, exactly nor via the hyphen/underscore/case-normalized fallback); relay it and suggest `/knowledge:search <name>` to find the right slug. `3` the store could not be resolved — relay the stderr message (suggests `/knowledge:init` when none exists). `4` a store-integrity error (slug collision or a filename stem outside the safe `[A-Za-z0-9._-]` grammar) — relay and stop; this is a data problem in the store, not something to retry.
 
+Links inside fenced code blocks (backticks or tildes) and single-backtick inline code spans are not links.
+
 ## Output
 
 - `neighbors <slug>`: rows `<in|out>\t<stem>` — in-edges before out-edges, each block sorted by stem. A self-linking memory shows up as both an `in` and an `out` row.
