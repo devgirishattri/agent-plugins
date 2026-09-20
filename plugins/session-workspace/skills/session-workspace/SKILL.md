@@ -103,12 +103,20 @@ them:
   was not launched under an earlier `audit`/`enforce` mode (stale mode is
   drift and blocks until the configured session containing the pane is
   restarted via `/session-workspace:workspace-restart <session-id>`).
-- **Reviewer**: every Edit/Write/NotebookEdit is blocked; shell is
-  default-deny except one literal read-only command inside its own checkout
-  (no pipes, redirection, `sed`, sibling `../` reads) and trusted
-  coordination helpers (reply to the orchestrator, `task-done`/`task-block`,
-  context and read-only knowledge helpers). Verdicts go out as a single-line
-  `/session-chat:reply` or a scheduler note.
+- **Reviewer**: Edit/Write/NotebookEdit/apply_patch are blocked everywhere
+  except one staging exception: non-hidden `.md`/`.txt` files placed
+  directly in a messages store the validated plan grants this pane
+  (`roles.reviewer.grants` includes `messages`; the path comes from the plan,
+  never from inherited `SESSION_*` env). Targets are canonicalised before the
+  check, so symlinks and `../` that leave the store are refused, as are
+  existing targets that are not single-link regular files, `queue/` and
+  `archive/` subpaths, and any patch that also touches a file outside the
+  store. Shell writes remain denied. Shell is default-deny except one literal
+  read-only command inside its own checkout (no pipes, redirection, `sed`,
+  sibling `../` reads) and trusted coordination helpers (reply to the
+  orchestrator, `task-done`/`task-block`, context and read-only knowledge
+  helpers). Verdicts go out as a single-line `/session-chat:reply`, a
+  scheduler note, or a staged file sent with `dispatch-to-session.sh`.
 - **Executor**: edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files

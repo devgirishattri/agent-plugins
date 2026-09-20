@@ -152,6 +152,12 @@ compare_case "reviewer Git parent cwd escape" reviewer "$REVIEW_PANE" "$CHILD" "
 compare_case "reviewer quoted outside path containing spaces" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'cat "/tmp/outside file"')" deny
 compare_case "reviewer bare relative symlink escape" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'cat escape-link')" deny
 compare_case "reviewer bare spaced symlink escape" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'cat "escape link"')" deny
+mkdir -p "$PROJECT/.tmp/messages"
+compare_case "reviewer message draft allowed" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit "$PROJECT/.tmp/messages/review.md")" allow
+compare_case "reviewer queue draft denied" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit "$PROJECT/.tmp/messages/queue/review.md")" deny
+compare_case "reviewer context draft denied" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit "$PROJECT/.tmp/contexts/review.md")" deny
+ln -s "$OUTSIDE_SECRET" "$PROJECT/.tmp/messages/escape.md"
+compare_case "reviewer draft symlink escape denied" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit "$PROJECT/.tmp/messages/escape.md")" deny
 compare_case "reviewer edit denial" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit 'src/file.ts')"
 compare_case "reviewer unknown mutation" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'touch file')"
 compare_case "reviewer Git mutation" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'git config user.email reviewer@example.test')"

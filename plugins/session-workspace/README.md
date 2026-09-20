@@ -302,7 +302,11 @@ engine-owned launch identity the policy cross-checks.
 Configuration selects *which* panes hold each role; it cannot add scripts,
 regexes, shell fragments, commands, or permission exceptions. The floor:
 
-- **Reviewer** — every edit/write/patch/notebook tool is denied. Shell is
+- **Reviewer** — native edit/write/patch/notebook tools may stage non-hidden
+  `.md`/`.txt` files directly inside the validated `messages` grant (normally
+  `.tmp/messages`). Other files, nested queue/archive state, hardlinked
+  targets, and resolved paths outside that grant remain denied. The grant
+  comes from the workspace plan, never inherited environment overrides. Shell is
   default-deny, with two carve-outs: (a) one literal read-only command
   (`cat head tail wc ls stat file diff grep rg find jq sort ...` and
   read-only `git` subcommands without write/output/external-exec options)
@@ -477,9 +481,10 @@ that information or a sound mitigation exists.
   on every gated tool call (a jq-only plan; the hook is registered on the
   gated tools only). There is deliberately no cache: a same-uid cache file
   could be planted by an executor.
-- Reviewer verdicts travel as single-line `send-message.sh` replies or
-  scheduler notes — a reviewer cannot stage a multi-line dispatch body
-  because every write tool is denied. Executors stage prompt files inside
+- Reviewer verdicts travel as single-line `send-message.sh` replies,
+  scheduler notes, or multiline files staged with a native edit tool in
+  the configured `messages` grant and dispatched with `--reply-to`. Shell
+  staging remains denied. Executors stage prompt files inside
   their own checkout; a trusted helper may consume a pre-existing literal
   `$TMPDIR` file as input, but containment refuses creating one there.
 - Executors read dispatch files with the provider's `Read` tool (unknown

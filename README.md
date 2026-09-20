@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.11 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.28 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.5.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.5.4 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -321,6 +321,14 @@ memory root) must already exist or the first agent to write to one can fail.
 mkdir -p "$STORES_BASE"/{messages,scheduler,contexts}
 chmod 700 "$STORES_BASE"/{messages,scheduler,contexts}
 ```
+
+Under strict-v1, reviewers may use native edit tools to stage non-hidden
+`.md`/`.txt` reply files directly in their configured `messages` grant
+(normally `.tmp/messages`), then dispatch them to the orchestrator with
+`--reply-to` correlation. Other reviewer file writes remain blocked, including
+nested queue/archive state and hardlinked files. The exception uses validated
+configuration, not an inherited environment override; it does not permit shell
+redirection or grant access when the role lacks the `messages` grant.
 
 One asymmetry to know about: `stores.pin` exports the three coordination
 variables, but `stores.memory.root` exports nothing. If panes should write to

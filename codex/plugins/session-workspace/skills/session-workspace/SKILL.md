@@ -109,12 +109,17 @@ them:
   was not launched under an earlier `audit`/`enforce` mode (stale mode is
   drift and blocks until the configured session containing the pane is
   restarted via `$session-workspace:workspace-restart <session-id>`).
-- **Reviewer**: every Edit/Write/NotebookEdit is blocked; shell is
-  default-deny except one literal read-only command inside its own checkout
-  (no pipes, redirection, `sed`, sibling `../` reads) and trusted
-  coordination helpers (reply to the orchestrator, `task-done`/`task-block`,
-  context and read-only knowledge helpers). Verdicts go out as a single-line
-  `$session-chat:reply` or a scheduler note.
+- **Reviewer**: native edit tools may stage or revise non-hidden `.md`/`.txt`
+  files directly inside the validated `messages` grant (normally
+  `<project>/.tmp/messages`). Other files, nested transport state, and
+  hardlinked files remain blocked; resolved targets must stay in that grant.
+  No grant means no staging exception; inherited store variables cannot grant
+  access. Shell remains default-deny except one literal read-only command
+  inside its own checkout (no pipes, redirection, `sed`, sibling `../` reads)
+  and trusted coordination helpers. Send short verdicts with
+  `$session-chat:reply`; for long or multiline verdicts, stage a message with
+  a native edit tool and dispatch that file to the orchestrator with
+  `--reply-to` correlation. Shell-based staging remains blocked.
 - **Executor**: edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files

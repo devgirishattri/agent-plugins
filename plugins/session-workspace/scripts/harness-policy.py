@@ -228,6 +228,7 @@ class Context:
     reviewer_panes: frozenset
     child_roots: tuple
     grant_roots: tuple
+    message_roots: tuple
     claude_home: Path
     codex_home: Path
     guards: dict
@@ -499,9 +500,13 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
     # --add-dir grants plus its memory shard) are readable/addressable roots
     # for helper operands even though they live outside a child's cwd.
     grant_paths = set()
+    message_paths = set()
     for grant in pane.get("grants", []) or []:
         if isinstance(grant, dict) and isinstance(grant.get("path"), str) and grant["path"]:
-            grant_paths.add(canonical(Path(grant["path"])))
+            grant_path = canonical(Path(grant["path"]))
+            grant_paths.add(grant_path)
+            if grant.get("store") == "messages":
+                message_paths.add(grant_path)
     # (the memory shard is a grant like any other: it is present in
     # pane.grants only when roles.<r>.grants lists "memory")
     claude_home, codex_home = provider_homes()
@@ -517,6 +522,7 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         reviewer_panes=reviewer_panes,
         child_roots=child_roots,
         grant_roots=tuple(sorted(grant_paths, key=str)),
+        message_roots=tuple(sorted(message_paths, key=str)),
         claude_home=claude_home,
         codex_home=codex_home,
         guards=guards,
@@ -2053,8 +2059,6 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
 
 
 def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
-    if ctx.semantic_role == "reviewer":
-        raise PolicyFailure("reviewer.readonly", "reviewer panes cannot edit, write, patch, move, or delete files")
     targets = edit_targets(tool_input)
     if not targets:
         raise PolicyFailure("edit.path", "active harness could not identify an edit target")
@@ -2071,6 +2075,22 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
     for value in sorted(targets):
         raw = Path(value).expanduser()
         path = canonical(raw if raw.is_absolute() else base / raw)
+        if ctx.semantic_role == "reviewer":
+            # Only top-level message drafts, never transport queue/archive state.
+            # Grants come from the validated plan, not inherited store variables.
+            allowed = (
+                path.parent in ctx.message_roots
+                and not path.name.startswith(".")
+                and path.suffix in {".md", ".txt"}
+            )
+            try:
+                if path.exists() and (not path.is_file() or path.stat().st_nlink != 1):
+                    allowed = False
+            except OSError:
+                allowed = False
+            if not allowed:
+                raise PolicyFailure("reviewer.readonly", "reviewer panes cannot edit, write, patch, move, or delete files")
+            continue
         protected = ctx.guards.get("protected_files")
         if ctx.semantic_role == "orchestrator" and within(path, ctx.project_root) and isinstance(protected, dict):
             basename = path.name

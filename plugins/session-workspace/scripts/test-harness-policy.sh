@@ -26,7 +26,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-POLICY="$HERE/harness-policy.py"
+POLICY="${HARNESS_TEST_POLICY:-$HERE/harness-policy.py}"
 PY="${HARNESS_TEST_PYTHON:-python3}"
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/session-workspace-harness-test.XXXXXX")"
 trap 'rm -rf "$TMPROOT"' EXIT
@@ -452,6 +452,39 @@ as_review "reviewer git -C .. status is denied" "$(bash_payload 'git -C .. statu
 as_review "reviewer cat absolute path containing spaces outside its roots is denied" "$(bash_payload "cat \"$TMPROOT/some dir/file.ts\"")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer cat path containing spaces inside its checkout is allowed" "$(bash_payload "cat \"$CHILD/sub dir/file.ts\"")" '.decision == "allow"'
 as_review "reviewer cd is not a read-only command" "$(bash_payload 'cd .. && ls')" '.decision == "deny" and .rule == "reviewer.shell"'
+# Reviewer message staging is a narrow native-edit exception, not store access.
+write_payload() { jq -cn --arg p "$1" '{tool_name:"Write",tool_input:{file_path:$p,content:"PLAN-REVIEW: approve\nEvidence follows."}}'; }
+as_review "reviewer can stage a multiline message" "$(write_payload "$ROOT/.tmp/messages/review.md")" '.decision == "allow"'
+as_review "reviewer can revise staged text" "$(edit_payload "$ROOT/.tmp/messages/review.txt")" '.decision == "allow"'
+as_review "reviewer relative staging path" "$(write_payload "../.tmp/messages/review.md")" '.decision == "allow"'
+as_review "reviewer can dispatch staged message" "$(bash_payload "bash $DISPATCH --reply-to abcdef12 $MASTER_PANE $ROOT/.tmp/messages/note.md")" '.decision == "allow"'
+for forbidden in "$CHILD/review.md" "$ROOT/.tmp/contexts/review.md" "$ROOT/.tmp/scheduler/review.md" "$ROOT/.agents/memory/review.md" "$FAKE_CLAUDE/messages/review.md" "$ROOT/.tmp/messages/queue/review.md" "$ROOT/.tmp/messages/archive/review.md" "$ROOT/.tmp/messages/.hidden.md" "$ROOT/.tmp/messages/script.sh" "$ROOT/.tmp/messages/../source.md"; do
+  as_review "reviewer staging rejects $forbidden" "$(write_payload "$forbidden")" '.decision == "deny" and .rule == "reviewer.readonly"'
+done
+ln -s "$CHILD/README.md" "$ROOT/.tmp/messages/escape.md"
+ln "$CHILD/README.md" "$ROOT/.tmp/messages/hardlink.md"
+as_review "reviewer staging rejects symlink escape" "$(write_payload "$ROOT/.tmp/messages/escape.md")" '.decision == "deny" and .rule == "reviewer.readonly"'
+as_review "reviewer staging rejects hardlink escape" "$(write_payload "$ROOT/.tmp/messages/hardlink.md")" '.decision == "deny" and .rule == "reviewer.readonly"'
+as_review "reviewer patch can stage a message" "$(jq -cn --arg patch "*** Begin Patch
+*** Add File: $ROOT/.tmp/messages/patch.md
++review
+*** End Patch" '{tool_name:"apply_patch",tool_input:{input:$patch}}')" '.decision == "allow"'
+as_review "reviewer mixed patch cannot edit source" "$(jq -cn --arg patch "*** Begin Patch
+*** Add File: $ROOT/.tmp/messages/patch.md
++review
+*** Update File: $CHILD/README.md
+@@
+-hello
++changed
+*** End Patch" '{tool_name:"apply_patch",tool_input:{input:$patch}}')" '.decision == "deny" and .rule == "reviewer.readonly"'
+NO_MESSAGES_CONFIG="$ROOT/.agent-workspace/no-messages.json"
+jq '.roles.reviewer.grants = ["scheduler", "contexts"]' "$CONFIG" > "$NO_MESSAGES_CONFIG"
+expect "reviewer staging needs an explicit messages grant" reviewer "$REVIEW_PANE" "$CHILD" "$NO_MESSAGES_CONFIG" enforce "$(write_payload "$ROOT/.tmp/messages/review.md")" '.decision == "deny" and .rule == "reviewer.readonly"' SESSION_CHAT_TARGET_MESSAGES_DIR="$ROOT/.tmp/messages"
+OVERRIDE_CONFIG="$ROOT/.agent-workspace/messages-override.json"
+jq '.stores.overrides.messages = ".tmp/replies"' "$CONFIG" > "$OVERRIDE_CONFIG"
+mkdir -p "$ROOT/.tmp/replies"
+expect "reviewer configured message override allowed" reviewer "$REVIEW_PANE" "$CHILD" "$OVERRIDE_CONFIG" enforce "$(write_payload "$ROOT/.tmp/replies/review.md")" '.decision == "allow"'
+expect "reviewer old default excluded after override" reviewer "$REVIEW_PANE" "$CHILD" "$OVERRIDE_CONFIG" enforce "$(write_payload "$ROOT/.tmp/messages/review.md")" '.decision == "deny" and .rule == "reviewer.readonly"'
 as_review "reviewer reading a GRANTED coordination store is allowed" "$(bash_payload "cat $ROOT/.tmp/messages/note.md")" '.decision == "allow"'
 as_review "reviewer reading an UNGRANTED store (memory) is denied" "$(bash_payload "cat $ROOT/.agents/memory/MEMORY.md")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer reading a stale (unselected) cache version is denied" "$(bash_payload "cat $STALE_SEND")" '.decision == "deny" and .rule == "reviewer.path"'
