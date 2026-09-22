@@ -360,9 +360,21 @@ _km_journal_validate_shape() {
   return 0
 }
 
+# A missing inbox is allowed here: recovery may follow an already-completed
+# consumption. Existing parents must be real directories; never create one.
+_km_check_candidate_inbox() {
+  local inbox="$1/.inbox"
+  if [ -L "$inbox" ] || { [ -e "$inbox" ] && [ ! -d "$inbox" ]; }; then
+    km_error "candidate inbox is not a real directory (inspect/remove manually): $inbox"
+    return 4
+  fi
+  return 0
+}
+
 _km_consume_candidate() {
   local store="$1" candidate_id="$2" expect_raw_sha="$3" cfile raw
   [ "$candidate_id" != "-" ] || return 0
+  _km_check_candidate_inbox "$store" || return 4
   cfile="$store/.inbox/${candidate_id}.md"
   if [ ! -e "$cfile" ]; then
     return 0
@@ -527,6 +539,10 @@ _km_transaction_body() {
 
   # (4) VERIFY: candidate first (fail closed BEFORE the journal), then CAS hashes
   if [ "$candidate_id" != "-" ]; then
+    if ! _km_check_candidate_inbox "$store"; then
+      rm -rf "${store:?}/${staged_dir:?}"
+      return 4
+    fi
     local cfile="$store/.inbox/${candidate_id}.md" craw
     if [ ! -f "$cfile" ] || [ -L "$cfile" ]; then
       km_error "candidate not found or unsafe: $cfile"
