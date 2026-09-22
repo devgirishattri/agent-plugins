@@ -1,0 +1,230 @@
+{
+  "schema_version": 5,
+  "project": {
+    "id": "sample-fleet",
+    "display_name": "Sample Fleet",
+    "root": "."
+  },
+  "runtimes": {
+    "codex": {
+      "program": "codex",
+      "args": []
+    }
+  },
+  "roles": {
+    "master": {
+      "runtime": "codex",
+      "grants": [
+        "messages",
+        "scheduler",
+        "contexts"
+      ],
+      "env_group": "dev"
+    },
+    "executor": {
+      "runtime": "codex",
+      "grants": [
+        "messages",
+        "scheduler",
+        "contexts",
+        "memory"
+      ],
+      "env_group": "dev"
+    },
+    "reviewer": {
+      "runtime": "codex",
+      "grants": [
+        "messages",
+        "scheduler",
+        "contexts"
+      ],
+      "env_group": "dev"
+    },
+    "service": {
+      "runtime": "shell"
+    }
+  },
+  "stores": {
+    "base": ".tmp",
+    "pin": [
+      "messages",
+      "scheduler",
+      "contexts"
+    ],
+    "memory": {
+      "mode": "shared",
+      "root": ".agents/memory"
+    }
+  },
+  "env": {
+    "groups": {
+      "dev": {
+        "values": {},
+        "pin_to_session": true
+      }
+    },
+    "pane_name_aliases": []
+  },
+  "sessions": [
+    {
+      "id": "control",
+      "name": "${PROJECT_ID}-control",
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-root",
+          "role": "master",
+          "cwd": "."
+        }
+      ]
+    },
+    {
+      "id": "dev-web",
+      "name": "${PROJECT_ID}-dev-web",
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-web-master",
+          "role": "master",
+          "cwd": "control-web"
+        },
+        {
+          "name": "${PROJECT_ID}-web-executor",
+          "role": "executor",
+          "cwd": "component-a"
+        },
+        {
+          "name": "${PROJECT_ID}-web-reviewer",
+          "role": "reviewer",
+          "cwd": "component-a"
+        }
+      ]
+    },
+    {
+      "id": "service-web",
+      "name": "${PROJECT_ID}-service-web",
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-web-server",
+          "role": "service",
+          "cwd": "component-a",
+          "command": [
+            "npm",
+            "run",
+            "dev"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dev-vue3",
+      "name": "${PROJECT_ID}-dev-vue3",
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-vue3-master",
+          "role": "master",
+          "cwd": "control-vue3"
+        },
+        {
+          "name": "${PROJECT_ID}-vue3-executor",
+          "role": "executor",
+          "cwd": "component-b"
+        },
+        {
+          "name": "${PROJECT_ID}-vue3-reviewer",
+          "role": "reviewer",
+          "cwd": "component-b"
+        }
+      ]
+    },
+    {
+      "id": "service-vue3",
+      "name": "${PROJECT_ID}-service-vue3",
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-vue3-server",
+          "role": "service",
+          "cwd": "component-b",
+          "command": [
+            "npm",
+            "run",
+            "dev"
+          ]
+        }
+      ]
+    }
+  ],
+  "behavior": {
+    "default_start_target": "control",
+    "attach": "never",
+    "stop_scope": "selected",
+    "save_before_stop": true
+  },
+  "harness": {
+    "enabled": true,
+    "mode": "audit",
+    "profile": "strict-v1",
+    "roles": {
+      "orchestrator": "master",
+      "executor": "executor",
+      "reviewer": "reviewer"
+    },
+    "gates": {
+      "plan_review_ttl_minutes": 60,
+      "audit_ttl_minutes": 60
+    },
+    "guards": {
+      "orchestrator": {
+        "deny_child_chdir": true
+      }
+    }
+  },
+  "orchestration": {
+    "enabled": true,
+    "profile": "reviewed-git-v1",
+    "targets": [
+      {
+        "id": "web",
+        "cwd": "component-a",
+        "remote": "origin",
+        "work_branch": "main",
+        "release_branch": "production",
+        "deploy": {
+          "strategy": "merge-no-ff-v1"
+        }
+      },
+      {
+        "id": "vue3",
+        "cwd": "component-b",
+        "remote": "origin",
+        "work_branch": "main",
+        "release_branch": "production",
+        "deploy": {
+          "strategy": "merge-no-ff-v1"
+        }
+      }
+    ]
+  },
+  "environments": [
+    {
+      "id": "web",
+      "cwd": "component-a",
+      "development": [
+        "dev-web"
+      ],
+      "services": [
+        "service-web"
+      ],
+      "orchestrator": "${PROJECT_ID}-web-master"
+    },
+    {
+      "id": "vue3",
+      "cwd": "component-b",
+      "development": [
+        "dev-vue3"
+      ],
+      "services": [
+        "service-vue3"
+      ],
+      "orchestrator": "${PROJECT_ID}-vue3-master"
+    }
+  ]
+}

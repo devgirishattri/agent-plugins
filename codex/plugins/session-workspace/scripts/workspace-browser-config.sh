@@ -9,16 +9,18 @@ source "$HERE/config.sh"
 source "$HERE/validate-config.sh"
 
 usage() {
-  echo "Usage: workspace-browser-config.sh [--config PATH] [--provider codex|claude|all] [--apply] [--json]" >&2
+  echo "Usage: workspace-browser-config.sh [--config PATH] [--provider codex|claude|all] [--browser SESSION_ID] [--apply] [--json]" >&2
 }
 
 CONFIG_OVERRIDE=""
 PROVIDER="all"
+BROWSER_SESSION=""
 APPLY=0
 JSON_MODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --config) CONFIG_OVERRIDE="${2:-}"; shift 2 ;;
+    --browser) BROWSER_SESSION="${2:-}"; shift 2 ;;
     --provider) PROVIDER="${2:-}"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     --json) JSON_MODE=1; shift ;;
@@ -39,6 +41,11 @@ if ! validate_workspace_config "$CONFIG_JSON" "$CONFIG_PATH"; then
   echo "ERROR: config failed validation: $CONFIG_PATH" >&2
   print_validation_errors
   exit 1
+fi
+if printf '%s' "$CONFIG_JSON" | jq -e 'has("browsers")' >/dev/null; then
+  selected="$(printf '%s' "$CONFIG_JSON" | jq -c --arg sid "$BROWSER_SESSION" '[.browsers[] | select(.session_id == $sid)]')"
+  [ "$(printf '%s' "$selected" | jq length)" = "1" ] || { echo "ERROR: select a configured browser session with --browser SESSION_ID" >&2; exit 1; }
+  CONFIG_JSON="$(printf '%s' "$CONFIG_JSON" | jq -c --argjson b "$selected" '.browser = $b[0]')"
 fi
 if ! printf '%s' "$CONFIG_JSON" | jq -e 'has("browser")' >/dev/null; then
   echo "ERROR: config has no top-level browser block" >&2

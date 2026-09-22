@@ -1,6 +1,6 @@
 # Schema-v4 Orchestration Configuration
 
-`orchestration` is accepted only with `schema_version: 4`. Version 4 otherwise
+`orchestration` is accepted with `schema_version: 4` or `5`. Version 4 otherwise
 retains schema-v3 harness and guard behavior; omitting `orchestration` leaves the
 normalized plan and policy decision unchanged.
 

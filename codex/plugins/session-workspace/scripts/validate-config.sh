@@ -92,7 +92,7 @@ _validate_cwds() {
 # apparently non-dot child cwd must not canonicalize back to the project root.
 _validate_harness_resolved_cwds() {
   local json="$1" root_abs="$2"
-  if ! printf '%s' "$json" | jq -e '(.schema_version == 2 or .schema_version == 3 or .schema_version == 4) and (.harness.enabled // false)' >/dev/null; then
+  if ! printf '%s' "$json" | jq -e '(.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false)' >/dev/null; then
     return 0
   fi
 
@@ -119,7 +119,7 @@ _validate_harness_resolved_cwds() {
 # two configured target aliases resolve to the same checkout.
 _validate_orchestration_resolved_targets() {
   local json="$1" root_abs="$2"
-  if ! printf '%s' "$json" | jq -e '.schema_version == 4 and (.orchestration | type) == "object" and (.orchestration.enabled // false) and (.orchestration.targets | type) == "array"' >/dev/null; then
+  if ! printf '%s' "$json" | jq -e '(.schema_version == 4 or .schema_version == 5) and (.orchestration | type) == "object" and (.orchestration.enabled // false) and (.orchestration.targets | type) == "array"' >/dev/null; then
     return 0
   fi
 
@@ -367,6 +367,12 @@ validate_workspace_config() {
     _validate_orchestration_resolved_targets "$json" "$root_abs"
     _validate_stores "$json" "$root_abs"
     _validate_secrets_file "$json" "$root_abs"
+    if [ "$(printf '%s' "$json" | jq -r '.schema_version')" = "5" ]; then
+      local v5_errors
+      if ! v5_errors="$(printf '%s' "$json" | python3 "$here/workspace-v5.py" validate "$root_abs" 2>&1)"; then
+        _add_error "schema v5 validation: $v5_errors"
+      fi
+    fi
   fi
 
   [ "${#VALIDATION_ERRORS[@]}" -eq 0 ]

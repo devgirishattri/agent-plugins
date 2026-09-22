@@ -180,3 +180,17 @@ must never be described as harness-enforced.
   without `--confirmed`; `restart` implies it).
 - `workspace-plan`, `workspace-status`, and `workspace-doctor` are
   mutation-free; don't hesitate to run them freely to check state.
+
+## Schema v5: independent environments and optional diagnostics
+
+Read [references/environments.md](references/environments.md) for named development/
+services groups, optional local orchestrators, scoped routing/tasks, multiple browser
+bindings, and the fully optional removable Jev diagnostic helper. Versions 1–4
+retain their single-orchestrator contract. V5 pins scope identity at launch; never
+export it manually. Jev stays off unless configured, and supplies no approvals.
+
+New inherited operational tunables are `SESSION_WORKSPACE_JEV_MAX_REQUESTS` (default
+0, cumulative 0–10000 request ceiling) and `SESSION_WORKSPACE_JEV_TIMEOUT_MS` (default
+5000, range 1–15000). The optional pinned `integrations` store is launch-inherited
+as `SESSION_WORKSPACE_INTEGRATIONS_HOME`. Full data, credential, fallback and removal
+contracts are in the reference; do not upload logs merely because it is enabled.

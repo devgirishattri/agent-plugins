@@ -305,7 +305,7 @@ check_config() {
 
   if validate_workspace_config "$CONFIG_JSON" "$CONFIG_PATH"; then
     local schema_version
-    if schema_version="$(printf '%s' "$CONFIG_JSON" | jq -er '.schema_version | select(. == 1 or . == 2 or . == 3 or . == 4) | tostring' 2>/dev/null)"; then
+    if schema_version="$(printf '%s' "$CONFIG_JSON" | jq -er '.schema_version | select(. == 1 or . == 2 or . == 3 or . == 4 or . == 5) | tostring' 2>/dev/null)"; then
       CONFIG_VALID=1
       add_check "config.validation" "config validation" "OK" \
         "$CONFIG_PATH is valid (schema_version $schema_version)"
@@ -756,37 +756,55 @@ check_session_chat_helper() {
   add_check "integrations.session_chat_helper" "session-chat helper" "$status" "$message" "" "$details"
 }
 
-check_browser() {
+check_browser_binding() {
   [ "$CONFIG_VALID" -eq 1 ] || return 0
   printf '%s' "$CONFIG_JSON" | jq -e 'has("browser")' >/dev/null || return 0
   local program port project_id profile owner_file owner=""
   program="$(printf '%s' "$CONFIG_JSON" | jq -r '.browser.chrome_program')"
   port="$(printf '%s' "$CONFIG_JSON" | jq -r '.browser.port')"
   project_id="$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')"
-  profile="$(sw_browser_profile_dir "$project_id")"
+  profile="$(sw_browser_profile_dir "${1:-$project_id}")"
+  local check_prefix="${2:-browser}"
 
   if ! command -v curl >/dev/null 2>&1; then
-    add_check "browser.curl" "browser readiness probe" "ERROR" "curl is not on PATH" "Install curl; browser start uses it to verify the DevTools endpoint."
+    add_check "$check_prefix.curl" "browser readiness probe" "ERROR" "curl is not on PATH" "Install curl; browser start uses it to verify the DevTools endpoint."
   else
-    add_check "browser.curl" "browser readiness probe" "OK" "curl resolves"
+    add_check "$check_prefix.curl" "browser readiness probe" "OK" "curl resolves"
   fi
   if { case "$program" in /*) [ -x "$program" ] ;; *) command -v "$program" >/dev/null 2>&1 ;; esac; }; then
-    add_check "browser.program" "Chrome executable" "OK" "$program resolves"
+    add_check "$check_prefix.program" "Chrome executable" "OK" "$program resolves"
   else
-    add_check "browser.program" "Chrome executable" "ERROR" "$program does not resolve" "Set browser.chrome_program to an executable path or command on PATH."
+    add_check "$check_prefix.program" "Chrome executable" "ERROR" "$program does not resolve" "Set browser.chrome_program to an executable path or command on PATH."
   fi
 
   owner_file="${XDG_STATE_HOME:-$HOME/.local/state}/session-workspace/browser-ports/$port"
   [ -f "$owner_file" ] && owner="$(sed -n '1p' "$owner_file")"
   if [ -n "$owner" ] && [ "$owner" != "$project_id" ] && sw_browser_probe "$port"; then
-    add_check "browser.port" "browser port allocation" "ERROR" "port $port is owned by project '$owner' and is live" "Choose a different browser.port."
+    add_check "$check_prefix.port" "browser port allocation" "ERROR" "port $port is owned by project '$owner' and is live" "Choose a different browser.port."
   elif sw_browser_probe "$port"; then
-    add_check "browser.port" "browser port allocation" "OK" "DevTools is ready on 127.0.0.1:$port"
+    add_check "$check_prefix.port" "browser port allocation" "OK" "DevTools is ready on 127.0.0.1:$port"
   else
-    add_check "browser.port" "browser port allocation" "INFO" "port $port is allocated; DevTools is not currently running"
+    add_check "$check_prefix.port" "browser port allocation" "INFO" "port $port is allocated; DevTools is not currently running"
   fi
-  add_check "browser.profile" "browser profile" "OK" "$profile (derived, project-isolated)"
+  add_check "$check_prefix.profile" "browser profile" "OK" "$profile (derived, project-isolated)"
 }
+
+check_browser() {
+  [ "$CONFIG_VALID" -eq 1 ] || return 0
+  local original_config="$CONFIG_JSON" browser_json sid project_id
+  if printf '%s' "$CONFIG_JSON" | jq -e 'has("browsers")' >/dev/null; then
+    project_id="$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')"
+    while IFS= read -r browser_json; do
+      sid="$(printf '%s' "$browser_json" | jq -r '.session_id')"
+      CONFIG_JSON="$(printf '%s' "$original_config" | jq -c --argjson b "$browser_json" '.browser = $b')"
+      check_browser_binding "$project_id/sessions/session-$sid" "browser.$sid"
+    done < <(printf '%s' "$original_config" | jq -c '.browsers[]')
+    CONFIG_JSON="$original_config"
+  else
+    check_browser_binding
+  fi
+}
+
 
 # ============================================================================
 # Run every check, in order.

@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Result
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace-plan.sh" $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.sh" plan $ARGUMENTS`
 
 ## Instructions
 
@@ -25,3 +25,7 @@ An optional pane whose declared `cwd` does not resolve on disk (an
 un-cloned child repo) is shown marked `[SKIPPED: cwd unavailable — will not
 be launched]` — that is expected, not a config error, and mirrors what the
 lifecycle verbs will actually do with it.
+
+Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
+Group selection cannot be combined with a positional session or `--all`; it never
+attaches automatically. See the session-workspace environment reference.

@@ -75,6 +75,13 @@ if printf '%s' "$CONFIG_JSON" | jq -e 'has("browser")' >/dev/null; then
   BROWSER_PROFILE_DIR="$(sw_browser_profile_dir "$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')")"
 fi
 
+BROWSER_PROFILES='{}'
+while IFS= read -r browser_sid; do
+  [ -n "$browser_sid" ] || continue
+  profile="$(sw_browser_profile_dir "$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')/sessions/session-$browser_sid")"
+  BROWSER_PROFILES="$(printf '%s' "$BROWSER_PROFILES" | jq -c --arg sid "$browser_sid" --arg p "$profile" '. + {($sid):$p}')"
+done < <(printf '%s' "$CONFIG_JSON" | jq -r '.browsers[]?.session_id')
+
 # Validate TARGET before computing the plan, so an unknown target fails fast.
 # Session filtering happens after normalization: schema-v4 orchestration is a
 # workspace-wide target map and still needs every configured executor/reviewer
@@ -109,6 +116,7 @@ PLAN_JSON="$(printf '%s' "$CONFIG_JSON" | jq -c \
   --arg root "$ROOT_ABS" \
   --arg config_path "$CONFIG_PATH" \
   --arg browser_profile_dir "$BROWSER_PROFILE_DIR" \
+  --argjson browser_profiles "$BROWSER_PROFILES" \
   --argjson cwd_map "$CWD_MAP_RESOLVED" \
   -f "$HERE/compute-plan.jq")"
 

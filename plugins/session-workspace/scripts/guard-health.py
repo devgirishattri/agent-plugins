@@ -71,6 +71,9 @@ def main(argv: List[str]) -> int:
     if len(current) != 1 or current[0].get("role") != roles.get("orchestrator"):
         return 0
 
+    scope = current[0].get("scope")
+    if scope and pane_name != scope.get("root_orchestrator"):
+        return 0
     health = guards.get("workspace_health", {})
     if not isinstance(health, dict):
         return 0

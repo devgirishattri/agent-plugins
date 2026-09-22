@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Result
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace-reconcile.sh" $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.sh" reconcile $ARGUMENTS`
 
 ## Instructions
 
@@ -41,3 +41,7 @@ their own per-pane adoption rules). A dry run adopts nothing.
 
 Relay the per-pane report lines verbatim, plus the dry-run closing line or
 the `--apply` summary count as applicable.
+
+Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
+Group selection cannot be combined with a positional session or `--all`; it never
+attaches automatically. See the session-workspace environment reference.

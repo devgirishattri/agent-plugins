@@ -213,6 +213,7 @@ ENGINE_ALWAYS_NAMES=(
   SESSION_WORKSPACE_PANE_CWD
   SESSION_WORKSPACE_HARNESS_MODE
   SESSION_WORKSPACE_GUARDS_JSON
+  SESSION_WORKSPACE_SCOPE_JSON
 )
 
 # _is_engine_always NAME — true if NAME is one of ENGINE_ALWAYS_NAMES (a
@@ -248,6 +249,7 @@ coordination_var_name() {
     messages) echo "SESSION_CHAT_TARGET_MESSAGES_DIR" ;;
     scheduler) echo "SESSION_SCHEDULER_HOME" ;;
     contexts) echo "SESSION_CONTEXT_HOME" ;;
+    integrations) echo "SESSION_WORKSPACE_INTEGRATIONS_HOME" ;;
   esac
 }
 
@@ -379,6 +381,9 @@ _env_build_map() {
   _env_set "SESSION_WORKSPACE_ROLE" "${ENV_ROLE_NAME:-}"
   _env_set "SESSION_WORKSPACE_PANE_CWD" "${ENV_PANE_CWD:-}"
   _env_set "SESSION_WORKSPACE_HARNESS_MODE" "${ENV_HARNESS_MODE:-}"
+  if [ -n "${ENV_SCOPE_JSON:-}" ]; then
+    _env_set "SESSION_WORKSPACE_SCOPE_JSON" "$ENV_SCOPE_JSON"
+  fi
   if [ -n "${ENV_GUARDS_JSON:-}" ]; then
     _env_set "SESSION_WORKSPACE_GUARDS_JSON" "$ENV_GUARDS_JSON"
   fi
@@ -711,6 +716,7 @@ _env_prepare_inputs() {
     ENV_COORD_VAR_VALUES+=("$path")
   done < <(printf '%s' "$CONFIG_JSON" | jq -r '.stores.pin // [] | .[]')
 
+  ENV_SCOPE_JSON="$(printf '%s' "$PANE_PLAN" | jq -cS 'if .scope != null then .scope else empty end')"
   ENV_PANE_NAME="$pane_name"
   ENV_TMUX_PANE_ID="$tmux_pane_id"
   ENV_WORKSPACE_CONFIG="$CONFIG_PATH"
@@ -718,13 +724,13 @@ _env_prepare_inputs() {
   ENV_ROLE_NAME="$ROLE_NAME"
   ENV_PANE_CWD="$(printf '%s' "$PANE_PLAN" | jq -r '.cwd // ""')"
   ENV_HARNESS_MODE="$(printf '%s' "$CONFIG_JSON" | jq -r '
-    if (.schema_version == 2 or .schema_version == 3 or .schema_version == 4) and (.harness.enabled // false)
+    if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false)
     then .harness.mode
     else ""
     end
   ')"
   ENV_GUARDS_JSON="$(printf '%s' "$CONFIG_JSON" | jq -cS '
-    if (.schema_version == 3 or .schema_version == 4) and (.harness.enabled // false) and (.harness | has("guards"))
+    if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) and (.harness | has("guards"))
     then .harness.guards
     else empty
     end

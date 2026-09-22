@@ -17,7 +17,7 @@ GUARDS="${SESSION_WORKSPACE_GUARDS_JSON:-}"
 [ -n "$CONFIG" ] && [ -n "$GUARDS" ] || exit 0
 [ -r "$CONFIG" ] || exit 0
 CONFIG_TEXT="$(<"$CONFIG")"
-[[ "$CONFIG_TEXT" =~ \"schema_version\"[[:space:]]*:[[:space:]]*(3|4)[[:space:]]*([,}]) ]] || exit 0
+[[ "$CONFIG_TEXT" =~ \"schema_version\"[[:space:]]*:[[:space:]]*(3|4|5)[[:space:]]*([,}]) ]] || exit 0
 case "$EVENT" in
   session) FEATURE='"session_reminder":true'; HOOK_EVENT="SessionStart" ;;
   prompt) FEATURE='"prompt_reminder":true'; HOOK_EVENT="UserPromptSubmit" ;;

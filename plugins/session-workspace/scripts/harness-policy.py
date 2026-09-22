@@ -232,6 +232,11 @@ class Context:
     claude_home: Path
     codex_home: Path
     guards: dict
+    environment: str = ""
+    route_peers: frozenset = frozenset()
+    scoped: bool = False
+    session_ids: frozenset = frozenset()
+    scheduler_root: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -355,7 +360,7 @@ def read_raw_config(path: Path) -> Optional[dict]:
 
 
 def raw_harness_state(config: Optional[dict]) -> Tuple[bool, str]:
-    if not config or config.get("schema_version") not in {2, 3, 4}:
+    if not config or config.get("schema_version") not in {2, 3, 4, 5}:
         return False, ""
     harness = config.get("harness")
     if not isinstance(harness, dict) or harness.get("enabled") is not True:
@@ -485,11 +490,42 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
     if not semantic:
         return None, deny(None, tool, "identity.role", "configured pane is not a harness role", mode, integrity=True)
 
+    scope = pane.get("scope")
+    scope_env = os.environ.get("SESSION_WORKSPACE_SCOPE_JSON", "")
+    if (scope is None and scope_env) or (scope is not None and scope_env != json.dumps(scope, sort_keys=True, separators=(",", ":"))):
+        return None, deny(None, tool, "identity.scope", "launcher scope does not match validated configuration; restart affected sessions", mode, integrity=True)
+    environment = ""
+    route_peers = frozenset()
+    scoped = scope is not None
+    own = None
+    owned_panes = panes
     orchestrators = [p for p in panes if p.get("role") == roles.get("orchestrator")]
+    if scoped:
+        root_name = scope.get("root_orchestrator")
+        environments = scope.get("environments", [])
+        current_session = next(s["id"] for s in plan["sessions"] if any(p["name"] == pane_name for p in s["panes"]))
+        own = next((e for e in environments if current_session in e["development"] + e["services"]), None)
+        if own:
+            environment = own["id"]
+            own_ids = own["development"] + own["services"]
+            owned_panes = [p for s in plan["sessions"] if s["id"] in own_ids for p in s["panes"]]
+            coordinator = own.get("orchestrator", root_name)
+            orchestrators = [p for p in panes if p["name"] == coordinator]
+            if semantic == "orchestrator":
+                route_peers = frozenset([root_name])
+        else:
+            if pane_name != root_name:
+                return None, deny(None, tool, "identity.scope", "unbound harness pane", mode, integrity=True)
+            # Root addresses local coordinators, and workers only in environments
+            # deliberately configured without a local coordinator.
+            direct_ids = [sid for e in environments if not e.get("orchestrator") for sid in e["development"] + e["services"]]
+            owned_panes = [p for s in plan["sessions"] if s["id"] in direct_ids for p in s["panes"]]
+            route_peers = frozenset(e["orchestrator"] for e in environments if e.get("orchestrator"))
+            orchestrators = [p for p in panes if p["name"] == root_name]
     if len(orchestrators) != 1:
-        return None, deny(None, tool, "identity.topology", "validated topology has no unique orchestrator pane", mode, integrity=True)
-    executor_panes = frozenset(str(p["name"]) for p in panes if p.get("role") == roles.get("executor"))
-    reviewer_panes = frozenset(str(p["name"]) for p in panes if p.get("role") == roles.get("reviewer"))
+        return None, deny(None, tool, "identity.topology", "validated topology has no unique scope orchestrator", mode, integrity=True)
+    executor_panes = frozenset(str(p["name"]) for p in owned_panes if p.get("role") == roles.get("executor"))
+    reviewer_panes = frozenset(str(p["name"]) for p in owned_panes if p.get("role") == roles.get("reviewer"))
     child_roots = tuple(
         sorted(
             {canonical(Path(str(p["cwd"]))) for p in panes if p.get("cwd") and p.get("role") in {roles.get("executor"), roles.get("reviewer")}},
@@ -526,6 +562,11 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         claude_home=claude_home,
         codex_home=codex_home,
         guards=guards,
+        environment=environment,
+        route_peers=route_peers,
+        scoped=scoped,
+        session_ids=frozenset(own["development"] + own["services"]) if scoped and own else frozenset(),
+        scheduler_root=next((canonical(Path(g["path"])) for g in pane.get("grants", []) if g.get("store") == "scheduler"), None),
     )
     return context, None
 
@@ -1263,7 +1304,7 @@ def require_route_target(ctx: Context, target: str) -> None:
     if not LABEL_RE.fullmatch(target):
         raise PolicyFailure("helper.argv", "recipient must be a literal pane name")
     if ctx.semantic_role == "orchestrator":
-        if target not in ctx.executor_panes | ctx.reviewer_panes:
+        if target not in ctx.executor_panes | ctx.reviewer_panes | ctx.route_peers:
             raise PolicyFailure("routing.master", "orchestrator may route only to configured executor/reviewer panes")
     elif target != ctx.orchestrator_pane:
         raise PolicyFailure("routing.master", "executor/reviewer outbound coordination must target the orchestrator pane")
@@ -1605,6 +1646,7 @@ def memory_write(ctx: Context, script: str, args: List[str]) -> None:
 
 
 WORKSPACE_VERB_SCRIPT = {
+    "jev": "workspace-jev.sh",
     "plan": "workspace-plan.sh",
     "status": "workspace-status.sh",
     "doctor": "workspace-doctor.sh",
@@ -1673,10 +1715,57 @@ def workspace_install(ctx: Context, script: str, args: List[str]) -> None:
 
 
 def workspace_browser_config(ctx: Context, script: str, args: List[str]) -> None:
-    workspace_args(ctx, script, args, ("--apply", "--json"), allow_target=False, value_flags=("--provider",))
+    workspace_args(ctx, script, args, ("--apply", "--json"), allow_target=False, value_flags=("--provider", "--browser"))
+
+
+def jev_command(ctx: Context, script: str, args: List[str]) -> None:
+    if ctx.semantic_role != "orchestrator":
+        raise PolicyFailure("coordination.write", "diagnostic inference is coordinator-only")
+    remaining = list(args)
+    environment = ""
+    seen = set()
+    while remaining:
+        flag = remaining.pop(0)
+        if flag in seen:
+            raise PolicyFailure("helper.argv", "duplicate Jev option")
+        seen.add(flag)
+        if flag in {"--status", "--sanitized"}:
+            continue
+        if flag not in {"--config", "--environment", "--packet"} or not remaining:
+            raise PolicyFailure("helper.argv", "unknown Jev option")
+        value = remaining.pop(0)
+        if flag == "--config" and candidate_path(value, ctx.pane_cwd) != ctx.config_path:
+            raise PolicyFailure("helper.argv", "Jev config must be this workspace")
+        if flag == "--environment":
+            if not LABEL_RE.fullmatch(value):
+                raise PolicyFailure("helper.argv", "invalid environment")
+            environment = value
+        if flag == "--packet":
+            literal_file(ctx, value, "sanitized diagnostic packet")
+    if ctx.environment and environment != ctx.environment:
+        raise PolicyFailure("routing.scope", "Jev environment must match local scope")
+
+
+def environment_command(ctx: Context, script: str, args: List[str]) -> None:
+    if not args or args[0] not in {"plan", "status", "start", "stop", "restart", "reconcile"}:
+        raise PolicyFailure("helper.argv", "environment helper requires a lifecycle verb")
+    if args[0] not in {"plan", "status"} and ctx.semantic_role != "orchestrator":
+        raise PolicyFailure("coordination.write", "only coordinators manage environments")
+    rest = args[1:]
+    if rest.count("--environment") != 1:
+        raise PolicyFailure("helper.argv", "exactly one --environment is required")
+    i = rest.index("--environment")
+    if i + 1 >= len(rest) or not LABEL_RE.fullmatch(rest[i+1]):
+        raise PolicyFailure("helper.argv", "environment requires a literal id")
+    if ctx.environment and rest[i+1] != ctx.environment:
+        raise PolicyFailure("routing.scope", "environment selector escapes this coordinator scope")
+    workspace_args(ctx, script, rest, ("--services", "--development", "--json", "--confirmed", "--no-save", "--no-agents", "--no-services", "--no-attach", "--apply"), allow_target=False, value_flags=("--environment",))
 
 
 def workspace_dispatcher(ctx: Context, script: str, args: List[str]) -> None:
+    if "--environment" in args and args and args[0] != "jev":
+        environment_command(ctx, script, args)
+        return
     if args == ["--contract"]:
         return
     if not args or args[0] not in WORKSPACE_VERB_SCRIPT:
@@ -1764,6 +1853,8 @@ HELPERS = {
         "harness-doctor.sh": ("oer", workspace_read),
         "validate-config.sh": ("oer", workspace_read),
         "workspace.sh": ("oer", workspace_dispatcher),
+        "workspace-environment.sh": ("oer", environment_command),
+        "workspace-jev.sh": ("o", jev_command),
         "workspace-start.sh": ("o", workspace_start),
         "workspace-stop.sh": ("o", workspace_stop),
         "workspace-restart.sh": ("o", workspace_restart),
@@ -1820,6 +1911,37 @@ def helper_invocation(ctx: Context, tokens: List[str], raw: str) -> Optional[Tup
     return plugin, script_name, args
 
 
+def scoped_task(ctx: Context, script: str, args: List[str]) -> None:
+    expected = ctx.environment or "root"
+    if script == "task-new.sh":
+        fields = [args[i+1] for i, a in enumerate(args[:-1]) if a == "--meta" and args[i+1].startswith("environment=")]
+        if fields != ["environment=" + expected]:
+            raise PolicyFailure("task.scope", "scoped task creation requires exactly one --meta environment=" + expected)
+        return
+    indices = {"task-assign.sh": 1, "task-done.sh": 0, "task-block.sh": 0, "task-review.sh": 0}
+    if script not in indices:
+        return
+    index = indices[script]
+    if len(args) <= index or not LABEL_RE.fullmatch(args[index]) or ctx.scheduler_root is None:
+        raise PolicyFailure("task.scope", "scoped task requires a valid id and configured scheduler grant")
+    task = ctx.scheduler_root / "tasks" / (args[index] + ".json")
+    try:
+        if not within(canonical(task), ctx.scheduler_root) or task.is_symlink() or task.stat().st_nlink != 1:
+            raise ValueError("unsafe task")
+        data = json.loads(task.read_text())
+        if data.get("meta", {}).get("environment") != expected:
+            raise ValueError("foreign task")
+        allowed_assignees = ctx.executor_panes | ctx.reviewer_panes
+        if data.get("assignee") and data["assignee"] not in allowed_assignees:
+            raise ValueError("foreign assignee")
+        if data.get("reviewer") and data["reviewer"] not in ctx.reviewer_panes:
+            raise ValueError("foreign reviewer")
+        if data.get("assigner") and data["assigner"] != ctx.orchestrator_pane:
+            raise ValueError("foreign assigner")
+    except (OSError, ValueError, TypeError):
+        raise PolicyFailure("task.scope", "task does not belong to this environment")
+
+
 def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> None:
     table = HELPERS.get(plugin)
     if not table or script not in table:
@@ -1827,6 +1949,16 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
     roles, grammar = table[script]
     if ROLE_LETTER[ctx.semantic_role] not in roles:
         raise PolicyFailure("coordination.write", "%s is not a %s operation in strict-v1" % (script, ctx.semantic_role))
+    if ctx.scoped and plugin == "session-scheduler":
+        scoped_task(ctx, script, args)
+    if ctx.environment and plugin == "session-workspace":
+        mutating = {"workspace-start.sh", "workspace-stop.sh", "workspace-restart.sh", "workspace-reconcile.sh"}
+        if script in mutating and (not args or args[0] not in ctx.session_ids or "--all" in args):
+            raise PolicyFailure("routing.scope", "local lifecycle requires an explicitly owned session")
+        if script in {"workspace-install.sh", "workspace-browser-config.sh"}:
+            raise PolicyFailure("routing.scope", "workspace installation/browser config belongs to root coordinator")
+    if ctx.environment and (plugin, script) in {("session-scheduler", "tasks-clean.sh"), ("session-chat", "messages-clean.sh"), ("session-chat", "clean-messages.sh"), ("session-manager", "delete-all-sessions.sh"), ("session-manager", "delete-session.sh")}:
+        raise PolicyFailure("routing.scope", "shared-store cleanup belongs to root coordinator")
     grammar(ctx, script, args)
 
 
@@ -1938,7 +2070,7 @@ def validate_tool_workdir(ctx: Context, tool_input: dict) -> None:
             continue
         raw = Path(value.strip()).expanduser()
         path = canonical(raw if raw.is_absolute() else ctx.pane_cwd / raw)
-        if ctx.semantic_role == "executor" and not within(path, ctx.pane_cwd):
+        if (ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment)) and not within(path, ctx.pane_cwd):
             raise PolicyFailure("executor.containment", "tool workdir escapes the configured child cwd: %s" % value)
         if ctx.semantic_role == "reviewer" and not readable(ctx, path):
             raise PolicyFailure("reviewer.path", "tool workdir escapes the reviewer's allowed roots: %s" % value)
@@ -1966,7 +2098,7 @@ def executor_inline_code(segment: List[str]) -> bool:
 
 
 def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
-    if ctx.semantic_role != "orchestrator":
+    if ctx.semantic_role != "orchestrator" or ctx.environment:
         if tool_input.get("dangerouslyDisableSandbox") is True or tool_input.get("with_escalated_permissions") is True:
             raise PolicyFailure("shell.sandbox_escape", "child roles cannot request a sandbox/approval escape")
     validate_tool_workdir(ctx, tool_input)
@@ -1999,14 +2131,14 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
     if helper is not None:
         validate_helper(ctx, *helper)
         return
-    bypass = child_transport_bypass(tokens, ctx.semantic_role != "orchestrator")
+    bypass = child_transport_bypass(tokens, ctx.semantic_role != "orchestrator" or bool(ctx.environment))
     if bypass is not None:
         raise PolicyFailure("routing.master", "coordination transport may only run as the selected session-chat helper (%s)" % bypass)
 
     if ctx.semantic_role == "reviewer":
         validate_reviewer_read(tokens, command, ctx)
         return
-    if ctx.semantic_role == "executor":
+    if ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment):
         # Executor containment for arbitrary shell: no inline shell/interpreter
         # code (an unreadable escape hatch), no operand that only exists after
         # a shell expansion, no operand feeder (xargs), and every path-like
@@ -2020,6 +2152,8 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
         if has_unquoted_glob(command):
             raise PolicyFailure("path.dynamic", "unquoted glob/brace expansion produces operands the policy cannot resolve; quote the pattern or name the files")
         for segment, cwd, after in walk_segments(tokens, ctx.pane_cwd):
+            if ctx.semantic_role == "orchestrator" and command_basename(segment) == "git" and not git_is_read_only(segment):
+                raise PolicyFailure("orchestrator.git", "local coordinator Git mutations belong to its executor")
             if executor_inline_code(segment):
                 raise PolicyFailure("executor.inline_code", "executor inline shell/interpreter code is outside strict-v1 containment")
             if command_basename(segment) == "xargs":
@@ -2105,7 +2239,7 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
             extras = protected.get("extra_basenames", [])
             if generic or (isinstance(extras, list) and basename in extras):
                 raise PolicyFailure("orchestrator.protected_file", "orchestrator cannot edit protected credential/lockfile: %s" % value)
-        if ctx.semantic_role == "executor":
+        if ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment):
             if not within(path, ctx.pane_cwd):
                 raise PolicyFailure("executor.containment", "executor edit escapes its configured child cwd: %s" % value)
         elif any(within(path, root) for root in ctx.child_roots):

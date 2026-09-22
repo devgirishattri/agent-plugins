@@ -37,7 +37,7 @@ def target_cwd_valid:
   and test("\\A[A-Za-z0-9][A-Za-z0-9._/-]*\\z")
   and (contains("..") | not)
   and (endswith("/") | not);
-def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_HOME", "SESSION_CONTEXT_HOME"];
+def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_HOME", "SESSION_CONTEXT_HOME", "SESSION_WORKSPACE_INTEGRATIONS_HOME"];
 def harness_engine_vars: [
   "SESSION_WORKSPACE_CONFIG",
   "SESSION_WORKSPACE_PROJECT_ROOT",
@@ -45,31 +45,32 @@ def harness_engine_vars: [
   "SESSION_WORKSPACE_ROLE",
   "SESSION_WORKSPACE_PANE_CWD",
   "SESSION_WORKSPACE_HARNESS_MODE",
-  "SESSION_WORKSPACE_GUARDS_JSON"
+  "SESSION_WORKSPACE_GUARDS_JSON",
+  "SESSION_WORKSPACE_SCOPE_JSON"
 ];
 
 [
   # ---- schema_version ----
   (.schema_version as $version |
-   if (has("schema_version") | not) or ([1, 2, 3, 4] | index($version)) == null then
-     "schema_version must be 1, 2, 3, or 4 (got: " + ((.schema_version // "missing") | tostring) + ")"
+   if (has("schema_version") | not) or ([1, 2, 3, 4, 5] | index($version)) == null then
+     "schema_version must be 1, 2, 3, 4, or 5 (got: " + ((.schema_version // "missing") | tostring) + ")"
    else empty end),
 
   # ---- structural: unknown/missing keys, one call per object shape ----
-  (if (.schema_version == 2 or .schema_version == 3 or .schema_version == 4) then
-     chk(.; (["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser", "harness"] + (if .schema_version == 4 then ["orchestration"] else [] end)); ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) then
+     chk(.; (["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser", "harness"] + (if (.schema_version == 4 or .schema_version == 5) then ["orchestration"] else [] end) + (if .schema_version == 5 then ["environments", "integrations", "browsers"] else [] end)); ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
    else
      chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
    end),
-  (if (.schema_version == 2 or .schema_version == 3 or .schema_version == 4) and has("harness") then
-     chk(.harness; (if (.schema_version == 3 or .schema_version == 4) then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled"]; "harness")
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and has("harness") then
+     chk(.harness; (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled"]; "harness")
    else empty end),
-  (if (.schema_version == 2 or .schema_version == 3 or .schema_version == 4) and (.harness.enabled // false) == true then
-     chk(.harness; (if (.schema_version == 3 or .schema_version == 4) then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled", "mode", "profile", "roles", "gates"]; "harness"),
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) == true then
+     chk(.harness; (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled", "mode", "profile", "roles", "gates"]; "harness"),
      chk(.harness.roles // {}; ["orchestrator", "executor", "reviewer"]; ["orchestrator", "executor", "reviewer"]; "harness.roles"),
      chk(.harness.gates // {}; ["plan_review_ttl_minutes", "audit_ttl_minutes"]; ["plan_review_ttl_minutes", "audit_ttl_minutes"]; "harness.gates")
    else empty end),
-  (if (.schema_version == 3 or .schema_version == 4) and (.harness.enabled // false) == true and (.harness | has("guards")) then
+  (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) == true and (.harness | has("guards")) then
      chk(.harness.guards; ["protected_files", "orchestrator", "lifecycle", "workspace_health"]; []; "harness.guards"),
      (if (.harness.guards | has("protected_files")) then
         chk(.harness.guards.protected_files; ["profile", "extra_basenames"]; ["profile"]; "harness.guards.protected_files")
@@ -87,7 +88,7 @@ def harness_engine_vars: [
          else empty end)
       else empty end)
    else empty end),
-  (if .schema_version == 4 and has("orchestration") then
+  (if (.schema_version == 4 or .schema_version == 5) and has("orchestration") then
      chk(.orchestration; ["enabled", "profile", "targets"]; ["enabled"]; "orchestration"),
      (if (.orchestration | type) == "object" and (.orchestration.enabled // false) == true then
         chk(.orchestration; ["enabled", "profile", "targets"]; ["enabled", "profile", "targets"]; "orchestration"),
@@ -148,7 +149,7 @@ def harness_engine_vars: [
   # ---- schema-v2 opt-in harness contract. The executable policy owns a
   #      non-configurable safety floor; config only selects the typed profile,
   #      mode, semantic role names, and gate freshness windows. ----
-  (if (.schema_version == 2 or .schema_version == 3 or .schema_version == 4) and has("harness") then
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and has("harness") then
      (if (.harness.enabled | type) != "boolean" then
         "harness.enabled must be a boolean"
       else empty end),
@@ -156,7 +157,7 @@ def harness_engine_vars: [
         "harness.enabled=false must not include mode, profile, roles, gates, or guards"
       else empty end)
    else empty end),
-  (if (.schema_version == 2 or .schema_version == 3 or .schema_version == 4) and (.harness.enabled // false) == true then
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) == true then
      .harness as $h |
      (if (["audit", "enforce"] | index($h.mode)) == null then
         "harness.mode must be one of [\"audit\",\"enforce\"]"
@@ -183,7 +184,7 @@ def harness_engine_vars: [
          ([ $panes[] | select(.role == $hr.orchestrator) ] | length) as $orchestrators |
          ([ $panes[] | select(.role == $hr.executor) ] | length) as $executors |
          ([ $panes[] | select(.role == $hr.reviewer) ] | length) as $reviewers |
-         (if $orchestrators != 1 then
+         (if $orchestrators != (1 + (if .schema_version == 5 then [(.environments // [])[] | select(has("orchestrator"))] | length else 0 end)) then
             "enabled harness requires exactly one orchestrator pane (got: " + ($orchestrators | tostring) + ")"
           else empty end),
          (if $executors < 1 then
@@ -224,7 +225,7 @@ def harness_engine_vars: [
 
   # ---- schema-v3 additive guard packs. These are closed, typed, and may
   #      only add denials or warnings; they never accept scripts/regexes. ----
-  (if (.schema_version == 3 or .schema_version == 4) and (.harness.enabled // false) == true and (.harness | has("guards")) then
+  (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) == true and (.harness | has("guards")) then
      (.harness.guards // {}) as $g |
      (if ($g | type) != "object" then
         "harness.guards must be an object"
@@ -278,14 +279,14 @@ def harness_engine_vars: [
               else empty end))
          else empty end)
       else empty end)
-   elif (.schema_version == 3 or .schema_version == 4) and has("harness") and (.harness | has("guards")) and (.harness.enabled // false) != true then
+   elif (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and has("harness") and (.harness | has("guards")) and (.harness.enabled // false) != true then
      "harness.guards requires harness.enabled=true"
    else empty end),
 
   # ---- schema-v4 reviewed orchestration. Configuration names only literal
   #      coordinates; the workspace-orchestrator skill owns the immutable
   #      review, confirmation, executor-locus, and Git safety gates. ----
-  (if .schema_version == 4 and has("orchestration") and (.orchestration | type) == "object" then
+  (if (.schema_version == 4 or .schema_version == 5) and has("orchestration") and (.orchestration | type) == "object" then
      .orchestration as $o |
      (if ($o.enabled | type) != "boolean" then
         "orchestration.enabled must be a boolean"
@@ -496,7 +497,7 @@ def harness_engine_vars: [
     else empty end),
 
   # ---- stores.pin: known stores only, no duplicates ----
-  ((.stores.pin // [])[] | select(. != "messages" and . != "scheduler" and . != "contexts") |
+  (.schema_version as $v | (.stores.pin // [])[] | select(. != "messages" and . != "scheduler" and . != "contexts" and (. != "integrations" or $v != 5)) |
     "stores.pin contains an unknown store: " + .),
   ((.stores.pin // []) as $pin | if ($pin | unique | length) != ($pin | length) then "stores.pin must not contain duplicates" else empty end),
 

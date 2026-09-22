@@ -117,30 +117,41 @@ sw_lock_acquire "$PROJECT_ID" || exit 1
 
 PLAN_JSON="$(bash "$HERE/workspace-plan.sh" --config "$CONFIG_PATH" --json)" || exit 1
 
-BROWSER_TARGETED=0
-BROWSER_PORT=""
-if printf '%s' "$PLAN_JSON" | jq -e '.browser != null' >/dev/null; then
-  BROWSER_SESSION_ID="$(printf '%s' "$PLAN_JSON" | jq -r '.browser.session_id')"
-  BROWSER_PORT="$(printf '%s' "$PLAN_JSON" | jq -r '.browser.port')"
+if [ "$(printf '%s' "$PLAN_JSON" | jq -r '.schema_version')" = "5" ] && [ "$NO_SERVICES" -eq 0 ]; then
+  printf '%s' "$PLAN_JSON" | python3 "$HERE/service-ports.py" "$TARGET" || exit 1
+fi
+
+if printf '%s' "$PLAN_JSON" | jq -e '.integrations.jev.enabled == true and .integration_store != null' >/dev/null; then
+  integration_store="$(printf '%s' "$PLAN_JSON" | jq -r '.integration_store')"
+  (umask 077; mkdir -p "$integration_store") || exit 1
+fi
+
+declare -a BROWSER_PORTS=()
+while IFS= read -r browser_json; do
+  BROWSER_SESSION_ID="$(printf '%s' "$browser_json" | jq -r '.session_id')"
+  BROWSER_PORT="$(printf '%s' "$browser_json" | jq -r '.port')"
   if { [ "$TARGET" = "all" ] || [ "$TARGET" = "$BROWSER_SESSION_ID" ]; } && [ "$NO_SERVICES" -eq 0 ]; then
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to verify browser readiness" >&2; exit 1; }
     sw_browser_claim_port "$PROJECT_ID" "$BROWSER_PORT" || exit 1
-    mkdir -p "$(printf '%s' "$PLAN_JSON" | jq -r '.browser.profile_dir')" || exit 1
-    BROWSER_TARGETED=1
+    mkdir -p "$(printf '%s' "$browser_json" | jq -r '.profile_dir')" || exit 1
+    BROWSER_PORTS+=("$BROWSER_PORT")
   fi
-fi
+done < <(printf '%s' "$PLAN_JSON" | jq -c '(.browsers // (if .browser != null then [.browser] else [] end))[]')
 
 echo "session-workspace start — $CONFIG_PATH (project: $PROJECT_ID)"
 sw_process_plan "$PLAN_JSON" "$TARGET"
 
-if [ "$BROWSER_TARGETED" -eq 1 ] && [ "$SW_FAILED_SLOTS" -eq 0 ]; then
+for BROWSER_PORT in "${BROWSER_PORTS[@]:-}"; do
+  [ -n "$BROWSER_PORT" ] || continue
+  if [ "$SW_FAILED_SLOTS" -eq 0 ]; then
   if sw_browser_wait_ready "$BROWSER_PORT"; then
     echo "  [ready]  browser DevTools endpoint http://127.0.0.1:$BROWSER_PORT"
   else
     echo "  [failed] browser DevTools endpoint did not become ready on 127.0.0.1:$BROWSER_PORT" >&2
     SW_FAILED_SLOTS=$((SW_FAILED_SLOTS + 1))
   fi
-fi
+  fi
+done
 
 echo
 echo "started/adopted: $SW_CHANGED  kept (already healthy): $SW_KEPT  failed: $SW_FAILED_SLOTS"

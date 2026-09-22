@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Result
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace-stop.sh" $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.sh" stop $ARGUMENTS`
 
 ## Instructions
 
@@ -24,3 +24,7 @@ killing only when ALL three hold: the session has `retain_layout: true`,
 
 Relay the `killed: N` summary verbatim, and never run this without the user
 having asked for it.
+
+Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
+Group selection cannot be combined with a positional session or `--all`; it never
+attaches automatically. See the session-workspace environment reference.

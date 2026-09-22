@@ -103,6 +103,9 @@ while IFS= read -r session_json; do
     fi
 
     readiness="n/a"
+    if [ "$(printf '%s' "$PLAN_JSON" | jq -r '.schema_version')" = "5" ] && [ -n "$p_port" ] && [ "$p_browser" != "true" ]; then
+      readiness="$(python3 "$HERE/service-ports.py" probe "$p_port")"
+    fi
     if [ "$p_browser" = "true" ]; then
       sw_browser_probe "$p_port"
       probe_rc=$?

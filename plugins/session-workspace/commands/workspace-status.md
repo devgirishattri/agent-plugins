@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Result
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace-status.sh" $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.sh" status $ARGUMENTS`
 
 ## Instructions
 
@@ -29,3 +29,7 @@ adoption-candidate analysis belongs to `start`/`reconcile`, not to
 report to one `sessions[].id`; an unknown target fails fast with a clear
 error rather than silently returning an empty report. `--json` emits the
 machine-readable rows.
+
+Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
+Group selection cannot be combined with a positional session or `--all`; it never
+attaches automatically. See the session-workspace environment reference.

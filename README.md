@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.11 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.28 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.5.4 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.6.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -700,3 +700,24 @@ Claude likewise reads the Claude marketplace and Claude manifests. It should not
   local and are gitignored.
 - `session-scheduler` is intentionally a file-backed ledger layered on `session-chat`; keep scheduling state out of the transport plugin.
 - `session-workspace` owns tmux lifecycle, the optional executable role-policy harness, and schema-v4's fixed `reviewed-git-v1` coordination lifecycle. A project's root `workspace.sh` remains a logic-free bootstrap. `workspace.json` supplies validated pane/Git coordinates only; correlated session-chat replies plus the pinned scheduler ledger carry machine-verifiable gate evidence, while product-specific build/test requirements remain in `AGENTS.md` and explicit user confirmations remain conversational rather than harness-enforced.
+
+### Independent workspace environments (schema v5)
+
+Session-workspace supports independently named development/services groups for
+multiple child repositories, optional local orchestrators under a root coordinator,
+scoped task/routing checks, and multiple browser profiles. See the
+[environment contract](codex/plugins/session-workspace/skills/session-workspace/references/environments.md)
+and [complete sample](codex/plugins/session-workspace/templates/workspace-multi-environment.json).
+Use `workspace start --environment web`, `workspace status --environment vue3`,
+or `workspace restart --environment vue3 --services`. Existing configurations remain
+valid; opt into v5 only after upgrading both providers.
+
+Jev is an optional, explicitly invoked diagnostic guide helper, disabled by default
+and removable without changing the ordinary workflow. It is never a permission or
+review gate. `SESSION_WORKSPACE_JEV_MAX_REQUESTS` defaults to 0 (no paid calls),
+accepts 0–10000 and caps cumulative attempts for the workspace integration store.
+`SESSION_WORKSPACE_JEV_TIMEOUT_MS` defaults to 5000 (range 1–15000, no retries).
+Configure tunables through launcher env groups; the optional `integrations` store
+is pinned as `SESSION_WORKSPACE_INTEGRATIONS_HOME`. Credential/data/removal and
+accounting rules are in the environment contract; no production-workload benefit
+is claimed from synthetic diagnostic evaluation.

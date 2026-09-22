@@ -56,6 +56,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
   --arg env_role "${SESSION_WORKSPACE_ROLE:-}" \
   --arg env_cwd "${SESSION_WORKSPACE_PANE_CWD:-}" \
   --arg env_mode "${SESSION_WORKSPACE_HARNESS_MODE:-}" \
+  --arg env_scope "${SESSION_WORKSPACE_SCOPE_JSON:-}" \
   --arg env_guards "${SESSION_WORKSPACE_GUARDS_JSON:-}" \
   --arg chat_alias "${SESSION_CHAT_PANE_NAME:-}" \
   --arg knowledge_alias "${KNOWLEDGE_PANE_NAME:-}" \
@@ -100,6 +101,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
             and $env_role == $pane.role
             and $env_cwd == ($pane.cwd // "")
             and $env_mode == (.harness.mode // "")
+            and (if $pane.scope != null then (try (($env_scope | fromjson) == $pane.scope) catch false) else $env_scope == "" end)
             and (if .harness.guards then (try (($env_guards | fromjson) == .harness.guards) catch false) else $env_guards == "" end)
             and (($chat_alias == "" or $chat_alias == $env_pane) and ($knowledge_alias == "" or $knowledge_alias == $env_pane)))
           end

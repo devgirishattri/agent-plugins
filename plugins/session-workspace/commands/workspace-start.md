@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 ## Result
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace-start.sh" $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/workspace.sh" start $ARGUMENTS`
 
 ## Instructions
 
@@ -37,3 +37,7 @@ positional `TARGET`, the target is `behavior.default_start_target`
 Relay the per-pane report lines and the summary count
 (`started/adopted: N  kept (already healthy): N  failed: N`) verbatim. A non-zero exit means
 at least one slot failed — do not claim the workspace is fully up.
+
+Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
+Group selection cannot be combined with a positional session or `--all`; it never
+attaches automatically. See the session-workspace environment reference.

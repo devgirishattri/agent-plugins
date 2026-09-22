@@ -21,3 +21,7 @@ layout/resurrect save before stopping happens only when
 window layout is saved/restored only for a session with
 `retain_layout: true`; `--no-save` overrides and skips the save either way. Make sure the user
 actually wants a live pane killed and recreated before running this.
+
+Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
+Group selection cannot be combined with a positional session or `--all`; it never
+attaches automatically. See the session-workspace environment reference.

@@ -984,7 +984,7 @@ fi
 
 echo "== every static invalid fixture fails validation =="
 declare -a RULE_FIXTURES=(
-  "schema-version.json:schema_version must be 1, 2, 3, or 4"
+  "schema-version.json:schema_version must be 1, 2, 3, 4, or 5"
   "harness-v2-guards.json:unknown key in harness: guards"
   "harness-v3-disabled-guards.json:harness.enabled=false must not include"
   "harness-v3-bad-guards.json:unknown key in harness.guards: unknown"
@@ -4408,6 +4408,13 @@ fi
 
 echo
 echo "-----------------------------------------------"
+# v5 cross-session isolation and optional-adapter regressions (synthetic only).
+if python3 -B "$HERE/test-environments.py"; then
+  pass "schema v5 environments and optional Jev regressions"
+else
+  fail "schema v5 environments and optional Jev regressions" "see unittest output"
+fi
+
 echo "session-workspace tests: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then
   echo

@@ -6,7 +6,7 @@ description: Coordinate a schema-v4 session-workspace reviewed Git lifecycle acr
 # Workspace Orchestrator
 
 Use this skill only from the configured semantic orchestrator pane. It turns a
-validated `schema_version: 4` `orchestration` block into one provider-neutral
+validated `schema_version: 4` or `5` `orchestration` block into one provider-neutral
 workflow; every repository mutation still runs in the target's configured
 executor pane.
 
@@ -67,3 +67,17 @@ aliases to exist.
   Git floor, deploy preflight, and evidence rules.
 - [references/workspace-json.md](references/workspace-json.md) — schema-v4
   configuration contract and example.
+
+## Scoped ownership (v5)
+
+Use the normalized target's `orchestrator` as the only owning coordinator. Root
+delegates to that local coordinator, which follows the same immutable reviewed
+lifecycle. Root delegates to locals through messages, never scheduler assignment.
+Local coordinators create tasks with `--meta environment=<id>` for their own
+executor/reviewer pair and report results to root through messages. Coordinators
+cannot close tasks. For target AGENTS.md and read-only Git evidence, locals request
+executor/reviewer reports instead of running queries outside their control cwd;
+reviewers independently verify executor evidence. Bind every packet/approval to
+target, repository, task and diff revision.
+Read `../session-workspace/references/environments.md` before grouped lifecycle or
+Jev use. Jev advice never satisfies a review or user confirmation.

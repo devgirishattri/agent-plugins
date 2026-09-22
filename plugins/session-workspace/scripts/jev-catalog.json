@@ -1,0 +1,47 @@
+{
+  "socket_access": {
+    "description": "Current access to the tmux server socket is blocked by operating-system permissions or sandbox restrictions. Not a file-read permission error elsewhere.",
+    "guide": "session-chat:session-chat",
+    "anchor": "Common Failures: tmux socket permission error"
+  },
+  "queued_delivery": {
+    "description": "A message did not arrive live, but durable queued delivery is explicitly confirmed. It has not been lost; queue guidance applies.",
+    "guide": "session-chat:session-chat",
+    "anchor": "Common Failures: timeout followed by Queued"
+  },
+  "shell_target": {
+    "description": "The intended recipient pane exists but is at an ordinary shell prompt because its agent is not running.",
+    "guide": "session-chat:session-chat",
+    "anchor": "Common Failures: pane is at a shell prompt"
+  },
+  "missing_target": {
+    "description": "The tmux server is accessible but no pane matches the requested recipient name. Not a missing command or inaccessible socket.",
+    "guide": "session-chat:session-chat",
+    "anchor": "Common Failures: No pane named"
+  },
+  "duplicate_target": {
+    "description": "Two or more reachable panes have the same requested recipient name, so the destination is ambiguous.",
+    "guide": "session-chat:session-chat",
+    "anchor": "Common Failures: Multiple panes named"
+  },
+  "missing_store": {
+    "description": "A context helper cannot run because required inherited SESSION_CONTEXT_HOME is absent. Not an absent snapshot or empty existing store.",
+    "guide": "knowledge:context-load",
+    "anchor": "SESSION_CONTEXT_HOME not set: relaunch with inherited environment"
+  },
+  "config_invalid": {
+    "description": "Workspace structural configuration validation rejects the current config, such as an unsupported schema, unknown key or invalid enum. Not valid config with a runtime launch failure.",
+    "guide": "session-workspace:workspace-doctor",
+    "anchor": "Troubleshooting: config.validation ERROR"
+  },
+  "identity_mismatch": {
+    "description": "Harness identity checks report partial inherited engine identity, inconsistent aliases or active live-identity disagreement. Not duplicate recipient names or config syntax errors.",
+    "guide": "session-workspace:harness-doctor",
+    "anchor": "identity.env, identity.alias, identity.live"
+  },
+  "unknown": {
+    "description": "No single listed guide is supported by current observations: missing evidence, only historical/negated mentions, outside-catalog problem, or multiple equally current unresolved categories.",
+    "guide": null,
+    "anchor": "Keep ordinary diagnosis; no model-selected guide"
+  }
+}

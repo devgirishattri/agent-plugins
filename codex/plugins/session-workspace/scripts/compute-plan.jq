@@ -48,18 +48,21 @@ def coordination_var_name(store):
   if store == "messages" then "SESSION_CHAT_TARGET_MESSAGES_DIR"
   elif store == "scheduler" then "SESSION_SCHEDULER_HOME"
   elif store == "contexts" then "SESSION_CONTEXT_HOME"
+  elif store == "integrations" then "SESSION_WORKSPACE_INTEGRATIONS_HOME"
   else empty end;
 
 . as $cfg
-| ($cfg.browser // null) as $browser
-# The concrete Chrome pane: browser.pane_name when given, else the sole pane
-# of browser.session_id (validation has already rejected any other shape).
-| (if $browser == null then null
-   else ($browser.pane_name // ([($cfg.sessions // [])[] | select(.id == $browser.session_id) | (.panes // [])[] | .name] | .[0]))
-   end) as $browser_pane_name
+| ([ $cfg.browsers[]?, $cfg.browser? | select(. != null) ] | map(. as $b | . + {
+    pane_name: ($b.pane_name // ([$cfg.sessions[] | select(.id == $b.session_id) | .panes[].name][0])),
+    profile_dir: ($browser_profiles[$b.session_id] // $browser_profile_dir),
+    browser_url: ("http://127.0.0.1:" + ($b.port | tostring)),
+    mcp_server_name: ($b.mcp_server_name // "chrome-devtools")
+  })) as $browsers
+| ($browsers[0] // null) as $browser
+| ($browser.pane_name // null) as $browser_pane_name
 | ([($cfg.sessions // [])[] | (.panes // [])[]]) as $all_panes
-| (($cfg.schema_version == 2 or $cfg.schema_version == 3 or $cfg.schema_version == 4) and ($cfg.harness.enabled // false)) as $harness_active
-| (($cfg.schema_version == 3 or $cfg.schema_version == 4) and $harness_active and ($cfg.harness | has("guards"))) as $guards_configured
+| (($cfg.schema_version == 2 or $cfg.schema_version == 3 or ($cfg.schema_version == 4 or $cfg.schema_version == 5)) and ($cfg.harness.enabled // false)) as $harness_active
+| (($cfg.schema_version == 3 or ($cfg.schema_version == 4 or $cfg.schema_version == 5)) and $harness_active and ($cfg.harness | has("guards"))) as $guards_configured
 | ($cfg.stores.base // ".tmp") as $store_base
 | ($cfg.stores.overrides // {}) as $store_overrides
 | ($cfg.stores.pin // []) as $pin
@@ -82,10 +85,15 @@ def coordination_var_name(store):
     "SESSION_WORKSPACE_ROLE",
     "SESSION_WORKSPACE_PANE_CWD",
     "SESSION_WORKSPACE_HARNESS_MODE"
+  ] + (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then ["SESSION_WORKSPACE_SCOPE_JSON"] else [] end) + [
   ] + (if $guards_configured then ["SESSION_WORKSPACE_GUARDS_JSON"] else [] end)) as $engine_always
 |
 ({
+  schema_version: $cfg.schema_version,
   config_path: $config_path,
+  environments: ($cfg.environments // []),
+  integrations: ($cfg.integrations // {}),
+  integration_store: (if ($pin | index("integrations")) != null then store_path($store_base; $store_overrides; "integrations") else null end),
   project: {
     id: $pid,
     display_name: ($cfg.project.display_name // $pid),
@@ -100,6 +108,8 @@ def coordination_var_name(store):
   } + (if $guards_configured then {guards: $cfg.harness.guards} else {} end)) else {active: false} end),
   sessions: [
     ($cfg.sessions // [])[] | . as $s
+    | ([$browsers[] | select(.session_id == $s.id)][0] // null) as $browser
+    | ($browser.pane_name // null) as $browser_pane_name
     | {
         id: $s.id,
         name: $s.name,
@@ -125,6 +135,10 @@ def coordination_var_name(store):
           | {
               name: $p.name,
               role: $p.role,
+              scope: (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then {
+                environments: ($cfg.environments | map(del(.jev))),
+                root_orchestrator: ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name | select(. as $n | [$cfg.environments[].orchestrator] | index($n) | not)][0] // null)
+              } else null end),
               optional: ($p.optional // false),
               cwd_raw: ($p.cwd // null),
               cwd: ($cwd_map[$p.name] // null),
@@ -144,7 +158,7 @@ def coordination_var_name(store):
                 [$browser.chrome_program,
                  "--remote-debugging-address=127.0.0.1",
                  "--remote-debugging-port=" + ($browser.port | tostring),
-                 "--user-data-dir=" + $browser_profile_dir,
+                 "--user-data-dir=" + $browser.profile_dir,
                  "--no-first-run",
                  "--no-default-browser-check"]
                 else ($p.command // null) end),
@@ -180,17 +194,18 @@ def coordination_var_name(store):
         ]
       }
   ],
+  browsers: $browsers,
   browser: (if $browser == null then null else {
     session_id: $browser.session_id,
     pane_name: $browser_pane_name,
     port: $browser.port,
     browser_url: ("http://127.0.0.1:" + ($browser.port | tostring)),
-    profile_dir: $browser_profile_dir,
+    profile_dir: $browser.profile_dir,
     chrome_program: $browser.chrome_program,
     mcp_package: $browser.mcp_package,
     mcp_server_name: ($browser.mcp_server_name // "chrome-devtools")
   } end)
-} + (if $cfg.schema_version == 4 and ($cfg | has("orchestration")) then {
+} + (if ($cfg.schema_version == 4 or $cfg.schema_version == 5) and ($cfg | has("orchestration")) then {
   orchestration: (if ($cfg.orchestration.enabled // false) then {
     active: true,
     profile: $cfg.orchestration.profile,
@@ -201,6 +216,8 @@ def coordination_var_name(store):
       | ([ $all_panes[] | select(.role == $cfg.harness.roles.reviewer and (.cwd // null) == $target.cwd) ][0]) as $reviewer
       | {
           id: $target.id,
+          environment: ([$cfg.environments[]? | select(.cwd == $target.cwd) | .id][0] // null),
+          orchestrator: ([$cfg.environments[]? | select(.cwd == $target.cwd) | .orchestrator][0] // ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name][0])),
           cwd_raw: $target.cwd,
           cwd: ($cwd_map[$executor.name] // null),
           executor: $executor.name,
@@ -216,3 +233,9 @@ def coordination_var_name(store):
     ]
   } else {active: false} end)
 } else {} end))
+
+| if $cfg.schema_version != 5 then
+    del(.schema_version, .environments, .integrations, .integration_store, .browsers)
+    | .sessions |= map(.panes |= map(del(.scope)))
+    | if (.orchestration.active // false) then .orchestration.targets |= map(del(.environment, .orchestrator)) else . end
+  else . end
