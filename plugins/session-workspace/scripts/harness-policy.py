@@ -1493,17 +1493,28 @@ def diff_context(ctx: Context, script: str, args: List[str]) -> None:
 
 def save_context(ctx: Context, script: str, args: List[str]) -> None:
     if len(args) < 2 or not LABEL_RE.fullmatch(args[0]):
-        raise PolicyFailure("helper.argv", "save-context.sh requires <name> <snapshot-file> [--handoff] [--expires ISO]")
+        raise PolicyFailure("helper.argv", "save-context.sh requires <name> <snapshot-file> [--handoff] [--expires <UTC-ISO>] [--handoff-data <json-file>]")
     literal_file(ctx, args[1], "save-context.sh snapshot")
     remaining = list(args[2:])
+    handoff = False
+    handoff_data = False
     while remaining:
         flag = remaining.pop(0)
         if flag == "--handoff":
+            handoff = True
+            continue
+        if flag == "--handoff-data":
+            if not remaining or not remaining[0] or remaining[0].startswith("--"):
+                raise PolicyFailure("helper.argv", "--handoff-data requires a non-empty file path")
+            literal_file(ctx, remaining.pop(0), "save-context.sh handoff data")
+            handoff_data = True
             continue
         if flag == "--expires" and remaining and ISO_UTC_RE.fullmatch(remaining[0]):
             remaining.pop(0)
             continue
-        raise PolicyFailure("helper.argv", "save-context.sh accepts only --handoff and --expires <UTC-ISO>")
+        raise PolicyFailure("helper.argv", "save-context.sh accepts only --handoff, --expires <UTC-ISO>, and --handoff-data <json-file>")
+    if handoff_data and not handoff:
+        raise PolicyFailure("helper.argv", "--handoff-data requires --handoff")
 
 
 def share_context(ctx: Context, script: str, args: List[str]) -> None:

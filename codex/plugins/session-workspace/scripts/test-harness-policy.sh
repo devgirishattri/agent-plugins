@@ -666,6 +666,19 @@ as_review "reviewer memory write (remember) is denied" "$(bash_payload "bash $KN
 as_review "reviewer docs write is denied" "$(bash_payload "bash $KNOW/docs-write.sh docs/x.md")" '.decision == "deny" and .rule == "coordination.write"'
 as_review "reviewer context load is allowed" "$(bash_payload "bash $KNOW/load-context.sh review_arc")" '.decision == "allow"'
 as_review "reviewer context save of an existing snapshot file is allowed" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff --expires 2026-12-31T00:00:00Z")" '.decision == "allow"'
+# Handoff data uses the same literal-file boundary as the snapshot operand.
+printf '{"scope":{},"items":[]}\n' > "$CHILD/handoff data.json"
+HANDOFF_DATA="$CHILD/handoff data.json"
+as_review "reviewer context save with handoff data is allowed" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff --handoff-data '$HANDOFF_DATA'")" '.decision == "allow"'
+as_review "reviewer context save with handoff data before handoff is allowed" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff-data '$HANDOFF_DATA' --expires 2026-12-31T00:00:00Z --handoff")" '.decision == "allow"'
+as_review "reviewer context save with missing handoff data value is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff --handoff-data")" '.decision == "deny" and .rule == "helper.argv"'
+as_review "reviewer context save with empty handoff data value is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff --handoff-data ''")" '.decision == "deny" and .rule == "helper.argv"'
+as_review "reviewer context save with a flag as handoff data value is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff-data --handoff")" '.decision == "deny" and .rule == "helper.argv"'
+as_review "reviewer context save with nonexistent handoff data is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff --handoff-data $CHILD/missing.json")" '.decision == "deny" and .rule == "helper.argv"'
+as_review "reviewer context save with directory handoff data is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff --handoff-data $CHILD")" '.decision == "deny" and .rule == "helper.argv"'
+as_review "reviewer context save with dynamic handoff data is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff --handoff-data '\$HOME/data.json'")" '.decision == "deny" and .rule == "path.dynamic"'
+as_review "reviewer context save with outside handoff data is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff --handoff-data /etc/hosts")" '.decision == "deny" and .rule == "helper.argv"'
+as_review "reviewer context save with handoff data without handoff is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --handoff-data '$HANDOFF_DATA'")" '.decision == "deny" and .rule == "helper.argv"'
 as_review "reviewer context save with a bad --expires is denied" "$(bash_payload "bash $KNOW/save-context.sh review_arc $CHILD/README.md --expires tomorrow")" '.decision == "deny" and .rule == "helper.argv"'
 as_review "reviewer context share to the orchestrator is allowed" "$(bash_payload "bash $KNOW/share-context.sh $MASTER_PANE review_arc")" '.decision == "allow"'
 as_review "reviewer context share to the executor is denied" "$(bash_payload "bash $KNOW/share-context.sh $EXEC_PANE review_arc")" '.decision == "deny" and .rule == "routing.master"'
