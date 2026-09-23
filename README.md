@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.11 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.29 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.6.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.6.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -544,8 +544,11 @@ no separate `--confirmed` flag. Secrets declared in the config are handed to
 panes as a private `0600` temp file passed by path, never through `send-keys` or
 tmux metadata. See `plugins/session-workspace/README.md` for the config schema.
 
-Strict-v1 reviewers can keep a child checkout as `cwd` while granting selected
+Strict-v1 reviewers and executors can keep a child checkout as `cwd` while granting selected
 shell reads through per-pane `read_paths`, for example `["docs", "AGENTS.md"]`.
+Executor grants permit only single literal read commands under the reviewer
+read-command restrictions; executor workdirs and writes stay inside their own
+checkout. For example, use `cat ../docs/guide.md` from the child checkout.
 Relative entries resolve against the workspace root; canonical absolute paths
 can name external repositories. Existing files grant exact-file access and
 directories grant descendants. These grants never become `--add-dir`, write
@@ -554,11 +557,11 @@ Configured stores, memory, secrets, provider homes, foreign v5 environments,
 symlink components, parent traversal, and overlapping grants are rejected.
 The engine pins `SESSION_WORKSPACE_READ_PATHS_JSON` at launch; do not set it
 manually. After adding/changing/removing paths, restart the affected workspace
-session. Before downgrading to a version without this field, remove `read_paths`
-from the config and restart. Native provider restrictions still apply; hooks
-cannot prevent a same-uid filesystem swap racing a check.
+session. Before downgrading below 0.6.3, remove executor `read_paths`; before
+downgrading below 0.6.2, remove reviewer `read_paths` too. Restart affected sessions.
+Native provider restrictions still apply; hooks cannot prevent a same-uid filesystem swap racing a check.
 If a path disappears or becomes unsafe, plan/status show it as unavailable and
-only its reviewer blocks; other panes and stop remain usable. Restore the path,
+only its configured pane blocks; other panes and stop remain usable. Restore the path,
 or change the configuration and restart. Launch refuses unavailable grants.
 
 ### Chronos

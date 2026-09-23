@@ -494,7 +494,7 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
 
     read_paths = pane.get("read_paths", [])
     if any(entry.get("kind") not in {"file", "directory"} for entry in read_paths):
-        return None, deny(None, tool, "identity.read_paths", "reviewer read path is unavailable; inspect workspace-plan and restore the path or update config and restart", mode, integrity=True)
+        return None, deny(None, tool, "identity.read_paths", "pane read path is unavailable; inspect workspace-plan and restore the path or update config and restart", mode, integrity=True)
     read_identity = json.dumps(read_paths, sort_keys=True, separators=(",", ":")) if read_paths else ""
     if os.environ.get("SESSION_WORKSPACE_READ_PATHS_JSON", "") != read_identity:
         return None, deny(None, tool, "identity.read_paths", "launcher read paths do not match validated configuration; restart affected sessions", mode, integrity=True)
@@ -574,7 +574,7 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         environment=environment,
         route_peers=route_peers,
         scoped=scoped,
-        read_paths=tuple((Path(entry["path"]), entry["kind"]) for entry in read_paths) if semantic == "reviewer" else (),
+        read_paths=tuple((Path(entry["path"]), entry["kind"]) for entry in read_paths) if semantic in {"reviewer", "executor"} else (),
         session_ids=frozenset(own["development"] + own["services"]) if scoped and own else frozenset(),
         scheduler_root=next((canonical(Path(g["path"])) for g in pane.get("grants", []) if g.get("store") == "scheduler"), None),
     )
@@ -977,8 +977,9 @@ def tmp_readable(ctx: Context, path: Path) -> bool:
 
 
 def reviewer_readable(ctx: Context, path: Path) -> bool:
-    """Extra grants apply only to reviewer shell/workdir, never helper stores."""
-    return readable(ctx, path) or (ctx.semantic_role == "reviewer" and any(
+    """Extra grants apply to scoped shell reads, never helper stores."""
+    base_readable = within(path, ctx.pane_cwd) if ctx.semantic_role == "executor" else readable(ctx, path)
+    return base_readable or (ctx.semantic_role in {"reviewer", "executor"} and any(
         (kind == "file" and path == root) or (kind == "directory" and within(path, root))
         for root, kind in ctx.read_paths))
 
@@ -2149,7 +2150,7 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
             raise PolicyFailure("shell.sandbox_escape", "child roles cannot request a sandbox/approval escape")
     validate_tool_workdir(ctx, tool_input)
     reviewer_base = ctx.pane_cwd
-    if ctx.semantic_role == "reviewer":
+    if ctx.semantic_role == "reviewer" or (ctx.semantic_role == "executor" and ctx.read_paths):
         bases = set()
         for key in ("cwd", "workdir"):
             value = tool_input.get(key)
@@ -2157,11 +2158,15 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
                 raw = Path(value.strip()).expanduser()
                 bases.add(canonical(raw if raw.is_absolute() else ctx.pane_cwd / raw))
         if len(bases) > 1:
-            raise PolicyFailure("reviewer.path", "reviewer tool cwd and workdir disagree")
-        if bases:
+            if ctx.semantic_role == "reviewer":
+                raise PolicyFailure("reviewer.path", "reviewer tool cwd and workdir disagree")
+            reviewer_base = None  # Ambiguous base cannot authorize extra reads.
+        elif bases:
             reviewer_base = bases.pop()
             if not reviewer_base.is_dir():
-                raise PolicyFailure("reviewer.path", "reviewer tool workdir must be an existing directory")
+                if ctx.semantic_role == "reviewer":
+                    raise PolicyFailure("reviewer.path", "reviewer tool workdir must be an existing directory")
+                reviewer_base = None
     if not command.strip():
         raise PolicyFailure("bash.command", "active harness received an empty shell command")
     tokens = parse_shell(command)
@@ -2200,6 +2205,15 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
     if ctx.semantic_role == "reviewer":
         validate_reviewer_read(tokens, command, ctx, reviewer_base)
         return
+    if ctx.semantic_role == "executor" and ctx.read_paths and reviewer_base is not None:
+        # Grants authorize only the existing single-command read grammar.
+        # Never widen arbitrary executor operands or native edit authority.
+        try:
+            validate_reviewer_read(tokens, command, ctx, reviewer_base)
+        except PolicyFailure:
+            pass  # Ordinary in-checkout executor commands retain their floor.
+        else:
+            return
     if ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment):
         # Executor containment for arbitrary shell: no inline shell/interpreter
         # code (an unreadable escape hatch), no operand that only exists after

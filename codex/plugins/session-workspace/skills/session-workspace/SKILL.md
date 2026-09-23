@@ -121,23 +121,27 @@ them:
   `$session-chat:reply`; for long or multiline verdicts, stage a message with
   a native edit tool and dispatch that file to the orchestrator with
   `--reply-to` correlation. Shell-based staging remains blocked.
-  Schema v2–5 reviewers may set `sessions[].panes[].read_paths` to up to 16
+  Schema v2–5 reviewers and executors may set `sessions[].panes[].read_paths` to up to 16
   existing files/directories, relative to the project root or canonical absolute
   paths for external repositories. Files grant exact-file access, directories
   grant descendants. Symlink components, parent traversal, overlapping grants,
   configured stores/memory/secrets, provider homes and foreign v5 environments
   are rejected. Recursive symlink-follow options and directory `diff` are denied;
-  compare explicit files instead. These paths affect shell reads and recognized
+  compare explicit files instead. These paths affect shell reads and reviewer
   tool workdirs only: they do not grant helper-store access, native Read/Grep/Glob
   permissions, `--add-dir`, or writes. Provider permissions still apply.
   `SESSION_WORKSPACE_READ_PATHS_JSON` is engine-owned launch identity, never a
   user tunable; changes/removal or filesystem drift fail closed in both modes
-  for the affected reviewer. Restore an unavailable path, or update the config
+  for the affected pane. Restore an unavailable path, or update the config
   and restart its session. Plan/status retain unavailable entries for diagnosis;
   other panes and stop remain usable. Launch refuses unavailable read paths.
   Omitted/empty paths keep old behavior.
   Hooks are not an atomic filesystem sandbox against racing same-uid swaps.
-- **Executor**: edits and shell path operands must stay inside its own
+- **Executor**: explicit per-pane `read_paths` also permit single literal shell
+  reads using the reviewer read-command restrictions above. Executor tool workdirs
+  must remain inside its checkout; use relative or absolute operands for shared
+  docs. Grants never permit writes or composed shell commands outside the checkout.
+  Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files
   with the `Read` tool and stage prompt files inside the checkout (writes

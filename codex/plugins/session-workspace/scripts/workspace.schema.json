@@ -895,7 +895,7 @@
                   "type": "boolean"
                 },
                 "read_paths": {
-                  "description": "Active strict-v1 reviewer only (schema v2-5). Up to 16 existing, non-overlapping canonical files/directories for shell reads; relative to project root or explicit absolute. No symlinks, parent traversal, protected stores/secrets/provider homes or foreign environments. Pins launcher identity; changes require restart. Does not grant native-tool or write permissions.",
+                  "description": "Active strict-v1 reviewer or executor only (schema v2-5). Up to 16 existing, non-overlapping canonical files/directories for shell reads; relative to project root or explicit absolute. No symlinks, parent traversal, protected stores/secrets/provider homes or foreign environments. Pins launcher identity; changes require restart. Does not grant native-tool or write permissions.",
                   "type": "array",
                   "maxItems": 16,
                   "uniqueItems": true,

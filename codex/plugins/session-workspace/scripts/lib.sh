@@ -16,7 +16,7 @@ umask 077
 sw_require_available_read_paths() {
   local plan_json="$1" target="${2:-all}"
   if printf '%s' "$plan_json" | jq -e --arg target "$target" 'any(.sessions[] | select($target == "all" or .id == $target) | .panes[] | select(.skip_unresolved | not); any(.read_paths[]?; .kind == "unavailable"))' >/dev/null; then
-    echo "ERROR: selected reviewer has unavailable read_paths; inspect workspace-plan before launching" >&2
+    echo "ERROR: selected pane has unavailable read_paths; inspect workspace-plan before launching" >&2
     return 1
   fi
   return 0

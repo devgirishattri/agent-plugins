@@ -161,10 +161,50 @@ class ReadPaths:
             self.assertNotEqual(launch.returncode, 0)
             self.assertIn("unavailable read_paths", launch.stderr)
 
+    def test_executor_scoped_reads(self):
+        executor = self.cfg["sessions"][0]["panes"][1]
+        self.assert_decision("deny", env=self.launch("executor"))
+        executor["read_paths"] = ["docs", "AGENTS.md"]
+        env = self.launch("executor")
+        for command in ("cat ../docs/a.md", "cat ../AGENTS.md", "rg sample ../docs", "head ../docs/a.md"):
+            self.assert_decision("allow", command, env=env)
+        for command in ("cat ../other.md", "cat ../docs-extra/no.md", "ls ..",
+                        "cat ../.tmp/messages/report.md",
+                        "touch ../docs/new.md", "cp a.md ../docs/a.md", "echo text > ../docs/a.md",
+                        "cat ../docs/a.md > a.md", "cat ../docs/a.md && touch a.md",
+                        "sed -n 1p ../docs/a.md", "git -C ../docs add a.md", "rg -L sample ../docs",
+                        "find ../docs -delete", "sort -o ../docs/a.md a.md", "bash ../docs/a.md"):
+            self.assert_decision("deny", command, env=env)
+        self.assert_decision("allow", "touch local.md", env=env)
+        self.assert_decision("allow", tool="Write", inputs={"file_path": str(self.root / "component-a/local.md"), "content": "ok"}, env=env)
+        self.assert_decision("deny", tool="Write", inputs={"file_path": str(self.root / "docs/a.md"), "content": "no"}, env=env)
+        self.assert_decision("deny", inputs={"command": "cat a.md", "cwd": str(self.root / "docs")}, env=env)
+        (self.root / "docs/link").symlink_to(self.root / "other.md")
+        self.assert_decision("deny", "cat ../docs/link", env=env)
+        (self.root / "component-a/sub").mkdir()
+        self.assert_decision("allow", inputs={"command": "cat ../../docs/a.md", "workdir": str(self.root / "component-a/sub")}, env=env)
+        self.assert_decision("deny", inputs={"command": "cat ../../other.md", "workdir": str(self.root / "component-a/sub")}, env=env)
+        for workdirs in ({"workdir": str(self.root / "component-a/missing")},
+                         {"cwd": str(self.root / "component-a"), "workdir": str(self.root / "component-a/sub")}):
+            self.assert_decision("allow", inputs={"command": "touch local.md", **workdirs}, env=env)
+            self.assert_decision("deny", inputs={"command": "cat ../docs/a.md", **workdirs}, env=env)
+        missing = dict(env)
+        missing.pop(IDENTITY)
+        self.assertEqual(self.assert_decision("deny", env=missing)["rule"], "identity.read_paths")
+        for mode in ("audit", "enforce"):
+            self.cfg["harness"]["mode"] = mode
+            current = self.launch("executor")
+            self.assert_decision("allow", env=current)
+            (self.root / "docs").rename(self.root / "docs-away")
+            self.assertEqual(self.assert_decision("deny", env=current)["rule"], "identity.read_paths")
+            (self.root / "docs-away").rename(self.root / "docs")
+        executor["read_paths"] = []
+        self.assert_decision("deny", env=self.launch("executor"))
+
     def test_roles_and_identity_override_validation(self):
         self.pane["read_paths"] = ["docs"]
         self.plan()
-        for role in ("master", "executor"):
+        for role in ("master",):
             self.pane.pop("read_paths")
             target = next(p for p in self.cfg["sessions"][0]["panes"] if p["role"] == role)
             target["read_paths"] = ["docs"]

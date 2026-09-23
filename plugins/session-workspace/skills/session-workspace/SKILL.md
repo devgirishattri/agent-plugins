@@ -117,7 +117,7 @@ them:
   orchestrator, `task-done`/`task-block`, context and read-only knowledge
   helpers). Verdicts go out as a single-line `/session-chat:reply`, a
   scheduler note, or a staged file sent with `dispatch-to-session.sh`.
-  Schema v2–5 reviewers may set `sessions[].panes[].read_paths` to up to 16
+  Schema v2–5 reviewers and executors may set `sessions[].panes[].read_paths` to up to 16
   files/directories, relative to the project root or canonical absolute paths
   for external repositories. Files grant exact-file access, directories grant
   descendants. Parent traversal, overlapping grants, configured
@@ -125,19 +125,25 @@ them:
   rejected at validation. A path that is missing, not a regular file or
   directory, or has a symlink component is shown as `unavailable` in
   `workspace-plan`: launch/restart/adopt of that pane is refused and a running
-  reviewer is blocked until the path is restored; other panes and stop/status
+  pane is blocked until the path is restored; other panes and stop/status
   keep working. Recursive symlink-follow options (`rg -L`, `grep -R`/`-S`,
   `find -L`, `du -L`, `ls -L`) and directory `diff` are denied; compare
   explicit files instead. Relative operands resolve against the effective
   tool `cwd`/`workdir`, and helpers must run from the configured pane cwd.
-  These paths affect shell reads and recognized tool workdirs only: they do
+  These paths affect shell reads and reviewer tool workdirs only: they do
   not grant helper-store access, native Read/Grep/Glob permissions,
   `--add-dir`, or writes; provider permissions still apply.
   `SESSION_WORKSPACE_READ_PATHS_JSON` is engine-owned launch identity, never a
   user tunable; changing or removing paths fails closed in both modes until
   the affected session is restarted. Omitted/empty paths keep old behavior.
   Hooks are not an atomic filesystem sandbox against racing same-uid swaps.
-- **Executor**: edits and shell path operands must stay inside its own
+- **Executor**: explicit per-pane `read_paths` also permit single literal shell
+  reads using the reviewer read-command restrictions above (the executor's own
+  checkout plus its grants; never helper stores or message inboxes). Executor
+  tool workdirs must remain inside its checkout; use relative or absolute
+  operands for shared docs, for example `cat ../docs/guide.md`. Grants never
+  permit writes or composed shell commands outside the checkout.
+  Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files
   with the `Read` tool and stage prompt files inside the checkout (writes

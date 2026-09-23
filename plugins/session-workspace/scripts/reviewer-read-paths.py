@@ -40,8 +40,8 @@ def resolve_paths(config, root):
             if "read_paths" not in pane:
                 continue
             label = "pane %s read_paths" % pane["name"]
-            if config["schema_version"] not in (2, 3, 4, 5) or harness.get("enabled") is not True or pane["role"] != harness.get("roles", {}).get("reviewer"):
-                raise ValueError(label + " requires an active harness reviewer")
+            if config["schema_version"] not in (2, 3, 4, 5) or harness.get("enabled") is not True or pane["role"] not in {harness.get("roles", {}).get("reviewer"), harness.get("roles", {}).get("executor")}:
+                raise ValueError(label + " requires an active harness reviewer or executor")
             paths = pane["read_paths"]
             if not isinstance(paths, list) or len(paths) > 16:
                 raise ValueError(label + " must be an array of at most 16 literal paths")
