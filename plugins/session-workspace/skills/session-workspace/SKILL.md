@@ -128,7 +128,10 @@ them:
   pane is blocked until the path is restored; other panes and stop/status
   keep working. Recursive symlink-follow options (`rg -L`, `grep -R`/`-S`,
   `find -L`, `du -L`, `ls -L`) and directory `diff` are denied; compare
-  explicit files instead. Relative operands resolve against the effective
+  explicit files instead. `rg` must start with literal `--no-config`
+  (`rg --no-config PATTERN PATH`) so an inherited `RIPGREP_CONFIG_PATH`
+  cannot add symlink following or a preprocessor; `--pre`, `--hostname-bin`
+  and `--search-zip`/`-z` are denied. Relative operands resolve against the effective
   tool `cwd`/`workdir`, and helpers must run from the configured pane cwd.
   These paths affect shell reads and reviewer tool workdirs only: they do
   not grant helper-store access, native Read/Grep/Glob permissions,
@@ -142,7 +145,11 @@ them:
   checkout plus its grants; never helper stores or message inboxes). Executor
   tool workdirs must remain inside its checkout; use relative or absolute
   operands for shared docs, for example `cat ../docs/guide.md`. Grants never
-  permit writes or composed shell commands outside the checkout.
+  permit writes or composed shell commands outside the checkout. A command
+  that fails the read grammar (for example `rg` without `--no-config`) falls
+  back to ordinary executor containment, so it still runs when every operand
+  is inside the checkout; that floor checks operands, not recursive traversal
+  or inherited tool configuration (a known limit).
   Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files

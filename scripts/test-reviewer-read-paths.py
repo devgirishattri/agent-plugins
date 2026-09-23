@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -106,7 +107,7 @@ class ReadPaths:
         env = self.launch()
         self.assertEqual(env[IDENTITY], json.dumps(paths, sort_keys=True, separators=(",", ":")))
         for cmd in ("cat ../docs/a.md", "cat '../docs/with space.md'", "cat ../AGENTS.md", "cat ../component-b/b.md",
-                    "cat " + shlex.quote(str(self.external / "README.md")), "rg sample ../docs", "git -C ../component-b status"):
+                    "cat " + shlex.quote(str(self.external / "README.md")), "rg --no-config sample ../docs", "git -C ../component-b status"):
             self.assert_decision("allow", cmd, env=env)
         for cmd in ("cat ../other.md", "ls ..", "cat ../docs-extra/no.md", "cat ../docs/../other.md"):
             self.assert_decision("deny", cmd, env=env)
@@ -166,13 +167,13 @@ class ReadPaths:
         self.assert_decision("deny", env=self.launch("executor"))
         executor["read_paths"] = ["docs", "AGENTS.md"]
         env = self.launch("executor")
-        for command in ("cat ../docs/a.md", "cat ../AGENTS.md", "rg sample ../docs", "head ../docs/a.md"):
+        for command in ("cat ../docs/a.md", "cat ../AGENTS.md", "rg --no-config sample ../docs", "head ../docs/a.md"):
             self.assert_decision("allow", command, env=env)
         for command in ("cat ../other.md", "cat ../docs-extra/no.md", "ls ..",
                         "cat ../.tmp/messages/report.md",
                         "touch ../docs/new.md", "cp a.md ../docs/a.md", "echo text > ../docs/a.md",
                         "cat ../docs/a.md > a.md", "cat ../docs/a.md && touch a.md",
-                        "sed -n 1p ../docs/a.md", "git -C ../docs add a.md", "rg -L sample ../docs",
+                        "sed -n 1p ../docs/a.md", "git -C ../docs add a.md", "rg --no-config -L sample ../docs",
                         "find ../docs -delete", "sort -o ../docs/a.md a.md", "bash ../docs/a.md"):
             self.assert_decision("deny", command, env=env)
         self.assert_decision("allow", "touch local.md", env=env)
@@ -225,14 +226,100 @@ class ReadPaths:
         self.write()
         self.assertNotEqual(self.script("workspace-plan", "--json").returncode, 0)
 
+    def test_rg_scoped_option_contract(self):
+        for role in ("reviewer", "executor"):
+            self.cfg["sessions"][0]["panes"][2 if role == "reviewer" else 1]["read_paths"] = ["docs"]
+            env = self.launch(role)
+            self.assert_decision("allow", "rg --no-config sample ../docs", env=env)
+            for command in (
+                "rg sample ../docs", "rg -e --no-config ../docs",
+                "rg --regexp=--no-config ../docs", "rg sample -- ../docs --no-config",
+                "rg sample ../docs --no-config", "rg --no-config -L sample ../docs",
+                "rg --no-config --follow sample ../docs", "rg --no-config --pre=cat sample ../docs",
+                "rg --no-config --pre cat sample ../docs", "rg --no-config --pre-glob=x sample ../docs",
+                "rg --no-config --hostname-bin=../docs/a.md sample ../docs",
+                "rg --no-config --hostname-bin ../docs/a.md sample ../docs",
+                "rg --no-config -z sample ../docs", "rg --no-config -nz sample ../docs",
+                "rg --no-config --search-zip sample ../docs",
+            ):
+                with self.subTest(role=role, command=command):
+                    decision = self.assert_decision("deny", command, env=env)
+                    self.assertIn(decision["rule"], {"reviewer.search", "reviewer.symlink_follow", "executor.containment"})
+
+    def test_rg_inherited_config_execution_controls(self):
+        self.assertIsNotNone(shutil.which("rg"), "real ripgrep is required for inherited-config regression")
+        outside = self.root / "other.md"
+        outside.write_text("synthetic-outside-marker\n")
+        (self.root / "docs/link").symlink_to(outside)
+        marker = self.root / "preprocessor-ran"
+        preprocessor = self.root / "preprocessor.sh"
+        preprocessor.write_text("#!/bin/sh\nprintf executed > " + shlex.quote(str(marker)) + '\ncat "$1"\n')
+        preprocessor.chmod(0o700)
+        config = self.root / "rg.conf"
+        for role in ("reviewer", "executor"):
+            self.cfg["sessions"][0]["panes"][2 if role == "reviewer" else 1]["read_paths"] = ["docs"]
+            env = self.launch(role)
+            env.pop("RIPGREP_CONFIG_PATH", None)
+            for config_text in (None, "--line-number\n", "--follow\n", "--pre=" + str(preprocessor) + "\n"):
+                with self.subTest(role=role, config=config_text):
+                    if config_text is not None:
+                        config.write_text(config_text)
+                        env["RIPGREP_CONFIG_PATH"] = str(config)
+                    if marker.exists():
+                        marker.unlink()
+                    # A real in-scope match is the positive control, including
+                    # hostile config: disabling config must not disable search.
+                    command = "rg --no-config sample ../docs"
+                    self.assert_decision("allow", command, env=env)
+                    result = subprocess.run(shlex.split(command), cwd=self.root / "component-a", env=env,
+                                            capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("sample", result.stdout)
+                    self.assertFalse(marker.exists())
+                    command = "rg --no-config synthetic-outside-marker ../docs"
+                    self.assert_decision("allow", command, env=env)
+                    result = subprocess.run(shlex.split(command), cwd=self.root / "component-a", env=env,
+                                            capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertNotIn("synthetic-outside-marker", result.stdout)
+                    self.assertFalse(marker.exists())
+            for config_text, pattern in (("--follow\n", "synthetic-outside-marker"),
+                                         ("--pre=" + str(preprocessor) + "\n", "sample")):
+                with self.subTest(role=role, hostile=config_text):
+                    config.write_text(config_text)
+                    if marker.exists():
+                        marker.unlink()
+                    command = "rg " + pattern + " ../docs"
+                    decision = self.decision(command, env=env)["decision"]
+                    output = ""
+                    if decision == "allow":
+                        # Execute only the isolated synthetic fixture. On old
+                        # code this reproduces the actual read/exec, not just a
+                        # different rule name in a policy decision.
+                        result = subprocess.run(shlex.split(command), cwd=self.root / "component-a", env=env,
+                                                capture_output=True, text=True, timeout=10)
+                        output = result.stdout
+                    self.assertEqual((decision, "synthetic-outside-marker" in output, marker.exists()),
+                                     ("deny", False, False))
+
+    def test_rg_executor_floor_compatibility(self):
+        # The exception for scoped external reads must not silently redefine
+        # the executor's general in-checkout shell permission floor.
+        self.cfg["sessions"][0]["panes"][1]["read_paths"] = ["docs"]
+        env = self.launch("executor")
+        self.assert_decision("allow", "rg sample .", env=env)
+        self.assert_decision("allow", "rg -L sample .", env=env)
+        self.assert_decision("allow", "rg --no-config sample ../docs", env=env)
+        self.assert_decision("deny", "rg --no-config -L sample ../docs", env=env)
+
     def test_symlinks_and_recursive_controls(self):
         self.pane["read_paths"] = ["docs"]
         (self.root / "docs/out").symlink_to(self.root / "other.md")
         (self.root / "docs/in").symlink_to(self.root / "docs/a.md")
         env = self.launch()
-        for cmd in ("cat ../docs/in", "rg sample ../docs", "grep -r sample ../docs", "find ../docs -type f", "diff a.md ../docs/a.md"):
+        for cmd in ("cat ../docs/in", "rg --no-config sample ../docs", "grep -r sample ../docs", "find ../docs -type f", "diff a.md ../docs/a.md"):
             self.assert_decision("allow", cmd, env=env)
-        for cmd in ("cat ../docs/out", "rg -L sample ../docs", "rg -nL sample ../docs", "rg --follow sample ../docs", "grep -Rn sample ../docs",
+        for cmd in ("cat ../docs/out", "rg --no-config -L sample ../docs", "rg --no-config -nL sample ../docs", "rg --no-config --follow sample ../docs", "grep -Rn sample ../docs",
                     "grep --dereference-recursive sample ../docs", "grep -rS sample ../docs", "grep -S -r sample ../docs", "grep --dereference-files -r sample ../docs", "find -L ../docs", "find ../docs -follow", "du -L ../docs", "ls -LR ../docs",
                     "diff -r ../docs .", "diff ../docs ."):
             d = self.assert_decision("deny", cmd, env=env)
@@ -240,9 +327,9 @@ class ReadPaths:
 
     def test_recursive_floor_without_new_config(self):
         env = self.launch()
-        for cmd in ("rg sample .", "grep --recursive sample .", "find . -type f", "diff a.md a.md"):
+        for cmd in ("rg --no-config sample .", "grep --recursive sample .", "find . -type f", "diff a.md a.md"):
             self.assert_decision("allow", cmd, env=env)
-        for cmd in ("rg -L sample .", "grep -Rn sample .", "find -L .", "du -L .", "ls -LR .", "diff . ."):
+        for cmd in ("rg --no-config -L sample .", "grep -Rn sample .", "find -L .", "du -L .", "ls -LR .", "diff . ."):
             with self.subTest(command=cmd):
                 self.assert_decision("deny", cmd, env=env)
 

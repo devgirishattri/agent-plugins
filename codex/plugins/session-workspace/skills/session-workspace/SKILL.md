@@ -127,7 +127,11 @@ them:
   grant descendants. Symlink components, parent traversal, overlapping grants,
   configured stores/memory/secrets, provider homes and foreign v5 environments
   are rejected. Recursive symlink-follow options and directory `diff` are denied;
-  compare explicit files instead. These paths affect shell reads and reviewer
+  compare explicit files instead. Restricted ripgrep commands must begin with
+  `rg --no-config` so inherited configuration cannot add traversal or execution.
+  Explicit preprocessors, `--hostname-bin` and `-z`/`--search-zip` are also denied.
+  Update existing reviewer/scoped-read commands when upgrading to 0.6.4; there
+  is no config/store migration. These paths affect shell reads and reviewer
   tool workdirs only: they do not grant helper-store access, native Read/Grep/Glob
   permissions, `--add-dir`, or writes. Provider permissions still apply.
   `SESSION_WORKSPACE_READ_PATHS_JSON` is engine-owned launch identity, never a
@@ -141,7 +145,9 @@ them:
   reads using the reviewer read-command restrictions above. Executor tool workdirs
   must remain inside its checkout; use relative or absolute operands for shared
   docs. Grants never permit writes or composed shell commands outside the checkout.
-  Otherwise, edits and shell path operands must stay inside its own
+  The ordinary in-checkout executor shell floor is unchanged: these restricted
+  read rules do not establish recursive traversal confinement for general
+  executor commands. Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files
   with the `Read` tool and stage prompt files inside the checkout (writes

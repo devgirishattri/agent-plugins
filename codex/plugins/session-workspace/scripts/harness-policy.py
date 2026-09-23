@@ -2022,6 +2022,18 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
         raise PolicyFailure("reviewer.sed", "reviewer %s is not read-only: script-taking tools can write or execute" % executable)
     if executable not in READ_COMMANDS:
         raise PolicyFailure("reviewer.command", "reviewer executable is not read-only allowlisted: %s" % (executable or "?"))
+    if executable == "rg":
+        # The tool's environment/config may differ from the hook's. Require
+        # an unambiguous argv option rather than inspecting that mutable input
+        # or mistaking an -e pattern/operand named --no-config for the flag.
+        if len(tokens) < 2 or tokens[1] != "--no-config":
+            raise PolicyFailure("reviewer.search", "restricted ripgrep reads require rg --no-config as the command prefix")
+        for token in tokens[2:]:
+            if token == "--":
+                break
+            if (token.split("=", 1)[0] in {"--hostname-bin", "--search-zip"} or
+                    (token.startswith("-") and not token.startswith("--") and "z" in token[1:])):
+                raise PolicyFailure("reviewer.search", "restricted ripgrep reads cannot invoke hostname programs or decompressors")
     # Canonicalizing operands cannot inspect symlinks reached during recursive
     # traversal. Refuse follow flags, including bundled short-option forms.
     short_follow = {"rg": "L", "grep": "RS", "find": "L", "du": "L", "ls": "L", "diff": "rR"}.get(executable, "")
