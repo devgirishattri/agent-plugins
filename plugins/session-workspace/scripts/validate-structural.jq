@@ -46,7 +46,8 @@ def harness_engine_vars: [
   "SESSION_WORKSPACE_PANE_CWD",
   "SESSION_WORKSPACE_HARNESS_MODE",
   "SESSION_WORKSPACE_GUARDS_JSON",
-  "SESSION_WORKSPACE_SCOPE_JSON"
+  "SESSION_WORKSPACE_SCOPE_JSON",
+  "SESSION_WORKSPACE_READ_PATHS_JSON"
 ];
 
 [
@@ -141,7 +142,7 @@ def harness_engine_vars: [
     (($s.value.layout.nodes // []) | to_entries[] | . as $n |
       chk($n.value; ["id", "from", "dir", "percent"]; ["id"]; "sessions." + $slabel + ".layout.nodes[" + ($n.key | tostring) + "]")),
     (($s.value.panes // []) | to_entries[] | . as $p | ($p.value.name // ("panes[" + ($p.key | tostring) + "]")) as $plabel | (
-      chk($p.value; ["name", "role", "cwd", "optional", "command", "port", "agent"]; ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
+      chk($p.value; ["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths"]; ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
       chk($p.value.agent // {}; ["model", "effort", "profile", "permission_mode"]; []; "sessions." + $slabel + ".panes." + $plabel + ".agent")
     ))
   )),

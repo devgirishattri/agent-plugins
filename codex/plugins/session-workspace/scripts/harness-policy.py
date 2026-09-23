@@ -14,6 +14,7 @@ Inputs (all engine-owned, emitted per pane by adapters.sh / lifecycle.sh):
   SESSION_WORKSPACE_PANE_CWD      this pane's resolved cwd
   SESSION_WORKSPACE_HARNESS_MODE  audit|enforce when active, empty when inactive
   SESSION_WORKSPACE_GUARDS_JSON   canonical schema-v3/v4 guard pack JSON, when configured
+  SESSION_WORKSPACE_READ_PATHS_JSON canonical reviewer shell-read grants, when configured
 
 Hook mode reads one JSON event (Claude- or Codex-shaped) from stdin:
   allow / inactive  -> silent, exit 0
@@ -237,6 +238,7 @@ class Context:
     scoped: bool = False
     session_ids: frozenset = frozenset()
     scheduler_root: Optional[Path] = None
+    read_paths: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -490,6 +492,13 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
     if not semantic:
         return None, deny(None, tool, "identity.role", "configured pane is not a harness role", mode, integrity=True)
 
+    read_paths = pane.get("read_paths", [])
+    if any(entry.get("kind") not in {"file", "directory"} for entry in read_paths):
+        return None, deny(None, tool, "identity.read_paths", "reviewer read path is unavailable; inspect workspace-plan and restore the path or update config and restart", mode, integrity=True)
+    read_identity = json.dumps(read_paths, sort_keys=True, separators=(",", ":")) if read_paths else ""
+    if os.environ.get("SESSION_WORKSPACE_READ_PATHS_JSON", "") != read_identity:
+        return None, deny(None, tool, "identity.read_paths", "launcher read paths do not match validated configuration; restart affected sessions", mode, integrity=True)
+
     scope = pane.get("scope")
     scope_env = os.environ.get("SESSION_WORKSPACE_SCOPE_JSON", "")
     if (scope is None and scope_env) or (scope is not None and scope_env != json.dumps(scope, sort_keys=True, separators=(",", ":"))):
@@ -565,6 +574,7 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         environment=environment,
         route_peers=route_peers,
         scoped=scoped,
+        read_paths=tuple((Path(entry["path"]), entry["kind"]) for entry in read_paths) if semantic == "reviewer" else (),
         session_ids=frozenset(own["development"] + own["services"]) if scoped and own else frozenset(),
         scheduler_root=next((canonical(Path(g["path"])) for g in pane.get("grants", []) if g.get("store") == "scheduler"), None),
     )
@@ -964,6 +974,13 @@ def readable(ctx: Context, path: Path) -> bool:
 
 def tmp_readable(ctx: Context, path: Path) -> bool:
     return readable(ctx, path) or any(within(path, root) for root in tmp_roots())
+
+
+def reviewer_readable(ctx: Context, path: Path) -> bool:
+    """Extra grants apply only to reviewer shell/workdir, never helper stores."""
+    return readable(ctx, path) or (ctx.semantic_role == "reviewer" and any(
+        (kind == "file" and path == root) or (kind == "directory" and within(path, root))
+        for root, kind in ctx.read_paths))
 
 
 def resolve_chdir_hops(chdirs: List[List[str]], cwd: Path, allowed: Optional[Callable[[Path], bool]] = None, rule: str = "") -> Path:
@@ -1978,7 +1995,8 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
 # ---------------------------------------------------------------------------
 
 
-def validate_reviewer_read(tokens: List[str], command: str, ctx: Context) -> None:
+def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: Optional[Path] = None) -> None:
+    base = ctx.pane_cwd if base is None else base
     if has_unquoted_expansion(command) or any(is_control(token) for token in tokens):
         raise PolicyFailure("reviewer.shell", "reviewer commands must be one literal read-only segment without expansion, pipes, or redirection")
     if has_unquoted_glob(command):
@@ -1994,7 +2012,7 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context) -> Non
             raise PolicyFailure("reviewer.git", "reviewer Git requires an exact read-only subcommand")
         if not git_is_read_only(tokens):
             raise PolicyFailure("reviewer.git", "reviewer Git write/output/external-execution options are forbidden")
-        ensure_paths_within(tokens, ctx.pane_cwd, lambda p: readable(ctx, p), "reviewer.path")
+        ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path")
         return
     if executable in {"sed", "awk", "perl"}:
         # Script-taking tools can write (sed w/W, s///w, -i) or exec (awk
@@ -2003,6 +2021,23 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context) -> Non
         raise PolicyFailure("reviewer.sed", "reviewer %s is not read-only: script-taking tools can write or execute" % executable)
     if executable not in READ_COMMANDS:
         raise PolicyFailure("reviewer.command", "reviewer executable is not read-only allowlisted: %s" % (executable or "?"))
+    # Canonicalizing operands cannot inspect symlinks reached during recursive
+    # traversal. Refuse follow flags, including bundled short-option forms.
+    short_follow = {"rg": "L", "grep": "RS", "find": "L", "du": "L", "ls": "L", "diff": "rR"}.get(executable, "")
+    long_follow = {"rg": {"--follow"}, "grep": {"--dereference-recursive", "--dereference-files"},
+                   "find": {"-follow"}, "du": {"--dereference"},
+                   "ls": {"--dereference"}, "diff": {"--recursive"}}.get(executable, set())
+    for token in tokens[1:]:
+        if token == "--":
+            break
+        if short_follow and (token.split("=", 1)[0] in long_follow or
+                             (token.startswith("-") and not token.startswith("--") and any(c in token[1:] for c in short_follow))):
+            raise PolicyFailure("reviewer.symlink_follow", "reviewer recursive symlink traversal is forbidden")
+    if executable == "diff":
+        for token in tokens[1:]:
+            path = candidate_path(token, base)
+            if path is not None and path.is_dir():
+                raise PolicyFailure("reviewer.symlink_follow", "reviewer diff requires file operands; directory comparison follows leaf symlinks")
     if executable == "find" and any(token in {"-delete", "-exec", "-execdir", "-fls", "-fprint", "-fprint0", "-fprintf", "-ok", "-okdir"} for token in tokens):
         raise PolicyFailure("reviewer.find", "reviewer find mutation/execution actions are forbidden")
     if executable == "tail" and any(token in {"-f", "-F", "--follow"} or token.startswith("--follow=") for token in tokens):
@@ -2011,7 +2046,7 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context) -> Non
         raise PolicyFailure("reviewer.search", "reviewer search preprocessors are forbidden")
     if executable == "sort" and any(token in {"-o", "--output", "--compress-program"} or token.startswith(("--output=", "--compress-program=")) for token in tokens):
         raise PolicyFailure("reviewer.sort", "reviewer sort output/program options are forbidden")
-    ensure_paths_within(tokens, ctx.pane_cwd, lambda p: readable(ctx, p), "reviewer.path")
+    ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path")
 
 
 def executable_tokens(segment: List[str]) -> List[str]:
@@ -2083,7 +2118,7 @@ def validate_tool_workdir(ctx: Context, tool_input: dict) -> None:
         path = canonical(raw if raw.is_absolute() else ctx.pane_cwd / raw)
         if (ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment)) and not within(path, ctx.pane_cwd):
             raise PolicyFailure("executor.containment", "tool workdir escapes the configured child cwd: %s" % value)
-        if ctx.semantic_role == "reviewer" and not readable(ctx, path):
+        if ctx.semantic_role == "reviewer" and not reviewer_readable(ctx, path):
             raise PolicyFailure("reviewer.path", "tool workdir escapes the reviewer's allowed roots: %s" % value)
         if ctx.semantic_role == "orchestrator" and any(within(path, root) for root in ctx.child_roots):
             raise PolicyFailure("orchestrator.child_write", "orchestrator cannot execute tools from a child-repository cwd: %s" % value)
@@ -2113,6 +2148,20 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
         if tool_input.get("dangerouslyDisableSandbox") is True or tool_input.get("with_escalated_permissions") is True:
             raise PolicyFailure("shell.sandbox_escape", "child roles cannot request a sandbox/approval escape")
     validate_tool_workdir(ctx, tool_input)
+    reviewer_base = ctx.pane_cwd
+    if ctx.semantic_role == "reviewer":
+        bases = set()
+        for key in ("cwd", "workdir"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                raw = Path(value.strip()).expanduser()
+                bases.add(canonical(raw if raw.is_absolute() else ctx.pane_cwd / raw))
+        if len(bases) > 1:
+            raise PolicyFailure("reviewer.path", "reviewer tool cwd and workdir disagree")
+        if bases:
+            reviewer_base = bases.pop()
+            if not reviewer_base.is_dir():
+                raise PolicyFailure("reviewer.path", "reviewer tool workdir must be an existing directory")
     if not command.strip():
         raise PolicyFailure("bash.command", "active harness received an empty shell command")
     tokens = parse_shell(command)
@@ -2140,6 +2189,8 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
     # configured executor/reviewer panes).
     helper = helper_invocation(ctx, tokens, command)
     if helper is not None:
+        if ctx.semantic_role == "reviewer" and reviewer_base != ctx.pane_cwd:
+            raise PolicyFailure("helper.workdir", "reviewer helpers require the configured pane cwd")
         validate_helper(ctx, *helper)
         return
     bypass = child_transport_bypass(tokens, ctx.semantic_role != "orchestrator" or bool(ctx.environment))
@@ -2147,7 +2198,7 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
         raise PolicyFailure("routing.master", "coordination transport may only run as the selected session-chat helper (%s)" % bypass)
 
     if ctx.semantic_role == "reviewer":
-        validate_reviewer_read(tokens, command, ctx)
+        validate_reviewer_read(tokens, command, ctx, reviewer_base)
         return
     if ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment):
         # Executor containment for arbitrary shell: no inline shell/interpreter

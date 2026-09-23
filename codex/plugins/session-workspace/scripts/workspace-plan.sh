@@ -118,6 +118,7 @@ PLAN_JSON="$(printf '%s' "$CONFIG_JSON" | jq -c \
   --arg browser_profile_dir "$BROWSER_PROFILE_DIR" \
   --argjson browser_profiles "$BROWSER_PROFILES" \
   --argjson cwd_map "$CWD_MAP_RESOLVED" \
+  --argjson read_paths_map "$VALIDATED_READ_PATHS" \
   -f "$HERE/compute-plan.jq")"
 
 if [ "$TARGET" != "all" ]; then
@@ -201,6 +202,7 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
     printf '\n'
     printf '    role=%s  runtime=%s  program=%s\n' "$p_role" "$p_rt" "$p_prog"
     printf '    cwd=%s\n' "$p_cwd"
+    printf '%s\n' "$pane" | jq -r 'if (.read_paths // [] | length) > 0 then "    read_paths (shell only): " + (.read_paths | tojson) else empty end'
     [ -n "$p_command" ] && printf '    command: %s\n' "$p_command"
     [ -n "$p_port" ] && printf '    port: %s\n' "$p_port"
     printf '    agent: model=%s effort=%s profile=%s permission_mode=%s\n' \

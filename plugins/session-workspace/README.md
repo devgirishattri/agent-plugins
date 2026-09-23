@@ -188,6 +188,7 @@ validation errors) — and `workspace-plan` lists their names:
 | `SESSION_WORKSPACE_PANE_CWD` | the pane's resolved cwd |
 | `SESSION_WORKSPACE_HARNESS_MODE` | `audit` or `enforce` when active; empty for v1, no `harness`, or `enabled: false` |
 | `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3/v4 launch; absent for v1/v2 and v3/v4 without guards |
+| `SESSION_WORKSPACE_READ_PATHS_JSON` | canonical `[{path, kind}]` for a reviewer with `read_paths`; exported empty for every other pane so an inherited value is cleared |
 
 The policy cross-checks this identity against the validated config on every
 gated tool call and **fails closed** on any disagreement: unknown pane, role
@@ -395,6 +396,9 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   version, never an unselected plugin). An *executor's* arbitrary shell is
   narrower still: every operand must resolve inside its pane cwd alone
   (`/dev/null` excepted).
+  A reviewer's *shell* operands and tool `cwd`/`workdir` (never helper
+  operands) may additionally resolve inside that pane's `read_paths` (see
+  "Reviewer read paths" below).
   Inherited `SESSION_*_HOME` / `SESSION_CHAT_TARGET_MESSAGES_DIR` values
   and the rest of a marketplace cache are deliberately not trusted. A plain `memory-search.sh --recall`
   without `--store` still works for a pane without a memory grant (the
@@ -404,6 +408,55 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   the orchestrator addresses only its configured executor/reviewer panes;
   `broadcast-message.sh` has no topology-bound form and is not allowed in
   strict-v1.
+
+### Reviewer read paths
+
+A reviewer keeps its child checkout as `cwd`, and can be granted extra
+**shell reads** per pane:
+
+```json
+{ "name": "component-a-review", "role": "reviewer", "cwd": "component-a",
+  "read_paths": ["docs", "AGENTS.md", "/Users/<you>/src/<external-repo>"] }
+```
+
+- Relative entries resolve against the project root and must stay inside it;
+  absolute entries must already be canonical (for example `/private/tmp/...`,
+  not `/tmp/...` on macOS) and may name an external repository.
+- A file grants that exact file only (not its parent or siblings); a
+  directory grants its descendants.
+- Validation (fatal for the whole config): at most 16 entries; literal paths
+  only (no `$`, backticks, globs, leading `-`/`~`, control characters, `..`);
+  no duplicate or nested entries; no overlap in either direction with
+  `stores.base`, `stores.overrides.*`, `stores.memory.root`,
+  `secrets.env_file`, or the Claude/Codex homes; not `$HOME` or any ancestor
+  of it; in a v5 config, not inside another environment's cwd or panes.
+- Disk state (per pane): a missing path, a non-file/non-directory, or a path
+  with a symlink component is reported as `kind: "unavailable"` with an
+  `error` in `workspace-plan`. `start`, `restart` (checked before it stops
+  anything) and reconcile/adopt refuse to launch that session; a running
+  reviewer is blocked with `identity.read_paths` in both modes until the
+  path is restored. Other panes, `stop`, and `status` are unaffected.
+- The reviewer policy also refuses recursive symlink-follow options (`rg
+  -L/--follow`, `grep -R/-S/--dereference-recursive/--dereference-files`,
+  `find -L/-follow`, `du -L`, `ls -L`, `diff -r`) and `diff` with a directory
+  operand, because traversal below a checked operand cannot be verified.
+- Relative operands resolve against the effective tool `cwd`/`workdir`;
+  conflicting `cwd`/`workdir` or a non-directory workdir is refused, and
+  trusted helpers must run from the configured pane cwd.
+- **Scope of the grant.** `read_paths` never becomes `--add-dir`, a write
+  permission, or a helper/knowledge-store grant, and the agent argv is
+  unchanged. strict-v1 does not gate native `Read`/`Grep`/`Glob` tools, so
+  Claude's own permission layer still decides native reads outside the cwd
+  (a prompt, or a refusal under `permission_mode: dontAsk`). The hook check
+  is not atomic against a same-uid process swapping the filesystem between
+  the check and the read.
+
+**Migration / rollback.** Omitted and `[]` are identical to earlier
+releases, so existing configs need no change. Adding, changing, or removing
+`read_paths` pins new launch identity: restart the affected session
+(`workspace restart <session-id>`). Before downgrading to a release without
+this field, remove `read_paths` from the config and restart, or validation
+will reject the unknown key.
 
 ### Trusted helpers: exact provenance, literal argv
 
@@ -832,6 +885,7 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].panes[].optional` | boolean | no | `false` | A missing `cwd` for an optional pane is reported (INFO in `doctor`, "skipped" in `start`) rather than failing validation/the slot. |
 | `sessions[].panes[].command` | array of strings, min 1 item | no | (agent argv, or interactive shell) | For a `shell`-runtime (typically `service`-role) pane: literal argv to run instead of an interactive shell. A bare string command is rejected — it must be an array, so there's never a shell re-parsing step. |
 | `sessions[].panes[].port` | integer, 1-65535 | no | — | First-class metadata only (surfaced in `plan`/`status` output); does not itself change what gets launched or add a `--port` flag anywhere. |
+| `sessions[].panes[].read_paths` | array of ≤16 strings | no | — (no extra reads) | Active strict-v1 **reviewer** panes only (schema v2–5). Existing files/directories a reviewer's shell may read in addition to its cwd; see "Reviewer read paths". Any other role, or an inactive harness, is a validation error. |
 | `sessions[].panes[].agent.*` | see `roles.<r>.agent.*` | no | role-level value, or no flag | Pane-level override of `model`/`effort`/`profile`/`permission_mode`, taking precedence over the role's own value. |
 
 ### `behavior` (optional)

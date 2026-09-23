@@ -330,6 +330,7 @@ _validate_secrets_file() {
 validate_workspace_config() {
   local json="$1" config_path="$2"
   VALIDATION_ERRORS=()
+  VALIDATED_READ_PATHS='{}'
 
   if ! printf '%s' "$json" | jq empty >/dev/null 2>&1; then
     _add_error "config is not valid JSON"
@@ -367,6 +368,17 @@ validate_workspace_config() {
     _validate_orchestration_resolved_targets "$json" "$root_abs"
     _validate_stores "$json" "$root_abs"
     _validate_secrets_file "$json" "$root_abs"
+    # Only opt-in configs require the Python path resolver. Reuse this exact
+    # validated map in workspace-plan; do not resolve grants a second time.
+    if [ "${#VALIDATION_ERRORS[@]}" -eq 0 ] && printf '%s' "$json" | jq -e 'any(.sessions[].panes[]; has("read_paths"))' >/dev/null; then
+      local read_paths_result
+      if read_paths_result="$(printf '%s' "$json" | python3 "$here/reviewer-read-paths.py" "$root_abs" 2>&1)"; then
+        # shellcheck disable=SC2034 # validated global output consumed by workspace-plan.sh
+        VALIDATED_READ_PATHS="$read_paths_result"
+      else
+        _add_error "$read_paths_result"
+      fi
+    fi
     if [ "$(printf '%s' "$json" | jq -r '.schema_version')" = "5" ]; then
       local v5_errors
       if ! v5_errors="$(printf '%s' "$json" | python3 "$here/workspace-v5.py" validate "$root_abs" 2>&1)"; then

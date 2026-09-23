@@ -84,7 +84,8 @@ def coordination_var_name(store):
     "SESSION_WORKSPACE_PANE_NAME",
     "SESSION_WORKSPACE_ROLE",
     "SESSION_WORKSPACE_PANE_CWD",
-    "SESSION_WORKSPACE_HARNESS_MODE"
+    "SESSION_WORKSPACE_HARNESS_MODE",
+    "SESSION_WORKSPACE_READ_PATHS_JSON"
   ] + (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then ["SESSION_WORKSPACE_SCOPE_JSON"] else [] end) + [
   ] + (if $guards_configured then ["SESSION_WORKSPACE_GUARDS_JSON"] else [] end)) as $engine_always
 |
@@ -170,6 +171,7 @@ def coordination_var_name(store):
                 profile: resolve_field($p.agent.profile; $role.agent.profile),
                 permission_mode: resolve_field($p.agent.permission_mode; $role.agent.permission_mode)
               },
+              read_paths: (($ARGS.named.read_paths_map // {})[$p.name] // []),
               grants: [
                 ($role.grants // [])[] | . as $g
                 | if $g == "memory" then

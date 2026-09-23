@@ -806,6 +806,10 @@ sw_process_plan() {
   SW_FAILED_SLOTS=0
   SW_CHANGED=0
   SW_KEPT=0
+  if ! sw_require_available_read_paths "$plan_json" "$target"; then
+    SW_FAILED_SLOTS=1
+    return 1
+  fi
   local session_json
   while IFS= read -r session_json; do
     [ -z "$session_json" ] && continue

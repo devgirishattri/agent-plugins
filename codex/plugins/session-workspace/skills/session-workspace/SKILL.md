@@ -115,11 +115,28 @@ them:
   hardlinked files remain blocked; resolved targets must stay in that grant.
   No grant means no staging exception; inherited store variables cannot grant
   access. Shell remains default-deny except one literal read-only command
-  inside its own checkout (no pipes, redirection, `sed`, sibling `../` reads)
+  inside its own checkout or explicit per-pane `read_paths` (no pipes,
+  redirection, `sed`, or ungranted sibling reads)
   and trusted coordination helpers. Send short verdicts with
   `$session-chat:reply`; for long or multiline verdicts, stage a message with
   a native edit tool and dispatch that file to the orchestrator with
   `--reply-to` correlation. Shell-based staging remains blocked.
+  Schema v2–5 reviewers may set `sessions[].panes[].read_paths` to up to 16
+  existing files/directories, relative to the project root or canonical absolute
+  paths for external repositories. Files grant exact-file access, directories
+  grant descendants. Symlink components, parent traversal, overlapping grants,
+  configured stores/memory/secrets, provider homes and foreign v5 environments
+  are rejected. Recursive symlink-follow options and directory `diff` are denied;
+  compare explicit files instead. These paths affect shell reads and recognized
+  tool workdirs only: they do not grant helper-store access, native Read/Grep/Glob
+  permissions, `--add-dir`, or writes. Provider permissions still apply.
+  `SESSION_WORKSPACE_READ_PATHS_JSON` is engine-owned launch identity, never a
+  user tunable; changes/removal or filesystem drift fail closed in both modes
+  for the affected reviewer. Restore an unavailable path, or update the config
+  and restart its session. Plan/status retain unavailable entries for diagnosis;
+  other panes and stop remain usable. Launch refuses unavailable read paths.
+  Omitted/empty paths keep old behavior.
+  Hooks are not an atomic filesystem sandbox against racing same-uid swaps.
 - **Executor**: edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files

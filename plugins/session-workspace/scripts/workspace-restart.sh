@@ -35,6 +35,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Check before stop: an unavailable reviewer grant must not tear down a
+# healthy session only to fail its subsequent start.
+declare -a PLAN_ARGS=("$TARGET" --json)
+[ -n "$CONFIG_OVERRIDE" ] && PLAN_ARGS+=(--config "$CONFIG_OVERRIDE")
+PLAN_JSON="$(bash "$HERE/workspace-plan.sh" "${PLAN_ARGS[@]}")" || exit 1
+sw_require_available_read_paths "$PLAN_JSON" "$TARGET" || exit 1
+
 declare -a STOP_ARGS=("$TARGET" --confirmed)
 [ -n "$CONFIG_OVERRIDE" ] && STOP_ARGS+=(--config "$CONFIG_OVERRIDE")
 [ "$NO_SAVE" -eq 1 ] && STOP_ARGS+=(--no-save)

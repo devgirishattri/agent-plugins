@@ -120,8 +120,9 @@ while IFS= read -r session_json; do
       --arg pane "$p_name" --arg role "$p_role" --arg runtime "$p_runtime" \
       --arg model "$p_model" --arg cwd "$p_cwd" --arg pane_id "${found_pane:-}" \
       --arg process "${cur_cmd:-}" --arg health "$health" --arg readiness "$readiness" --arg port "$p_port" \
+      --argjson read_paths "$(printf '%s' "$pane_json" | jq -c '.read_paths // []')" \
       --argjson session_exists "$session_exists" --argjson session_managed "$session_managed" \
-      '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, pane_id:$pane_id, process:$process, health:$health, readiness:$readiness, port:(if $port == "" then null else ($port|tonumber) end)}')"
+      '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, read_paths:$read_paths, pane_id:$pane_id, process:$process, health:$health, readiness:$readiness, port:(if $port == "" then null else ($port|tonumber) end)}')"
     ROWS="$(printf '%s' "$ROWS" | jq -c --argjson r "$row" '. + [$r]')"
   done < <(printf '%s' "$session_json" | jq -c '.panes[]')
 done < <(printf '%s' "$PLAN_JSON" | jq -c '.sessions[]')
@@ -135,6 +136,7 @@ echo "session-workspace status — $CONFIG_PATH (project: $PROJECT_ID)"
 printf '%s\n' "$ROWS" | jq -r '
   group_by(.session_name)[] |
   "== session: \(.[0].session_name) == (exists=\(.[0].session_exists) managed=\(.[0].session_managed))",
-  (.[] | "  pane: \(.pane)  role=\(.role) runtime=\(.runtime) model=\(.model)\n    cwd=\(.cwd)\n    pane_id=\(.pane_id // "(none)")  process=\(.process // "(n/a)")  health=\(.health)  readiness=\(.readiness)")
+  (.[] | "  pane: \(.pane)  role=\(.role) runtime=\(.runtime) model=\(.model)\n    cwd=\(.cwd)\n    pane_id=\(.pane_id // "(none)")  process=\(.process // "(n/a)")  health=\(.health)  readiness=\(.readiness)",
+    (if (.read_paths | length) > 0 then "    read_paths (shell only): " + (.read_paths | tojson) else empty end))
 '
 exit 0

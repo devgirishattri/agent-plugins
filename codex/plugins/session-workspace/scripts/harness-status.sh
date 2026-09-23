@@ -57,6 +57,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
   --arg env_cwd "${SESSION_WORKSPACE_PANE_CWD:-}" \
   --arg env_mode "${SESSION_WORKSPACE_HARNESS_MODE:-}" \
   --arg env_scope "${SESSION_WORKSPACE_SCOPE_JSON:-}" \
+  --arg env_read_paths "${SESSION_WORKSPACE_READ_PATHS_JSON:-}" \
   --arg env_guards "${SESSION_WORKSPACE_GUARDS_JSON:-}" \
   --arg chat_alias "${SESSION_CHAT_PANE_NAME:-}" \
   --arg knowledge_alias "${KNOWLEDGE_PANE_NAME:-}" \
@@ -73,6 +74,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
       roles: (.harness.roles // null),
       gates: (.harness.gates // null),
       guards: (.harness.guards // null),
+      read_paths: ($pane.read_paths // []),
       identity: {
         # present: ANY engine identity variable is set; complete: all five
         # core variables are set (mode is legitimately empty when inactive);
@@ -87,6 +89,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
         cwd: (if $env_cwd == "" then null else $env_cwd end),
         mode: (if $env_mode == "" then null else $env_mode end),
         guards: (if $env_guards == "" then null else (try ($env_guards | fromjson) catch "invalid") end),
+        read_paths: (if $env_read_paths == "" then [] else (try ($env_read_paths | fromjson) catch "invalid") end),
         aliases: {
           session_chat_pane_name: (if $chat_alias == "" then null else $chat_alias end),
           knowledge_pane_name: (if $knowledge_alias == "" then null else $knowledge_alias end),
@@ -101,6 +104,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
             and $env_role == $pane.role
             and $env_cwd == ($pane.cwd // "")
             and $env_mode == (.harness.mode // "")
+            and (if ($pane.read_paths // [] | length) > 0 then (try (($env_read_paths | fromjson) == $pane.read_paths) catch false) else $env_read_paths == "" end)
             and (if $pane.scope != null then (try (($env_scope | fromjson) == $pane.scope) catch false) else $env_scope == "" end)
             and (if .harness.guards then (try (($env_guards | fromjson) == .harness.guards) catch false) else $env_guards == "" end)
             and (($chat_alias == "" or $chat_alias == $env_pane) and ($knowledge_alias == "" or $knowledge_alias == $env_pane)))
@@ -126,6 +130,7 @@ printf '%s\n' "$STATUS_JSON" | jq -r '
   else
     "state: inactive"
   end,
+  "read_paths (shell only): " + (.read_paths | tojson),
   (if .identity.matches == null then
      "identity: not present in this process (run from a workspace-launched pane for a live match)"
    elif .identity.partial then

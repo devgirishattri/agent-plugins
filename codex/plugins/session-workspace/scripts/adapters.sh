@@ -214,6 +214,7 @@ ENGINE_ALWAYS_NAMES=(
   SESSION_WORKSPACE_HARNESS_MODE
   SESSION_WORKSPACE_GUARDS_JSON
   SESSION_WORKSPACE_SCOPE_JSON
+  SESSION_WORKSPACE_READ_PATHS_JSON
 )
 
 # _is_engine_always NAME — true if NAME is one of ENGINE_ALWAYS_NAMES (a
@@ -381,6 +382,8 @@ _env_build_map() {
   _env_set "SESSION_WORKSPACE_ROLE" "${ENV_ROLE_NAME:-}"
   _env_set "SESSION_WORKSPACE_PANE_CWD" "${ENV_PANE_CWD:-}"
   _env_set "SESSION_WORKSPACE_HARNESS_MODE" "${ENV_HARNESS_MODE:-}"
+  # Empty explicitly clears inherited identity when this pane has no grants.
+  _env_set "SESSION_WORKSPACE_READ_PATHS_JSON" "${ENV_READ_PATHS_JSON:-}"
   if [ -n "${ENV_SCOPE_JSON:-}" ]; then
     _env_set "SESSION_WORKSPACE_SCOPE_JSON" "$ENV_SCOPE_JSON"
   fi
@@ -608,6 +611,10 @@ _load_plan_and_pane() {
     echo "ERROR: adapters: no pane named \"$pane_name\" in the resolved plan" >&2
     return 1
   fi
+  if printf '%s' "$PANE_PLAN" | jq -e 'any(.read_paths[]?; .kind == "unavailable")' >/dev/null; then
+    echo "ERROR: adapters: pane $pane_name has unavailable read_paths; inspect workspace-plan" >&2
+    return 1
+  fi
   # shellcheck disable=SC2034  # SESSION_ID is part of this function's
   # documented global-output contract (see its header comment) for any
   # future Phase D consumer; secret-file no longer needs a --session
@@ -717,6 +724,7 @@ _env_prepare_inputs() {
   done < <(printf '%s' "$CONFIG_JSON" | jq -r '.stores.pin // [] | .[]')
 
   ENV_SCOPE_JSON="$(printf '%s' "$PANE_PLAN" | jq -cS 'if .scope != null then .scope else empty end')"
+  ENV_READ_PATHS_JSON="$(printf '%s' "$PANE_PLAN" | jq -cS 'if (.read_paths // [] | length) > 0 then .read_paths else empty end')"
   ENV_PANE_NAME="$pane_name"
   ENV_TMUX_PANE_ID="$tmux_pane_id"
   ENV_WORKSPACE_CONFIG="$CONFIG_PATH"

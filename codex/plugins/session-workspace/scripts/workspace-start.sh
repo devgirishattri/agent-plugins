@@ -117,6 +117,8 @@ sw_lock_acquire "$PROJECT_ID" || exit 1
 
 PLAN_JSON="$(bash "$HERE/workspace-plan.sh" --config "$CONFIG_PATH" --json)" || exit 1
 
+sw_require_available_read_paths "$PLAN_JSON" "$TARGET" || exit 1
+
 if [ "$(printf '%s' "$PLAN_JSON" | jq -r '.schema_version')" = "5" ] && [ "$NO_SERVICES" -eq 0 ]; then
   printf '%s' "$PLAN_JSON" | python3 "$HERE/service-ports.py" "$TARGET" || exit 1
 fi
