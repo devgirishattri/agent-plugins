@@ -1,0 +1,239 @@
+{
+  "schema_version": 5,
+  "project": {
+    "id": "shared-root",
+    "display_name": "Shared Root",
+    "root": "../valid"
+  },
+  "runtimes": {
+    "codex": {
+      "program": "codex",
+      "args": []
+    },
+    "claude": {
+      "program": "claude",
+      "args": []
+    }
+  },
+  "roles": {
+    "master": {
+      "runtime": "codex",
+      "grants": [
+        "messages",
+        "scheduler",
+        "contexts",
+        "memory"
+      ],
+      "env_group": "dev"
+    },
+    "executor": {
+      "runtime": "codex",
+      "grants": [
+        "messages",
+        "scheduler",
+        "contexts",
+        "memory"
+      ],
+      "env_group": "dev"
+    },
+    "reviewer": {
+      "runtime": "codex",
+      "grants": [
+        "messages",
+        "scheduler",
+        "contexts"
+      ],
+      "env_group": "dev"
+    },
+    "service": {
+      "runtime": "shell"
+    }
+  },
+  "stores": {
+    "base": ".tmp",
+    "pin": [
+      "messages",
+      "scheduler",
+      "contexts"
+    ],
+    "memory": {
+      "mode": "shared",
+      "root": ".agents/memory"
+    }
+  },
+  "env": {
+    "groups": {
+      "dev": {
+        "values": {},
+        "pin_to_session": true
+      }
+    },
+    "pane_name_aliases": []
+  },
+  "sessions": [
+    {
+      "id": "development",
+      "name": "${PROJECT_ID}-development",
+      "panes": [
+        {
+          "name": "sample-master",
+          "role": "master",
+          "cwd": ".",
+          "runtime": "claude"
+        },
+        {
+          "name": "sample-executor",
+          "role": "executor",
+          "cwd": "component-a",
+          "runtime": "claude"
+        },
+        {
+          "name": "sample-reviewer",
+          "role": "reviewer",
+          "cwd": "component-a",
+          "runtime": "codex"
+        },
+        {
+          "name": "sample-chrome",
+          "role": "service",
+          "cwd": ".",
+          "runtime": "claude"
+        }
+      ]
+    },
+    {
+      "id": "services",
+      "name": "${PROJECT_ID}-services",
+      "panes": [
+        {
+          "name": "sample-shell",
+          "role": "service",
+          "cwd": "."
+        },
+        {
+          "name": "sample-server",
+          "role": "service",
+          "cwd": "component-a",
+          "port": 3000,
+          "command": [
+            "sleep",
+            "600"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vue3-development",
+      "name": "${PROJECT_ID}-vue3-development",
+      "panes": [
+        {
+          "name": "sample-vue3-master",
+          "role": "master",
+          "cwd": ".",
+          "runtime": "codex"
+        },
+        {
+          "name": "sample-vue3-executor",
+          "role": "executor",
+          "cwd": "component-b",
+          "runtime": "codex"
+        },
+        {
+          "name": "sample-vue3-reviewer",
+          "role": "reviewer",
+          "cwd": "component-b",
+          "runtime": "claude"
+        }
+      ]
+    },
+    {
+      "id": "vue3-services",
+      "name": "${PROJECT_ID}-vue3-services",
+      "panes": [
+        {
+          "name": "sample-vue3-shell",
+          "role": "service",
+          "cwd": "."
+        },
+        {
+          "name": "sample-vue3-server",
+          "role": "service",
+          "cwd": "component-b",
+          "port": 3100
+        },
+        {
+          "name": "sample-vue3-chrome",
+          "role": "service",
+          "cwd": "."
+        }
+      ]
+    }
+  ],
+  "behavior": {
+    "default_start_target": "development",
+    "attach": "never",
+    "stop_scope": "selected",
+    "save_before_stop": true
+  },
+  "harness": {
+    "enabled": true,
+    "mode": "enforce",
+    "profile": "strict-v1",
+    "roles": {
+      "orchestrator": "master",
+      "executor": "executor",
+      "reviewer": "reviewer"
+    },
+    "gates": {
+      "plan_review_ttl_minutes": 60,
+      "audit_ttl_minutes": 60
+    },
+    "guards": {
+      "orchestrator": {
+        "deny_child_chdir": true
+      }
+    }
+  },
+  "environments": [
+    {
+      "id": "web",
+      "cwd": "component-a",
+      "development": [
+        "development"
+      ],
+      "services": [
+        "services"
+      ],
+      "orchestrator": "sample-master"
+    },
+    {
+      "id": "vue3",
+      "cwd": "component-b",
+      "development": [
+        "vue3-development"
+      ],
+      "services": [
+        "vue3-services"
+      ],
+      "orchestrator": "sample-vue3-master"
+    }
+  ],
+  "browsers": [
+    {
+      "session_id": "development",
+      "pane_name": "sample-chrome",
+      "port": 9223,
+      "chrome_program": "google-chrome",
+      "mcp_package": "chrome-devtools-mcp@0.20.0",
+      "mcp_server_name": "chrome-devtools"
+    },
+    {
+      "session_id": "vue3-services",
+      "pane_name": "sample-vue3-chrome",
+      "port": 9224,
+      "chrome_program": "google-chrome",
+      "mcp_package": "chrome-devtools-mcp@0.20.0",
+      "mcp_server_name": "chrome-devtools-vue3"
+    }
+  ]
+}

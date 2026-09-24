@@ -791,13 +791,22 @@ check_browser_binding() {
 
 check_browser() {
   [ "$CONFIG_VALID" -eq 1 ] || return 0
-  local original_config="$CONFIG_JSON" browser_json sid project_id
+  local original_config="$CONFIG_JSON" browser_json sid project_id legacy_profile session_profile migration_command
   if printf '%s' "$CONFIG_JSON" | jq -e 'has("browsers")' >/dev/null; then
     project_id="$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')"
     while IFS= read -r browser_json; do
       sid="$(printf '%s' "$browser_json" | jq -r '.session_id')"
       CONFIG_JSON="$(printf '%s' "$original_config" | jq -c --argjson b "$browser_json" '.browser = $b')"
       check_browser_binding "$project_id/sessions/session-$sid" "browser.$sid"
+      legacy_profile="$(sw_browser_profile_dir "$project_id")"
+      session_profile="$(sw_browser_profile_dir "$project_id/sessions/session-$sid")"
+      if [ -d "$legacy_profile" ] && [ ! -e "$session_profile" ]; then
+        # Destination is below source: exclude sessions to avoid recursive copies.
+        printf -v migration_command 'mkdir -p %q && rsync -a --exclude=/sessions/ -- %q/ %q/' "$session_profile" "$legacy_profile" "$session_profile"
+        add_check "browser.$sid.profile_migration" "browser profile migration" "INFO" \
+          "Legacy profile exists; the per-session profile is absent." \
+          "Stop Chrome first, then copy manually: $migration_command"
+      fi
     done < <(printf '%s' "$original_config" | jq -c '.browsers[]')
     CONFIG_JSON="$original_config"
   else

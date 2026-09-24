@@ -1,5 +1,18 @@
 # Changelog
 
+## session-workspace 0.7.0 — 2026-09-23
+
+- Support root-scoped environment orchestrators with own-worker routing and task
+  metadata, the existing root policy floor, and workspace-health guard output.
+- Make the unbound root orchestrator optional when all worker environments have
+  their own orchestrator; retain control-directory coordinator confinement.
+- Allow command-less service shells and browser panes anywhere inside the project
+  root while keeping command-bearing services inside their environment checkout.
+- Add schema-v5 pane runtime overrides for mixed Claude/Codex roles. Schemas 1–4
+  retain their existing plan and policy behavior.
+- Report manual browser-profile migration guidance in doctor when changing from
+  a singular project profile to per-session profiles; add a shared-root template.
+
 ## session-workspace 0.6.4 — 2026-09-23
 
 - Require `rg --no-config` as the prefix for reviewer and scoped executor

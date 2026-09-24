@@ -119,7 +119,7 @@ PLAN_JSON="$(printf '%s' "$CONFIG_JSON" | jq -c \
   --argjson browser_profiles "$BROWSER_PROFILES" \
   --argjson cwd_map "$CWD_MAP_RESOLVED" \
   --argjson read_paths_map "$VALIDATED_READ_PATHS" \
-  -f "$HERE/compute-plan.jq")"
+  -L "$HERE" -f "$HERE/compute-plan.jq")"
 
 if [ "$TARGET" != "all" ]; then
   PLAN_JSON="$(printf '%s' "$PLAN_JSON" | jq -c --arg t "$TARGET" '.sessions |= map(select(.id == $t))')"

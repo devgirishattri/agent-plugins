@@ -2,6 +2,7 @@
 """Synthetic v5 regressions; no paid calls, real agent launches or user stores."""
 import argparse
 import copy
+import io
 import importlib.util
 import json
 import os
@@ -91,6 +92,244 @@ class Environments(unittest.TestCase):
         self.assertEqual([s['id'] for s in json.loads(r.stdout)['sessions']], ['service-vue3'])
         self.assertEqual(len(json.loads(r.stdout)['orchestration']['targets']), 2)
 
+    def shared_root(self):
+        # Read test data from this test file, even when testing the original engine.
+        self.cfg = json.loads((Path(__file__).resolve().parent / 'fixtures/valid/shared-root-orchestrators-v5.json').read_text())
+        self.write()
+
+    def test_shared_root_plan_and_runtime(self):
+        self.shared_root()
+        self.assertEqual(self.run_script('validate-config').returncode, 0)
+        for eid, ids, runtime in [('web', ['development', 'services'], 'claude'), ('vue3', ['vue3-development', 'vue3-services'], 'codex')]:
+            result = self.run_script('workspace', 'plan', '--environment', eid, '--json')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            plan = json.loads(result.stdout)
+            self.assertEqual([s['id'] for s in plan['sessions']], ids)
+            self.assertEqual(plan['sessions'][0]['panes'][0]['runtime']['name'], runtime)
+            self.assertEqual(plan['sessions'][0]['panes'][0]['scope']['environment'], eid)
+        plan = self.plan()
+        self.assertEqual(plan['sessions'][2]['panes'][2]['runtime']['name'], 'claude')
+        self.cfg['sessions'][0]['panes'][0].pop('runtime')
+        self.write()
+        self.assertEqual(self.plan()['sessions'][0]['panes'][0]['runtime']['name'], 'codex')
+
+    def test_shared_root_policy(self):
+        self.shared_root()
+        p, ctx, env = self.context('sample-vue3-master')
+        for target in ['sample-vue3-executor', 'sample-vue3-reviewer', 'sample-master']:
+            p.require_route_target(ctx, target)
+        for target in ['sample-executor', 'sample-reviewer']:
+            with self.assertRaises(p.PolicyFailure): p.require_route_target(ctx, target)
+        p.validate_edit(ctx, {'file_path': str(self.root/'notes.md')}, {})
+        p.validate_bash(ctx, 'python3 -c pass', {})
+        for child in ['component-a', 'component-b']:
+            with self.assertRaises(p.PolicyFailure): p.validate_edit(ctx, {'file_path': str(self.root/child/'notes.md')}, {})
+            with self.assertRaises(p.PolicyFailure): p.validate_bash(ctx, 'touch '+child+'/notes.md', {})
+        with self.assertRaises(p.PolicyFailure): p.validate_bash(ctx, 'git push', {})
+        p.validate_helper(ctx, 'session-scheduler', 'task-new.sh', ['Example', '--meta', 'environment=vue3'])
+        for args in [['Example'], ['Example', '--meta', 'environment=web'], ['Example', '--meta', 'environment=root']]:
+            with self.assertRaises(p.PolicyFailure): p.validate_helper(ctx, 'session-scheduler', 'task-new.sh', args)
+        task = self.root/'.tmp/scheduler/tasks/example.json'
+        task.write_text(json.dumps({'meta': {'environment': 'vue3'}}))
+        p.validate_helper(ctx, 'session-scheduler', 'task-assign.sh', ['sample-vue3-executor', 'example', 'Do work'])
+        with self.assertRaises(p.PolicyFailure): p.validate_helper(ctx, 'session-scheduler', 'task-assign.sh', ['sample-executor', 'example', 'Do work'])
+        task.write_text(json.dumps({'meta': {'environment': 'web'}}))
+        with self.assertRaises(p.PolicyFailure): p.validate_helper(ctx, 'session-scheduler', 'task-assign.sh', ['sample-vue3-executor', 'example', 'Do work'])
+        p, worker, _ = self.context('sample-vue3-executor')
+        p.require_route_target(worker, 'sample-vue3-master')
+        with self.assertRaises(p.PolicyFailure): p.require_route_target(worker, 'sample-master')
+        env['SESSION_WORKSPACE_SCOPE_JSON'] = '{}'
+        with patch.dict(os.environ, env, clear=True):
+            _, failure = p.load_context()
+        self.assertEqual(failure.rule, 'identity.scope')
+
+    def test_shared_root_start_and_selection(self):
+        self.shared_root()
+        # Start the exact topology on a private tmux server, suppressing external
+        # agents/services. Runtime argv and browser commands are covered separately.
+        with tempfile.TemporaryDirectory(prefix='w7t-', dir='/tmp') as socket_dir:
+            env = dict(ENV, TMUX_TMPDIR=socket_dir, XDG_STATE_HOME=str(self.root/'state'), SESSION_WORKSPACE_STOP_GRACE_SECONDS='0')
+            try:
+                for eid in ['web', 'vue3']:
+                    result = self.run_script('workspace', 'start', '--environment', eid, '--no-agents', '--no-services', '--no-attach', env=env)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                def panes():
+                    return subprocess.check_output(['tmux', 'list-panes', '-t', '=shared-root-development', '-F', '#{pane_id}:#{pane_pid}'], env=env, text=True)
+                before = panes()
+                result = self.run_script('workspace', 'stop', '--environment', 'vue3', '--confirmed', env=env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(panes(), before)
+            finally:
+                subprocess.run(['tmux', 'kill-server'], env=env, capture_output=True)
+
+    def test_shared_root_guards_and_argv(self):
+        self.shared_root()
+        # Use the same guard shape as existing v3 fixtures.
+        guards = json.loads((HERE/'fixtures/valid/harness-v3.json').read_text())['harness']['guards']
+        self.cfg['harness']['guards'] = guards
+        self.write()
+        p, ctx, _ = self.context('sample-vue3-master')
+        p.validate_edit(ctx, {'file_path': str(self.root/'notes.md')}, {})
+        with self.assertRaises(p.PolicyFailure): p.validate_bash(ctx, 'cd component-a', {})
+        with self.assertRaises(p.PolicyFailure): p.validate_edit(ctx, {'file_path': str(self.root/'custom-secret.json')}, {})
+        for name, runtime in [('sample-master','claude'), ('sample-vue3-master','codex'), ('sample-vue3-reviewer','claude')]:
+            result = self.run_script('adapters', 'agent-argv', '--pane', name)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.split("\0")[0], runtime)
+
+    def test_shared_root_health(self):
+        self.shared_root()
+        self.cfg['harness']['guards']['workspace_health'] = {'warn_root_dirty': True}
+        self.write()
+        (self.root/'.git').mkdir()
+        plan = self.plan()
+        health = module('health_v5', os.environ.get('WORKSPACE_TEST_GUARD_HEALTH', 'guard-health.py'))
+        def run(argv, **kwargs):
+            if argv[0] == 'bash':
+                return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(plan))
+            return subprocess.CompletedProcess(argv, 0, stdout=' M notes.md\n')
+        for name in ['sample-master', 'sample-vue3-master', 'sample-vue3-reviewer']:
+            env = dict(ENV, SESSION_WORKSPACE_CONFIG=str(self.path), SESSION_WORKSPACE_PANE_NAME=name,
+                       SESSION_WORKSPACE_GUARDS_JSON=json.dumps(plan['harness']['guards']))
+            output = io.StringIO()
+            with patch.dict(os.environ, env, clear=True), patch.object(health, 'run', side_effect=run), patch.object(sys, 'stdin', io.StringIO()), patch.object(sys, 'stdout', output):
+                self.assertEqual(health.main([]), 0)
+            self.assertEqual('uncommitted path' in output.getvalue(), name != 'sample-vue3-reviewer')
+        # Existing control-directory coordinators remain silent.
+        self.cfg['sessions'][0]['panes'][0]['cwd'] = 'control-web'
+        self.write(); plan = self.plan()
+        env['SESSION_WORKSPACE_PANE_NAME'] = 'sample-master'
+        output = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), patch.object(health, 'run', side_effect=run), patch.object(sys, 'stdin', io.StringIO()), patch.object(sys, 'stdout', output):
+            self.assertEqual(health.main([]), 0)
+        self.assertEqual(output.getvalue(), '')
+
+    def test_shared_root_browser_migration(self):
+        self.shared_root()
+        # A dedicated HOME ensures doctor cannot inspect the user's browser data.
+        home = self.root/'home with space'
+        home.mkdir()
+        env = dict(ENV, HOME=str(home), XDG_STATE_HOME=str(home/'state'), XDG_CONFIG_HOME=str(home/'config'), XDG_CACHE_HOME=str(home/'cache'))
+        result = self.run_script('workspace-plan', '--json', env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        profile = Path(json.loads(result.stdout)['browsers'][0]['profile_dir'])
+        legacy = profile.parent.parent
+        result = self.run_script('workspace-doctor', '--json', env=env)
+        self.assertNotIn('profile_migration', result.stdout)
+        legacy.mkdir(parents=True)
+        result = self.run_script('workspace-doctor', '--json', env=env)
+        self.assertIn('browser.services.profile_migration', result.stdout)
+        self.assertIn('rsync -a --exclude=/sessions/', result.stdout)
+        self.assertFalse(profile.exists())  # doctor never copies or creates it
+        profile.mkdir(parents=True)
+        result = self.run_script('workspace-doctor', '--json', env=env)
+        self.assertNotIn('browser.services.profile_migration', result.stdout)
+
+    def test_shared_root_invalid_controls(self):
+        self.shared_root()
+        self.plan()
+        original = copy.deepcopy(self.cfg)
+        for mutate, message in [
+            (lambda c: c['sessions'][0]['panes'][0].update(runtime='missing'), 'unknown runtime'),
+            (lambda c: c['sessions'][0]['panes'][1].update(runtime='shell'), 'shell runtime'),
+            (lambda c: c['sessions'][1]['panes'][2].update(runtime='claude'), 'shell panes'),
+            (lambda c: c['sessions'][0]['panes'][0].update(cwd='component-a'), 'overlap repositories'),
+            (lambda c: (c['environments'][0].pop('orchestrator'), c['sessions'][0]['panes'].pop(0)), 'workers require'),
+            (lambda c: c['environments'][1].update(orchestrator='sample-master'), 'unique pane'),
+            (lambda c: c['sessions'][1]['panes'][0].update(command=['sleep','1']), 'cwd escapes'),
+        ]:
+            self.cfg = copy.deepcopy(original); mutate(self.cfg); self.write()
+            result = self.run_script('validate-config')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stdout + result.stderr)
+
+    def test_missing_structure_diagnostics(self):
+        base = json.loads((HERE/'fixtures/valid/project-d.json').read_text())
+        for version in range(1, 6):
+            self.cfg = copy.deepcopy(base)
+            self.cfg['schema_version'] = version
+            self.write()
+            self.plan()  # Valid control for every schema version.
+            for missing, message in [('sessions', 'missing required key in top-level: sessions'), ('panes', 'missing required key in sessions.development: panes')]:
+                with self.subTest(version=version, missing=missing):
+                    self.cfg = copy.deepcopy(base)
+                    self.cfg['schema_version'] = version
+                    if missing == 'sessions':
+                        del self.cfg['sessions']
+                    else:
+                        del self.cfg['sessions'][0]['panes']
+                    self.write()
+                    result = self.run_script('workspace-plan', '--json')
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
+                    self.assertNotIn('structural validation crashed', result.stderr)
+
+    def test_scope_ownership_consistency(self):
+        self.shared_root()
+        policy, _, env = self.context('sample-vue3-master')
+        plan = self.plan()
+        pane = next(p for s in plan['sessions'] for p in s['panes'] if p['name'] == 'sample-vue3-master')
+        def load():
+            result = subprocess.CompletedProcess([], 0, stdout=json.dumps(plan), stderr='')
+            with patch.dict(os.environ, env, clear=True), patch.object(policy.subprocess, 'run', return_value=result):
+                return policy.load_context()
+        ctx, failure = load()
+        self.assertIsNotNone(ctx)
+        self.assertIsNone(failure)
+        pane['scope']['environment'] = 'web'
+        # Match launch JSON to the deliberately inconsistent plan so the earlier
+        # generic scope comparison passes and ownership itself is exercised.
+        env['SESSION_WORKSPACE_SCOPE_JSON'] = json.dumps(pane['scope'], sort_keys=True, separators=(',', ':'))
+        ctx, failure = load()
+        self.assertIsNone(ctx)
+        self.assertEqual(failure.rule, 'identity.scope')
+        self.assertEqual(failure.reason, 'launcher environment does not match ownership')
+
+    def test_mixed_orchestrator_routing(self):
+        self.cfg['sessions'][1]['panes'][0]['cwd'] = '.'
+        self.write()
+        p, root_scoped, _ = self.context('web-master')
+        for target in ['root', 'vue3-master', 'web-executor', 'web-reviewer']:
+            p.require_route_target(root_scoped, target)
+        with self.assertRaises(p.PolicyFailure): p.require_route_target(root_scoped, 'vue3-executor')
+        p, confined, _ = self.context('vue3-master')
+        for target in ['root', 'vue3-executor', 'vue3-reviewer']:
+            p.require_route_target(confined, target)
+        with self.assertRaises(p.PolicyFailure): p.require_route_target(confined, 'web-master')
+        p, root, _ = self.context('root')
+        for target in ['web-master', 'vue3-master']:
+            p.require_route_target(root, target)
+
+    def test_root_only_administration(self):
+        operations = [('session-workspace', 'workspace-install.sh', []),
+                      ('session-workspace', 'workspace-browser-config.sh', ['--browser', 'service-web']),
+                      ('session-scheduler', 'tasks-clean.sh', [])]
+        p, root, _ = self.context('root')
+        for plugin, script, args in operations:
+            p.validate_helper(root, plugin, script, args)
+        p, confined, _ = self.context('web-master')
+        for plugin, script, args in operations:
+            with self.assertRaises(p.PolicyFailure) as caught: p.validate_helper(confined, plugin, script, args)
+            self.assertEqual(caught.exception.rule, 'routing.scope')
+        self.shared_root()
+        for name in ['sample-master', 'sample-vue3-master']:
+            p, scoped, _ = self.context(name)
+            for plugin, script, args in operations:
+                with self.assertRaises(p.PolicyFailure) as caught: p.validate_helper(scoped, plugin, script, args)
+                self.assertEqual(caught.exception.rule, 'routing.scope')
+
+    def test_browser_runtime_in_development(self):
+        self.shared_root()
+        browser = self.cfg['sessions'][1]['panes'].pop()
+        self.cfg['sessions'][0]['panes'].append(browser)
+        self.cfg['browsers'][0]['session_id'] = 'development'
+        self.write(); self.plan()  # Shell browser is valid outside services.
+        browser['runtime'] = 'claude'
+        self.write()
+        result = self.run_script('validate-config')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('browser pane must be a nonoptional service shell', result.stderr)
+
     def test_bad_bindings(self):
         self.plan()  # valid positive control
         original = copy.deepcopy(self.cfg)
@@ -98,7 +337,6 @@ class Environments(unittest.TestCase):
             lambda c: c['environments'][1].update(id='web'),
             lambda c: c['environments'][1].update(services=['service-web']),
             lambda c: c['environments'][1].update(cwd='../outside'),
-            lambda c: c['sessions'][1]['panes'][0].update(cwd='.'),
             lambda c: c['sessions'][1]['panes'][0].update(cwd='component-a'),
             lambda c: c['sessions'][1]['panes'][1].update(cwd='component-b'),
             lambda c: c['behavior'].update(stop_scope='all'),

@@ -72,7 +72,7 @@ def main(argv: List[str]) -> int:
         return 0
 
     scope = current[0].get("scope")
-    if scope and pane_name != scope.get("root_orchestrator"):
+    if scope and pane_name != scope.get("root_orchestrator") and current[0].get("cwd") != plan.get("project", {}).get("root"):
         return 0
     health = guards.get("workspace_health", {})
     if not isinstance(health, dict):

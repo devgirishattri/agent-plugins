@@ -339,7 +339,7 @@ validate_workspace_config() {
 
   local here structural_out rc
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  structural_out="$(printf '%s' "$json" | jq -c -f "$here/validate-structural.jq" 2>&1)"
+  structural_out="$(printf '%s' "$json" | jq -L "$here" -c -f "$here/validate-structural.jq" 2>&1)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     _add_error "structural validation crashed: $structural_out"

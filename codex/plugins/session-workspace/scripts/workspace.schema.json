@@ -18,6 +18,39 @@
       "if": {
         "properties": {
           "schema_version": {
+            "enum": [
+              1,
+              2,
+              3,
+              4
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "properties": {
+                "panes": {
+                  "items": {
+                    "not": {
+                      "required": [
+                        "runtime"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
             "const": 1
           }
         }
@@ -887,6 +920,11 @@
                 },
                 "role": {
                   "type": "string"
+                },
+                "runtime": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Schema v5 only: a declared runtimes key or shell; overrides the role runtime. Harness panes cannot resolve to shell."
                 },
                 "cwd": {
                   "type": "string"

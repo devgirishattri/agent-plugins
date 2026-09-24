@@ -19,9 +19,14 @@ are explicit references, not conventions. Prefix tmux and pane names with
 nonoverlapping child cwd and disjoint session lists. Service sessions contain only
 shell panes. With the harness active each environment has one executor/reviewer
 pair at its repository root. Its optional orchestrator is in a development session,
-uses the configured orchestrator role and has a distinct control directory outside
-all child repositories (for example `control-web`). Exactly one root orchestrator
-remains at workspace root. Without a local coordinator, workers route to root.
+uses the configured orchestrator role and is non-optional. Its cwd may be the
+workspace root (root-scoped), or a distinct control directory outside all child
+repositories (for example `control-web`). Zero or one unbound root orchestrator
+may remain at workspace root. Without one, every environment with workers must
+declare an orchestrator; otherwise workers without a local coordinator route to root.
+Command-bearing service panes stay inside their environment checkout. Command-less
+service shells and selected browser panes may live anywhere inside the project
+root: they carry no harness policy, so checkout containment protects no role boundary.
 Unbound shell sessions can host shared services; group selection leaves them alone.
 
 ## Lifecycle and boundaries
@@ -45,14 +50,57 @@ there is no automatic rollback that could kill pre-existing work. Recheck status
 
 Root routes to local coordinators; local coordinators route to root and their own
 workers; workers route only to their coordinator. Root may manage all sessions;
-locals manage only their explicit environment/session ids. Local native writes and
-ordinary shell paths stay inside their control directory. Trusted helpers supply
+environment coordinators manage only their explicit environment/session ids. Control-directory
+coordinators keep native writes and ordinary shell paths inside that directory. Trusted helpers supply
 bounded coordination. Existing Codex audit-mode recommendations still apply;
 these are tool policies, not OS isolation or complete Codex path containment.
 
 The launcher pins `SESSION_WORKSPACE_SCOPE_JSON`. Never repair/export identity
 manually. Changing repository/session/coordinator bindings requires restarting
 affected sessions; Jev feature toggles are excluded from this scope identity.
+
+
+## Root-scoped environment orchestrators
+
+Use [workspace-shared-root.json](../../../templates/workspace-shared-root.json)
+and its [operating notes](../../../templates/workspace-shared-root.md)
+for two masters at `.` with mixed Claude/Codex workers in `component-a` and
+`component-b`, root-level service shells, and separate browsers. The executable
+fixture is `scripts/fixtures/valid/shared-root-orchestrators-v5.json`.
+
+```json
+{"schema_version":5,"environments":[
+  {"id":"web","cwd":"component-a","development":["development"],
+   "services":["services"],"orchestrator":"sample-master"},
+  {"id":"vue3","cwd":"component-b","development":["vue3-development"],
+   "services":["vue3-services"],"orchestrator":"sample-vue3-master"}
+]}
+```
+
+Set both masters' `cwd` to `.`. `sessions[].panes[].runtime` overrides the role
+runtime with a declared runtime key or `shell` (v5 only); omission inherits the
+role. Harness panes must resolve to agent runtimes, browser panes to `shell`.
+Policy is selected by role, regardless of runtime. Codex enforce limitations
+remain unchanged.
+
+A root-scoped master retains the root orchestrator shell/edit floor and guard
+packs: root edits are allowed, all child checkout mutations and `git push` are
+blocked. It routes to its own workers and any other orchestrator; workers route
+only to their owning master. The owning environment is pinned in launch scope
+identity. `task-new` requires `--meta environment=<own-id>`; `task-assign` checks
+that stored metadata and permits only its own workers (it has no `--meta` flag).
+`environment=root` is reserved for an unbound root coordinator. Root-scoped
+masters share root stores and memory; there is no additional coordination lock,
+so users coordinate concurrent root writes. Control-directory policy is unchanged.
+Mixed routing is asymmetric: root-scoped masters can address control-directory
+masters, but confined masters cannot reply directly to them. Use the unbound root
+as relay when configured; without one there is no reverse coordinator route.
+
+Root-scoped masters still cannot run workspace installation, browser MCP config
+or shared-store cleanup helpers. In the shared-root template, which has no unbound
+root, run those operations from a user terminal outside the harness. Alternatively,
+add an unbound root orchestrator to own them. Never unset launcher identity inside
+an active pane to bypass policy.
 
 ## Tasks, review and knowledge
 
@@ -61,7 +109,7 @@ root coordination). Assignment/done/block/review checks the task's environment v
 the configured scheduler grant. Root delegates to local coordinators through messages; coordinator panes cannot
 be scheduler assignees or close tasks. Local coordinators create and assign tasks
 to their own executor/reviewer pair, then report their results to root through
-messages. Cross-environment work uses linked tasks and root-mediated messages; shared storage or dependencies do not grant authority.
+messages. Cross-environment work uses linked tasks and permitted coordinator messages; shared storage or dependencies do not grant authority.
 Unbound existing tasks require deliberate recreation/migration, never auto-retagging.
 
 Reviewed Git targets expose `environment` and owning `orchestrator`. Root delegates
@@ -88,9 +136,16 @@ Application-specific health checks and dependency graphs are not provided.
 Use top-level `browsers` instead of `browser` for multiple bindings. Entries use the
 existing browser shape with unique session ids, ports and `mcp_server_name` values;
 profiles are separated by project and session. Selected browser panes cannot set
-their own command/port. Root uses `browser-config --browser service-web` to select
-an entry for rendering/applying MCP config. Singular browser configs retain their
-existing profile location.
+their own command/port. An unbound root orchestrator can use
+`browser-config --browser service-web` to select an entry for rendering/applying
+MCP config. Without an unbound root, use a user terminal outside the harness; the
+shared-root template selectors are `services` and `vue3-services`. Singular browser configs retain their
+existing profile location. Switching to `browsers[]` changes
+`chrome/<project.id>` to `chrome/<project.id>/sessions/session-<sid>` beneath the
+existing browser profile base. When the legacy directory exists but a session's
+profile does not, doctor emits INFO with a manual copy command. Stop Chrome first;
+the command excludes `sessions/` to avoid copying a destination back into itself.
+Doctor never moves data or changes the selected profile.
 
 ## Optional removable Jev
 
@@ -164,3 +219,9 @@ config, create required directories, inspect plan, start selected environments.
 Never migrate in-flight approvals to a different repository. Roll back by stopping
 only introduced sessions, restoring old config and restarting affected identities.
 Removing Jev requires no workspace-plugin downgrade or task-store migration.
+
+To merge two v4 configs sharing one root, merge sessions while keeping pane names,
+choose one project id and `stores.base`, add environments and pane runtimes, then
+restart all sessions to establish the new identity. Stop the retired second project
+with its old config first to release port-registry entries owned by its project id.
+Keep both old configs for rollback; stop the merged sessions before restoring them.

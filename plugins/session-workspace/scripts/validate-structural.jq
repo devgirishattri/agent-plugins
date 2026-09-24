@@ -1,3 +1,5 @@
+include "runtime";
+
 ## validate-structural.jq — pure jq half of workspace.json validation.
 ##
 ## validate-config.sh runs this filter against the token-interpolated config
@@ -136,13 +138,13 @@ def harness_engine_vars: [
   ((.env.groups // {}) | to_entries[] | . as $e |
     chk($e.value; ["values", "pin_to_session"]; ["values"]; "env.groups." + $e.key)),
 
-  ((.sessions // []) | to_entries[] | . as $s | ($s.value.id // ("sessions[" + ($s.key | tostring) + "]")) as $slabel | (
+  (. as $cfg | (.sessions // []) | to_entries[] | . as $s | ($s.value.id // ("sessions[" + ($s.key | tostring) + "]")) as $slabel | (
     chk($s.value; ["id", "name", "window_index", "layout", "retain_layout", "panes"]; ["id", "name", "panes"]; "sessions." + $slabel),
     chk($s.value.layout // {}; ["kind", "name", "only_when_fresh", "mask_after_split_hook", "nodes", "pane_order"]; ($s.value.layout | if . then ["kind"] else [] end); "sessions." + $slabel + ".layout"),
     (($s.value.layout.nodes // []) | to_entries[] | . as $n |
       chk($n.value; ["id", "from", "dir", "percent"]; ["id"]; "sessions." + $slabel + ".layout.nodes[" + ($n.key | tostring) + "]")),
     (($s.value.panes // []) | to_entries[] | . as $p | ($p.value.name // ("panes[" + ($p.key | tostring) + "]")) as $plabel | (
-      chk($p.value; ["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths"]; ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
+      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths"] + (if $cfg.schema_version == 5 then ["runtime"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
       chk($p.value.agent // {}; ["model", "effort", "profile", "permission_mode"]; []; "sessions." + $slabel + ".panes." + $plabel + ".agent")
     ))
   )),
@@ -178,14 +180,17 @@ def harness_engine_vars: [
            "harness.roles must not use the reserved service role"
          elif ((.roles // {}) | has($role_name)) | not then
            "harness.roles references unknown role \"" + $role_name + "\""
-         elif (.roles[$role_name].runtime // "") == "shell" then
+         elif (. as $cfg | any((.sessions // [])[] | (.panes // [])[]; .role == $role_name and pane_runtime($cfg; .) == "shell")) then
            "harness role \"" + $role_name + "\" must not use the built-in shell runtime"
          else empty end),
        ([.sessions[] | .panes[]] as $panes |
          ([ $panes[] | select(.role == $hr.orchestrator) ] | length) as $orchestrators |
          ([ $panes[] | select(.role == $hr.executor) ] | length) as $executors |
          ([ $panes[] | select(.role == $hr.reviewer) ] | length) as $reviewers |
-         (if $orchestrators != (1 + (if .schema_version == 5 then [(.environments // [])[] | select(has("orchestrator"))] | length else 0 end)) then
+         (if (if .schema_version == 5 and ((.environments // []) | length) > 0 then
+            ([.environments[] | select(has("orchestrator"))] | length) as $bound |
+            ($orchestrators < $bound or $orchestrators > ($bound + 1))
+          else $orchestrators != 1 end) then
             "enabled harness requires exactly one orchestrator pane (got: " + ($orchestrators | tostring) + ")"
           else empty end),
          (if $executors < 1 then
@@ -441,7 +446,7 @@ def harness_engine_vars: [
           (if ($p.optional // false) then "browser session pane must not be optional" else empty end),
           (if ($p | has("command")) then "browser session pane must omit command; session-workspace derives the Chrome argv" else empty end),
           (if ($p | has("port")) then "browser session pane must omit port; use browser.port as the single source of truth" else empty end),
-          ((.roles[$p.role].runtime // "") as $rt | if $rt != "shell" then "browser session pane role must use the built-in shell runtime" else empty end)
+          (pane_runtime(.; $p) as $rt | if $rt != "shell" then "browser session pane role must use the built-in shell runtime" else empty end)
         else empty end)
      else empty end),
     ([.sessions[] | .panes[] | select(has("port")) | .port] | index($b.port)) as $port_collision |
@@ -600,6 +605,13 @@ def harness_engine_vars: [
   ((.roles // {}) | to_entries[] | . as $r |
     if ($rt_names | index($r.value.runtime)) == null and $r.value.runtime != "shell" then
       "roles." + $r.key + ".runtime references unknown runtime \"" + ($r.value.runtime // "") + "\" (not declared in runtimes, and not the built-in \"shell\")"
+    else empty end),
+  (. as $cfg | (.sessions // [])[] | (.panes // [])[] | select(has("runtime")) |
+    if (.runtime | type) != "string" then "pane runtime must be a declared runtime name or shell"
+    else empty end),
+  (. as $cfg | (.sessions // [])[] | (.panes // [])[] | select(has("runtime")) | . as $p |
+    if ($p.runtime | type) == "string" and $p.runtime != "shell" and ($rt_names | index($p.runtime)) == null then
+      "pane " + $p.name + " references unknown runtime " + $p.runtime
     else empty end),
   ((.roles // {}) | keys) as $role_names |
   ((.sessions // [])[] | (.panes // [])[] | . as $p |

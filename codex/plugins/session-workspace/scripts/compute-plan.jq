@@ -1,3 +1,5 @@
+include "runtime";
+
 ## compute-plan.jq — pure jq half of `workspace-plan`.
 ##
 ## Takes the already-validated, token-interpolated workspace.json on stdin
@@ -129,7 +131,8 @@ def coordination_var_name(store):
         panes: [
           ($s.panes // [])[] | . as $p
           | ($cfg.roles[$p.role] // {}) as $role
-          | ($cfg.runtimes[$role.runtime] // null) as $runtime
+          | pane_runtime($cfg; $p) as $runtime_name
+          | ($cfg.runtimes[$runtime_name] // null) as $runtime
           | ($role.env_group // "none") as $env_group
           | ($cfg.env.groups[$env_group] // {values: {}, pin_to_session: false}) as $group
           | ($group.pin_to_session // false) as $pin_to_session
@@ -138,6 +141,7 @@ def coordination_var_name(store):
               role: $p.role,
               scope: (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then {
                 environments: ($cfg.environments | map(del(.jev))),
+                environment: ([$cfg.environments[] | select((.development + .services) | index($s.id)) | .id][0] // null),
                 root_orchestrator: ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name | select(. as $n | [$cfg.environments[].orchestrator] | index($n) | not)][0] // null)
               } else null end),
               optional: ($p.optional // false),
@@ -151,8 +155,8 @@ def coordination_var_name(store):
               # and the engine can never disagree about which panes these are.
               skip_unresolved: (($p.optional // false) and ($p.cwd // null) != null and ($cwd_map[$p.name] // null) == null),
               runtime: {
-                name: $role.runtime,
-                program: (if $role.runtime == "shell" then "shell" else ($runtime.program // null) end),
+                name: $runtime_name,
+                program: (if $runtime_name == "shell" then "shell" else ($runtime.program // null) end),
                 args: ($runtime.args // [])
               },
               command: (if $browser != null and $s.id == $browser.session_id and $p.name == $browser_pane_name then

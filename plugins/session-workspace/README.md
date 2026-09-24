@@ -904,6 +904,7 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].layout.pane_order` | array of node ids | yes (if `kind: split_tree`) | — | Explicit, authoritative mapping from split-tree node id to `panes[]` slot order — a visual layout can't otherwise express "pane order differs from split order." |
 | `sessions[].panes[].name` | string | yes | — | The pane's `@name` (session-chat addressing identity) and managed-marker pane value. Enforced unique across the whole config. |
 | `sessions[].panes[].role` | string | yes | — | A key from `roles`. |
+| `sessions[].panes[].runtime` | string | no (v5 only) | role runtime | Declared `runtimes` key or `shell`; pane overrides role. Harness panes cannot resolve to shell; browser-selected panes must resolve to shell. |
 | `sessions[].panes[].cwd` | string | no | session/window default | Relative (to `project.root`) or absolute working directory. Validated to resolve inside the project root; a missing directory is a hard validation error **unless** `optional: true`. |
 | `sessions[].panes[].optional` | boolean | no | `false` | A missing `cwd` for an optional pane is reported (INFO in `doctor`, "skipped" in `start`) rather than failing validation/the slot. |
 | `sessions[].panes[].command` | array of strings, min 1 item | no | (agent argv, or interactive shell) | For a `shell`-runtime (typically `service`-role) pane: literal argv to run instead of an interactive shell. A bare string command is rejected — it must be an array, so there's never a shell re-parsing step. |
@@ -977,3 +978,34 @@ config values get rejected:
   unquoted, attacker-chosen *name* could still inject a second shell
   statement. (`secrets.visible_to_roles` entries are validated differently —
   as references to existing role names, not as export names.)
+
+## Schema v5 root-scoped environment orchestrators
+
+See the [environment contract](skills/session-workspace/references/environments.md)
+and [shared-root template](templates/workspace-shared-root.json). Environment masters
+can share the project-root cwd while retaining their own worker routing and task
+metadata. An unbound root master is optional when every worker environment has a
+master. Control-directory coordinators retain their confined policy. Root-scoped
+masters retain root shell/edit permissions and guard packs, with all child checkout
+mutations and `git push` denied. Shared-root write coordination is a user rule.
+
+Command-less service shells and browser panes may use any project-contained cwd;
+they carry no harness policy, so checkout containment protects no role boundary.
+Services with commands remain within their environment checkout.
+
+The `browsers[]` profile path is `chrome/<project.id>/sessions/session-<sid>`;
+singular `browser` retains `chrome/<project.id>`. Doctor emits INFO with a manual
+copy command when the legacy profile exists but the session profile does not.
+Stop Chrome first and exclude `sessions/` during copying. No automatic migration
+runs. To merge two v4 configs, preserve pane names, merge sessions, choose one
+`stores.base`, and restart all sessions. Stop the retired second project using its
+old config first to release port allocations owned by that project's id.
+
+The shared-root template has no unbound root orchestrator. Run workspace
+installation, browser MCP configuration (`workspace browser-config --browser
+services` or `vue3-services`) and shared-store cleanup from a user terminal outside
+the harness, or configure an unbound root to own those operations. Root-scoped
+masters retain these helper restrictions; do not unset launcher identity to bypass
+them. In mixed topologies, a root-scoped master can message a confined master, but
+the confined master cannot reply directly; use the unbound root as relay when one
+exists. See the shared-root template's adjacent `workspace-shared-root.md` notes.

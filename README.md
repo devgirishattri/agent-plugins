@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.11 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.29 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.6.4 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.7.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -738,6 +738,51 @@ and [complete sample](codex/plugins/session-workspace/templates/workspace-multi-
 Use `workspace start --environment web`, `workspace status --environment vue3`,
 or `workspace restart --environment vue3 --services`. Existing configurations remain
 valid; opt into v5 only after upgrading both providers.
+
+#### Root-scoped environment orchestrators
+
+The [shared-root fixture](codex/plugins/session-workspace/scripts/fixtures/valid/shared-root-orchestrators-v5.json)
+and [template](codex/plugins/session-workspace/templates/workspace-shared-root.json)
+put two masters at `.` with separate workers in `component-a` and `component-b`.
+An unbound root master is optional; without one, every worker environment must
+name its own master. Each root-scoped master routes to its own workers and any
+other master, while workers route only to their owner. Root edits and the usual
+root shell floor remain available; all child-checkout mutations and `git push`
+remain blocked, with existing guard packs applied.
+
+`sessions[].panes[].runtime` (v5) is a declared `runtimes` key or `shell`. It takes
+precedence over `roles.<role>.runtime`; omission inherits the role. Harness panes
+cannot resolve to `shell`, and browser-selected panes must resolve to `shell`.
+This supports mixed providers under the same role without changing role policy.
+The existing Codex enforce caveats still apply.
+
+Task creation requires `--meta environment=<own-id>`; assignment checks that
+metadata on the stored task and permits only that master's workers. `root` is
+reserved for an unbound root master. Shared-root writes remain user-coordinated;
+no new master lock is added. Service panes with commands stay in their environment
+checkout; command-less shells/browser panes can use any project-contained cwd.
+Those shells carry no harness policy, so checkout confinement protects no role
+boundary.
+
+`browsers[]` uses `chrome/<project.id>/sessions/session-<sid>` instead of the singular
+`browser` profile at `chrome/<project.id>`. Doctor reports INFO and a manual copy
+command when the legacy directory exists and the session profile does not. Stop
+Chrome before copying; exclude `sessions/` because the destination is inside the
+legacy directory. No profile migration runs automatically.
+
+For migration from two v4 configs, merge sessions, preserve pane names, choose one
+`stores.base`, and restart all sessions. Stop the retired second project with its
+old config first to release port allocations owned by its old project id. Keep the
+old configs; rollback requires stopping merged sessions before restoring them.
+
+The shared-root template has no unbound root orchestrator. Run workspace
+installation, browser MCP configuration (`workspace browser-config --browser
+services` or `vue3-services`) and shared-store cleanup from a user terminal outside
+the harness, or configure an unbound root to own those operations. Root-scoped
+masters retain these helper restrictions; do not unset launcher identity to bypass
+them. In mixed topologies, a root-scoped master can message a confined master, but
+the confined master cannot reply directly; use the unbound root as relay when one
+exists. See the shared-root template's adjacent `workspace-shared-root.md` notes.
 
 Jev is an optional, explicitly invoked diagnostic guide helper, disabled by default
 and removable without changing the ordinary workflow. It is never a permission or

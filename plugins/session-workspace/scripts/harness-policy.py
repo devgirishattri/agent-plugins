@@ -240,6 +240,10 @@ class Context:
     scheduler_root: Optional[Path] = None
     read_paths: tuple = ()
 
+    @property
+    def confined_orchestrator(self):
+        return self.semantic_role == "orchestrator" and bool(self.environment) and self.pane_cwd != self.project_root
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -516,12 +520,15 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         own = next((e for e in environments if current_session in e["development"] + e["services"]), None)
         if own:
             environment = own["id"]
+            if scope.get("environment") != environment:
+                return None, deny(None, tool, "identity.scope", "launcher environment does not match ownership", mode, integrity=True)
             own_ids = own["development"] + own["services"]
             owned_panes = [p for s in plan["sessions"] if s["id"] in own_ids for p in s["panes"]]
             coordinator = own.get("orchestrator", root_name)
             orchestrators = [p for p in panes if p["name"] == coordinator]
             if semantic == "orchestrator":
-                route_peers = frozenset([root_name])
+                route_peers = (frozenset(p["name"] for p in panes if p.get("role") == roles.get("orchestrator") and p["name"] != pane_name)
+                               if pane_cwd == project_root else frozenset([root_name]) if root_name else frozenset())
         else:
             if pane_name != root_name:
                 return None, deny(None, tool, "identity.scope", "unbound harness pane", mode, integrity=True)
@@ -2129,7 +2136,7 @@ def validate_tool_workdir(ctx: Context, tool_input: dict) -> None:
             continue
         raw = Path(value.strip()).expanduser()
         path = canonical(raw if raw.is_absolute() else ctx.pane_cwd / raw)
-        if (ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment)) and not within(path, ctx.pane_cwd):
+        if (ctx.semantic_role == "executor" or ctx.confined_orchestrator) and not within(path, ctx.pane_cwd):
             raise PolicyFailure("executor.containment", "tool workdir escapes the configured child cwd: %s" % value)
         if ctx.semantic_role == "reviewer" and not reviewer_readable(ctx, path):
             raise PolicyFailure("reviewer.path", "tool workdir escapes the reviewer's allowed roots: %s" % value)
@@ -2157,7 +2164,7 @@ def executor_inline_code(segment: List[str]) -> bool:
 
 
 def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
-    if ctx.semantic_role != "orchestrator" or ctx.environment:
+    if ctx.semantic_role != "orchestrator" or ctx.confined_orchestrator:
         if tool_input.get("dangerouslyDisableSandbox") is True or tool_input.get("with_escalated_permissions") is True:
             raise PolicyFailure("shell.sandbox_escape", "child roles cannot request a sandbox/approval escape")
     validate_tool_workdir(ctx, tool_input)
@@ -2226,7 +2233,7 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
             pass  # Ordinary in-checkout executor commands retain their floor.
         else:
             return
-    if ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment):
+    if ctx.semantic_role == "executor" or ctx.confined_orchestrator:
         # Executor containment for arbitrary shell: no inline shell/interpreter
         # code (an unreadable escape hatch), no operand that only exists after
         # a shell expansion, no operand feeder (xargs), and every path-like
@@ -2327,7 +2334,7 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
             extras = protected.get("extra_basenames", [])
             if generic or (isinstance(extras, list) and basename in extras):
                 raise PolicyFailure("orchestrator.protected_file", "orchestrator cannot edit protected credential/lockfile: %s" % value)
-        if ctx.semantic_role == "executor" or (ctx.semantic_role == "orchestrator" and ctx.environment):
+        if ctx.semantic_role == "executor" or ctx.confined_orchestrator:
             if not within(path, ctx.pane_cwd):
                 raise PolicyFailure("executor.containment", "executor edit escapes its configured child cwd: %s" % value)
         elif any(within(path, root) for root in ctx.child_roots):

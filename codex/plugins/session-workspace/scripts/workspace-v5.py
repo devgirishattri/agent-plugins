@@ -10,6 +10,10 @@ def inside(path, root):
     return path == root or root in path.parents
 
 
+def pane_runtime(cfg, pane):
+    return pane.get('runtime', cfg['roles'][pane['role']]['runtime'])
+
+
 def validate(cfg, root):
     def require(ok, message):
         if not ok:
@@ -26,6 +30,8 @@ def validate(cfg, root):
     panes = {p['name']: p for s in sessions.values() for p in s['panes']}
     roles = cfg.get('harness', {}).get('roles', {})
     active = cfg.get('harness', {}).get('enabled', False)
+    declared = [e.get('orchestrator') for e in envs if isinstance(e, dict) and 'orchestrator' in e]
+    require(all(isinstance(name, str) for name in declared) and len(declared) == len(set(declared)), 'environment orchestrator requires a unique pane')
     seen_ids, seen_sessions, seen_roots, coordinators, control_roots = set(), set(), [], set(), []
     for e in envs:
         shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator', 'jev'], ['id', 'cwd', 'development', 'services'], 'environment')
@@ -48,19 +54,23 @@ def validate(cfg, root):
                 seen_sessions.add(sid)
                 for p in sessions[sid]['panes']:
                     selected.append(p)
-                    shell = cfg['roles'][p['role']]['runtime'] == 'shell'
+                    shell = pane_runtime(cfg, p) == 'shell'
                     require(kind != 'services' or shell, 'services sessions must contain only shell panes')
                     if p['name'] != e.get('orchestrator'):
                         pcwd = (root / p.get('cwd', '.')).resolve(strict=True)
-                        require(inside(pcwd, cwd), 'environment pane cwd escapes its repository')
+                        if p['role'] == 'service' and 'command' not in p:
+                            require(inside(pcwd, root), 'service shell cwd escapes workspace root')
+                        else:
+                            require(inside(pcwd, cwd), 'environment pane cwd escapes its repository')
         if 'orchestrator' in e:
             name = e['orchestrator']
             require(active and isinstance(name, str) and name in panes and name not in coordinators, 'environment orchestrator requires enabled harness and unique pane')
-            require(any(p['name'] == name for p in selected) and panes[name]['role'] == roles.get('orchestrator'), 'environment orchestrator must be its development coordinator')
+            require(any(p['name'] == name for sid in e['development'] for p in sessions[sid]['panes']) and panes[name]['role'] == roles.get('orchestrator'), 'environment orchestrator must be its development coordinator')
             require(not panes[name].get('optional', False), 'environment orchestrator cannot be optional')
             control = (root / panes[name].get('cwd', '.')).resolve(strict=True)
-            require(control.is_dir() and control != root and inside(control, root), 'local orchestrator requires a distinct control directory inside the workspace')
-            control_roots.append(control)
+            require(control.is_dir() and inside(control, root), 'environment orchestrator requires workspace root or a contained control directory')
+            if control != root:
+                control_roots.append(control)
             coordinators.add(name)
         if active:
             workers = [p for p in selected if p['role'] in [roles['executor'], roles['reviewer']]]
@@ -72,7 +82,8 @@ def validate(cfg, root):
         require(not any(inside(a, b) or inside(b, a) for i, a in enumerate(control_roots) for b in control_roots[i+1:]), 'coordinator directories overlap')
         if active:
             roots = [p for p in panes.values() if p['role'] == roles['orchestrator'] and p['name'] not in coordinators]
-            require(len(roots) == 1 and (root / roots[0].get('cwd', '.')).resolve() == root, 'exactly one root orchestrator at workspace root is required')
+            require(len(roots) <= 1 and all((root / p.get('cwd', '.')).resolve() == root for p in roots), 'zero or one unbound root orchestrator at workspace root is required')
+            require(bool(roots) or all('orchestrator' in e for e in envs), 'workers require an environment orchestrator when no unbound root exists')
             for s in sessions.values():
                 if s['id'] not in seen_sessions:
                     require(all(p['role'] not in [roles['executor'], roles['reviewer']] for p in s['panes']), 'all workers must belong to an environment')
@@ -91,7 +102,7 @@ def validate(cfg, root):
         selected = [p for p in ps if p['name'] == name]
         require(len(selected) == 1, 'browser must select exactly one pane')
         p = selected[0]
-        require(cfg['roles'][p['role']]['runtime'] == 'shell' and p['role'] == 'service' and not p.get('optional') and 'command' not in p and 'port' not in p, 'browser pane must be a nonoptional service shell without command/port')
+        require(pane_runtime(cfg, p) == 'shell' and p['role'] == 'service' and not p.get('optional') and 'command' not in p and 'port' not in p, 'browser pane must be a nonoptional service shell without command/port')
         require(type(b['port']) is int and 1 <= b['port'] <= 65535 and b['port'] not in ports, 'browser port invalid or duplicated')
         ports.add(b['port'])
         require(isinstance(b['chrome_program'], str) and bool(b['chrome_program']), 'browser program required')
