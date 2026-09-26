@@ -1,0 +1,8 @@
+{
+  "name": "agent-plugins-native-ci",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@openai/codex": "0.155.0"
+  }
+}

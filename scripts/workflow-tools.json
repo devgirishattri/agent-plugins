@@ -1,0 +1,30 @@
+{
+  "actionlint": {
+    "version": "1.7.12",
+    "repository": "rhysd/actionlint",
+    "assets": {
+      "Linux-x86_64": {
+        "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
+        "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+      },
+      "Darwin-arm64": {
+        "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz",
+        "sha256": "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f"
+      }
+    }
+  },
+  "zizmor": {
+    "version": "1.30.1",
+    "repository": "zizmorcore/zizmor",
+    "assets": {
+      "Linux-x86_64": {
+        "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-x86_64-unknown-linux-gnu.tar.gz",
+        "sha256": "e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a"
+      },
+      "Darwin-arm64": {
+        "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-aarch64-apple-darwin.tar.gz",
+        "sha256": "e28d22b087f9ebb8d99da6e740d348c930f559961c7c3f12badda54f882195a2"
+      }
+    }
+  }
+}

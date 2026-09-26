@@ -690,6 +690,29 @@ Claude likewise reads the Claude marketplace and Claude manifests. It should not
 
 ## Development Notes
 
+CI checks `actionlint` and `zizmor` use upstream binaries pinned by version and
+SHA-256 in `scripts/workflow-tools.json`. To reproduce either check on Linux
+x86_64 or macOS ARM64 (Python 3 and ShellCheck required for actionlint):
+
+```bash
+python3 -B scripts/install-workflow-tools.py --tool actionlint --dest .tmp/workflow-tools
+python3 -B scripts/install-workflow-tools.py --tool zizmor --dest .tmp/workflow-tools
+python3 -B scripts/test-workflow-assurance.py --tool actionlint --bin-dir .tmp/workflow-tools
+python3 -B scripts/test-workflow-assurance.py --tool zizmor --bin-dir .tmp/workflow-tools
+```
+
+Each check runs passing and faulty controls before scanning every workflow.
+Zizmor runs offline with the regular persona, all severity/confidence levels,
+and no configuration or suppression comments; online and stricter-persona
+audits are outside this gate. Actionlint also checks embedded shell using the
+installed ShellCheck; Python snippets are outside its scope. A download,
+checksum, control or workflow failure fails the check. These are CI-only tools.
+The native CLI job uses `.github/tools/codex/package-lock.json` with `npm ci`;
+update its exact Codex dependency and lockfile together. Tool-pin updates need
+review of the upstream release, asset digests and controlled-test results.
+These checks do not themselves enable repository merge protection.
+
+
 - Keep provider-specific manifests separate.
 - Keep Claude command behavior aligned with the corresponding Codex skills and
   provider-parity command references.
