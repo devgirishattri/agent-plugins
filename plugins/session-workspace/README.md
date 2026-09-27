@@ -504,6 +504,21 @@ writes/edits, cache workdirs, and execution stay denied; helpers still run only 
 grammar. Confined orchestrators are unchanged. No config migration;
 downgrading restores the earlier denial.
 
+**Provider skill reads (0.7.3).** Reviewers and executors may also use the
+same single literal, non-`git` read grammar on provider-installed skill
+documentation: Codex system skills under `<codex-home>/skills/.system/<skill>/`
+(only while Codex's system-skills marker file exists) and user skills under
+`<codex-home>/skills/<skill>/` and `<claude-home>/skills/<skill>/`. The skill
+directory must contain a regular `SKILL.md`; every file read must be a
+regular single-link file inside that same skill directory, with no symlink
+or hidden path component (other than Codex's `.system`). The grant covers
+reads only — never workdirs, helper operands, writes, or execution — and
+never other provider-home content (`auth.json`, `config.toml`, sessions,
+logs, caches, marketplace clones). **Known limit:** skills shipped by
+plugins from marketplaces other than `girishattri-plugins` remain denied,
+because their active selection cannot yet be determined reliably. No config
+migration; downgrading restores the earlier denial.
+
 **Migration / rollback.** Omitted and `[]` are identical to earlier
 releases, so existing configs need no change. Adding, changing, or removing
 `read_paths` pins new launch identity: restart the affected session

@@ -172,6 +172,15 @@ them:
   access. Confined orchestrator shell behavior is unchanged. No config
   migration is needed; update the plugin and restart affected agents.
   Downgrading restores the earlier executor cache-read restriction.
+  From 0.7.3, reviewers and executors can also read provider-installed skill
+  documentation with the same single literal, non-`git` read grammar: Codex
+  system skills (`<codex-home>/skills/.system/<skill>/`, only while the
+  system-skills marker exists) and user skills (`<codex-home>/skills/<skill>/`,
+  `<claude-home>/skills/<skill>/`) whose directory holds a regular `SKILL.md`.
+  Files must be regular, single-link, inside that skill directory, with no
+  symlink or hidden components (except `.system`). No workdirs, helper
+  operands, writes, execution, or other provider-home content. Known limit:
+  skills from non-`girishattri-plugins` marketplace plugins stay denied.
   Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files

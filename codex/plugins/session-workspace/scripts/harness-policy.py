@@ -882,7 +882,7 @@ def git_is_read_only(tokens: List[str]) -> bool:
     return True
 
 
-def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = ()) -> Optional[Path]:
+def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = (), resolve: bool = True) -> Optional[Path]:
     """Resolve one argv token as a path operand, or None when it is data.
     Path forms: absolute, ./ ../ ~/ prefixed, bare . / .. / ~, anything with a
     slash, `--opt=PATH`, an attached cwd option (`-C..`, `-C/tmp`), an
@@ -917,7 +917,8 @@ def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = ()
     if dynamic:
         raise PolicyFailure("path.dynamic", "dynamic or globbed path operands are outside strict-v1")
     path = Path(value).expanduser()
-    return canonical(path if path.is_absolute() else base / path)
+    path = path if path.is_absolute() else base / path
+    return canonical(path) if resolve else path
 
 
 def executable_path(token: str, base: Path) -> Optional[Path]:
@@ -994,6 +995,72 @@ def reviewer_readable(ctx: Context, path: Path) -> bool:
         for root, kind in ctx.read_paths))
 
 
+def skill_content_readable(ctx: Context, raw: Path) -> bool:
+    """Read installed system/user skill content, never provider state or code.
+
+    This is only an extra operand grant in the literal non-Git read grammar.
+    It is deliberately absent from helper, workdir, and edit authorization.
+    Validate lexical components before resolution so cross-skill symlinks cannot
+    borrow the destination skill's authority. No same-uid race guarantee.
+    """
+    if ctx.semantic_role not in {"reviewer", "executor"} or ".." in raw.parts:
+        return False
+    for home, system in ((ctx.codex_home, True), (ctx.claude_home, False)):
+        skills = home / "skills"
+        try:
+            parts = raw.relative_to(skills).parts
+        except ValueError:
+            continue
+        base = skills
+        if system and parts and parts[0] == ".system":
+            base = skills / ".system"
+            marker = base / ".codex-system-skills.marker"
+            try:
+                if marker.is_symlink() or not marker.is_file() or marker.stat().st_nlink != 1:
+                    return False
+            except OSError:
+                return False
+            parts = parts[1:]
+        if not parts or any(p.startswith(".") for p in parts):
+            return False
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", parts[0]):
+            return False
+        skill = base / parts[0]
+        entry = skill / "SKILL.md"
+        try:
+            # Reject links in all components below the already-resolved home.
+            for target in (raw, entry):
+                cursor = target
+                while cursor != home:
+                    if cursor.is_symlink():
+                        return False
+                    cursor = cursor.parent
+            if not skill.is_dir() or not entry.is_file() or entry.stat().st_nlink != 1:
+                return False
+            if not within(canonical(raw), skill):
+                return False
+            if raw.is_file():
+                return raw.stat().st_nlink == 1
+            if raw.is_dir():
+                # Recursive tools must not expose linked leaves. Their follow,
+                # preprocessor, mutation and execution options are gated above.
+                def walk_error(error: OSError) -> None:
+                    raise error
+
+                for parent, dirs, files in os.walk(raw, followlinks=False, onerror=walk_error):
+                    for name in dirs + files:
+                        child = Path(parent) / name
+                        if name.startswith(".") or child.is_symlink() or not (child.is_dir() or child.is_file()):
+                            return False
+                        if child.is_file() and child.stat().st_nlink != 1:
+                            return False
+                return True
+        except (OSError, ValueError):
+            return False
+        return False
+    return False
+
+
 def resolve_chdir_hops(chdirs: List[List[str]], cwd: Path, allowed: Optional[Callable[[Path], bool]] = None, rule: str = "") -> Path:
     """Apply env --chdir hops IN ORDER. Each env hop starts from the cwd the
     previous hop produced; within a hop every given value is resolved
@@ -1021,7 +1088,8 @@ def segment_exec_cwd(segment: List[str], cwd: Path) -> Path:
     return resolve_chdir_hops(parse_wrappers(segment).chdirs, cwd)
 
 
-def ensure_paths_within(tokens: List[str], base: Path, allowed: Callable[[Path], bool], rule: str) -> None:
+def ensure_paths_within(tokens: List[str], base: Path, allowed: Callable[[Path], bool], rule: str,
+                        extra_read: Optional[Callable[[Path], bool]] = None) -> None:
     """Every path-like operand of ONE segment must satisfy ALLOWED. The
     wrapper prefix (assignments, env and its option VALUES such as
     `-C ..`) resolves against BASE; the real command's execution cwd (BASE,
@@ -1048,6 +1116,9 @@ def ensure_paths_within(tokens: List[str], base: Path, allowed: Callable[[Path],
         if path is None or path == Path("/dev/null"):
             continue
         if not allowed(path):
+            raw = candidate_path(token, exec_cwd, resolve=False)
+            if extra_read is not None and raw is not None and extra_read(raw):
+                continue
             raise PolicyFailure(rule, "path operand escapes the allowed scope: %s" % token)
 
 
@@ -2069,7 +2140,8 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
         raise PolicyFailure("reviewer.search", "reviewer search preprocessors are forbidden")
     if executable == "sort" and any(token in {"-o", "--output", "--compress-program"} or token.startswith(("--output=", "--compress-program=")) for token in tokens):
         raise PolicyFailure("reviewer.sort", "reviewer sort output/program options are forbidden")
-    ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path")
+    ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path",
+                        extra_read=lambda p: skill_content_readable(ctx, p))
 
 
 def executable_tokens(segment: List[str]) -> List[str]:

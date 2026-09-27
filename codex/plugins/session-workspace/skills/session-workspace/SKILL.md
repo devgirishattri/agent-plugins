@@ -165,6 +165,15 @@ them:
   This cache-read exception does not change confined orchestrator shell reads. No configuration migration
   is required; update the plugin and restart affected agents. Downgrading restores
   the earlier executor cache-read restriction without changing stores.
+  From 0.7.3, reviewers and executors can also read provider-installed skill
+  documentation with the same single literal, non-`git` read grammar: Codex
+  system skills (`<codex-home>/skills/.system/<skill>/`, only while the
+  system-skills marker exists) and user skills (`<codex-home>/skills/<skill>/`,
+  `<claude-home>/skills/<skill>/`) whose directory holds a regular `SKILL.md`.
+  Files must be regular, single-link, inside that skill directory, with no
+  symlink or hidden components (except `.system`). No workdirs, helper
+  operands, writes, execution, or other provider-home content. Known limit:
+  skills from non-`girishattri-plugins` marketplace plugins stay denied.
   The ordinary in-checkout executor shell floor is unchanged: these restricted
   read rules do not establish recursive traversal confinement for general
   executor commands. Otherwise, edits and shell path operands must stay inside its own

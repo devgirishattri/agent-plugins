@@ -1098,6 +1098,7 @@ python3 -B scripts/test-memory-inbox-boundaries.py
 python3 -B scripts/test-memory-dismissal.py
 python3 -B scripts/test-reviewer-read-paths.py
 python3 -B scripts/test-message-drafts.py
+python3 -B scripts/test-skill-reads.py
 python3 scripts/test-plugin-evals.py
 python3 scripts/plugin-evals.py
 python3 scripts/test-shared-helpers.py
