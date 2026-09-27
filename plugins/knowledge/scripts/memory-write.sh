@@ -18,6 +18,7 @@
 #   memory-write.sh purge     --store <path> (--ids <id,...> | --expired)
 #                              [--manifest <file>] --confirm <path>
 #   memory-write.sh bootstrap --store <path>
+#   memory-write.sh dismiss|restore --store <path> --candidate <id> --expect-candidate <sha256>
 #   memory-write.sh unlock    --store <path> --confirm <path>
 #
 # Exit codes (shared map): 0 ok / 2 usage / 3 store-resolution / 4 store-
@@ -1117,10 +1118,105 @@ _km_ensure_inbox_dir() {
   return 0
 }
 
+# Validate retained review state without creating it on a read/capture probe.
+_km_dismissed_dir() {
+  local store="$1" create="${2:-0}" dir="$1/.inbox/.dismissed" parent="$1/.inbox"
+  if [ -L "$parent" ] || [ ! -d "$parent" ] ||
+     [ "$(km_path_uid "$parent")" != "$(id -u)" ] || [ "$(km_path_mode "$parent")" != "700" ]; then
+    km_error "unsafe candidate inbox: $parent"; return 4
+  fi
+  if ! km_path_exists "$dir"; then
+    [ "$create" = 1 ] || return 0
+    (umask 077; mkdir -m 700 "$dir") || return 4
+  fi
+  if [ -L "$dir" ] || [ ! -d "$dir" ] ||
+     [ "$(km_path_uid "$dir")" != "$(id -u)" ] || [ "$(km_path_mode "$dir")" != "700" ]; then
+    km_error "unsafe dismissed inbox: $dir"; return 4
+  fi
+}
+
+_km_review_file() {
+  local file="$1" id="$2"
+  if [ -L "$file" ] || [ ! -f "$file" ] ||
+     [ "$(km_path_uid "$file")" != "$(id -u)" ] ||
+     [ "$(km_path_mode "$file")" != "600" ] || [ "$(km_link_count "$file")" != 1 ]; then
+    km_error "unsafe review candidate: $file"; return 4
+  fi
+  km_parse_capture "$file" stored || return 4
+  if [ "$KM_CAP_ID" != "$id" ] || [ "$(km_capture_canonical_hash)" != "$id" ]; then
+    km_error "review candidate identity mismatch: $file"; return 4
+  fi
+}
+
+_km_disposition_body() {
+  local store="$1" operation="$2" id="$3" expected="$4" source dest
+  _km_dismissed_dir "$store" 0 || return 4
+  if km_path_exists "$store/.journal"; then
+    km_error "pending memory journal: recover the interrupted transaction before $operation"; return 4
+  fi
+  source="$store/.inbox/$id.md"; dest="$store/.inbox/.dismissed/$id.md"
+  if [ "$operation" = restore ]; then source="$dest"; dest="$store/.inbox/$id.md"; fi
+  if ! km_path_exists "$source"; then
+    _km_review_file "$dest" "$id" || return 4
+    [ "$(km_sha256_file "$dest")" = "$expected" ] || { km_error "candidate changed since approval"; return 4; }
+    echo "status: no-op (already $operation)"; return 0
+  fi
+  _km_review_file "$source" "$id" || return 4
+  [ "$(km_sha256_file "$source")" = "$expected" ] || { km_error "candidate changed since approval"; return 4; }
+  if km_path_exists "$dest"; then
+    km_error "candidate disposition collision: $dest"; return 4
+  fi
+  _km_dismissed_dir "$store" 1 || return 4
+  # One same-filesystem rename; no authoritative memory/index mutation. Existing
+  # writer lock serializes cooperating callers. Same-uid filesystem races are
+  # not an atomic sandbox boundary; never overwrite a destination.
+  mv -n "$source" "$dest" || return 4
+  if km_path_exists "$source"; then km_error "candidate disposition did not move source"; return 4; fi
+  _km_review_file "$dest" "$id" || return 4
+  [ "$(km_sha256_file "$dest")" = "$expected" ] || return 4
+  echo "candidate: $id"
+  echo "status: $operation"
+}
+
+cmd_disposition() {
+  local operation="$1" store_arg="" candidate="" expected="" store rc
+  shift
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || { km_error "$operation requires literal flag/value pairs"; return 2; }
+    case "$1" in
+      --store) [ -z "$store_arg" ] || return 2; store_arg="$2" ;;
+      --candidate) [ -z "$candidate" ] || return 2; candidate="$2" ;;
+      --expect-candidate) [ -z "$expected" ] || return 2; expected="$2" ;;
+      *) km_error "$operation: unknown argument: $1"; return 2 ;;
+    esac
+    shift 2
+  done
+  if [ -z "$store_arg" ] || ! _km_is_sha256 "$candidate" || ! _km_is_sha256 "$expected"; then
+    km_error "Usage: memory-write.sh $operation --store PATH --candidate ID --expect-candidate SHA256"; return 2
+  fi
+  km_require_non_reviewer "memory" || return 6
+  store=$(km_resolve_store "$store_arg") || return $?
+  km_verify_gitignored "$store" || { km_error "memory store is not covered by .gitignore: $store"; return 4; }
+  _km_lock_acquire "$store" || return $?
+  _km_disposition_body "$store" "$operation" "$candidate" "$expected"
+  rc=$?
+  _km_lock_release "$store"
+  return "$rc"
+}
+
 _km_capture_body() {
   local store="$1" staged_file="$2" key="$3"
   local target="$store/.inbox/${key}.md" existing_hash new_hash ts tmp l
   _km_ensure_inbox_dir "$store" || return 4
+  _km_dismissed_dir "$store" 0 || return 4
+  local dismissed="$store/.inbox/.dismissed/$key.md"
+  if km_path_exists "$dismissed"; then
+    _km_review_file "$dismissed" "$key" || return 4
+    if km_path_exists "$target"; then km_error "candidate exists in pending and dismissed inboxes"; return 4; fi
+    echo "capture_id: $key"
+    echo "status: no-op (dismissed)"
+    return 0
+  fi
 
   if km_path_exists "$target"; then
     if [ -L "$target" ] || [ ! -f "$target" ]; then
@@ -1935,6 +2031,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
   case "$subcommand" in
     capture) cmd_capture "$@"; exit $? ;;
+    dismiss|restore) cmd_disposition "$subcommand" "$@"; exit $? ;;
     apply) cmd_apply "$@"; exit $? ;;
     index) cmd_index "$@"; exit $? ;;
     retire) cmd_retire "$@"; exit $? ;;
@@ -1942,7 +2039,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     bootstrap) cmd_bootstrap "$@"; exit $? ;;
     unlock) cmd_unlock "$@"; exit $? ;;
     *)
-      echo "ERROR: Usage: memory-write.sh <capture|apply|index|retire|purge|bootstrap|unlock> ..." >&2
+      echo "ERROR: Usage: memory-write.sh <capture|apply|index|retire|purge|bootstrap|unlock|dismiss|restore> ..." >&2
       exit 2
       ;;
   esac

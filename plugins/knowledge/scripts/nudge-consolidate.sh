@@ -65,7 +65,7 @@ n="$(bash "$DIR/memory-remember.sh" --store "$store" --list 2>/dev/null | grep -
 case "$n" in ''|*[!0-9]*) exit 0 ;; esac
 [ "$n" -gt 0 ] || exit 0
 
-msg="knowledge: ${n} pending memory candidate(s) in the capture inbox — run /knowledge:consolidate to review and persist them. Nothing is written automatically."
+msg="knowledge: ${n} pending memory candidate(s) in the capture inbox — run /knowledge:consolidate to review them for promotion or dismissal. Nothing is written automatically."
 
 if [ "$MODE" = json ]; then
   # $n is a validated integer and $msg is fixed text containing no JSON

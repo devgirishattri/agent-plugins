@@ -65,10 +65,10 @@ source "$WRITER"
 
 _kr_usage() {
   echo "ERROR: Usage: memory-remember.sh [--store <path>] --staged <file>" >&2
-  echo "       memory-remember.sh [--store <path>] --list [--expired-only]" >&2
+  echo "       memory-remember.sh [--store <path>] --list [--expired-only] [--dismissed]" >&2
 }
 
-store_arg="" staged_file="" list_mode=0 expired_only=0
+store_arg="" staged_file="" list_mode=0 expired_only=0 dismissed_only=0
 have_staged=0 have_list=0
 
 while [ $# -gt 0 ]; do
@@ -93,6 +93,10 @@ while [ $# -gt 0 ]; do
       expired_only=1
       shift 1
       ;;
+    --dismissed)
+      dismissed_only=1
+      shift 1
+      ;;
     *)
       _kr_usage
       exit 2
@@ -110,6 +114,10 @@ if [ "$have_staged" -eq 0 ] && [ "$have_list" -eq 0 ]; then
 fi
 if [ "$expired_only" -eq 1 ] && [ "$have_list" -eq 0 ]; then
   echo "ERROR: --expired-only requires --list" >&2
+  exit 2
+fi
+if [ "$dismissed_only" -eq 1 ] && [ "$have_list" -eq 0 ]; then
+  echo "ERROR: --dismissed requires --list" >&2
   exit 2
 fi
 
@@ -142,6 +150,11 @@ if [ "$list_mode" -eq 1 ]; then
   if [ "$inbox_mode" != "700" ]; then
     km_error ".inbox must be mode 700 (found $inbox_mode): $inbox"
     exit 4
+  fi
+  if [ "$dismissed_only" -eq 1 ]; then
+    _km_dismissed_dir "$store" 0 || exit 4
+    inbox="$inbox/.dismissed"
+    [ -d "$inbox" ] || exit 0
   fi
 
   retention_days="${KNOWLEDGE_INBOX_RETENTION_DAYS:-30}"

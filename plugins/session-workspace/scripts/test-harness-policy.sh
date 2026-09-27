@@ -819,6 +819,13 @@ as_master "orchestrator task-done is denied (worker-owned stage)" "$(bash_payloa
 as_master "orchestrator tasks-clean dry run is allowed" "$(bash_payload "bash $SCHED/tasks-clean.sh --older-than 30 --status done")" '.decision == "allow"'
 as_master "orchestrator memory-write apply with literal CAS flags is allowed" "$(bash_payload "bash $KNOW/memory-write.sh apply --store $ROOT/.agents/memory --target note.md --staged-target $TMPROOT/candidate.md --staged-index $TMPROOT/candidate.md --expect-target absent --expect-index 0000000000000000000000000000000000000000000000000000000000000000")" '.decision == "allow"'
 as_master "orchestrator memory-write with an unreviewed flag is denied" "$(bash_payload "bash $KNOW/memory-write.sh apply --store $ROOT/.agents/memory --hook /tmp/x")" '.decision == "deny" and .rule == "helper.argv"'
+for disposition in dismiss restore; do
+  disposition_command="bash $KNOW/memory-write.sh $disposition --store $ROOT/.agents/memory --candidate 0000000000000000000000000000000000000000000000000000000000000000 --expect-candidate 0000000000000000000000000000000000000000000000000000000000000000"
+  as_master "orchestrator memory-write $disposition is allowed" "$(bash_payload "$disposition_command")" '.decision == "allow"'
+  as_exec "executor memory-write $disposition remains denied" "$(bash_payload "$disposition_command")" '.decision == "deny" and .rule == "coordination.write"'
+  as_review "reviewer memory-write $disposition remains denied" "$(bash_payload "$disposition_command")" '.decision == "deny" and .rule == "coordination.write"'
+done
+as_master "orchestrator dismissed inbox listing is allowed" "$(bash_payload "bash $KNOW/memory-remember.sh --store $ROOT/.agents/memory --list --dismissed")" '.decision == "allow"'
 as_master "orchestrator memory-lint --fix is allowed" "$(bash_payload "bash $KNOW/memory-lint.sh --fix")" '.decision == "allow"'
 as_master "orchestrator docs-write inside the workspace is allowed" "$(bash_payload "bash $KNOW/docs-write.sh --repo $ROOT")" '.decision == "allow"'
 as_master "orchestrator docs-write outside the workspace is denied" "$(bash_payload "bash $KNOW/docs-write.sh --repo /tmp")" '.decision == "deny" and .rule == "helper.argv"'

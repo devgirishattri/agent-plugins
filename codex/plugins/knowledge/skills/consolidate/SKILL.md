@@ -165,6 +165,10 @@ Two sources, both in scope for this run:
    `$knowledge:remember`'s purge workflow — that is a distinct, explicit,
    destructive action this skill never performs on its own).
 
+   `--list` shows only pending candidates; candidates a user already
+   dismissed live in `<STORE_PATH>/.inbox/.dismissed/` and are out of scope
+   (audit them read-only with `--list --dismissed`).
+
    For each candidate you intend to consider, **Read**
    `<STORE_PATH>/.inbox/<id>.md` to see its full proposed frontmatter and body
    (the `--list` row alone is not enough to judge duplication).
@@ -183,16 +187,17 @@ consolidate this run.
 Before deduping or proposing a file, classify the item:
 
 - **Reusable going forward** — keep it in scope for CREATE/UPDATE.
-- **Only session residue** — do not promote it to durable memory; leave the
-  backing inbox candidate untouched unless the user separately chooses the
-  explicit purge workflow.
+- **Only session residue** — do not promote it to durable memory. For an inbox
+  candidate, propose the **DISMISS** disposition (step 7) so it stops being
+  counted as pending; dismissal archives it, never deletes it.
 - **Historical but still explanatory** — summarize it as rationale,
   migration/provenance, or "why this rule exists"; do not store raw chronology
   or obsolete step-by-step state.
 - **Superseded or obsolete** — prefer an UPDATE to the current memory with
   `status: superseded|archived|stale`, `supersedes`, and/or `review_after`
-  where appropriate. Do not delete here; `retire` and `purge` are separate
-  explicit actions.
+  where appropriate. An inbox candidate that is obsolete and not promoted gets
+  the **DISMISS** disposition. Do not delete here; `retire` and `purge` are
+  separate explicit actions.
 
 ## 5. Dedup pass, per item
 
@@ -292,11 +297,25 @@ dangling link, every legacy upgrade you're folding in, and which items are
 inbox candidates vs. session learnings. State plainly which items you judged
 as UPDATE-over-CREATE and why.
 
-**Apply nothing until the user has approved.** If the user declines some or
-all items, drop exactly those from the batch — apply only what was approved
-(or nothing, if everything was declined) in step 8. An inbox candidate that
-isn't approved this round stays in the inbox untouched; mention it in the
-final report as "not promoted this round," not as an error.
+Give **every inbox candidate exactly one disposition** in this same
+presentation — no separate follow-up question:
+
+- **CREATE/UPDATE** — promoted through the diff above (consumed on apply).
+- **DISMISS** — reviewed and judged obsolete, duplicate, or session residue;
+  it moves to `.inbox/.dismissed/` (content preserved, reversible with
+  `restore`) and stops counting as pending.
+- **LEAVE PENDING** — not decided this round; stays in the inbox.
+
+For each proposed dismissal, show the candidate id, its reviewed content,
+reason for dismissal, and raw SHA256. Approval binds those exact bytes.
+
+**Apply nothing until the user has approved.** Approval covers the diffs and
+the dispositions together. If the user declines some or all items, drop
+exactly those from the batch — apply or dismiss only what was approved (or
+nothing, if everything was declined) in step 8. A candidate that isn't
+approved this round stays in the inbox untouched; mention it in the final
+report as "not promoted this round," not as an error. Never dismiss a
+candidate the user did not review and approve for dismissal.
 
 ## 8. Apply — one item at a time, only after approval
 
@@ -355,6 +374,29 @@ hash) changes after every successful apply. For each item:
      retry, never attempt to work around it (e.g. by unsetting
      `KNOWLEDGE_PANE_NAME` yourself).
 
+**Approved dismissals** — one candidate at a time, after the approved
+CREATE/UPDATE items:
+
+1. Re-read the candidate and compute its raw sha256 immediately before the
+   call: `shasum -a 256 "<STORE_PATH>/.inbox/<id>.md"`. It must match the hash
+   shown in the approved disposition; otherwise stop and re-present the
+   changed candidate. Use that approved hash as `--expect-candidate`.
+2. Invoke exactly one literal Bash segment:
+   ```
+   bash "<PLUGIN_ROOT>/scripts/memory-write.sh" dismiss \
+     --store <STORE_PATH> --candidate <capture-id> --expect-candidate <raw-sha256>
+   ```
+3. Exit codes mean the same as for `apply`. `4` covers a changed candidate
+   (re-read and re-present it) and the case where both a pending and a
+   dismissed copy of the same id exist — relay it and stop; never delete
+   either copy yourself. A re-run for an already-dismissed candidate with the
+   same bytes is a no-op success.
+
+If the user later wants a dismissed candidate back, the reverse is
+`memory-write.sh restore` with the same `--store --candidate
+--expect-candidate` arguments (hash of `.inbox/.dismissed/<id>.md`); it only
+runs on an explicit user request.
+
 If the batch is empty (nothing was approved), skip straight to step 9 having
 made zero writes.
 
@@ -371,8 +413,8 @@ bash "<PLUGIN_ROOT>/scripts/memory-backlinks.sh" --store <STORE_PATH> report
 Report the results to the user: confirm no new `ERROR`/drift/collision
 findings were introduced, restate any dangling links (pre-existing or newly
 flagged in step 6), and summarize what was created, what was updated, which
-inbox candidates were promoted (and which were left pending), and anything the
-user declined.
+inbox candidates were promoted, which were dismissed, which were left pending,
+and anything the user declined.
 
 ## Non-goals (always, every run)
 
@@ -383,6 +425,9 @@ user declined.
   citation inside the memory file's own body if the user wants that.
 - Never write to `docs/`, `docs/decisions/`, `AGENTS.md`, or `CLAUDE.md` — that
   is the docs surface's job (`$knowledge:docs-create`), not this skill's.
+- Never dismiss or restore a candidate without the user's explicit approval
+  of that disposition, and never delete a dismissed candidate — dismissal is
+  an archive, not a purge.
 - Never retire, purge, or bootstrap a store as a side effect of consolidation
   — those are separate, explicitly user-invoked actions (`$knowledge:promote`,
   `$knowledge:remember`'s purge workflow, `$knowledge:init`).

@@ -39,6 +39,10 @@ Otherwise keep the durable memory/doc focused on what remains true going
 forward. Obsolete material is handled by explicit lifecycle actions:
 `status: stale|superseded|archived`, `review_after`, `promote` source
 deletion, `retire`, `purge`, or `context-remove`; nothing is silently deleted.
+A reviewed inbox candidate the user judges obsolete can be **dismissed**
+during consolidation (approved disposition): it is archived under
+`.inbox/.dismissed/`, reversible with `restore`, and no longer counted as
+pending.
 
 ## Choose a command
 

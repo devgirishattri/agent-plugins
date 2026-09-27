@@ -1639,8 +1639,8 @@ def memory_backlinks(ctx: Context, script: str, args: List[str]) -> None:
 def memory_remember(ctx: Context, script: str, args: List[str]) -> None:
     remaining = take_knowledge_store(ctx, args)
     if remaining[:1] == ["--list"]:
-        if remaining[1:] not in ([], ["--expired-only"]):
-            raise PolicyFailure("helper.argv", "memory-remember.sh --list accepts only --expired-only")
+        if remaining[1:] not in ([], ["--expired-only"], ["--dismissed"], ["--expired-only", "--dismissed"], ["--dismissed", "--expired-only"]):
+            raise PolicyFailure("helper.argv", "memory-remember.sh --list accepts only --expired-only and --dismissed")
         return
     if len(remaining) == 2 and remaining[0] == "--staged":
         literal_file(ctx, remaining[1], "memory-remember.sh --staged file")
@@ -1649,7 +1649,7 @@ def memory_remember(ctx: Context, script: str, args: List[str]) -> None:
 
 
 SHA_RE = re.compile(r"\A[a-f0-9]{64}\Z")
-MEMORY_WRITE_SUBCOMMANDS = {"capture", "apply", "index", "retire", "purge", "bootstrap", "unlock"}
+MEMORY_WRITE_SUBCOMMANDS = {"capture", "apply", "index", "retire", "purge", "bootstrap", "unlock", "dismiss", "restore"}
 MEMORY_WRITE_PATH_FLAGS = {"--staged", "--staged-target", "--staged-index", "--confirm", "--manifest"}
 MEMORY_WRITE_SHA_FLAGS = {"--expect-target", "--expect-index", "--expect-candidate", "--idempotency-key"}
 MEMORY_WRITE_LABEL_FLAGS = {"--target", "--candidate", "--slug", "--ids"}

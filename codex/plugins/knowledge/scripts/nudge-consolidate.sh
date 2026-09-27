@@ -43,7 +43,7 @@ n="$(bash "$DIR/memory-remember.sh" --store "$store" --list 2>/dev/null | grep -
 case "$n" in ''|*[!0-9]*) exit 0 ;; esac
 [ "$n" -gt 0 ] || exit 0
 
-msg="knowledge: ${n} pending memory candidate(s) in the capture inbox — run /knowledge:consolidate (Claude) or \$knowledge:consolidate (Codex) to review and persist them. Nothing is written automatically."
+msg="knowledge: ${n} pending memory candidate(s) in the capture inbox — run /knowledge:consolidate (Claude) or \$knowledge:consolidate (Codex) to review them for promotion or dismissal. Nothing is written automatically."
 if [ "$STOP_JSON" -eq 1 ]; then
   msg=${msg//\\/\\\\}
   msg=${msg//\"/\\\"}

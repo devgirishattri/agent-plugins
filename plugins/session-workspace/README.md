@@ -360,7 +360,10 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   coordination may only target
   the orchestrator; direct `tmux send-keys`/`paste-buffer`/... and copied or
   relative session-chat helpers are refused as routing bypasses. Executors
-  additionally get `task-review` and `memory-remember`.
+  additionally get `task-review` and `memory-remember` (including the
+  read-only `--list --dismissed`, from 0.7.2); reviewers get neither.
+  `memory-write` — including the knowledge 0.3.30 `dismiss`/`restore` verbs —
+  stays orchestrator-only.
 - **Orchestrator** — may not edit or run mutating commands against any
   child checkout root (read-only commands and `git` reads against a child
   are fine), and never runs `git push` — including behind `env`, `command`,

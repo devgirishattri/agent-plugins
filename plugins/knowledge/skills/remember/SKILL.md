@@ -68,6 +68,33 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-remember.sh" [--store <path>] --list 
 ```
 Output is zero or more tab-separated rows, `<id>\t<created>\t<age-days>\t<expired|active>\t<sensitivity>`, in id order. No rows (exit `0`, empty output) means no pending candidates — report that plainly rather than treating it as an error. Exit `3`/`4` mean the same store-resolution/integrity conditions as above. Present the candidates as a readable table; never fabricate a row the script did not print.
 
+### Dismissed candidates
+
+`/knowledge:consolidate` can **dismiss** a reviewed candidate (obsolete,
+duplicate, or session residue) after the user approves that disposition: the
+file moves to `.inbox/.dismissed/<id>.md`, keeps its content, and no longer
+counts as pending, so the consolidation nudge stops reporting it. Recapturing
+identical content is a no-op; different content gets a new id and is pending
+again. List dismissed candidates read-only with:
+
+```
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-remember.sh" [--store <path>] --list --dismissed [--expired-only]
+```
+
+To undo, and only on explicit user request, run `memory-write.sh restore
+--store <resolved-store-path> --candidate <id> --expect-candidate <sha256 of
+.inbox/.dismissed/<id>.md>`. Dismissal never deletes; purge (below) is the
+only deletion path, and it does not touch the dismissed archive.
+
+**Rollback.** Before downgrading below knowledge 0.3.30, `restore` any
+dismissed candidate you still want pending. An older release leaves
+`.inbox/.dismissed/` intact but ignores it: its capture can re-queue identical
+content as pending, and its listings do not show the archive. If both a
+pending and a dismissed copy of the same id exist after upgrading again, the
+writer refuses `dismiss`/`restore` for that id (collision); keep both for
+inspection and resolve them explicitly — never delete either copy
+automatically.
+
 ### Purging candidates
 
 Only when the user explicitly asks to delete pending or expired candidates — this is destructive and separate from `/knowledge:consolidate`, which is the normal way candidates leave the inbox. This is a two-call PLAN/APPLY protocol on `memory-write.sh` directly (there is no purge planner script):
