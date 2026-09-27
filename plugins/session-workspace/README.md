@@ -303,11 +303,28 @@ engine-owned launch identity the policy cross-checks.
 Configuration selects *which* panes hold each role; it cannot add scripts,
 regexes, shell fragments, commands, or permission exceptions. The floor:
 
-- **Reviewer** — native edit/write/patch/notebook tools may stage non-hidden
-  `.md`/`.txt` files directly inside the validated `messages` grant (normally
-  `.tmp/messages`). Other files, nested queue/archive state, hardlinked
-  targets, and resolved paths outside that grant remain denied. The grant
-  comes from the workspace plan, never inherited environment overrides. Shell is
+- **Draft staging (reviewer, executor, environment-scoped coordinator)** —
+  from 0.7.1 the only message-store write is the pane's own drafts
+  directory, `<messages grant>/drafts/<pane-name>/<name>.md|.txt` (the grant
+  is normally `.tmp/messages` and comes from the workspace plan, never
+  inherited environment overrides). Native create/edit/delete only; shell
+  writes and `rm` stay denied, so Claude panes (no native delete tool)
+  leave delivered drafts in place. The target's parent must canonicalise to
+  exactly that directory; names not starting with an ASCII letter or digit (or using other than letters, digits, `.`, `_`, `-`; stem at most 128), symlinked directories, hardlinked or
+  non-regular targets, moves, other panes' drafts, the store top level,
+  delivered dispatch files, queue/archive/ledger state, and patches touching
+  any other path are denied. A pane whose role has no `messages` grant gets
+  no staging exception (fail closed); an executor keeps its ordinary checkout
+  write authority, which is not a substitute staging contract. The root
+  orchestrator's existing authority over store and transport files is
+  unchanged. Arbitrary executor shell commands (anything outside the single
+  literal read grammar) and confined-coordinator shell commands may not name
+  a granted messages store, even one nested inside their cwd; reviewer safe
+  reads of granted stores and an executor's single safe read of a store
+  inside its cwd are unchanged. Portable guidance: read dispatch files with
+  the native `Read` tool or a trusted helper.
+- **Reviewer** — native edit/write/patch/notebook tools are limited to draft
+  staging above. Shell is
   default-deny, with two carve-outs: (a) one literal read-only command
   (`cat head tail wc ls stat file diff grep rg find jq sort ...` and
   read-only `git` subcommands without write/output/external-exec options)
@@ -464,12 +481,25 @@ and disk-state rules. The grant is narrower than a reviewer's:
   `cat ../docs/guide.md` from `component-a`. Anything else falls back to
   the unchanged executor containment floor, so composed commands, writes,
   scripts and ungranted siblings are still refused.
-- The executor's readable base is its own checkout plus its grants; it does
-  not gain the reviewer's shell reads of coordination stores, message
-  inboxes, or plugin caches.
+- The executor's readable base is its own checkout, its grants, and (from
+  0.7.1) the selected installed `girishattri-plugins` version directories; it does not
+  gain the reviewer's shell reads of coordination stores or message inboxes.
 - Tool `cwd`/`workdir` must still stay inside the checkout; relative
   operands resolve against that effective workdir.
 - Edits (native or shell) remain confined to the checkout.
+
+**Selected plugin reads (0.7.1).** Without any `read_paths`, the same
+single literal read grammar may also name files inside the *selected*
+version directory of an installed `girishattri-plugins` plugin on either
+provider (skills, commands, references, scripts as data), so an executor
+can read the instructions it was told to use, for example
+`cat <claude-cache>/session-chat/<version>/commands/reply.md` (Claude) or
+`cat <codex-cache>/session-chat/<version>/skills/reply/SKILL.md` (Codex).
+Other versions, unselected plugins, other marketplaces, symlinks whose
+canonical target escapes the allowed read roots, composed commands, cache
+writes/edits, cache workdirs, and execution stay denied; helpers still run only through the reviewed helper
+grammar. Confined orchestrators are unchanged. No config migration;
+downgrading restores the earlier denial.
 
 **Migration / rollback.** Omitted and `[]` are identical to earlier
 releases, so existing configs need no change. Adding, changing, or removing
@@ -557,18 +587,28 @@ that information or a sound mitigation exists.
   on every gated tool call (a jq-only plan; the hook is registered on the
   gated tools only). There is deliberately no cache: a same-uid cache file
   could be planted by an executor.
-- Reviewer verdicts travel as single-line `send-message.sh` replies,
-  scheduler notes, or multiline files staged with a native edit tool in
-  the configured `messages` grant and dispatched with `--reply-to`. Shell
-  staging remains denied. Executors stage prompt files inside
-  their own checkout; a trusted helper may consume a pre-existing literal
-  `$TMPDIR` file as input, but containment refuses creating one there.
+- Child verdicts and replies travel as single-line `send-message.sh`
+  replies, scheduler notes, or multiline drafts staged in the pane's own
+  `drafts/<pane-name>/` directory (unique names with a nonce) and dispatched
+  with `--reply-to`. After durable success (`Dispatched …`/`Queued …`) delete
+  the draft with a native delete tool where one exists (Codex `apply_patch`);
+  Claude panes leave it in place, since it is inert after delivery. Keep it
+  after a hard failure and retry. A pane without a `messages` grant reports
+  the missing grant instead of shortening a long reply. Shell staging remains denied, and nothing sweeps
+  drafts automatically. A trusted helper may still consume a pre-existing
+  literal `$TMPDIR` file as input, but containment refuses creating one there.
 - Executors read dispatch files with the provider's `Read` tool (unknown
   tools are allowed); `cat ~/.claude/messages/...` from an executor shell is
   refused by the cwd containment floor. Executors stage dispatch prompt
-  files *inside their own checkout* — edit and shell containment refuse
+  files through draft staging above — edit and shell containment refuse
   creating files under `$TMPDIR`; a temp file that already exists (written
   by a helper or hook) is accepted as helper input only.
+
+**Draft staging migration (0.7.1).** No config change. Reviewers that
+staged at the store top level must move to `drafts/<pane-name>/`; the old
+top-level exception is removed because it also allowed editing or deleting
+other panes' pending dispatch files. Restart affected agents after
+updating. Downgrading restores the earlier, broader reviewer exception.
 - `harness-status`/`harness-doctor` probe `harness-policy.py` directly, so
   their `policy:`/`identity.live` verdict is the policy *engine's* decision
   for this process — it assumes the bundled hook is actually loaded and

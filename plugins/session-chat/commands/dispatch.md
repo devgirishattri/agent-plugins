@@ -16,13 +16,13 @@ Lead with the result; add text only for errors or the follow-ups below. Run the 
    "Usage: `/dispatch [--priority high] [--ttl <minutes>] <session-name> <task prompt>`"
 
 3. Stage the prompt to a file with the **Write tool**, then dispatch that file. Do NOT embed the task text in a shell heredoc or command — arbitrary content is unsafe as shell source (a body line equal to a heredoc delimiter would terminate it and run the following text as shell). The Write tool writes the body as data, never as shell:
-   1. Choose a fresh temp path (e.g. `$(mktemp)` obtained via a separate Bash call, or a file under your scratchpad dir).
+   1. Choose a fresh temp path (e.g. `$(mktemp)` obtained via a separate Bash call, or a file under your scratchpad dir). **Under an active strict-v1 harness as a child pane**, use only your own drafts directory, `<messages-grant>/drafts/<your-pane-name>/<name>-<nonce>.md`, following "Staging files under a strict-v1 harness" in the `session-chat` skill; with no `messages` grant there is no staging exception, so report the missing grant instead of substituting another location.
    2. Use the **Write tool** to write the **verbatim prompt body** to that path — never interpolate the body into a bash command.
    3. Dispatch it (the script reads the file with `cat`; nothing in it is shell-evaluated):
    ```
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-to-session.sh [--priority high] [--ttl <minutes>] "<target>" "<prompt-file-path>"
    ```
-   4. Optionally remove the temp file afterward with `rm -f "<prompt-file-path>"`.
+   4. Optionally remove the temp file afterward with `rm -f "<prompt-file-path>"`. Under strict-v1 leave the draft in place: Claude has no native delete tool, shell `rm` into the store is denied, and the draft is inert after delivery. After a hard failure keep it for the retry.
 
 4. Report the script's result **verbatim** — both success cases are fine, but they mean different things:
    - `Dispatched task to '<target>'` — the prompt landed live in the recipient's pane now.

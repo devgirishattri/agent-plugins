@@ -67,7 +67,21 @@ If a recipient pane sits at an idle prompt (no turn in progress, no prompt comin
 
 ## Reply correlation
 
+Skill and command names (`/reply`, `session-chat:reply`) are not shell executables: there is no `reply.sh` or `session-chat reply` command. To reply from a shell, run the installed helper `bash <plugin-root>/scripts/send-message.sh --reply-to <incoming-id> <pane> <message>` (or `dispatch-to-session.sh --reply-to` for a file), substituting the absolute plugin path literally. Under strict-v1, read installed instructions with separate literal read commands (`cat <absolute-path>`); chaining, pipes, and redirection do not qualify for cache read access.
+
 Every `/send` and `/dispatch` has a unique `id:HEX8`. To reply, use **`/reply <pane> <message-id> <message>`** — it prepends the `[re:<id>]` correlation token for you (exactly once) and auto-picks `/send` for a short reply or `/dispatch` for a long/multiline one, so the original sender's `/check-replies` matches it. Do **not** hand-type `[re:<id>]` tokens; pass the `id:<hex>` from the message you're answering and let `/reply` add it. (The raw transports also accept `--reply-to <id>` if you script them directly.) When you ask a peer a question and expect an answer, tell it to `/reply` with your message id; then poll `/check-replies --pending` instead of re-pinging panes that already answered.
+
+## Staging files under a strict-v1 harness
+
+When a session-workspace strict-v1 harness is active and you are a child pane (reviewer, executor, or an environment-scoped coordinator), stage long replies and dispatch prompt files **only** in your own drafts directory inside the granted messages store:
+
+1. Find the store and your name. `/session-workspace:workspace-plan` lists your pane with `grants: messages=<path>`; `/session-chat:whoami` prints your pane name.
+2. **No `messages` grant means no staging exception — fail closed.** Do not substitute another staging location: the store top level and `$TMPDIR` are denied, reviewers cannot write anywhere else, and an executor's ordinary checkout write authority is not the staging contract. Do not silently shorten a long reply to fit a single-line send: report that this pane has no `messages` grant, so a multiline dispatch is unavailable (a genuinely short reply may still go out with `send-message.sh --reply-to`).
+3. Create the file with the native write tool (Claude `Write`, Codex `apply_patch` Add File) at `<messages-path>/drafts/<your-pane-name>/<name>.md` (or `.txt`). Use a fresh, unique name whose first character is an ASCII letter or digit, followed only by ASCII letters, digits, `.`, `_`, or `-` (at most 128 characters before the extension) that includes a nonce, e.g. `reply-<incoming-id>-<date +%s output>.md`, so a retained or concurrent draft is never overwritten. You may create, edit, and delete only in your own drafts directory. Renames/moves, shell writes (redirection, `tee`, `cp`, `mktemp`), other panes' drafts, files at the store top level, and delivered messages or queue/archive/ledger state are denied.
+4. Dispatch it by absolute path: `bash <plugin-root>/scripts/dispatch-to-session.sh --reply-to <incoming-id> <pane> <messages-path>/drafts/<your-pane-name>/<name>.md` (omit `--reply-to` for a new task).
+5. **Durable success** (`Dispatched task to …` or `Queued dispatch …`): delete the draft with a native delete tool where one exists (Codex `apply_patch` Delete File). Claude has no native delete tool and shell `rm` into the store is denied, so a Claude pane leaves the draft in place; it is inert (the transport copies the content into a new delivered file and never reads `drafts/`). **Hard failure** (`ERROR:` and non-zero exit): keep the draft, fix the named cause, and retry with the same file.
+
+Nothing sweeps drafts automatically; cleanup of leftovers is an explicit user request. Read incoming dispatch files with the native `Read` tool or a trusted helper; arbitrary shell commands naming the store are blocked for executors and confined coordinators. The root orchestrator's existing authority over store files is unchanged.
 
 ## Priorities and TTL
 

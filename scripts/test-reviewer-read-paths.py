@@ -133,7 +133,7 @@ class ReadPaths:
         for cmd in ("touch ../docs/new.md", "echo text > ../docs/a.md", "git -C ../docs add a.md"):
             self.assert_decision("deny", cmd, env=env)
         self.assert_decision("deny", tool="Write", inputs={"file_path": str(self.root / "docs/a.md"), "content": "change"}, env=env)
-        self.assert_decision("allow", tool="Write", inputs={"file_path": str(self.root / ".tmp/messages/report.md"), "content": "report"}, env=env)
+        self.assert_decision("allow", tool="Write", inputs={"file_path": str(self.root / ".tmp/messages/drafts/reviewer/report.md"), "content": "report"}, env=env)
 
     def test_validation(self):
         self.pane["read_paths"] = ["docs", "AGENTS.md", str(self.external)]

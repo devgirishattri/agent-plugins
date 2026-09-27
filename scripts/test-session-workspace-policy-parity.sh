@@ -153,7 +153,7 @@ compare_case "reviewer quoted outside path containing spaces" reviewer "$REVIEW_
 compare_case "reviewer bare relative symlink escape" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'cat escape-link')" deny
 compare_case "reviewer bare spaced symlink escape" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'cat "escape link"')" deny
 mkdir -p "$PROJECT/.tmp/messages"
-compare_case "reviewer message draft allowed" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit "$PROJECT/.tmp/messages/review.md")" allow
+compare_case "reviewer message draft allowed" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit "$PROJECT/.tmp/messages/drafts/$REVIEW_PANE/review.md")" allow
 compare_case "reviewer queue draft denied" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit "$PROJECT/.tmp/messages/queue/review.md")" deny
 compare_case "reviewer context draft denied" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_edit "$PROJECT/.tmp/contexts/review.md")" deny
 ln -s "$OUTSIDE_SECRET" "$PROJECT/.tmp/messages/escape.md"

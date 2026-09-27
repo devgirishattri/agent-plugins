@@ -300,6 +300,16 @@ class Environments(unittest.TestCase):
         for target in ['web-master', 'vue3-master']:
             p.require_route_target(root, target)
 
+    def test_confined_orchestrator_plugin_reads_unchanged(self):
+        p, ctx, _ = self.context('web-master')
+        self.assertTrue(ctx.confined_orchestrator)
+        p.validate_bash(ctx, 'cat README.md', {})
+        # Executor selected-plugin reads do not expand local coordinator scope.
+        with patch.object(p, 'selected_plugin_readable', return_value=True):
+            with self.assertRaises(p.PolicyFailure) as caught:
+                p.validate_bash(ctx, 'cat /outside/selected-plugin/SKILL.md', {})
+            self.assertEqual(caught.exception.rule, 'executor.containment')
+
     def test_root_only_administration(self):
         operations = [('session-workspace', 'workspace-install.sh', []),
                       ('session-workspace', 'workspace-browser-config.sh', ['--browser', 'service-web']),

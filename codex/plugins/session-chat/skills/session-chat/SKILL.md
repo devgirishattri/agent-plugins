@@ -7,6 +7,14 @@ description: "Coordinate Codex sessions over tmux with guidance for choosing sen
 
 Use this skill when the user asks how session-chat works, which command to use, how to configure receiving panes, or how to troubleshoot delivery.
 
+The `$session-chat:*` names select skills; they are not shell executables or
+Codex internal agent-messaging tools. Read the selected skill and invoke its
+installed Bash helper. Replies use `send-message.sh --reply-to <incoming-id>`
+(or `dispatch-to-session.sh --reply-to` for a file), never a guessed `reply.sh`
+or `session-chat reply` command. Under strict-v1, read installed instructions
+with separate literal read commands, such as `cat <absolute-skill-path>`;
+shell chaining, pipes, and redirection do not qualify for cache read access.
+
 ## Choosing A Command
 
 | Use case | Command | Notes |
@@ -41,6 +49,30 @@ Dispatch notifications are submitted as:
 ```
 
 The trailing id keeps the verification marker visible in TUIs that show the end of long input lines. In `auto`, the hook validates ownership, permissions, symlinks, and canonical containment, then inlines a bounded task body. `assist` and `notify` never inline it.
+
+## Staging files under a strict-v1 harness
+
+Under an active strict-v1 harness, a reviewer, executor, or confined coordinator
+must stage in `<validated-messages-grant>/drafts/<validated-pane-name>/`.
+Resolve the grant and identity from the validated workspace plan or launch context;
+use `$session-workspace:workspace-plan` if needed. Never derive or export store
+variables to grant access. Choose a fresh name such as
+`reply-<incoming-id>-<nonce>.md`: the stem starts with an ASCII letter or digit,
+contains only ASCII letters, digits, `.`, `_`, or `-`, and is at most 128
+characters; the suffix is `.md` or `.txt`. Use native `apply_patch` to create,
+revise, or delete only your own draft. Shell staging and shell cleanup are blocked.
+Transport messages, other panes' drafts, queue/archive/ledger state, symlinks,
+hardlinks, moves, and patches mixing drafts with other files are forbidden.
+If the messages grant or native writer is unavailable, report the missing
+capability; do not truncate the reply or fall back to shell interpolation.
+Outside this harness, create a temporary directory with `mktemp -d` in a separate
+shell call and use a native tool to write the file there.
+
+Use file dispatch for multiline, long, or command-containing/quoting-sensitive
+messages. For replies, always pass the incoming id through `--reply-to`. The
+helper creates a separate durable transport copy. After delivered or durable
+queued success, delete only your own draft with a native tool; keep it after a
+hard failure. Cleanup is explicit, with no automatic draft retention sweep.
 
 ## Reliability Contract
 

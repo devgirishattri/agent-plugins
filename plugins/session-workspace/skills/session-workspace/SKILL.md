@@ -103,15 +103,29 @@ them:
   was not launched under an earlier `audit`/`enforce` mode (stale mode is
   drift and blocks until the configured session containing the pane is
   restarted via `/session-workspace:workspace-restart <session-id>`).
+- **Draft staging (reviewer, executor, environment-scoped coordinator)**:
+  from 0.7.1 the only store write is the pane's own drafts directory,
+  `<messages grant>/drafts/<pane-name>/<name>.md|.txt`, when the validated
+  plan grants this pane's role `messages` (the path comes from the plan,
+  never from inherited `SESSION_*` env). Native create/edit/delete only;
+  the parent must canonicalise to exactly that directory, so symlinked
+  directories and any path (including `../` forms) resolving outside it are
+  refused, as are names outside the safe-name rule, existing targets
+  that are not single-link regular files, moves, other panes' drafts, the
+  store top level, delivered dispatch files, `queue/`/`archive/`/ledger
+  state, and any patch that also touches another path. No grant means no
+  staging exception (fail closed); an executor's ordinary checkout writes are
+  not a substitute staging contract. The root orchestrator's authority over
+  store and transport files is unchanged. Arbitrary executor shell commands
+  (outside the single literal read grammar) and confined-coordinator shell
+  commands may not name a granted messages store, even one nested in their
+  cwd; reviewer safe reads and an executor's single safe read of a store in
+  its cwd are unchanged. Portable guidance: read dispatch files with `Read`
+  or a trusted helper. Earlier releases let reviewers write any
+  top-level `.md`/`.txt` in the store, which also reached other panes'
+  pending dispatch files; that is removed, and downgrading restores it.
 - **Reviewer**: Edit/Write/NotebookEdit/apply_patch are blocked everywhere
-  except one staging exception: non-hidden `.md`/`.txt` files placed
-  directly in a messages store the validated plan grants this pane
-  (`roles.reviewer.grants` includes `messages`; the path comes from the plan,
-  never from inherited `SESSION_*` env). Targets are canonicalised before the
-  check, so symlinks and `../` that leave the store are refused, as are
-  existing targets that are not single-link regular files, `queue/` and
-  `archive/` subpaths, and any patch that also touches a file outside the
-  store. Shell writes remain denied. Shell is default-deny except one literal
+  except draft staging above. Shell writes remain denied. Shell is default-deny except one literal
   read-only command inside its own checkout or explicit per-pane `read_paths`
   (no pipes, redirection, `sed`, or ungranted sibling reads) and trusted coordination helpers (reply to the
   orchestrator, `task-done`/`task-block`, context and read-only knowledge
@@ -150,11 +164,20 @@ them:
   back to ordinary executor containment, so it still runs when every operand
   is inside the checkout; that floor checks operands, not recursive traversal
   or inherited tool configuration (a known limit).
+  From 0.7.1, executors can also read files in the selected installed
+  `girishattri-plugins` plugin version with the same single-command read grammar, without `read_paths`
+  (skills, commands, references, and scripts as data). Use separate
+  `cat <absolute-path>` calls or `rg --no-config`; this grants no cache
+  writes, cache workdirs, execution, unselected-version reads, or store
+  access. Confined orchestrator shell behavior is unchanged. No config
+  migration is needed; update the plugin and restart affected agents.
+  Downgrading restores the earlier executor cache-read restriction.
   Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files
-  with the `Read` tool and stage prompt files inside the checkout (writes
-  under `$TMPDIR` are refused by containment).
+  with the `Read` tool and stage multiline prompt files only through draft
+  staging above (checkout, scratchpad, and `$TMPDIR` staging are not the
+  contract; `$TMPDIR` writes are refused by containment).
 - **Orchestrator**: cannot edit or run mutating commands against a child
   checkout; routes only to its configured executor/reviewer panes;
   `broadcast` is not available under strict-v1.

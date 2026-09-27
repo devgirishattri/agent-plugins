@@ -18,14 +18,14 @@ argument-hint: <pane-name> <message-id> <message>
    bash "$PLUGIN_ROOT/scripts/send-message.sh" --reply-to "<message-id>" "<pane-name>" "<message>"
    ```
 
-5. For a long, multi-line, or quoting-sensitive reply, create a temporary
-   directory separately, use `apply_patch` to write the verbatim reply into
-   `reply.md`, then run:
+5. For file dispatch, follow `$session-chat:reply`'s canonical staging
+   instructions: strict-v1 children use native `apply_patch` in their validated
+   `<messages-grant>/drafts/<pane-name>/` namespace, with a fresh safe `.md` or
+   `.txt` filename. Other sessions may use a separately created temporary
+   directory. Preserve the verbatim body as data; never interpolate it into shell
+   source. Dispatch using the installed `dispatch-to-session.sh` helper with `--reply-to`.
+   Delete your own draft with `apply_patch` only after delivered or durable queued
+   success; preserve it after hard failure. Shell staging/cleanup is blocked for
+   strict-v1 children. A missing grant or native writer is an actionable error.
 
-   ```bash
-   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" --reply-to "<message-id>" "<pane-name>" "<temp-directory>/reply.md"
-   ```
-
-   Delete the file with `apply_patch`, then remove the empty directory. Never
-   interpolate reply text into a shell heredoc or command string.
 6. Relay the transport result or shortest actionable error.

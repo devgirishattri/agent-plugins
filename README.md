@@ -12,10 +12,10 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.7.10 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.11 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-chat` | 0.17.12 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.29 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.7.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.7.1 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -322,13 +322,28 @@ mkdir -p "$STORES_BASE"/{messages,scheduler,contexts}
 chmod 700 "$STORES_BASE"/{messages,scheduler,contexts}
 ```
 
-Under strict-v1, reviewers may use native edit tools to stage non-hidden
-`.md`/`.txt` reply files directly in their configured `messages` grant
-(normally `.tmp/messages`), then dispatch them to the orchestrator with
-`--reply-to` correlation. Other reviewer file writes remain blocked, including
-nested queue/archive state and hardlinked files. The exception uses validated
-configuration, not an inherited environment override; it does not permit shell
-redirection or grant access when the role lacks the `messages` grant.
+Under strict-v1 (workspace 0.7.1), reviewers, executors, and confined coordinators
+with a validated `messages` grant may use native edit tools to create, revise,
+and delete their own `.md`/`.txt` drafts at
+`<messages-grant>/drafts/<pane-name>/<safe-name>.md`. Use a fresh filename whose
+stem starts with an ASCII letter/digit, contains only ASCII letters/digits,
+`.`, `_`, or `-`, and is at most 128 characters. Resolve the grant and identity
+from the validated workspace plan; inherited variables cannot grant access.
+Use the installed dispatch helper with `--reply-to` for replies. It creates a
+separate transport copy. After delivered or durable queued success, delete only
+your draft using a native delete tool where available (Codex `apply_patch`).
+Claude has no native delete tool and retains its inert draft. Retain drafts after
+a hard failure. Cleanup is explicit, never automatic.
+Shell staging/cleanup, transport-message edits, peer drafts, queue/archive/ledger
+state, symlinks, hardlinks, moves, and mixed draft/product patches remain blocked.
+No grant means no staging exception. Existing reviewer top-level drafts must be
+restaged in the new namespace; never move transport files. Update session-chat
+and session-workspace, then restart affected agents; no config/schema change is
+required. Downgrading restores the executor staging failure and reviewer
+transport-edit flaw. The root coordinator retains authority to edit the entire store, including
+transport messages. Confined coordinators must use native reads or trusted
+helpers to read the message store; arbitrary shell access is blocked even when
+the store is nested inside their checkout.
 
 One asymmetry to know about: `stores.pin` exports the three coordination
 variables, but `stores.memory.root` exports nothing. If panes should write to
@@ -549,6 +564,14 @@ shell reads through per-pane `read_paths`, for example `["docs", "AGENTS.md"]`.
 Executor grants permit only single literal read commands under the reviewer
 read-command restrictions; executor workdirs and writes stay inside their own
 checkout. For example, use `cat ../docs/guide.md` from the child checkout.
+From session-workspace 0.7.1, executors also get restricted single-command reads
+of selected installed `girishattri-plugins` versions without `read_paths`. This covers skills,
+commands, references, and scripts as data, using separate `cat <absolute-path>`
+calls, for example. It adds no cache writes, cache workdirs, execution privileges,
+or store/inbox access; stale versions and unselected plugins remain outside scope.
+Confined orchestrator behavior is unchanged. No configuration or store migration
+is needed. Update the installed plugin and restart affected agents; downgrading
+restores the earlier executor cache-read restriction.
 Restricted ripgrep reads must start with `rg --no-config`, for example
 `rg --no-config pattern ../docs`, so inherited configuration cannot enable
 symlink traversal or preprocessors. Explicit follow/preprocessor options,

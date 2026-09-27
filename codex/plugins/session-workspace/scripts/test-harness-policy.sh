@@ -452,39 +452,41 @@ as_review "reviewer git -C .. status is denied" "$(bash_payload 'git -C .. statu
 as_review "reviewer cat absolute path containing spaces outside its roots is denied" "$(bash_payload "cat \"$TMPROOT/some dir/file.ts\"")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer cat path containing spaces inside its checkout is allowed" "$(bash_payload "cat \"$CHILD/sub dir/file.ts\"")" '.decision == "allow"'
 as_review "reviewer cd is not a read-only command" "$(bash_payload 'cd .. && ls')" '.decision == "deny" and .rule == "reviewer.shell"'
-# Reviewer message staging is a narrow native-edit exception, not store access.
+# Reviewer staging uses its own drafts namespace, never delivered messages.
 write_payload() { jq -cn --arg p "$1" '{tool_name:"Write",tool_input:{file_path:$p,content:"PLAN-REVIEW: approve\nEvidence follows."}}'; }
-as_review "reviewer can stage a multiline message" "$(write_payload "$ROOT/.tmp/messages/review.md")" '.decision == "allow"'
-as_review "reviewer can revise staged text" "$(edit_payload "$ROOT/.tmp/messages/review.txt")" '.decision == "allow"'
-as_review "reviewer relative staging path" "$(write_payload "../.tmp/messages/review.md")" '.decision == "allow"'
-as_review "reviewer can dispatch staged message" "$(bash_payload "bash $DISPATCH --reply-to abcdef12 $MASTER_PANE $ROOT/.tmp/messages/note.md")" '.decision == "allow"'
+as_review "reviewer can stage a multiline message" "$(write_payload "$ROOT/.tmp/messages/drafts/$REVIEW_PANE/review.md")" '.decision == "allow"'
+as_review "reviewer can revise staged text" "$(edit_payload "$ROOT/.tmp/messages/drafts/$REVIEW_PANE/review.txt")" '.decision == "allow"'
+as_review "reviewer relative staging path" "$(write_payload "../.tmp/messages/drafts/$REVIEW_PANE/review.md")" '.decision == "allow"'
+mkdir -p "$ROOT/.tmp/messages/drafts/$REVIEW_PANE"
+printf 'draft\n' > "$ROOT/.tmp/messages/drafts/$REVIEW_PANE/review.md"
+as_review "reviewer can dispatch staged message" "$(bash_payload "bash $DISPATCH --reply-to abcdef12 $MASTER_PANE $ROOT/.tmp/messages/drafts/$REVIEW_PANE/review.md")" '.decision == "allow"'
 for forbidden in "$CHILD/review.md" "$ROOT/.tmp/contexts/review.md" "$ROOT/.tmp/scheduler/review.md" "$ROOT/.agents/memory/review.md" "$FAKE_CLAUDE/messages/review.md" "$ROOT/.tmp/messages/queue/review.md" "$ROOT/.tmp/messages/archive/review.md" "$ROOT/.tmp/messages/.hidden.md" "$ROOT/.tmp/messages/script.sh" "$ROOT/.tmp/messages/../source.md"; do
-  as_review "reviewer staging rejects $forbidden" "$(write_payload "$forbidden")" '.decision == "deny" and .rule == "reviewer.readonly"'
+  as_review "reviewer staging rejects $forbidden" "$(write_payload "$forbidden")" '.decision == "deny" and (.rule == "reviewer.readonly" or .rule == "coordination.draft")'
 done
 ln -s "$CHILD/README.md" "$ROOT/.tmp/messages/escape.md"
 ln "$CHILD/README.md" "$ROOT/.tmp/messages/hardlink.md"
-as_review "reviewer staging rejects symlink escape" "$(write_payload "$ROOT/.tmp/messages/escape.md")" '.decision == "deny" and .rule == "reviewer.readonly"'
-as_review "reviewer staging rejects hardlink escape" "$(write_payload "$ROOT/.tmp/messages/hardlink.md")" '.decision == "deny" and .rule == "reviewer.readonly"'
+as_review "reviewer staging rejects symlink escape" "$(write_payload "$ROOT/.tmp/messages/escape.md")" '.decision == "deny" and (.rule == "reviewer.readonly" or .rule == "coordination.draft")'
+as_review "reviewer staging rejects hardlink escape" "$(write_payload "$ROOT/.tmp/messages/hardlink.md")" '.decision == "deny" and (.rule == "reviewer.readonly" or .rule == "coordination.draft")'
 as_review "reviewer patch can stage a message" "$(jq -cn --arg patch "*** Begin Patch
-*** Add File: $ROOT/.tmp/messages/patch.md
+*** Add File: $ROOT/.tmp/messages/drafts/$REVIEW_PANE/patch.md
 +review
 *** End Patch" '{tool_name:"apply_patch",tool_input:{input:$patch}}')" '.decision == "allow"'
 as_review "reviewer mixed patch cannot edit source" "$(jq -cn --arg patch "*** Begin Patch
-*** Add File: $ROOT/.tmp/messages/patch.md
+*** Add File: $ROOT/.tmp/messages/drafts/$REVIEW_PANE/patch.md
 +review
 *** Update File: $CHILD/README.md
 @@
 -hello
 +changed
-*** End Patch" '{tool_name:"apply_patch",tool_input:{input:$patch}}')" '.decision == "deny" and .rule == "reviewer.readonly"'
+*** End Patch" '{tool_name:"apply_patch",tool_input:{input:$patch}}')" '.decision == "deny" and (.rule == "reviewer.readonly" or .rule == "coordination.draft")'
 NO_MESSAGES_CONFIG="$ROOT/.agent-workspace/no-messages.json"
 jq '.roles.reviewer.grants = ["scheduler", "contexts"]' "$CONFIG" > "$NO_MESSAGES_CONFIG"
-expect "reviewer staging needs an explicit messages grant" reviewer "$REVIEW_PANE" "$CHILD" "$NO_MESSAGES_CONFIG" enforce "$(write_payload "$ROOT/.tmp/messages/review.md")" '.decision == "deny" and .rule == "reviewer.readonly"' SESSION_CHAT_TARGET_MESSAGES_DIR="$ROOT/.tmp/messages"
+expect "reviewer staging needs an explicit messages grant" reviewer "$REVIEW_PANE" "$CHILD" "$NO_MESSAGES_CONFIG" enforce "$(write_payload "$ROOT/.tmp/messages/drafts/$REVIEW_PANE/review.md")" '.decision == "deny" and (.rule == "reviewer.readonly" or .rule == "coordination.draft")' SESSION_CHAT_TARGET_MESSAGES_DIR="$ROOT/.tmp/messages"
 OVERRIDE_CONFIG="$ROOT/.agent-workspace/messages-override.json"
 jq '.stores.overrides.messages = ".tmp/replies"' "$CONFIG" > "$OVERRIDE_CONFIG"
 mkdir -p "$ROOT/.tmp/replies"
-expect "reviewer configured message override allowed" reviewer "$REVIEW_PANE" "$CHILD" "$OVERRIDE_CONFIG" enforce "$(write_payload "$ROOT/.tmp/replies/review.md")" '.decision == "allow"'
-expect "reviewer old default excluded after override" reviewer "$REVIEW_PANE" "$CHILD" "$OVERRIDE_CONFIG" enforce "$(write_payload "$ROOT/.tmp/messages/review.md")" '.decision == "deny" and .rule == "reviewer.readonly"'
+expect "reviewer configured message override allowed" reviewer "$REVIEW_PANE" "$CHILD" "$OVERRIDE_CONFIG" enforce "$(write_payload "$ROOT/.tmp/replies/drafts/$REVIEW_PANE/review.md")" '.decision == "allow"'
+expect "reviewer old default excluded after override" reviewer "$REVIEW_PANE" "$CHILD" "$OVERRIDE_CONFIG" enforce "$(write_payload "$ROOT/.tmp/messages/drafts/$REVIEW_PANE/review.md")" '.decision == "deny" and (.rule == "reviewer.readonly" or .rule == "coordination.draft")'
 as_review "reviewer reading a GRANTED coordination store is allowed" "$(bash_payload "cat $ROOT/.tmp/messages/note.md")" '.decision == "allow"'
 as_review "reviewer reading an UNGRANTED store (memory) is denied" "$(bash_payload "cat $ROOT/.agents/memory/MEMORY.md")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer reading a stale (unselected) cache version is denied" "$(bash_payload "cat $STALE_SEND")" '.decision == "deny" and .rule == "reviewer.path"'
@@ -556,6 +558,66 @@ as_review "reviewer quoted glob pattern in grep is allowed" "$(bash_payload "gre
 as_master "orchestrator redirect write into a child is denied" "$(bash_payload 'echo x > component-a/generated.ts')" '.decision == "deny" and .rule == "orchestrator.child_write"'
 as_master "orchestrator redirect write at its root is allowed" "$(bash_payload 'echo x > notes.txt')" '.decision == "allow"'
 as_master "orchestrator input redirect from a child is a read and allowed" "$(bash_payload 'wc -l < component-a/README.md')" '.decision == "allow"'
+
+echo "== executor selected plugin reads without read_paths =="
+as_exec "executor native patch inside checkout control" "$(jq -cn --arg path "$CHILD/README.md" '{tool_name:"apply_patch",tool_input:{patch:("*** Begin Patch\n*** Update File: " + $path + "\n@@\n-hello\n+updated\n*** End Patch")}}')" '.decision == "allow"'
+for SELECTED in "$CLAUDE_CACHE/session-chat/1.2.3" "$CODEX_CACHE/session-chat/2.0.0"; do
+  mkdir -p "$SELECTED/skills/reply/references" "$SELECTED/commands"
+  printf 'Reply instructions\n' > "$SELECTED/skills/reply/SKILL.md"
+  printf 'Reply reference\n' > "$SELECTED/skills/reply/references/guide.md"
+  printf 'Reply command\n' > "$SELECTED/commands/reply.md"
+  ln -s "$ROOT/AGENTS.md" "$SELECTED/skills/reply/escape.md"
+  SKILL_FILE="$SELECTED/skills/reply/SKILL.md"
+  REF_DIR="$SELECTED/skills/reply/references"
+  as_exec "executor selected skill read: $SELECTED" "$(bash_payload "cat $SKILL_FILE")" '.decision == "allow"'
+  as_exec "executor Codex argv selected skill read: $SELECTED" "$(jq -cn --arg path "$SKILL_FILE" --arg cwd "$CHILD" '{tool_name:"shell",tool_input:{command:["cat",$path],workdir:$cwd}}')" '.decision == "allow"'
+  as_exec "executor selected command read: $SELECTED" "$(bash_payload "cat $SELECTED/commands/reply.md")" '.decision == "allow"'
+  as_exec "executor selected reference head: $SELECTED" "$(bash_payload "head -n 1 $REF_DIR/guide.md")" '.decision == "allow"'
+  as_exec "executor selected reference grep: $SELECTED" "$(bash_payload "grep Reply $REF_DIR/guide.md")" '.decision == "allow"'
+  as_exec "executor selected reference rg: $SELECTED" "$(bash_payload "rg --no-config Reply $REF_DIR")" '.decision == "allow"'
+  as_exec "executor selected reference listing: $SELECTED" "$(bash_payload "ls $REF_DIR")" '.decision == "allow"'
+  as_exec "executor selected cache symlink escape: $SELECTED" "$(bash_payload "cat $SELECTED/skills/reply/escape.md")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache redirection denied: $SELECTED" "$(bash_payload "cat $SKILL_FILE > result.md")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache pipeline denied: $SELECTED" "$(bash_payload "cat $SKILL_FILE | tee result.md")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor composed cache read denied: $SELECTED" "$(bash_payload "cat $SKILL_FILE && rm local.md")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache chdir denied: $SELECTED" "$(bash_payload "cd $SELECTED && cat skills/reply/SKILL.md")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache copy denied: $SELECTED" "$(bash_payload "cp $SKILL_FILE local.md")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache rg config denied: $SELECTED" "$(bash_payload "rg Reply $REF_DIR")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache grep follow denied: $SELECTED" "$(bash_payload "grep -R Reply $REF_DIR")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache rg follow denied: $SELECTED" "$(bash_payload "rg --no-config -L Reply $REF_DIR")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache find execution denied: $SELECTED" "$(bash_payload "find $REF_DIR -exec cat '{}' +")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache tail follow denied: $SELECTED" "$(bash_payload "tail -f $SKILL_FILE")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache preprocessor denied: $SELECTED" "$(bash_payload "rg --no-config --pre cat Reply $REF_DIR")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache directory diff denied: $SELECTED" "$(bash_payload "diff $REF_DIR $REF_DIR")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache touch denied: $SELECTED" "$(bash_payload "touch $SKILL_FILE")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache rm denied: $SELECTED" "$(bash_payload "rm $SKILL_FILE")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache native edit denied: $SELECTED" "$(edit_payload "$SKILL_FILE")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache native patch denied: $SELECTED" "$(jq -cn --arg path "$SKILL_FILE" '{tool_name:"apply_patch",tool_input:{patch:("*** Begin Patch\n*** Update File: " + $path + "\n@@\n-Reply instructions\n+Updated reply instructions\n*** End Patch")}}')" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache skill execution denied: $SELECTED" "$(bash_payload "bash $SKILL_FILE")" '.decision == "deny" and (.rule | startswith("helper."))'
+  as_exec "executor cache skill source denied: $SELECTED" "$(bash_payload "source $SKILL_FILE")" '.decision == "deny" and (.rule | startswith("helper."))'
+  as_exec "executor cache parent listing denied: $SELECTED" "$(bash_payload "ls $SELECTED/..")" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor cache workdir denied: $SELECTED" "$(jq -cn --arg dir "$SELECTED" '{tool_name:"Bash",tool_input:{command:"cat skills/reply/SKILL.md",workdir:$dir}}')" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor conflicting cwd/workdir cannot grant cache reads: $SELECTED" "$(jq -cn --arg dir "$CHILD" --arg command "cat $SKILL_FILE" '{tool_name:"Bash",tool_input:{command:$command,cwd:$dir,workdir:($dir+"/src")}}')" '.decision == "deny" and .rule == "executor.containment"'
+  as_exec "executor matching cwd/workdir cache read control: $SELECTED" "$(jq -cn --arg dir "$CHILD" --arg command "cat $SKILL_FILE" '{tool_name:"Bash",tool_input:{command:$command,cwd:$dir,workdir:$dir}}')" '.decision == "allow"'
+done
+as_exec "executor selected-version symlink read control" "$(bash_payload "cat $CLAUDE_CACHE/session-chat/link/skills/reply/SKILL.md")" '.decision == "allow"'
+as_exec "executor stale Claude cache read denied" "$(bash_payload "cat $STALE_SEND")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor stale Codex cache read denied" "$(bash_payload "cat $CODEX_STALE_SEND")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor unselected plugin read denied" "$(bash_payload "cat $CLAUDE_CACHE/unlisted-plugin/1.0.0/scripts/mystery.sh")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor foreign marketplace read denied" "$(bash_payload "cat $FAKE_CODEX/plugins/cache/other/session-chat/2.0.0/skills/reply/SKILL.md")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor provider inbox read remains denied" "$(bash_payload "cat $FAKE_CLAUDE/messages/task.md")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor scheduler store read remains denied" "$(bash_payload "cat $ROOT/.tmp/scheduler/tasks/task.json")" '.decision == "deny" and .rule == "executor.containment"'
+expect "executor tilde selected cache read control" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce \
+  "$(bash_payload 'cat ~/plugins/cache/girishattri-plugins/session-chat/1.2.3/skills/reply/SKILL.md')" '.decision == "allow"' HOME="$FAKE_CLAUDE"
+expect "executor selected cache read in audit mode" executor "$EXEC_PANE" "$CHILD" "$AUDIT_CONFIG" audit \
+  "$(bash_payload "cat $SKILL_FILE")" '.decision == "allow"'
+PLUGIN_READ_CONFIG="$ROOT/.agent-workspace/plugin-read-paths.json"
+jq '.sessions[0].panes[1].read_paths = ["AGENTS.md"]' "$CONFIG" > "$PLUGIN_READ_CONFIG"
+PLUGIN_READ_IDENTITY="$(jq -cnS --arg path "$ROOT/AGENTS.md" '[{path:$path,kind:"file"}]')"
+expect "executor selected cache read with explicit read_paths" executor "$EXEC_PANE" "$CHILD" "$PLUGIN_READ_CONFIG" enforce \
+  "$(bash_payload "cat $SKILL_FILE")" '.decision == "allow"' SESSION_WORKSPACE_READ_PATHS_JSON="$PLUGIN_READ_IDENTITY"
+expect "executor explicit grant read control" executor "$EXEC_PANE" "$CHILD" "$PLUGIN_READ_CONFIG" enforce \
+  "$(bash_payload "cat $ROOT/AGENTS.md")" '.decision == "allow"' SESSION_WORKSPACE_READ_PATHS_JSON="$PLUGIN_READ_IDENTITY"
 
 echo "== trusted helpers: exact selected provenance (Claude cache) =="
 as_exec "executor selected helper send to orchestrator is allowed" "$(bash_payload "bash $SEND $MASTER_PANE 'done: abc123'")" '.decision == "allow"'

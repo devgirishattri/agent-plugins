@@ -23,23 +23,35 @@ correlation cannot be omitted.
 
 Stage the prompt as data, never as shell source:
 
-1. Run `mktemp -d "${TMPDIR:-/tmp}/session-chat-dispatch.XXXXXX"` in a
-   separate shell call and capture the returned directory. This command contains
-   no task text.
-2. Use the `apply_patch` tool to add `<returned-directory>/prompt.md` with the
-   verbatim prompt body. Never embed prompt text in a shell heredoc, `echo`,
-   `printf`, command substitution, or an interpreter `-c` string: a delimiter
-   line or shell metacharacters must remain inert task content.
-3. Run:
+Under an active strict-v1 harness, a reviewer, executor, or confined coordinator
+must stage in `<validated-messages-grant>/drafts/<validated-pane-name>/`.
+Resolve the grant and identity from the validated workspace plan or launch context;
+use `$session-workspace:workspace-plan` if needed. Never derive or export store
+variables to grant access. Choose a fresh name such as
+`reply-<incoming-id>-<nonce>.md`: the stem starts with an ASCII letter or digit,
+contains only ASCII letters, digits, `.`, `_`, or `-`, and is at most 128
+characters; the suffix is `.md` or `.txt`. Use native `apply_patch` to create,
+revise, or delete only your own draft. Shell staging and shell cleanup are blocked.
+Transport messages, other panes' drafts, queue/archive/ledger state, symlinks,
+hardlinks, moves, and patches mixing drafts with other files are forbidden.
+If the messages grant or native writer is unavailable, report the missing
+capability; do not truncate the reply or fall back to shell interpolation.
+Outside this harness, create a temporary directory with `mktemp -d` in a separate
+shell call and use a native tool to write the file there.
+
+1. Use `apply_patch` to add `<draft-path>` with the verbatim prompt body.
+   Never embed prompt text in a shell heredoc, `echo`, `printf`, command
+   substitution, or an interpreter `-c` string.
+2. Run:
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target>" "<returned-directory>/prompt.md"
+   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target>" "<draft-path>"
    ```
 
-4. Use `apply_patch` to delete the temporary prompt file, then remove its empty
-   temporary directory. If no data-safe file-writing tool is available, stop
-   and ask the user for an existing prompt-file path; never fall back to shell
-   interpolation.
+3. After `Dispatched ...` or durable `Queued ...` success, delete your own draft
+   with `apply_patch`; outside the harness, also remove the empty temporary
+   directory. Keep the draft after a hard failure for retry after fixing its
+   cause. Never resend a queued success.
 
 If tmux is not active, explain that dispatch requires running Codex inside tmux.
 If the target is not found, suggest `$session-chat:panes`. If this pane has no name, suggest `$session-chat:whoami <name>`.

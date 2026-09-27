@@ -214,6 +214,7 @@ SAFE_VERSION_RE = re.compile(r"\A[0-9][A-Za-z0-9._+-]*\Z")
 ISO_UTC_RE = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
 PATCH_MOVE_RE = re.compile(r"^\*\*\* Move to: (.+)$", re.M)
+DRAFT_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.(?:md|txt)\Z")
 
 
 @dataclass(frozen=True)
@@ -960,12 +961,9 @@ def allowed_read_roots(ctx: Context) -> Tuple[Path, ...]:
     return tuple(roots)
 
 
-def readable(ctx: Context, path: Path) -> bool:
-    """True when PATH lies inside an allowed read root, or inside the SELECTED
-    version directory of an installed plugin (never another version, never a
-    plugin that is not selected for this provider/workspace)."""
-    if any(within(path, root) for root in allowed_read_roots(ctx)):
-        return True
+def selected_plugin_readable(ctx: Context, path: Path) -> bool:
+    """Read selected installed content without granting stores or execution.
+    PATH is canonicalized by the operand parser before reaching this check."""
     for provider, root in (("claude", cache_roots(ctx)[0]), ("codex", cache_roots(ctx)[1])):
         try:
             parts = path.relative_to(root).parts
@@ -979,13 +977,18 @@ def readable(ctx: Context, path: Path) -> bool:
     return False
 
 
+def readable(ctx: Context, path: Path) -> bool:
+    """True for allowed read roots or the selected installed plugin version."""
+    return any(within(path, root) for root in allowed_read_roots(ctx)) or selected_plugin_readable(ctx, path)
+
+
 def tmp_readable(ctx: Context, path: Path) -> bool:
     return readable(ctx, path) or any(within(path, root) for root in tmp_roots())
 
 
 def reviewer_readable(ctx: Context, path: Path) -> bool:
     """Extra grants apply to scoped shell reads, never helper stores."""
-    base_readable = within(path, ctx.pane_cwd) if ctx.semantic_role == "executor" else readable(ctx, path)
+    base_readable = (within(path, ctx.pane_cwd) or selected_plugin_readable(ctx, path)) if ctx.semantic_role == "executor" else readable(ctx, path)
     return base_readable or (ctx.semantic_role in {"reviewer", "executor"} and any(
         (kind == "file" and path == root) or (kind == "directory" and within(path, root))
         for root, kind in ctx.read_paths))
@@ -2169,7 +2172,7 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
             raise PolicyFailure("shell.sandbox_escape", "child roles cannot request a sandbox/approval escape")
     validate_tool_workdir(ctx, tool_input)
     reviewer_base = ctx.pane_cwd
-    if ctx.semantic_role == "reviewer" or (ctx.semantic_role == "executor" and ctx.read_paths):
+    if ctx.semantic_role in {"reviewer", "executor"}:
         bases = set()
         for key in ("cwd", "workdir"):
             value = tool_input.get(key)
@@ -2224,8 +2227,9 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
     if ctx.semantic_role == "reviewer":
         validate_reviewer_read(tokens, command, ctx, reviewer_base)
         return
-    if ctx.semantic_role == "executor" and ctx.read_paths and reviewer_base is not None:
-        # Grants authorize only the existing single-command read grammar.
+    if ctx.semantic_role == "executor" and reviewer_base is not None:
+        # Selected plugin content and grants authorize only the existing
+        # single-command read grammar, even when read_paths is empty.
         # Never widen arbitrary executor operands or native edit authority.
         try:
             validate_reviewer_read(tokens, command, ctx, reviewer_base)
@@ -2255,7 +2259,8 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
                 raise PolicyFailure("executor.containment", "xargs feeds unresolvable operands to a command; outside strict-v1 containment")
             if not within(after, ctx.pane_cwd):
                 raise PolicyFailure("executor.containment", "cd target escapes the configured child cwd")
-            ensure_paths_within(segment, cwd, lambda p: within(p, ctx.pane_cwd), "executor.containment")
+            ensure_paths_within(segment, cwd, lambda p: within(p, ctx.pane_cwd) and not any(
+                within(p, root) for root in ctx.message_roots), "executor.containment")
         return
 
     # Orchestrator: shell is free apart from two floor rules. (1) It never
@@ -2287,6 +2292,33 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
             raise PolicyFailure("orchestrator.child_write", "orchestrator cannot run a mutating/unknown command against a child repository")
 
 
+def own_message_draft(ctx: Context, raw: Path, path: Path) -> bool:
+    """Native edits may address only this pane's drafts, never transport state.
+    Grants and identity come from the validated plan, not inherited store paths.
+    Checks are not an atomic sandbox against concurrent same-uid filesystem swaps.
+    """
+    if not DRAFT_NAME_RE.fullmatch(path.name):
+        return False
+    for root in ctx.message_roots:
+        drafts = root / "drafts"
+        parent = drafts / ctx.pane_name
+        if path.parent != parent:
+            continue
+        try:
+            if any(p.is_symlink() for p in (drafts, parent, raw)):
+                return False
+            if any(p.exists() and not p.is_dir() for p in (drafts, parent)):
+                return False
+            if path.exists():
+                info = path.stat()
+                if not path.is_file() or info.st_nlink != 1 or info.st_uid != os.getuid():
+                    return False
+        except OSError:
+            return False
+        return True
+    return False
+
+
 def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
     targets = edit_targets(tool_input)
     if not targets:
@@ -2301,25 +2333,28 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
         value = payload.get("cwd")
         if isinstance(value, str) and value.strip():
             base = canonical(Path(value.strip()))
+    resolved = []
     for value in sorted(targets):
         raw = Path(value).expanduser()
-        path = canonical(raw if raw.is_absolute() else base / raw)
+        raw = raw if raw.is_absolute() else base / raw
+        resolved.append((value, raw, canonical(raw)))
+    if ctx.semantic_role in {"reviewer", "executor"} or ctx.confined_orchestrator:
+        # Check the lexical path as well: a symlink under the messages grant
+        # must not fall through to ordinary checkout edit authority.
+        touches_messages = any(
+            within(path, root) or within(Path(os.path.abspath(raw)), root)
+            for _, raw, path in resolved for root in ctx.message_roots
+        )
+        if touches_messages:
+            moves = any(isinstance(child, str) and PATCH_MOVE_RE.search(child)
+                        for _, child in walk(tool_input))
+            moves = moves or any(key in {"old_path", "new_path"} for key, _ in walk(tool_input))
+            if moves or not all(own_message_draft(ctx, raw, path) for _, raw, path in resolved):
+                raise PolicyFailure("coordination.draft", "message edits require only this pane's draft files; transport state, peer drafts, moves, and mixed edits are forbidden")
+            return
+    for value, raw, path in resolved:
         if ctx.semantic_role == "reviewer":
-            # Only top-level message drafts, never transport queue/archive state.
-            # Grants come from the validated plan, not inherited store variables.
-            allowed = (
-                path.parent in ctx.message_roots
-                and not path.name.startswith(".")
-                and path.suffix in {".md", ".txt"}
-            )
-            try:
-                if path.exists() and (not path.is_file() or path.stat().st_nlink != 1):
-                    allowed = False
-            except OSError:
-                allowed = False
-            if not allowed:
-                raise PolicyFailure("reviewer.readonly", "reviewer panes cannot edit, write, patch, move, or delete files")
-            continue
+            raise PolicyFailure("reviewer.readonly", "reviewer panes cannot edit, write, patch, move, or delete files")
         protected = ctx.guards.get("protected_files")
         if ctx.semantic_role == "orchestrator" and within(path, ctx.project_root) and isinstance(protected, dict):
             basename = path.name

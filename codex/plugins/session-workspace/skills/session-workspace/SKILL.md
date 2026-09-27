@@ -109,18 +109,30 @@ them:
   was not launched under an earlier `audit`/`enforce` mode (stale mode is
   drift and blocks until the configured session containing the pane is
   restarted via `$session-workspace:workspace-restart <session-id>`).
-- **Reviewer**: native edit tools may stage or revise non-hidden `.md`/`.txt`
-  files directly inside the validated `messages` grant (normally
-  `<project>/.tmp/messages`). Other files, nested transport state, and
-  hardlinked files remain blocked; resolved targets must stay in that grant.
-  No grant means no staging exception; inherited store variables cannot grant
-  access. Shell remains default-deny except one literal read-only command
-  inside its own checkout or explicit per-pane `read_paths` (no pipes,
-  redirection, `sed`, or ungranted sibling reads)
-  and trusted coordination helpers. Send short verdicts with
-  `$session-chat:reply`; for long or multiline verdicts, stage a message with
-  a native edit tool and dispatch that file to the orchestrator with
-  `--reply-to` correlation. Shell-based staging remains blocked.
+- **Draft files (0.7.1)**: reviewers, executors, and confined coordinators with
+  a validated `messages` grant may use native edit tools to create, revise, and
+  delete `<messages-grant>/drafts/<pane-name>/<safe-name>.md` or `.txt`.
+  The stem starts with an ASCII letter/digit, uses only ASCII letters/digits,
+  `.`, `_`, `-`, and is at most 128 characters. Resolve the grant and pane name
+  from the validated plan; inherited variables cannot grant access. Only the
+  pane's own ordinary single-link drafts are allowed. Transport files, peer
+  drafts, queue/archive/ledger state, symlinks, moves, and mixed patches remain
+  blocked. Shell staging and cleanup remain blocked, including when the granted
+  message store is inside the checkout. Confined coordinators must use native
+  reads or trusted helpers for store reads, even inside the checkout. Root
+  coordinators retain authority to edit the entire store, including transport
+  messages.
+  Dispatch with `--reply-to` for a reply, then natively delete your draft only
+  after delivered or durable queued success; preserve it after hard failure.
+  Claude has no native delete tool and retains its inert draft.
+  No grant means no staging exception. Existing reviewer top-level drafts must
+  be restaged here; never move or edit transport files. No config/schema migration
+  is required. Update both plugins and restart affected agents. Downgrading
+  restores the executor staging failure and the reviewer transport-edit flaw.
+- **Reviewer**: other native edits remain blocked. Shell remains default-deny
+  except one literal read-only command inside its checkout or explicit per-pane
+  `read_paths` (no pipes, redirection, `sed`, or ungranted sibling reads), and
+  trusted coordination helpers. Use `$session-chat:reply` for verdicts.
   Schema v2–5 reviewers and executors may set `sessions[].panes[].read_paths` to up to 16
   existing files/directories, relative to the project root or canonical absolute
   paths for external repositories. Files grant exact-file access, directories
@@ -145,13 +157,21 @@ them:
   reads using the reviewer read-command restrictions above. Executor tool workdirs
   must remain inside its checkout; use relative or absolute operands for shared
   docs. Grants never permit writes or composed shell commands outside the checkout.
+  From 0.7.1, executors can also read files in the selected `girishattri-plugins`
+  version using the same restricted single-command grammar, without `read_paths`.
+  This includes skills, commands, references, and scripts as data. Use separate
+  `cat <absolute-path>` calls or `rg --no-config`; it grants no cache writes,
+  cache workdirs, execution, unselected-version reads, or extra store access.
+  This cache-read exception does not change confined orchestrator shell reads. No configuration migration
+  is required; update the plugin and restart affected agents. Downgrading restores
+  the earlier executor cache-read restriction without changing stores.
   The ordinary in-checkout executor shell floor is unchanged: these restricted
   read rules do not establish recursive traversal confinement for general
   executor commands. Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files
-  with the `Read` tool and stage prompt files inside the checkout (writes
-  under `$TMPDIR` are refused by containment).
+  with the `Read` tool and stage dispatch files in the own-pane draft namespace
+  above (writes under `$TMPDIR` are refused by containment).
 - **Orchestrator**: cannot edit or run mutating commands against a child
   checkout; routes only to its configured executor/reviewer panes;
   `broadcast` is not available under strict-v1.
