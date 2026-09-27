@@ -651,6 +651,7 @@ WRITE_REDIRECT_OPS = {">", ">>", ">|", "<>", "&>", "&>>", ">&"}
 # Sentinel appended to a segment that writes through a redirection. Carries
 # a NUL so it can never be mistaken for a path operand or a command.
 REDIR_WRITE_MARK = "\x00redirect-write"
+REDIR_PATH_PREFIX = "\x00redirect-path:"
 
 
 def segments(tokens: List[str]) -> List[List[str]]:
@@ -673,7 +674,9 @@ def segments(tokens: List[str]) -> List[List[str]]:
                 if not (token in {">&", "<&"} and (target.isdigit() or target == "-")):
                     if not (target in {".", "..", "~"} or target.startswith(("/", "./", "../", "~/"))):
                         target = "./" + target
-                    current.append(target)
+                    # Keep shell-opened files out of command argv: a data
+                    # option such as grep -e must never consume this target.
+                    current.append(REDIR_PATH_PREFIX + target)
                     if token in WRITE_REDIRECT_OPS:
                         current.append(REDIR_WRITE_MARK)
             continue
@@ -728,7 +731,8 @@ def parse_wrappers(segment: List[str]) -> Wrapped:
     is shell.wrapper. A privileged or re-parsed argv is never modelled."""
     index = 0
     chdirs: List[List[str]] = []
-    values: List[str] = []
+    values: List[str] = [t[len(REDIR_PATH_PREFIX):] for t in segment if t.startswith(REDIR_PATH_PREFIX)]
+    segment = [t for t in segment if not t.startswith(REDIR_PATH_PREFIX)]
     while index < len(segment):
         token = segment[index]
         if token == REDIR_WRITE_MARK:
@@ -882,7 +886,8 @@ def git_is_read_only(tokens: List[str]) -> bool:
     return True
 
 
-def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = (), resolve: bool = True) -> Optional[Path]:
+def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = (), resolve: bool = True,
+                   literal: bool = False) -> Optional[Path]:
     """Resolve one argv token as a path operand, or None when it is data.
     Path forms: absolute, ./ ../ ~/ prefixed, bare . / .. / ~, anything with a
     slash, `--opt=PATH`, an attached cwd option (`-C..`, `-C/tmp`), an
@@ -890,13 +895,13 @@ def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = ()
     existing entry under BASE (the symlink-escape shape, `cat escape-link`,
     with or without whitespace). Free text that names nothing stays data."""
     value = token
-    if token.startswith("--") and "=" in token:
+    if not literal and token.startswith("--") and "=" in token:
         value = token.split("=", 1)[1]
-    elif re.fullmatch(r"-C.+", token):
+    elif not literal and re.fullmatch(r"-C.+", token):
         value = token[2:]
-    elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+    elif not literal and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
         value = token.split("=", 1)[1]
-    if not value or value.startswith("-") or any(char in value for char in "\n\r\x00"):
+    if not value or value == "-" or (not literal and value.startswith("-")) or any(char in value for char in "\n\r\x00"):
         return None
     if value == "/dev/null":
         return Path(value)
@@ -919,6 +924,113 @@ def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = ()
     path = Path(value).expanduser()
     path = path if path.is_absolute() else base / path
     return canonical(path) if resolve else path
+
+
+# Only these reviewed options may suppress path inference for their values.
+# Everything else retains conservative path checks, including every possible
+# attached short-option suffix for commands whose grammar we do not know.
+SHORT_DATA_OPTIONS = {"grep": "emABCDd", "rg": "eEgtdTjmrMABC", "sort": "ktS"}
+SHORT_PATH_OPTIONS = {"grep": "f", "rg": "f", "sort": "oT"}
+SHORT_FLAGS = {
+    "grep": "EFGPHVabchilLnqrsRvwxyzUuI0123456789",
+    "rg": "FPUiSsLvuawxoclnNHIpqz0hV",
+    "sort": "bcdfghiMmnrRsuVz",
+}
+LONG_DATA_OPTIONS = {
+    "grep": {"--regexp", "--max-count", "--after-context", "--before-context", "--context", "--devices", "--directories"},
+    "rg": {"--regexp", "--encoding", "--glob", "--iglob", "--type", "--type-not", "--threads", "--max-count", "--replace", "--max-columns", "--after-context", "--before-context", "--context", "--max-depth"},
+    "sort": {"--key", "--field-separator", "--buffer-size"},
+}
+LONG_PATH_OPTIONS = {
+    "grep": {"--file"}, "rg": {"--file"},
+    "sort": {"--output", "--temporary-directory", "--compress-program", "--random-source", "--files0-from"},
+}
+
+
+def argv_fields(argv: List[str]) -> Iterable[Tuple[str, str]]:
+    """Yield (kind, value): option names, literal paths, or conservative
+    candidates. Data values are consumed but never reinterpreted as options.
+    This is shared by read checks, executor fallback and child detection.
+    It is deliberately not a complete grammar for arbitrary executables."""
+    if not argv:
+        return
+    command = Path(argv[0]).name
+    index = 1
+    positional = False
+    while index < len(argv):
+        token = argv[index]
+        index += 1
+        if positional:
+            yield "literal", token
+            continue
+        if token == "--":
+            positional = True
+            continue
+        if token.startswith("--"):
+            option, equals, value = token.partition("=")
+            yield "option", option
+            data = option in LONG_DATA_OPTIONS.get(command, set())
+            path = option in LONG_PATH_OPTIONS.get(command, set())
+            if data or path:
+                if not equals:
+                    if index >= len(argv):
+                        raise PolicyFailure("path.option", "%s requires a literal value" % option)
+                    value = argv[index]
+                    index += 1
+                if path:
+                    yield "literal", value
+            elif equals:
+                yield "literal", value
+            continue
+        if token.startswith("-") and token != "-":
+            offset = 1
+            while offset < len(token):
+                char = token[offset]
+                data = char in SHORT_DATA_OPTIONS.get(command, "")
+                path = char in SHORT_PATH_OPTIONS.get(command, "")
+                if data or path:
+                    yield "option", "-" + char
+                    value = token[offset + 1:]
+                    if not value:
+                        if index >= len(argv):
+                            raise PolicyFailure("path.option", "-%s requires a literal value" % char)
+                        value = argv[index]
+                        index += 1
+                    if path:
+                        yield "literal", value
+                    break
+                if char not in SHORT_FLAGS.get(command, ""):
+                    # Unknown option/command: any cluster boundary may start
+                    # a path value (cp -tDIR, tar -cfFILE, etc.). Do not grant
+                    # data exemptions after an unrecognized prefix.
+                    yield "candidate", token
+                    for start in range(2, len(token)):
+                        if not token[start - 1].isascii() or not token[start - 1].isalnum():
+                            break
+                        yield "literal", token[start:]
+                    break
+                yield "option", "-" + char
+                offset += 1
+            continue
+        yield "candidate", token
+
+
+def argv_paths(argv: List[str], base: Path, child_rel: Tuple[str, ...] = ()) -> Iterable[Tuple[str, Path, Path]]:
+    for kind, value in argv_fields(argv):
+        if kind == "option":
+            continue
+        raw = candidate_path(value, base, child_rel, resolve=False, literal=kind == "literal")
+        if raw is not None:
+            yield value, canonical(raw), raw
+
+
+def sort_writes(argv: List[str]) -> bool:
+    # GNU-style long option abbreviations can also write. Conservatively
+    # classify even ambiguous prefixes as writes; data values are not options.
+    long_options = {"--output", "--temporary-directory", "--compress-program"}
+    return any(kind == "option" and (value in {"-o", "-T"} or
+               (len(value) > 2 and any(option.startswith(value) for option in long_options)))
+               for kind, value in argv_fields(argv))
 
 
 def executable_path(token: str, base: Path) -> Optional[Path]:
@@ -1106,17 +1218,13 @@ def ensure_paths_within(tokens: List[str], base: Path, allowed: Callable[[Path],
         if not allowed(path):
             raise PolicyFailure(rule, "wrapper option escapes the allowed scope: %s" % value)
     exec_cwd = resolve_chdir_hops(wrapped.chdirs, base, allowed, rule)
-    for index, token in enumerate(argv):
-        if index == 0:
-            path = executable_path(token, exec_cwd)
-            if path is not None and not allowed(path):
-                raise PolicyFailure(rule, "executable path escapes the allowed scope: %s" % token)
-            continue
-        path = candidate_path(token, exec_cwd)
-        if path is None or path == Path("/dev/null"):
+    path = executable_path(argv[0], exec_cwd) if argv else None
+    if path is not None and not allowed(path):
+        raise PolicyFailure(rule, "executable path escapes the allowed scope: %s" % argv[0])
+    for token, path, raw in argv_paths(argv, exec_cwd):
+        if path == Path("/dev/null"):
             continue
         if not allowed(path):
-            raw = candidate_path(token, exec_cwd, resolve=False)
             if extra_read is not None and raw is not None and extra_read(raw):
                 continue
             raise PolicyFailure(rule, "path operand escapes the allowed scope: %s" % token)
@@ -1198,7 +1306,13 @@ def walk_segments(tokens: List[str], base: Path) -> Iterable[Tuple[List[str], Pa
         if executable in CD_COMMANDS:
             if any(t == "-" for t in argv[1:]):
                 raise PolicyFailure("path.dynamic", "cd - / pushd - is not a literal target")
-            operands = [t for t in argv[1:] if not t.startswith("-") and t != REDIR_WRITE_MARK]
+            operands = []
+            positional = False
+            for token in argv[1:]:
+                if token == "--" and not positional:
+                    positional = True
+                elif token != REDIR_WRITE_MARK and (positional or not token.startswith("-")):
+                    operands.append(token)
             if not operands:
                 if executable == "pushd":
                     raise PolicyFailure("path.dynamic", "pushd without a literal directory rotates the stack")
@@ -2103,13 +2217,19 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
         raise PolicyFailure("reviewer.sed", "reviewer %s is not read-only: script-taking tools can write or execute" % executable)
     if executable not in READ_COMMANDS:
         raise PolicyFailure("reviewer.command", "reviewer executable is not read-only allowlisted: %s" % (executable or "?"))
+    option_tokens = tokens[1:]
+    if executable in {"grep", "rg"}:
+        # Inspect flags, never letters in a consumed pattern/file value.
+        # Unknown short forms retain the previous conservative inspection.
+        option_tokens = [value for kind, value in argv_fields(tokens)
+                         if kind == "option" or (kind == "candidate" and value.startswith("-"))]
     if executable == "rg":
         # The tool's environment/config may differ from the hook's. Require
         # an unambiguous argv option rather than inspecting that mutable input
         # or mistaking an -e pattern/operand named --no-config for the flag.
         if len(tokens) < 2 or tokens[1] != "--no-config":
             raise PolicyFailure("reviewer.search", "restricted ripgrep reads require rg --no-config as the command prefix")
-        for token in tokens[2:]:
+        for token in option_tokens:
             if token == "--":
                 break
             if (token.split("=", 1)[0] in {"--hostname-bin", "--search-zip"} or
@@ -2121,24 +2241,23 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
     long_follow = {"rg": {"--follow"}, "grep": {"--dereference-recursive", "--dereference-files"},
                    "find": {"-follow"}, "du": {"--dereference"},
                    "ls": {"--dereference"}, "diff": {"--recursive"}}.get(executable, set())
-    for token in tokens[1:]:
+    for token in option_tokens:
         if token == "--":
             break
         if short_follow and (token.split("=", 1)[0] in long_follow or
                              (token.startswith("-") and not token.startswith("--") and any(c in token[1:] for c in short_follow))):
             raise PolicyFailure("reviewer.symlink_follow", "reviewer recursive symlink traversal is forbidden")
     if executable == "diff":
-        for token in tokens[1:]:
-            path = candidate_path(token, base)
-            if path is not None and path.is_dir():
+        for _, path, _ in argv_paths(tokens, base):
+            if path.is_dir():
                 raise PolicyFailure("reviewer.symlink_follow", "reviewer diff requires file operands; directory comparison follows leaf symlinks")
     if executable == "find" and any(token in {"-delete", "-exec", "-execdir", "-fls", "-fprint", "-fprint0", "-fprintf", "-ok", "-okdir"} for token in tokens):
         raise PolicyFailure("reviewer.find", "reviewer find mutation/execution actions are forbidden")
     if executable == "tail" and any(token in {"-f", "-F", "--follow"} or token.startswith("--follow=") for token in tokens):
         raise PolicyFailure("reviewer.tail", "reviewer tail must not follow (never-terminating)")
-    if executable in {"rg", "grep"} and any(token in {"--pre", "--pre-glob"} or token.startswith(("--pre=", "--pre-glob=")) for token in tokens):
+    if executable in {"rg", "grep"} and any(token in {"--pre", "--pre-glob"} or token.startswith(("--pre=", "--pre-glob=")) for token in option_tokens):
         raise PolicyFailure("reviewer.search", "reviewer search preprocessors are forbidden")
-    if executable == "sort" and any(token in {"-o", "--output", "--compress-program"} or token.startswith(("--output=", "--compress-program=")) for token in tokens):
+    if executable == "sort" and sort_writes(tokens):
         raise PolicyFailure("reviewer.sort", "reviewer sort output/program options are forbidden")
     ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path",
                         extra_read=lambda p: skill_content_readable(ctx, p))
@@ -2175,11 +2294,16 @@ def child_transport_bypass(tokens: List[str], child: bool) -> Optional[str]:
 
 
 def segment_mutates(segment: List[str]) -> bool:
+    if REDIR_WRITE_MARK in segment:
+        return True
     executable = command_basename(segment)
     if not executable:
         return False
-    if REDIR_WRITE_MARK in segment:
-        return True
+    if executable == "sort":
+        try:
+            return sort_writes(unwrap_prefixes(segment))
+        except PolicyFailure:
+            return True
     if executable in READ_COMMANDS or executable in CD_COMMANDS or executable == "popd":
         # A directory change mutates nothing by itself; the segments that run
         # inside the new cwd are judged against it by walk_segments.
@@ -2192,13 +2316,15 @@ def segment_mutates(segment: List[str]) -> bool:
 def references_child(segment: List[str], ctx: Context, cwd: Optional[Path] = None) -> bool:
     base = cwd if cwd is not None else ctx.project_root
     child_rel = tuple(str(root.relative_to(base)) for root in ctx.child_roots if within(root, base) and root != base)
-    for token in segment:
-        try:
-            path = candidate_path(token, base, child_rel)
-        except PolicyFailure:
+    try:
+        wrapped = parse_wrappers(segment)
+        paths = [candidate_path(value, base, child_rel) for value in wrapped.values]
+        paths.append(executable_path(wrapped.argv[0], base) if wrapped.argv else None)
+        paths.extend(path for _, path, _ in argv_paths(wrapped.argv, base, child_rel))
+        if any(path is not None and any(within(path, root) for root in ctx.child_roots) for path in paths):
             return True
-        if path is not None and any(within(path, root) for root in ctx.child_roots):
-            return True
+    except PolicyFailure:
+        return True
     return False
 
 

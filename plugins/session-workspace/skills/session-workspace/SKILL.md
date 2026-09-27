@@ -181,6 +181,14 @@ them:
   symlink or hidden components (except `.system`). No workdirs, helper
   operands, writes, execution, or other provider-home content. Known limit:
   skills from non-`girishattri-plugins` marketplace plugins stay denied.
+  From 0.7.4, paths attached to short options (`-f/x`, `-o/x`, `-uo/x`) and
+  every operand after `--` are path-checked for reviewer reads, executor
+  containment, and orchestrator child writes; redirection targets are checked
+  against the shell cwd. `grep`/`rg`/`sort` use reviewed option tables
+  (`-e/api/` stays a pattern); other commands are checked conservatively, so
+  pass unusual in-scope values as separate arguments. Reviewers never get
+  `sort` output options. No config migration; restart agents after
+  updating; downgrading restores the 0.7.3 gap.
   Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files

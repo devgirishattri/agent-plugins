@@ -353,7 +353,16 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   operands that only exist after a shell expansion (`"$TARGET"`, backticks,
   unquoted globs/braces) fail closed; redirection targets (`> file`,
   `>> "escape link"`, `2> /tmp/x`, `< ../x`) are path operands too;
-  attached `-C..`/`-Cdir` and `--chdir=` values are resolved; a bare operand
+  attached `-C..`/`-Cdir` and `--chdir=` values are resolved; from 0.7.4,
+  paths attached to short options (`-f/x`, `-o/x`, `-t/x`, clustered
+  `-uo/x`) and every operand after a standalone `--` (even one starting with
+  `-`) are path operands too, for reviewer reads, executor containment, and
+  orchestrator child-write checks alike (`grep`/`rg`/`sort` know which
+  letters take a pattern versus a file, so `grep -e/api/` stays a pattern;
+  reviewers may never use `sort -o`/`-T` or any abbreviation of
+  `--output`/`--temporary-directory`/`--compress-program`); redirection
+  targets are checked against the shell's cwd and can never be consumed as a
+  data value (`grep -e > out`); a bare operand
   that names an existing entry (a planted symlink) is canonicalized;
   `xargs`, inline code (`bash -c`, `python -c`, `node -e`, `eval`), and any
   sandbox/approval-escape flag are refused. Outbound
@@ -490,6 +499,16 @@ and disk-state rules. The grant is narrower than a reviewer's:
 - Tool `cwd`/`workdir` must still stay inside the checkout; relative
   operands resolve against that effective workdir.
 - Edits (native or shell) remain confined to the checkout.
+
+**Attached option values (0.7.4).** No config migration; update the plugin
+and restart affected agents. Commands that 0.7.3 wrongly allowed — a path
+attached to a short option or placed after `--` that escapes the pane's
+scope — are now denied; `cd -- -dir` inside scope is now accepted. Known
+limit: only `grep`, `rg`, and `sort` have reviewed option tables; for every
+other command any path-looking suffix of a short-option cluster is checked
+conservatively, which can deny an unusual in-scope form (use a separate
+argument instead). The policy is not a full grammar for arbitrary
+executables. Downgrading restores the 0.7.3 gap.
 
 **Selected plugin reads (0.7.1).** Without any `read_paths`, the same
 single literal read grammar may also name files inside the *selected*

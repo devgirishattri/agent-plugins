@@ -184,6 +184,16 @@ them:
 - **Orchestrator**: cannot edit or run mutating commands against a child
   checkout; routes only to its configured executor/reviewer panes;
   `broadcast` is not available under strict-v1.
+- From 0.7.4, shared shell path checks include attached short-option values
+  and literal operands after `--`, including through accepted wrappers.
+  Known `grep`/`rg` pattern and `sort` key/separator values remain data;
+  unknown short options receive conservative path checks. Reviewers cannot
+  use `sort` output or temporary-directory options. Executor output paths
+  must stay in the checkout; orchestrators cannot direct them into a child.
+  This remains an argv containment floor, not a complete command interpreter.
+  No config or store migration is needed; update and restart affected panes.
+  Downgrading restores the attached-option gaps. Keep project guards until
+  the combined hook chain has been verified before retiring duplicate checks.
 - `sudo`/`doas`/`su`/`runuser`/`pkexec` are refused for every role at any
   wrapper hop, as is any unsupported wrapper option (`exec -a`, `nohup --`,
   `time -o`, `env -S` all fail closed); the accepted `env`/`command`/
