@@ -325,10 +325,9 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   orchestrator's existing authority over store and transport files is
   unchanged. Arbitrary executor shell commands (anything outside the single
   literal read grammar) and confined-coordinator shell commands may not name
-  a granted messages store, even one nested inside their cwd; reviewer safe
-  reads of granted stores and an executor's single safe read of a store
-  inside its cwd are unchanged. Portable guidance: read dispatch files with
-  the native `Read` tool or a trusted helper.
+  a granted messages store, even one nested inside their cwd.
+- **Message reads (0.10.0)** — reviewer and executor shell reads of any
+  messages store or provider inbox follow "Message store access" below.
 - **Reviewer** — native edit/write/patch/notebook tools are limited to draft
   staging above. Shell is
   default-deny, with two carve-outs: (a) one literal read-only command
@@ -336,7 +335,8 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   read-only `git` subcommands without write/output/external-exec options)
   whose path operands — including bare `.`/`..`, `-C` values, and quoted
   paths containing spaces — resolve inside its own checkout, the
-  coordination stores the plan grants it, either provider's message inbox,
+  coordination stores the plan grants it (a messages store or either
+  provider's inbox only as scoped by "Message store access" below),
   or the *selected version* directory of an installed plugin (a bare
   operand naming a planted symlink is canonicalized) — no pipes,
   redirection, expansion, unquoted globs, `cd`, wrappers or assignment
@@ -426,7 +426,9 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   prompt file, `--store`, a context snapshot), may resolve inside: the
   pane's own cwd; the coordination stores the plan *grants* that pane
   (`roles.<r>.grants`, i.e. the same directories it receives as
-  `--add-dir`); `~/.claude/messages` and `~/.codex/messages`; and the
+  `--add-dir`); `~/.claude/messages` and `~/.codex/messages` (helper
+  operands only: shell reads of any messages store or provider inbox follow
+  "Message store access" below); and the
   *selected version* directory of an installed plugin (never another
   version, never an unselected plugin). An *executor's* arbitrary shell is
   narrower still: every operand must resolve inside its pane cwd alone
@@ -445,6 +447,65 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   the orchestrator addresses only its configured executor/reviewer panes;
   `broadcast-message.sh` has no topology-bound form and is not allowed in
   strict-v1.
+
+### Message store access
+
+From session-workspace 0.10.0 (paired with session-chat 0.17.13), reviewers
+and executors can read complete file dispatches; before this, an executor
+could not read a task body past the inline cap, and a reviewer could read the
+whole store.
+
+- **How to read.** In `auto` the session-chat incoming hook prints the
+  literal `Full task read command: cat '<absolute-path>'` before the inline
+  body; run it verbatim. The inline copy is capped by
+  `SESSION_CHAT_DISPATCH_INLINE_MAX` (default 6000 characters) and the hook's
+  total context cap; the file is not, so never split a task into parts to
+  fit. `assist` shows no body and gives the same command only for use after
+  the local user approves; `notify` offers no command.
+- **What is readable** (`coordination.message_read`, allow): a file directly
+  in this pane's plan `messages` grant named
+  `<epoch>-<pid>-<id>-<sender>-to-<recipient>.md`, where the name splits into
+  exactly one pair of validated plan pane names (every `-to-` split is tried,
+  including overlapping ones) with this pane as sender or recipient; the file
+  is private (no group/other bits), owned by this user, regular, single-link,
+  and reached with no symlink component and no `..`. Existing own drafts
+  (`drafts/<own-pane>/<name>.md|.txt`) are readable too.
+- **Grammar.** Only the existing single literal non-`git` read grammar
+  (`cat`, `head`, `tail`, `wc`, `rg --no-config`, ...): no pipes,
+  redirection, expansion, globs, `sed`/`awk`/`perl`, or symlink-follow
+  options. A piped or copied read of an own message falls back to the
+  executor floor and is refused there. NUL-separated file-list options
+  (`sort`/`du`/`wc --files0-from` and every abbreviation, `find
+  -files0-from`) are refused in the restricted read grammar for every
+  reviewer and executor read (`reviewer.file_list`; `coordination.message_read`
+  when the list is a message): this closes a pre-existing reviewer bypass
+  where a list file named paths the policy never saw. An executor's general
+  shell floor can still pass an in-checkout list file (arbitrary-shell
+  residual).
+- **What is denied** (`coordination.message_read`, deny): other panes'
+  messages and drafts, off-plan or ambiguous senders, files involving removed
+  panes, queue/archive/ledger state, subdirectories, `git` operands in any
+  store, and ungranted provider inboxes (`~/.claude/messages`,
+  `~/.codex/messages`). Every plan messages grant is guarded, so a pane
+  without its own grant cannot borrow checkout access to a store nested in
+  its cwd. Identity and roots come from the validated plan only; inherited
+  `SESSION_CHAT_TARGET_MESSAGES_DIR` or `SESSION_CHAT_PANE_NAME` cannot
+  widen them.
+- **Traversal** (`coordination.message_traversal`, deny): recursive reads
+  that would enter a store from an ancestor directory — `rg`, `find`, `du`,
+  recursive `grep` (`-r`, `-R`, `-d`), `ls -R`, including an implicit cwd —
+  and child tool workdirs inside a store. Name explicit subdirectories
+  outside the store; glob exclusions do not grant an exception. Executor
+  operands resolve against the effective tool workdir.
+- **Unchanged.** Own-draft native writes, send routing, incoming-mode
+  consent, and coordinator (orchestrator) behavior.
+- **Known limits.** strict-v1 does not gate Claude's native `Read`; operand
+  checks cannot see what an arbitrary program opens (an executor's general
+  shell floor can still recurse through `cp -r` or a script); the checks are
+  not atomic against same-uid filesystem swaps.
+- **Rollout.** No schema or store migration. Update session-chat and
+  session-workspace, then restart affected panes. Rollback restores the
+  executor read failure and the broader reviewer access.
 
 ### Reviewer read paths
 
@@ -501,10 +562,12 @@ and disk-state rules. The grant is narrower than a reviewer's:
   scripts and ungranted siblings are still refused.
 - The executor's readable base is its own checkout, its grants, and (from
   0.7.1) the selected installed `girishattri-plugins` version directories; it does not
-  gain the reviewer's shell reads of coordination stores or message inboxes.
+  gain the reviewer's shell reads of coordination stores. Messages are
+  readable only as scoped by "Message store access" (0.10.0).
 - Tool `cwd`/`workdir` must still stay inside the checkout; relative
   operands resolve against that effective workdir.
-- Edits (native or shell) remain confined to the checkout.
+- Edits (native or shell) remain confined to the checkout, apart from
+  native writes to its own drafts (draft staging above).
 
 **Attached option values (0.7.4).** No config migration; update the plugin
 and restart affected agents. Commands that 0.7.3 wrongly allowed — a path
@@ -667,9 +730,9 @@ that information or a sound mitigation exists.
   the missing grant instead of shortening a long reply. Shell staging remains denied, and nothing sweeps
   drafts automatically. A trusted helper may still consume a pre-existing
   literal `$TMPDIR` file as input, but containment refuses creating one there.
-- Executors read dispatch files with the provider's `Read` tool (unknown
-  tools are allowed); `cat ~/.claude/messages/...` from an executor shell is
-  refused by the cwd containment floor. Executors stage dispatch prompt
+- Executors read dispatch files with the literal `cat '<absolute-path>'`
+  command under the message-read rules above; other shell reads of a message
+  store, and any read of an ungranted provider inbox, are refused. Executors stage dispatch prompt
   files through draft staging above — edit and shell containment refuse
   creating files under `$TMPDIR`; a temp file that already exists (written
   by a helper or hook) is accepted as helper input only.

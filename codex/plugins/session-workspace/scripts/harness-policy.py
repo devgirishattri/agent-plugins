@@ -40,6 +40,7 @@ import fnmatch
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -215,6 +216,7 @@ ISO_UTC_RE = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
 PATCH_MOVE_RE = re.compile(r"^\*\*\* Move to: (.+)$", re.M)
 DRAFT_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.(?:md|txt)\Z")
+MESSAGE_NAME_RE = re.compile(r"\A[0-9]+-[0-9]+-[a-f0-9]{8,16}-(.+)\.md\Z")
 
 
 @dataclass(frozen=True)
@@ -240,6 +242,8 @@ class Context:
     session_ids: frozenset = frozenset()
     scheduler_root: Optional[Path] = None
     read_paths: tuple = ()
+    plan_panes: frozenset = frozenset()
+    plan_message_roots: tuple = ()
 
     @property
     def confined_orchestrator(self):
@@ -576,6 +580,9 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         child_roots=child_roots,
         grant_roots=tuple(sorted(grant_paths, key=str)),
         message_roots=tuple(sorted(message_paths, key=str)),
+        plan_panes=frozenset(p["name"] for p in panes),
+        plan_message_roots=tuple(sorted({canonical(Path(g["path"])) for p in panes
+                                        for g in p.get("grants", []) if g.get("store") == "messages"}, key=str)),
         claude_home=claude_home,
         codex_home=codex_home,
         guards=guards,
@@ -947,7 +954,7 @@ LONG_PATH_OPTIONS = {
 }
 
 
-def argv_fields(argv: List[str]) -> Iterable[Tuple[str, str]]:
+def argv_fields(argv: List[str], positional_only: bool = False) -> Iterable[Tuple[str, str]]:
     """Yield (kind, value): option names, literal paths, or conservative
     candidates. Data values are consumed but never reinterpreted as options.
     This is shared by read checks, executor fallback and child detection.
@@ -955,6 +962,13 @@ def argv_fields(argv: List[str]) -> Iterable[Tuple[str, str]]:
     if not argv:
         return
     command = Path(argv[0]).name
+    # Recursive traversal inference must not mistake an option's numeric/data
+    # value for a starting path. These exemptions affect positional inference
+    # only; the ordinary containment parser still checks all its old operands.
+    positional_short_data = {"du": "dBtX", "ls": "DITw"}.get(command, "") if positional_only else ""
+    positional_long_data = ({"du": {"--max-depth", "--block-size", "--threshold", "--exclude", "--exclude-from"},
+                             "ls": {"--ignore", "--tabsize", "--width", "--block-size", "--format", "--sort", "--time", "--time-style", "--quoting-style"}}
+                            .get(command, set())) if positional_only else set()
     index = 1
     positional = False
     while index < len(argv):
@@ -969,7 +983,7 @@ def argv_fields(argv: List[str]) -> Iterable[Tuple[str, str]]:
         if token.startswith("--"):
             option, equals, value = token.partition("=")
             yield "option", option
-            data = option in LONG_DATA_OPTIONS.get(command, set())
+            data = option in LONG_DATA_OPTIONS.get(command, set()) or option in positional_long_data
             path = option in LONG_PATH_OPTIONS.get(command, set())
             if data or path:
                 if not equals:
@@ -977,16 +991,16 @@ def argv_fields(argv: List[str]) -> Iterable[Tuple[str, str]]:
                         raise PolicyFailure("path.option", "%s requires a literal value" % option)
                     value = argv[index]
                     index += 1
-                if path:
+                if path and not positional_only:
                     yield "literal", value
-            elif equals:
+            elif equals and not positional_only:
                 yield "literal", value
             continue
         if token.startswith("-") and token != "-":
             offset = 1
             while offset < len(token):
                 char = token[offset]
-                data = char in SHORT_DATA_OPTIONS.get(command, "")
+                data = char in SHORT_DATA_OPTIONS.get(command, "") or char in positional_short_data
                 path = char in SHORT_PATH_OPTIONS.get(command, "")
                 if data or path:
                     yield "option", "-" + char
@@ -996,15 +1010,15 @@ def argv_fields(argv: List[str]) -> Iterable[Tuple[str, str]]:
                             raise PolicyFailure("path.option", "-%s requires a literal value" % char)
                         value = argv[index]
                         index += 1
-                    if path:
+                    if path and not positional_only:
                         yield "literal", value
                     break
-                if char not in SHORT_FLAGS.get(command, ""):
+                if char not in SHORT_FLAGS.get(command, "") and not (positional_only and command in {"du", "ls"} and char.isascii() and char.isalpha()):
                     # Unknown option/command: any cluster boundary may start
                     # a path value (cp -tDIR, tar -cfFILE, etc.). Do not grant
                     # data exemptions after an unrecognized prefix.
-                    yield "candidate", token
-                    for start in range(2, len(token)):
+                    yield "option" if positional_only else "candidate", token
+                    for start in range(2, len(token)) if not positional_only else ():
                         if not token[start - 1].isascii() or not token[start - 1].isalnum():
                             break
                         yield "literal", token[start:]
@@ -1101,10 +1115,104 @@ def tmp_readable(ctx: Context, path: Path) -> bool:
 
 def reviewer_readable(ctx: Context, path: Path) -> bool:
     """Extra grants apply to scoped shell reads, never helper stores."""
+    if any(within(path, root) for root in guarded_message_roots(ctx)):
+        return own_message_readable(ctx, path, path)
     base_readable = (within(path, ctx.pane_cwd) or selected_plugin_readable(ctx, path)) if ctx.semantic_role == "executor" else readable(ctx, path)
     return base_readable or (ctx.semantic_role in {"reviewer", "executor"} and any(
         (kind == "file" and path == root) or (kind == "directory" and within(path, root))
         for root, kind in ctx.read_paths))
+
+
+def guarded_message_roots(ctx: Context) -> tuple:
+    # Legacy provider inboxes do not grant access without a plan messages grant.
+    return ctx.message_roots + ctx.plan_message_roots + (ctx.claude_home / "messages", ctx.codex_home / "messages")
+
+
+def own_message_readable(ctx: Context, raw: Path, path: Path) -> bool:
+    """Read only private, unaliased payloads tied to validated plan identity.
+
+    Like the existing edit guard, this is not atomic against same-uid swaps.
+    Check lexical components before canonical containment loses that evidence.
+    """
+    if ".." in raw.parts:
+        return False
+    try:
+        if any(part.is_symlink() for part in (raw,) + tuple(raw.parents)):
+            return False
+        info = raw.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+            return False
+        if any(raw.parent == root / "drafts" / ctx.pane_name for root in ctx.message_roots):
+            return own_message_draft(ctx, raw, path)
+        if info.st_mode & 0o077 or not any(raw.parent == root == path.parent for root in ctx.message_roots):
+            return False
+    except OSError:
+        return False
+    match = MESSAGE_NAME_RE.fullmatch(path.name)
+    if match is None:
+        return False
+    tail = match.group(1)
+    pairs = [(tail[:m.start()], tail[m.start() + 4:]) for m in re.finditer(r"(?=-to-)", tail)]
+    pairs = [(sender, recipient) for sender, recipient in pairs
+             if sender in ctx.plan_panes and recipient in ctx.plan_panes]
+    return len(pairs) == 1 and ctx.pane_name in pairs[0]
+
+
+def file_list_read(tokens: List[str]) -> bool:
+    """NUL-delimited operand lists hide paths from the literal read grammar.
+
+    GNU tools accept unambiguous long-option prefixes (wc can accept --f),
+    so reject every nonempty prefix, not just the full option spelling.
+    """
+    executable = Path(tokens[0]).name if tokens else ""
+    if executable == "find":
+        return any(token == "-files0-from" for token in tokens[1:])
+    if executable not in {"sort", "du", "wc"}:
+        return False
+    return any(kind == "option" and value.startswith("--") and len(value) > 2
+               and "--files0-from".startswith(value) for kind, value in argv_fields(tokens))
+
+
+def message_read_guard(ctx: Context, tokens: List[str], base: Path) -> bool:
+    """Deny message aliases and recursive store traversal before broad grants.
+
+    Returns whether an explicit payload operand uses the scoped exception;
+    command grammar still has to pass separately before that can allow a read.
+    """
+    argv = unwrap_prefixes(tokens)
+    if not argv:
+        return False
+    roots = guarded_message_roots(ctx)
+    operands = list(argv_paths(argv, base))
+    touched = False
+    for _, path, raw in operands:
+        lexical = Path(os.path.abspath(raw))
+        if any(within(path, root) or within(lexical, root) for root in roots):
+            if argv[0] == "git" or not own_message_readable(ctx, raw, path):
+                raise PolicyFailure("coordination.message_read", "message reads require a private delivered file addressed to or sent by this validated pane, or its own draft; transport state, aliases, and peer files are forbidden")
+            touched = True
+    executable = Path(argv[0]).name
+    fields = list(argv_fields(argv, positional_only=True))
+    options = [value for kind, value in fields if kind == "option"]
+    if touched and file_list_read(argv):
+        raise PolicyFailure("coordination.message_read", "message files may be read as content, not as lists of additional file operands")
+    recursive = executable in {"rg", "find", "du"} or (
+        executable in {"grep", "ls"} and any(
+            value in {"--recursive", "--dereference-recursive", "--directories", "-d"} or
+            (value.startswith("-") and not value.startswith("--") and
+             any(flag in value[1:] for flag in ("rR" if executable == "grep" else "R")))
+            for value in options))
+    if recursive:
+        positional = [value for kind, value in fields if kind != "option"]
+        if executable in {"rg", "grep"} and not any(
+                option in {"-e", "-f", "--regexp", "--file", "--files"} for option in options):
+            positional = positional[1:]  # First positional is the search pattern.
+        scan_paths = [candidate_path(value, base, literal=True) for value in positional] or [base]
+        if executable == "find" and (len(argv) == 1 or argv[1].startswith("-")):
+            scan_paths.append(base)  # find expressions may omit the starting path.
+        if any(path is not None and path.is_dir() and any(within(root, path) for root in roots) for path in scan_paths):
+            raise PolicyFailure("coordination.message_traversal", "recursive reads may enter a message store; name explicit subdirectories outside the store (glob exclusions do not grant access)")
+    return touched
 
 
 def skill_content_readable(ctx: Context, raw: Path) -> bool:
@@ -2191,7 +2299,7 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
 # ---------------------------------------------------------------------------
 
 
-def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: Optional[Path] = None) -> None:
+def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: Optional[Path] = None) -> Optional[str]:
     base = ctx.pane_cwd if base is None else base
     if has_unquoted_expansion(command) or any(is_control(token) for token in tokens):
         raise PolicyFailure("reviewer.shell", "reviewer commands must be one literal read-only segment without expansion, pipes, or redirection")
@@ -2202,6 +2310,9 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
     if "/" in tokens[0] or tokens[0].startswith("~"):
         raise PolicyFailure("reviewer.command", "reviewer commands must be bare PATH names, never a path to an executable: %s" % tokens[0])
     executable = command_basename(tokens)
+    message_read = message_read_guard(ctx, tokens, base)
+    if file_list_read(tokens):
+        raise PolicyFailure("reviewer.file_list", "restricted reads cannot load additional file operands from a NUL-separated list; name each file literally")
     if executable == "git":
         sub, index = git_subcommand(tokens)
         if sub not in READ_GIT:
@@ -2261,6 +2372,7 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
         raise PolicyFailure("reviewer.sort", "reviewer sort output/program options are forbidden")
     ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path",
                         extra_read=lambda p: skill_content_readable(ctx, p))
+    return "coordination.message_read" if message_read else None
 
 
 def executable_tokens(segment: List[str]) -> List[str]:
@@ -2337,6 +2449,8 @@ def validate_tool_workdir(ctx: Context, tool_input: dict) -> None:
             continue
         raw = Path(value.strip()).expanduser()
         path = canonical(raw if raw.is_absolute() else ctx.pane_cwd / raw)
+        if ctx.semantic_role in {"executor", "reviewer"} and any(within(path, root) for root in guarded_message_roots(ctx)):
+            raise PolicyFailure("coordination.message_traversal", "child tool workdir cannot be inside a message store; read an explicit permitted file from the pane checkout")
         if (ctx.semantic_role == "executor" or ctx.confined_orchestrator) and not within(path, ctx.pane_cwd):
             raise PolicyFailure("executor.containment", "tool workdir escapes the configured child cwd: %s" % value)
         if ctx.semantic_role == "reviewer" and not reviewer_readable(ctx, path):
@@ -2613,18 +2727,19 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
                 return validate_orchestrator_gh(ctx, tokens, command, tool_input)
 
     if ctx.semantic_role == "reviewer":
-        validate_reviewer_read(tokens, command, ctx, reviewer_base)
-        return
+        return validate_reviewer_read(tokens, command, ctx, reviewer_base)
     if ctx.semantic_role == "executor" and reviewer_base is not None:
         # Selected plugin content and grants authorize only the existing
         # single-command read grammar, even when read_paths is empty.
         # Never widen arbitrary executor operands or native edit authority.
         try:
-            validate_reviewer_read(tokens, command, ctx, reviewer_base)
-        except PolicyFailure:
+            read_rule = validate_reviewer_read(tokens, command, ctx, reviewer_base)
+        except PolicyFailure as exc:
+            if exc.rule.startswith("coordination.message"):
+                raise
             pass  # Ordinary in-checkout executor commands retain their floor.
         else:
-            return
+            return read_rule
     if ctx.semantic_role == "executor" or ctx.confined_orchestrator:
         # Executor containment for arbitrary shell: no inline shell/interpreter
         # code (an unreadable escape hatch), no operand that only exists after
@@ -2638,7 +2753,10 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
             raise PolicyFailure("path.dynamic", "executor operands must be literal; shell expansion cannot be resolved by the policy")
         if has_unquoted_glob(command):
             raise PolicyFailure("path.dynamic", "unquoted glob/brace expansion produces operands the policy cannot resolve; quote the pattern or name the files")
-        for segment, cwd, after in walk_segments(tokens, ctx.pane_cwd):
+        floor_base = (reviewer_base or ctx.pane_cwd) if ctx.semantic_role == "executor" else ctx.pane_cwd
+        for segment, cwd, after in walk_segments(tokens, floor_base):
+            if ctx.semantic_role == "executor":
+                message_read_guard(ctx, segment, cwd)
             if ctx.semantic_role == "orchestrator" and command_basename(segment) == "git" and not git_is_read_only(segment):
                 raise PolicyFailure("orchestrator.git", "local coordinator Git mutations belong to its executor")
             if executor_inline_code(segment):
@@ -2809,7 +2927,9 @@ def evaluate(raw: str) -> Decision:
                 raise PolicyFailure("bash.command", "active harness could not read the shell command")
             rule = validate_bash(ctx, command, tool_input)
             if rule is not None:
-                return allow(ctx, tool_name, rule, "reviewed literal orchestrator gh read")
+                reason = ("literal read of this pane's delivered message or draft" if rule == "coordination.message_read"
+                          else "reviewed literal orchestrator gh read")
+                return allow(ctx, tool_name, rule, reason)
         elif lower in EDIT_TOOL_NAMES:
             if lower in {"str_replace_editor", "str_replace_based_edit_tool"} and tool_input.get("command") == "view":
                 return allow(ctx, tool_name, "tool.read", "read-only editor view")

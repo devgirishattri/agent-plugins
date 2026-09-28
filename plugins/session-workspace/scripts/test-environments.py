@@ -92,6 +92,26 @@ class Environments(unittest.TestCase):
         self.assertEqual([s['id'] for s in json.loads(r.stdout)['sessions']], ['service-vue3'])
         self.assertEqual(len(json.loads(r.stdout)['orchestration']['targets']), 2)
 
+    def test_message_reads_use_full_validated_topology(self):
+        for name in ('web-executor', 'web-reviewer'):
+            policy, ctx, env = self.context(name)
+            self.assertIn('vue3-master', ctx.plan_panes)
+            self.assertIn(name, ctx.plan_panes)
+            message = self.root / '.tmp/messages' / ('1790000000-123-abcdef12-vue3-master-to-' + name + '.md')
+            message.write_text('Complete cross-environment task\n')
+            message.chmod(0o600)
+            self.assertEqual(policy.validate_bash(ctx, 'cat ' + str(message), {}), 'coordination.message_read')
+            peer = self.root / '.tmp/messages/1790000000-123-abcdef12-vue3-master-to-vue3-executor.md'
+            peer.write_text('Peer task\n')
+            peer.chmod(0o600)
+            with self.assertRaises(policy.PolicyFailure):
+                policy.validate_bash(ctx, 'cat ' + str(peer), {})
+            # Mutable chat identity cannot replace the pane selected by the plan.
+            with patch.dict(os.environ, dict(env, SESSION_CHAT_PANE_NAME='vue3-executor'), clear=True):
+                loaded, failure = policy.load_context()
+            self.assertIsNone(loaded)
+            self.assertEqual(failure.rule, 'identity.alias')
+
     def shared_root(self):
         # Read test data from this test file, even when testing the original engine.
         self.cfg = json.loads((Path(__file__).resolve().parent / 'fixtures/valid/shared-root-orchestrators-v5.json').read_text())

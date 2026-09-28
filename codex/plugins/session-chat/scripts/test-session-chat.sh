@@ -833,4 +833,6 @@ ENTER_FAIL_OUT="$(TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" \
 assert_contains "RC=3" "$ENTER_FAIL_OUT"
 assert_file_contains "$TEST_HOME/messages/queue/recipient-test.tsv" "enter-fail-probe"
 
+python3 -B "$SCRIPT_DIR/test-dispatch-read.py" && ok || fail "20 KB dispatch read integration failed"
+
 echo "session-chat smoke tests: $ASSERTIONS passed, 0 failed"

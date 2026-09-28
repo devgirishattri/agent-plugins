@@ -376,7 +376,7 @@ as_exec "executor apply_patch Move to outside cwd is denied" '{"tool_name":"appl
 
 echo "== executor: shell stays available; routing and escapes are gated =="
 as_exec "executor arbitrary shell inside cwd is allowed" "$(bash_payload 'npm test')" '.decision == "allow"'
-as_exec "executor shell operand outside its cwd is denied (dispatch files are read via the Read tool)" "$(bash_payload "cat $FAKE_CLAUDE/messages/task.md")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor ungranted provider-inbox transport file is denied" "$(bash_payload "cat $FAKE_CLAUDE/messages/task.md")" '.decision == "deny" and .rule == "coordination.message_read"'
 as_exec "executor relative operand inside cwd is allowed" "$(bash_payload 'ls src/')" '.decision == "allow"'
 as_exec "executor absolute operand inside cwd is allowed" "$(bash_payload "cat $CHILD/README.md")" '.decision == "allow"'
 as_exec "executor /dev/null operand is allowed" "$(bash_payload 'cat /dev/null')" '.decision == "allow"'
@@ -487,7 +487,7 @@ jq '.stores.overrides.messages = ".tmp/replies"' "$CONFIG" > "$OVERRIDE_CONFIG"
 mkdir -p "$ROOT/.tmp/replies"
 expect "reviewer configured message override allowed" reviewer "$REVIEW_PANE" "$CHILD" "$OVERRIDE_CONFIG" enforce "$(write_payload "$ROOT/.tmp/replies/drafts/$REVIEW_PANE/review.md")" '.decision == "allow"'
 expect "reviewer old default excluded after override" reviewer "$REVIEW_PANE" "$CHILD" "$OVERRIDE_CONFIG" enforce "$(write_payload "$ROOT/.tmp/messages/drafts/$REVIEW_PANE/review.md")" '.decision == "deny" and (.rule == "reviewer.readonly" or .rule == "coordination.draft")'
-as_review "reviewer reading a GRANTED coordination store is allowed" "$(bash_payload "cat $ROOT/.tmp/messages/note.md")" '.decision == "allow"'
+as_review "reviewer reading unaddressed state in the GRANTED messages store is denied" "$(bash_payload "cat $ROOT/.tmp/messages/note.md")" '.decision == "deny" and .rule == "coordination.message_read"'
 as_review "reviewer reading an UNGRANTED store (memory) is denied" "$(bash_payload "cat $ROOT/.agents/memory/MEMORY.md")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer reading a stale (unselected) cache version is denied" "$(bash_payload "cat $STALE_SEND")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer reading a cache dir of a plugin not selected for this workspace is denied" "$(bash_payload "cat $CLAUDE_CACHE/unlisted-plugin/1.0.0/scripts/mystery.sh")" '.decision == "deny" and .rule == "reviewer.path"'
@@ -605,7 +605,7 @@ as_exec "executor stale Claude cache read denied" "$(bash_payload "cat $STALE_SE
 as_exec "executor stale Codex cache read denied" "$(bash_payload "cat $CODEX_STALE_SEND")" '.decision == "deny" and .rule == "executor.containment"'
 as_exec "executor unselected plugin read denied" "$(bash_payload "cat $CLAUDE_CACHE/unlisted-plugin/1.0.0/scripts/mystery.sh")" '.decision == "deny" and .rule == "executor.containment"'
 as_exec "executor foreign marketplace read denied" "$(bash_payload "cat $FAKE_CODEX/plugins/cache/other/session-chat/2.0.0/skills/reply/SKILL.md")" '.decision == "deny" and .rule == "executor.containment"'
-as_exec "executor provider inbox read remains denied" "$(bash_payload "cat $FAKE_CLAUDE/messages/task.md")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor provider inbox read remains denied" "$(bash_payload "cat $FAKE_CLAUDE/messages/task.md")" '.decision == "deny" and .rule == "coordination.message_read"'
 as_exec "executor scheduler store read remains denied" "$(bash_payload "cat $ROOT/.tmp/scheduler/tasks/task.json")" '.decision == "deny" and .rule == "executor.containment"'
 expect "executor tilde selected cache read control" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce \
   "$(bash_payload 'cat ~/plugins/cache/girishattri-plugins/session-chat/1.2.3/skills/reply/SKILL.md')" '.decision == "allow"' HOME="$FAKE_CLAUDE"
@@ -691,7 +691,7 @@ as_review "reviewer read of the workspace root is denied (only its own checkout)
 as_review "reviewer sibling checkout read via ../ is denied" "$(bash_payload 'cat ../component-b/secret.ts')" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer git -C sibling checkout is denied" "$(bash_payload "git -C $ROOT/component-b log")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer cat outside the workspace/trusted roots is denied" "$(bash_payload 'cat /etc/hosts')" '.decision == "deny" and .rule == "reviewer.path"'
-as_review "reviewer reading a dispatch file in the provider messages dir is allowed" "$(bash_payload "cat $FAKE_CLAUDE/messages/task.md")" '.decision == "allow"'
+as_review "reviewer reading an ungranted provider-inbox file is denied" "$(bash_payload "cat $FAKE_CLAUDE/messages/task.md")" '.decision == "deny" and .rule == "coordination.message_read"'
 as_review "reviewer reading a selected plugin cache file is allowed (operand, not execution)" "$(bash_payload "cat $SEND")" '.decision == "allow"'
 as_review "reviewer rg inside cwd is allowed" "$(bash_payload 'rg --no-config -n TODO src')" '.decision == "allow"'
 as_review "reviewer rg --pre is denied" "$(bash_payload 'rg --no-config --pre ./x TODO')" '.decision == "deny" and .rule == "reviewer.search"'
@@ -1038,6 +1038,188 @@ as_exec "executor operand resolved against the LAST -C (not composed) is allowed
 as_master "orchestrator repeated -C landing in a child (last is a child symlink) is denied" "$(bash_payload 'env -C wrap -C repeat-child npm test')" '.decision == "deny" and .rule == "orchestrator.child_write"'
 as_master "orchestrator repeated -C where the last is root-local is allowed (not composed through wrap/safe)" "$(bash_payload 'env -C wrap -C safe npm test')" '.decision == "allow"'
 as_master "orchestrator nested env hops still compose (wrap then safe -> child) and deny" "$(bash_payload 'env -C wrap env -C safe npm test')" '.decision == "deny" and .rule == "orchestrator.child_write"'
+
+echo "== delivered-message reads: own dispatches/drafts only, no aliases or store traversal =="
+# A delivered dispatch is <epoch>-<pid>-<id>-<from>-to-<to>.md written 0600 at
+# the top of the granted messages root. Endpoints must resolve to exactly one
+# pair of validated plan panes; this pane must be one of them.
+MSG="$ROOT/.tmp/messages"
+mkmsg() { printf 'task body %s\n' "$1" > "$MSG/$1"; chmod "${2:-600}" "$MSG/$1"; }
+TO_EXEC="1700000000-101-abcdef01-$MASTER_PANE-to-$EXEC_PANE.md"
+FROM_EXEC="1700000000-102-abcdef02-$EXEC_PANE-to-$MASTER_PANE.md"
+TO_REVIEW="1700000000-103-abcdef03-$MASTER_PANE-to-$REVIEW_PANE.md"
+OFF_PLAN="1700000000-104-abcdef04-stranger-to-$EXEC_PANE.md"
+LOOSE="1700000000-105-abcdef05-$MASTER_PANE-to-$EXEC_PANE.md"
+HARD="1700000000-106-abcdef06-$MASTER_PANE-to-$EXEC_PANE.md"
+LINKED="1700000000-107-abcdef07-$MASTER_PANE-to-$EXEC_PANE.md"
+BAD_ID="1700000000-108-NOTHEX00-$MASTER_PANE-to-$EXEC_PANE.md"
+mkmsg "$TO_EXEC"; mkmsg "$FROM_EXEC"; mkmsg "$TO_REVIEW"; mkmsg "$OFF_PLAN"; mkmsg "$LOOSE" 644; mkmsg "$HARD"; mkmsg "$BAD_ID"
+ln "$MSG/$HARD" "$TMPROOT/hardlink-copy.md"
+ln -s "$MSG/$TO_EXEC" "$MSG/$LINKED"
+mkdir -p "$MSG/archive" "$MSG/drafts/$EXEC_PANE"
+printf 'archived\n' > "$MSG/archive/$TO_EXEC"; chmod 600 "$MSG/archive/$TO_EXEC"
+printf 'my draft\n' > "$MSG/drafts/$EXEC_PANE/plan.md"
+printf 'sched\n' > "$ROOT/.tmp/scheduler/state.json"
+ln -s "$MSG" "$CHILD/msg-alias"
+M_READ='.decision == "allow" and .rule == "coordination.message_read"'
+M_DENY='.decision == "deny" and .rule == "coordination.message_read"'
+M_WALK='.decision == "deny" and .rule == "coordination.message_traversal"'
+as_exec "executor cat of a dispatch addressed to it is allowed" "$(bash_payload "cat $MSG/$TO_EXEC")" "$M_READ"
+as_exec "executor head of a dispatch it sent is allowed" "$(bash_payload "head -n 5 $MSG/$FROM_EXEC")" "$M_READ"
+as_exec "executor wc of its dispatch is allowed" "$(bash_payload "wc -l $MSG/$TO_EXEC")" "$M_READ"
+as_exec "executor rg of an explicit dispatch file is allowed" "$(bash_payload "rg --no-config -n body $MSG/$TO_EXEC")" "$M_READ"
+as_exec "executor Codex argv-shaped dispatch read is allowed" "$(jq -cn --arg f "$MSG/$TO_EXEC" '{tool_name:"shell",tool_input:{command:["cat",$f]}}')" "$M_READ"
+as_exec "executor read of a peer-to-peer dispatch is denied" "$(bash_payload "cat $MSG/$TO_REVIEW")" "$M_DENY"
+as_exec "executor read of a dispatch from an off-plan sender is denied" "$(bash_payload "cat $MSG/$OFF_PLAN")" "$M_DENY"
+as_exec "executor read of a group/other-readable dispatch is denied" "$(bash_payload "cat $MSG/$LOOSE")" "$M_DENY"
+as_exec "executor read of a hardlinked dispatch is denied" "$(bash_payload "cat $MSG/$HARD")" "$M_DENY"
+as_exec "executor read of a symlinked dispatch name is denied" "$(bash_payload "cat $MSG/$LINKED")" "$M_DENY"
+as_exec "executor read of a non-hex message id is denied" "$(bash_payload "cat $MSG/$BAD_ID")" "$M_DENY"
+as_exec "executor read of an own-named file in a store subdirectory is denied" "$(bash_payload "cat $MSG/archive/$TO_EXEC")" "$M_DENY"
+as_exec "executor read through a symlinked store directory is denied" "$(bash_payload "cat msg-alias/$TO_EXEC")" "$M_DENY"
+as_exec "executor read through a ../ alias is denied" "$(bash_payload "cat ../.tmp/messages/$TO_EXEC")" "$M_DENY"
+as_exec "executor ls of the messages root is denied" "$(bash_payload "ls $MSG")" "$M_DENY"
+as_exec "executor read of its own existing draft is allowed" "$(bash_payload "cat $MSG/drafts/$EXEC_PANE/plan.md")" "$M_READ"
+as_exec "executor read of a missing own draft is denied" "$(bash_payload "cat $MSG/drafts/$EXEC_PANE/absent.md")" "$M_DENY"
+as_exec "executor read of the reviewer's draft is denied" "$(bash_payload "cat $MSG/drafts/$REVIEW_PANE/review.md")" "$M_DENY"
+as_exec "executor git read of its dispatch is denied (no Git message grant)" "$(bash_payload "git diff --no-index $MSG/$TO_EXEC README.md")" "$M_DENY"
+as_exec "executor sort of dispatch content is allowed" "$(bash_payload "sort $MSG/$TO_EXEC")" "$M_READ"
+as_exec "executor sort cannot treat dispatch as file operands" "$(bash_payload "sort --files0-from=$MSG/$TO_EXEC")" "$M_DENY"
+as_review "reviewer sort of dispatch content is allowed" "$(bash_payload "sort $MSG/$TO_REVIEW")" "$M_READ"
+as_review "reviewer du cannot treat dispatch as file operands" "$(bash_payload "du --files0-from=$MSG/$TO_REVIEW")" "$M_DENY"
+for list_command in "sort --files0=$MSG/$TO_EXEC" "sort --fil=$MSG/$TO_EXEC" "wc --f=$MSG/$TO_EXEC"; do
+  as_exec "executor message file-list abbreviation denied: $list_command" "$(bash_payload "$list_command")" "$M_DENY"
+done
+printf '%s\0' "$MSG/$TO_EXEC" > "$CHILD/list.txt"
+as_review "reviewer plain sort content control" "$(bash_payload 'sort list.txt')" '.decision == "allow"'
+as_review "reviewer wc plain file control" "$(bash_payload 'wc -l list.txt')" '.decision == "allow"'
+as_review "reviewer du plain file control" "$(bash_payload 'du list.txt')" '.decision == "allow"'
+as_review "reviewer find literal starting path control" "$(bash_payload 'find src')" '.decision == "allow"'
+for list_command in 'sort --files0-from=list.txt' 'sort --files0=list.txt' 'sort --fil=list.txt' \
+    'du --files0-from=list.txt' 'du --f=list.txt' 'wc --files0-from=list.txt' 'wc --f=list.txt' 'find -files0-from list.txt'; do
+  as_review "reviewer file-list operand denied: $list_command" "$(bash_payload "$list_command")" '.decision == "deny" and .rule == "reviewer.file_list"'
+done
+as_exec "executor ordinary in-checkout file-list floor remains unchanged" "$(bash_payload 'sort --files0-from=list.txt')" '.decision == "allow" and .rule != "coordination.message_read"'
+as_exec "executor piped dispatch read stays under the shell floor" "$(bash_payload "cat $MSG/$TO_EXEC | head -n 1")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor copy of its dispatch into the checkout is denied" "$(bash_payload "cp $MSG/$TO_EXEC notes.md")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor copy of a peer dispatch is denied as a message read" "$(bash_payload "cp $MSG/$TO_REVIEW notes.md")" "$M_DENY"
+as_exec "executor redirect into its dispatch is denied" "$(bash_payload "printf x >> $MSG/$TO_EXEC")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor edit of a delivered dispatch is denied" "$(edit_payload "$MSG/$TO_EXEC")" '.decision == "deny" and .rule == "coordination.draft"'
+as_exec "executor edit of its own draft stays allowed" "$(edit_payload "$MSG/drafts/$EXEC_PANE/plan.md")" '.decision == "allow"'
+as_exec "executor tool workdir inside the messages root is denied" "$(jq -cn --arg d "$MSG" --arg c "cat $TO_EXEC" '{tool_name:"Bash",tool_input:{command:$c,workdir:$d}}')" "$M_WALK"
+as_exec "executor scheduler store read stays denied" "$(bash_payload "cat $ROOT/.tmp/scheduler/state.json")" '.decision == "deny" and .rule == "executor.containment"'
+as_review "reviewer cat of a dispatch addressed to it is allowed" "$(bash_payload "cat $MSG/$TO_REVIEW")" "$M_READ"
+as_review "reviewer read of the executor's dispatch is denied" "$(bash_payload "cat $MSG/$TO_EXEC")" "$M_DENY"
+as_review "reviewer read of its own existing draft is allowed" "$(bash_payload "cat $MSG/drafts/$REVIEW_PANE/review.md")" "$M_READ"
+as_review "reviewer read of the executor's draft is denied" "$(bash_payload "cat $MSG/drafts/$EXEC_PANE/plan.md")" "$M_DENY"
+as_review "reviewer recursive search of the messages root is denied" "$(bash_payload "rg --no-config body $MSG")" '.decision == "deny" and (.rule == "coordination.message_read" or .rule == "coordination.message_traversal")'
+as_review "reviewer find over the messages root is denied" "$(bash_payload "find $MSG -name '*.md'")" '.decision == "deny" and (.rule == "coordination.message_read" or .rule == "coordination.message_traversal")'
+as_review "reviewer git log of its dispatch is denied" "$(bash_payload "git log -- $MSG/$TO_REVIEW")" "$M_DENY"
+as_review "reviewer tool workdir inside the messages root is denied" "$(jq -cn --arg d "$MSG" --arg c "cat $TO_REVIEW" '{tool_name:"Bash",tool_input:{command:$c,workdir:$d}}')" '.decision == "deny"'
+as_review "reviewer non-message grant root read is unchanged" "$(bash_payload "cat $ROOT/.tmp/scheduler/state.json")" '.decision == "allow"'
+as_review "reviewer ordinary checkout read carries no message rule" "$(bash_payload 'cat README.md')" '.decision == "allow" and .rule != "coordination.message_read"'
+expect "reviewer without a messages grant cannot read its dispatch" reviewer "$REVIEW_PANE" "$CHILD" "$NO_MESSAGES_CONFIG" enforce "$(bash_payload "cat $MSG/$TO_REVIEW")" '.decision == "deny"'
+
+# Topology: a delimiter split must be unique across ALL validated plan panes.
+AMBIG_CONFIG="$ROOT/.agent-workspace/ambiguous.json"
+jq '.sessions[0].panes += [{name:"${PROJECT_ID}-master-to-x",role:"executor",cwd:"component-b"},{name:"x-to-${PROJECT_ID}-component-reviewer",role:"reviewer",cwd:"component-b"}]' "$CONFIG" > "$AMBIG_CONFIG"
+AMBIG="1700000000-109-abcdef09-$MASTER_PANE-to-x-to-$REVIEW_PANE.md"
+mkmsg "$AMBIG"
+expect "reviewer dispatch with two valid endpoint splits is denied" reviewer "$REVIEW_PANE" "$CHILD" "$AMBIG_CONFIG" enforce "$(bash_payload "cat $MSG/$AMBIG")" "$M_DENY"
+expect "reviewer unambiguous dispatch control under the same topology" reviewer "$REVIEW_PANE" "$CHILD" "$AMBIG_CONFIG" enforce "$(bash_payload "cat $MSG/$TO_REVIEW")" "$M_READ"
+expect "reviewer dispatch with the ambiguous name is denied under the base topology control" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(bash_payload "cat $MSG/$AMBIG")" "$M_DENY"
+SUFFIX="1700000000-110-abcdef0a-$MASTER_PANE-to-x-to-$EXEC_PANE.md"
+mkmsg "$SUFFIX"
+expect "executor name-suffix match to an unknown recipient is denied" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(bash_payload "cat $MSG/$SUFFIX")" "$M_DENY"
+
+# Store under the executor cwd (messages override inside the checkout):
+# explicit own reads work, peer reads and every traversal of the store do not.
+INCWD_CONFIG="$ROOT/.agent-workspace/messages-in-checkout.json"
+jq '.stores.overrides.messages = "component-a/.msgs"' "$CONFIG" > "$INCWD_CONFIG"
+IMSG="$CHILD/.msgs"
+mkdir -p "$IMSG"
+for name in "$TO_EXEC" "$TO_REVIEW"; do printf 'task body\n' > "$IMSG/$name"; chmod 600 "$IMSG/$name"; done
+as_incwd() { expect "$1" executor "$EXEC_PANE" "$CHILD" "$INCWD_CONFIG" enforce "$2" "$3"; }
+as_incwd "in-checkout store: relative read of its dispatch is allowed" "$(bash_payload "cat .msgs/$TO_EXEC")" "$M_READ"
+as_incwd "in-checkout store: relative read of a peer dispatch is denied" "$(bash_payload "cat .msgs/$TO_REVIEW")" "$M_DENY"
+INCWD_NO_MESSAGES_CONFIG="$ROOT/.agent-workspace/in-checkout-no-messages.json"
+jq '.roles.executor.grants = ["scheduler", "contexts", "memory"]' "$INCWD_CONFIG" > "$INCWD_NO_MESSAGES_CONFIG"
+expect "in-checkout store without messages grant cannot borrow checkout access" executor "$EXEC_PANE" "$CHILD" "$INCWD_NO_MESSAGES_CONFIG" enforce \
+  "$(bash_payload "cat .msgs/$TO_EXEC")" "$M_DENY"
+as_incwd "in-checkout store: rm of a peer dispatch is denied" "$(bash_payload "rm .msgs/$TO_REVIEW")" "$M_DENY"
+as_incwd "in-checkout store: tool workdir inside the store is denied" "$(jq -cn --arg d "$IMSG" --arg c "rm $TO_REVIEW" '{tool_name:"Bash",tool_input:{command:$c,workdir:$d}}')" "$M_WALK"
+as_incwd "in-checkout store: workdir-relative ../ alias is denied" "$(jq -cn --arg d "$CHILD/src" --arg c "cat ../.msgs/$TO_EXEC" '{tool_name:"Bash",tool_input:{command:$c,workdir:$d}}')" "$M_DENY"
+as_incwd "in-checkout store: rg over cwd is denied" "$(bash_payload 'rg --no-config body .')" "$M_WALK"
+as_incwd "in-checkout store: rg with implicit cwd is denied" "$(bash_payload 'rg --no-config body')" "$M_WALK"
+as_incwd "in-checkout store: rg whose pattern names a file is denied" "$(bash_payload 'rg --no-config README.md')" "$M_WALK"
+as_incwd "in-checkout store: rg of a subdirectory is allowed" "$(bash_payload 'rg --no-config body src')" '.decision == "allow"'
+as_incwd "in-checkout store: grep -r over cwd is denied" "$(bash_payload 'grep -r body .')" "$M_WALK"
+as_incwd "in-checkout store: grep -d recurse over cwd is denied" "$(bash_payload 'grep -d recurse body .')" "$M_WALK"
+as_incwd "in-checkout store: grep of one file is allowed" "$(bash_payload 'grep hello README.md')" '.decision == "allow"'
+as_incwd "in-checkout store: find with implicit start is denied" "$(bash_payload "find -name '*.md'")" "$M_WALK"
+as_incwd "in-checkout store: find of a subdirectory is allowed" "$(bash_payload "find src -name '*.md'")" '.decision == "allow"'
+as_incwd "in-checkout store: ls -R is denied" "$(bash_payload 'ls -R')" "$M_WALK"
+as_incwd "in-checkout store: ls of cwd is allowed" "$(bash_payload 'ls .')" '.decision == "allow"'
+as_incwd "in-checkout store: du of cwd is denied" "$(bash_payload 'du -sh')" "$M_WALK"
+as_incwd "in-checkout store: du depth option retains implicit cwd" "$(bash_payload 'du -d 1')" "$M_WALK"
+as_incwd "in-checkout store: bundled du depth retains implicit cwd" "$(bash_payload 'du -hd 1')" "$M_WALK"
+as_incwd "in-checkout store: rg pattern file retains implicit cwd" "$(bash_payload 'rg --no-config -f README.md')" "$M_WALK"
+as_incwd "in-checkout store: ls ignore option retains implicit cwd" "$(bash_payload 'ls -R -I README.md')" "$M_WALK"
+as_incwd "in-checkout store: bundled ls ignore retains implicit cwd" "$(bash_payload 'ls -RI README.md')" "$M_WALK"
+as_incwd "in-checkout store: du of a subdirectory is allowed" "$(bash_payload 'du -sh src')" '.decision == "allow"'
+rm -rf "$IMSG"
+echo "== message-read denial matrix for both receiving roles =="
+mkdir -p "$MSG/queue" "$MSG/nested"
+printf 'sent ledger\n' > "$MSG/sent-log.tsv"
+printf 'reply ledger\n' > "$MSG/replies-log.tsv"
+for message_role in executor reviewer; do
+  message_pane="$EXEC_PANE"
+  message_peer="$REVIEW_PANE"
+  [ "$message_role" != reviewer ] || { message_pane="$REVIEW_PANE"; message_peer="$EXEC_PANE"; }
+  received="1700000000-201-abcdef21-$MASTER_PANE-to-$message_pane.md"
+  sent="1700000000-202-abcdef22-$message_pane-to-$MASTER_PANE.md"
+  peer="1700000000-203-abcdef23-$MASTER_PANE-to-$message_peer.md"
+  mkmsg "$received"; mkmsg "$sent"; mkmsg "$peer"
+  for nested in queue archive nested; do
+    printf 'nested task\n' > "$MSG/$nested/$received"
+    chmod 600 "$MSG/$nested/$received"
+  done
+  linked="1700000000-204-abcdef24-$MASTER_PANE-to-$message_pane.md"
+  ln -s "$MSG/$received" "$MSG/$linked"
+  expect "$message_role matrix addressed control" "$message_role" "$message_pane" "$CHILD" "$CONFIG" enforce "$(bash_payload "cat $MSG/$received")" "$M_READ"
+  expect "$message_role matrix sent control" "$message_role" "$message_pane" "$CHILD" "$CONFIG" enforce "$(bash_payload "cat $MSG/$sent")" "$M_READ"
+  for forbidden in "$MSG/$peer" "$MSG/queue/$received" "$MSG/archive/$received" "$MSG/nested/$received" \
+      "$MSG/sent-log.tsv" "$MSG/replies-log.tsv" "$MSG/$linked" "$MSG/../messages/$received"; do
+    expect "$message_role matrix denies $forbidden" "$message_role" "$message_pane" "$CHILD" "$CONFIG" enforce "$(bash_payload "cat $forbidden")" "$M_DENY"
+  done
+  for command in "cat $MSG/*.md" "cat $MSG/$received | head" "cat $MSG/$received > saved.md" \
+      "cat \$SESSION_CHAT_TARGET_MESSAGES_DIR/$received" "cat '$MSG/*.md'"; do
+    expect "$message_role matrix denies dynamic/composed command $command" "$message_role" "$message_pane" "$CHILD" "$CONFIG" enforce "$(bash_payload "$command")" '.decision == "deny"'
+  done
+  expect "$message_role matrix rejects spoofed chat identity" "$message_role" "$message_pane" "$CHILD" "$CONFIG" enforce "$(bash_payload "cat $MSG/$peer")" \
+    '.decision == "deny" and .rule == "identity.alias"' SESSION_CHAT_PANE_NAME="$message_peer"
+  expect "$message_role matrix inherited store cannot grant peer reads" "$message_role" "$message_pane" "$CHILD" "$CONFIG" enforce "$(bash_payload "cat $MSG/$peer")" \
+    "$M_DENY" SESSION_CHAT_TARGET_MESSAGES_DIR="$MSG"
+  expect "$message_role matrix unchanged draft edit control" "$message_role" "$message_pane" "$CHILD" "$CONFIG" enforce \
+    "$(edit_payload "$MSG/drafts/$message_pane/own.md")" '.decision == "allow"'
+done
+# Overlapping -to- delimiters must also be enumerated. Both endpoint pairs
+# below are in the plan; accepting only the first split could leak a peer task.
+OVERLAP_CONFIG="$ROOT/.agent-workspace/overlap.json"
+jq '.sessions[0].panes[1].name = "a" | .sessions[0].panes += [{name:"a-to",role:"executor",cwd:"component-b"},{name:"to-b",role:"reviewer",cwd:"component-b"},{name:"b",role:"executor",cwd:"component-c"},{name:"b-review",role:"reviewer",cwd:"component-c"}]' "$CONFIG" > "$OVERLAP_CONFIG"
+mkdir -p "$ROOT/component-c"
+mkmsg '1700000000-205-abcdef25-a-to-to-b.md'
+mkmsg "1700000000-206-abcdef26-$MASTER_PANE-to-a.md"
+expect "overlapping delimiter control" executor a "$CHILD" "$OVERLAP_CONFIG" enforce "$(bash_payload "cat $MSG/1700000000-206-abcdef26-$MASTER_PANE-to-a.md")" "$M_READ"
+expect "overlapping delimiter ambiguity denied" executor a "$CHILD" "$OVERLAP_CONFIG" enforce "$(bash_payload "cat $MSG/1700000000-205-abcdef25-a-to-to-b.md")" "$M_DENY"
+for message_config in "$AMBIG_CONFIG" "$OVERLAP_CONFIG" "$INCWD_CONFIG" "$INCWD_NO_MESSAGES_CONFIG"; do
+  if bash "$HERE/validate-config.sh" --config "$message_config" >/dev/null 2>&1; then
+    pass "message fixture validates: $(basename "$message_config")"
+  else
+    fail "message fixture validates: $(basename "$message_config")" "invalid fixture cannot test message policy"
+  fi
+done
+rm -f "$CHILD/msg-alias"
 
 echo "== audit vs enforce =="
 expect "audit mode reports a policy denial as audit" reviewer "$REVIEW_PANE" "$CHILD" "$AUDIT_CONFIG" audit \

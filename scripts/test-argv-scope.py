@@ -172,8 +172,9 @@ class Cases:
             for command in ("grep -f", "rg --no-config --file", "sort -uo"):
                 with self.subTest(role=role, command=command):
                     self.check(role, "cat f.txt", "allow")
-                    rule = "reviewer.sort" if role == "reviewer" and command.startswith("sort") else "path.option"
-                    self.check(role, command, "deny", rule)
+                    # The message operand guard diagnoses missing values before
+                    # command-specific reviewer restrictions (including sort).
+                    self.check(role, command, "deny", "path.option")
 
     def test_redirect_targets_are_not_option_data(self):
         self.check("executor", ">sub/out", "allow")

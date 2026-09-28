@@ -1,5 +1,46 @@
 # Changelog
 
+## session-workspace 0.10.0 — 2026-09-28
+
+- Executors and reviewers may read complete delivered messages addressed to or
+  sent by their validated pane, and existing own drafts, through the existing
+  single literal read grammar. Delivered files must be private, owned regular
+  files with one link, directly in the validated messages grant, with no
+  traversal or symlink component. Filename endpoint parsing uses the complete
+  validated topology and rejects ambiguous or unknown pairs.
+- **Compatibility change:** reviewer shell reads no longer cover unrelated
+  messages, transport state, peer drafts, or ungranted provider inboxes. Removed
+  topology peers invalidate their historical payload access. Recursive reads
+  through an ancestor of a message store are refused (`rg`, `find`, `du`,
+  recursive `grep`, `ls -R`); name explicit safe subdirectories. Glob exclusions
+  do not override this boundary. Child tool workdirs inside stores are refused,
+  and executor operands resolve from the effective tool workdir.
+- Close a pre-existing reviewer read bypass: the restricted grammar rejects
+  NUL-separated file-list options in `sort`, `du`, `wc`, and `find`, including
+  long-option abbreviations, because list contents hide additional operands.
+  Ordinary executor in-checkout shell retains its existing floor; this does
+  not claim subprocess isolation. Ordinary content reads remain allowed. Bundled `du`
+  depth and `ls` ignore options cannot hide implicit recursive cwd traversal.
+  Git receives no message-store read exception.
+- Report scoped reads and denials as `coordination.message_read`, and recursive
+  traversal/workdir denials as `coordination.message_traversal`, including in
+  decision JSON. Own-draft native writes and coordinator rules are unchanged.
+- No schema/store migration. Update both plugins and restart affected panes.
+  Rollback restores the executor read failure and broader reviewer access.
+  This remains a shell-operand guardrail: Claude native Read, arbitrary program
+  internals, and same-user filesystem races are not isolated by this change.
+
+## session-chat 0.17.13 — 2026-09-28
+
+- Incoming file dispatches show a literal full-file read command before the
+  inline body. Truncation guidance points to that file, including when the total
+  hook-context cap truncates the body. Keep `SESSION_CHAT_DISPATCH_INLINE_MAX`
+  as a display tunable; reading a full task does not depend on raising it.
+  Claude's no-Python fallback now also reports byte-based inline truncation.
+- Pair with session-workspace 0.10.0 for scoped executor/reviewer reads. Drafts
+  and full transport copies keep their existing locations and send routing;
+  notify/assist consent behavior is unchanged. Update both plugins and restart.
+
 ## session-workspace 0.9.0 — 2026-09-28
 
 - **Behavior change:** orchestrator remote mutations through direct `gh` calls

@@ -222,6 +222,28 @@ compare_case "gh executor config containment unchanged" executor "$EXEC_PANE" "$
 compare_case "gh reviewer unchanged" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'gh pr list -R sample-org/component-a')" deny
 compare_case "gh audit mutation parity" master "$MASTER_PANE" "$PROJECT" "$AUDIT_CONFIG" audit "$(payload_bash 'gh api repositories/123/actions/runs -X DELETE')" deny
 
+MESSAGES="$PROJECT/.tmp/messages"
+mkdir -p "$MESSAGES/queue" "$MESSAGES/archive"
+for role in executor reviewer; do
+  pane="$EXEC_PANE"
+  [ "$role" != reviewer ] || pane="$REVIEW_PANE"
+  received="$MESSAGES/1790000000-123-abcdef12-$MASTER_PANE-to-$pane.md"
+  sent="$MESSAGES/1790000000-123-abcdef13-$pane-to-$MASTER_PANE.md"
+  peer="$MESSAGES/1790000000-123-abcdef14-$MASTER_PANE-to-$MASTER_PANE.md"
+  printf 'full task\n' > "$received"
+  printf 'reply\n' > "$sent"
+  printf 'peer\n' > "$peer"
+  chmod 600 "$received" "$sent" "$peer"
+  compare_case "$role own received dispatch" "$role" "$pane" "$CHILD" "$CONFIG" enforce "$(payload_bash "cat $received")" allow
+  compare_case "$role own sent dispatch" "$role" "$pane" "$CHILD" "$CONFIG" enforce "$(payload_bash "wc -c $sent")" allow
+  compare_case "$role unrelated dispatch" "$role" "$pane" "$CHILD" "$CONFIG" enforce "$(payload_bash "cat $peer")" deny
+  compare_case "$role message traversal" "$role" "$pane" "$CHILD" "$CONFIG" enforce "$(payload_bash "cat $MESSAGES/../messages/$(basename "$received")")" deny
+  compare_case "$role message pipeline" "$role" "$pane" "$CHILD" "$CONFIG" enforce "$(payload_bash "cat $received | head")" deny
+  compare_case "$role message store listing" "$role" "$pane" "$CHILD" "$CONFIG" enforce "$(payload_bash "ls $MESSAGES")" deny
+  compare_case "$role message queue" "$role" "$pane" "$CHILD" "$CONFIG" enforce "$(payload_bash "cat $MESSAGES/queue/task.md")" deny
+  compare_case "$role message edit" "$role" "$pane" "$CHILD" "$CONFIG" enforce "$(payload_edit "$received")" deny
+done
+
 PATCH_PAYLOAD="$(jq -cn --arg patch $'*** Begin Patch\n*** Update File: src/file.ts\n@@\n-old\n+new\n*** End Patch' '{tool_name:"apply_patch",tool_input:{patch:$patch}}')"
 compare_case "decoded apply_patch path" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$PATCH_PAYLOAD"
 

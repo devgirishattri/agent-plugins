@@ -50,6 +50,26 @@ Dispatch notifications are submitted as:
 
 The trailing id keeps the verification marker visible in TUIs that show the end of long input lines. In `auto`, the hook validates ownership, permissions, symlinks, and canonical containment, then inlines a bounded task body. `assist` and `notify` never inline it.
 
+With session-workspace 0.10.0, reviewers and executors can read complete
+delivered files addressed to or sent by their validated pane using the literal
+`cat '<absolute-path>'` command shown before the inline body. Keep the existing
+incoming-mode consent rules. `SESSION_CHAT_DISPATCH_INLINE_MAX` (default 6000)
+limits displayed characters, not the complete task. The full transport copy is
+saved directly in the validated messages grant as
+`<epoch>-<pid>-<id>-<sender>-to-<recipient>.md`; drafts remain under
+`drafts/<own-pane>/`. Sending retains the existing coordinator routes.
+
+Only private, owned, single-link regular delivered files with no symlink
+component or traversal qualify. Both filename endpoints must resolve uniquely
+in the validated plan. Own existing drafts are readable too; unrelated
+messages, peer drafts, queue/archive/ledger state, subdirectories and ungranted
+provider inboxes are denied. Reviewers lose their former broad store reads.
+Use one literal read command, without pipes, redirection, expansion, globs,
+`sed` or symlink-follow options. Recursive ancestor searches into the store are
+denied; name explicit safe subdirectories. Writes still use native tools only
+for own drafts. Coordinator behavior and Claude's ungated native Read remain
+unchanged. Update both plugins and restart affected panes.
+
 ## Staging files under a strict-v1 harness
 
 Under an active strict-v1 harness, a reviewer, executor, or confined coordinator
@@ -61,7 +81,7 @@ variables to grant access. Choose a fresh name such as
 contains only ASCII letters, digits, `.`, `_`, or `-`, and is at most 128
 characters; the suffix is `.md` or `.txt`. Use native `apply_patch` to create,
 revise, or delete only your own draft. Shell staging and shell cleanup are blocked.
-Transport messages, other panes' drafts, queue/archive/ledger state, symlinks,
+Writes to transport messages, other panes' drafts, queue/archive/ledger state, symlinks,
 hardlinks, moves, and patches mixing drafts with other files are forbidden.
 If the messages grant or native writer is unavailable, report the missing
 capability; do not truncate the reply or fall back to shell interpolation.

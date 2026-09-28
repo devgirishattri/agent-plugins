@@ -186,9 +186,30 @@ them:
   user tunable; changing or removing paths fails closed in both modes until
   the affected session is restarted. Omitted/empty paths keep old behavior.
   Hooks are not an atomic filesystem sandbox against racing same-uid swaps.
+- **Message reads (0.10.0)**: executors and reviewers may read a complete
+  delivered message addressed to or sent by their validated pane, or an existing
+  own draft, using the existing single literal non-Git read grammar. Use the
+  quoted `cat '<absolute-path>'` command printed before the incoming body;
+  inline truncation is not a task-size limit. Delivered files must sit directly
+  in the plan's messages grant, be private owned regular single-link files,
+  and have no symlink component or `..` traversal. Parse the generated
+  `<epoch>-<pid>-<id>-<sender>-to-<recipient>.md` name against all validated
+  pane names; exactly one endpoint pair must match, with this pane at one end.
+  Ambiguous or removed peers fail closed. No environment override grants reads.
+  Reviewers lose broad message-store and ungranted provider-inbox access.
+  Peer files, queue/archive/ledger state and message-store workdirs are denied.
+  Recursive reads from ancestors of the store (`rg`, `find`, `du`, recursive
+  `grep`, `ls -R`) are denied; name explicit safe subdirectories, not glob
+  exclusions. Own-draft native writes and coordinator behavior are unchanged.
+  Claude native Read remains ungated; these operand checks do not isolate
+  arbitrary program internals or concurrent same-user filesystem changes.
+  Update session-chat to 0.17.13 and workspace to 0.10.0, then restart panes.
+  No schema/store migration. Rollback restores the executor read failure and
+  broader reviewer access.
 - **Executor**: explicit per-pane `read_paths` also permit single literal shell
   reads using the reviewer read-command restrictions above (the executor's own
-  checkout plus its grants; never helper stores or message inboxes). Executor
+  checkout plus its grants; never helper stores, and message inboxes only
+  under the message-read rules above). Executor
   tool workdirs must remain inside its checkout; use relative or absolute
   operands for shared docs, for example `cat ../docs/guide.md`. Grants never
   permit writes or composed shell commands outside the checkout. A command
@@ -224,7 +245,7 @@ them:
   Otherwise, edits and shell path operands must stay inside its own
   checkout (the fixed `/dev/null` sink/source is the only exempt operand); inline code (`bash -c`, `python -c`) and sandbox-escape flags
   are blocked; it may only message the orchestrator. Read dispatch files
-  with the `Read` tool and stage multiline prompt files only through draft
+  with the literal read command above and stage multiline prompt files only through draft
   staging above (checkout, scratchpad, and `$TMPDIR` staging are not the
   contract; `$TMPDIR` writes are refused by containment).
 - **Orchestrator**: cannot edit or run mutating commands against a child

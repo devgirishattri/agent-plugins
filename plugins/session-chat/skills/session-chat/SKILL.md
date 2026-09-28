@@ -81,7 +81,19 @@ When a session-workspace strict-v1 harness is active and you are a child pane (r
 4. Dispatch it by absolute path: `bash <plugin-root>/scripts/dispatch-to-session.sh --reply-to <incoming-id> <pane> <messages-path>/drafts/<your-pane-name>/<name>.md` (omit `--reply-to` for a new task).
 5. **Durable success** (`Dispatched task to …` or `Queued dispatch …`): delete the draft with a native delete tool where one exists (Codex `apply_patch` Delete File). Claude has no native delete tool and shell `rm` into the store is denied, so a Claude pane leaves the draft in place; it is inert (the transport copies the content into a new delivered file and never reads `drafts/`). **Hard failure** (`ERROR:` and non-zero exit): keep the draft, fix the named cause, and retry with the same file.
 
-Nothing sweeps drafts automatically; cleanup of leftovers is an explicit user request. Read incoming dispatch files with the native `Read` tool or a trusted helper; arbitrary shell commands naming the store are blocked for executors and confined coordinators. The root orchestrator's existing authority over store files is unchanged.
+Nothing sweeps drafts automatically; cleanup of leftovers is an explicit user request. The root orchestrator's existing authority over store files is unchanged.
+
+## Reading complete dispatches under a strict-v1 harness
+
+In `auto` mode the incoming hook inlines at most `SESSION_CHAT_DISPATCH_INLINE_MAX` characters (default 6000) of a trusted dispatch and prints `Full task read command: cat '<absolute-path>'` **before** the body. That cap limits what is displayed, not the task size: never split a task into numbered parts to fit it. `assist` offers the same command only for use after the local user approves; `notify` offers none. Incoming-mode consent rules are unchanged.
+
+With session-workspace 0.10.0, reviewer and executor panes can run that command verbatim. The transport saves every dispatch at the top of the validated messages grant as `<epoch>-<pid>-<id>-<sender>-to-<recipient>.md`, and a read is allowed only when:
+
+- the filename's endpoints resolve to exactly one pair of validated plan panes, with this pane as sender or recipient;
+- the file is a private (no group/other bits), owned, single-link regular file directly in the grant, reached with no symlink component or `..` traversal;
+- the command is one literal read (`cat`, `head`, `tail`, `wc`, `rg --no-config`, ...) with no pipe, redirection, expansion, glob, `git`, symlink-follow option, or `--files0-from` file list.
+
+Your own existing drafts are readable the same way. Other panes' messages and drafts, queue/archive/ledger state, subdirectories, ungranted provider inboxes, and tool workdirs inside the store are denied, and reviewers no longer get the broad store reads they had before 0.10.0. Recursive reads from an ancestor of the store (`rg`, `find`, `du`, recursive `grep`, `ls -R`, including the implicit cwd) are denied; name explicit subdirectories outside the store instead. Writes remain limited to your own drafts through the native write tool. strict-v1 does not gate Claude's native `Read` tool, so the command above is the portable path for both providers.
 
 ## Priorities and TTL
 

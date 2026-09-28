@@ -12,10 +12,10 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.7.10 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.12 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-chat` | 0.17.13 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.30 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.9.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.10.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -383,6 +383,50 @@ memory root) must already exist or the first agent to write to one can fail.
 mkdir -p "$STORES_BASE"/{messages,scheduler,contexts}
 chmod 700 "$STORES_BASE"/{messages,scheduler,contexts}
 ```
+
+#### Message store access
+
+With session-workspace 0.10.0 and session-chat 0.17.13, executors and reviewers
+can read complete file dispatches using one literal command such as
+`cat '<absolute-message-path>'`. The incoming hook prints that command before
+the inline body, so the complete task remains available when either the
+`SESSION_CHAT_DISPATCH_INLINE_MAX` limit or the total hook-context limit is hit.
+The inline limit is a display tunable, not a task-size limit. Incoming
+`notify`/`assist` consent rules still apply.
+
+The trusted dispatch helper saves the complete transport copy directly in the
+validated messages grant as `<epoch>-<pid>-<id>-<sender>-to-<recipient>.md`.
+This is normally `<workspace>/.tmp/messages`; configured store overrides remain
+supported. Editable drafts stay in `drafts/<own-pane>/` beneath that root.
+The policy takes roots and pane identity from the validated plan, never from
+an inherited store or pane-name override. Sending still follows the existing
+coordinator routes; this read grant does not enable peer-to-peer sends.
+
+Child shell reads allow only existing own drafts or private, single-link,
+regular delivered files sent by or addressed to that pane. Both endpoints must
+form exactly one valid pair in the current plan, including when names contain
+`-to-`. Historical files involving removed panes or ambiguous pairs fail closed.
+Traversal, symlink components, other panes' messages/drafts, subdirectories,
+queue/archive/ledger state, and ungranted provider inboxes are denied. Reviewers
+previously had broader message-store reads; 0.10.0 deliberately narrows them.
+The existing read grammar applies: no pipes, redirection, expansion, globs,
+`sed`, or symlink-follow options. Own-draft writes and coordinator access are
+unchanged; delivered files are written by trusted helpers.
+The restricted read grammar rejects NUL-separated filename-list options in
+`sort`, `du`, `wc`, and `find`, including long-option abbreviations. File contents
+cannot supply unchecked read operands. Ordinary executor in-checkout shell
+commands retain their existing floor; this is not general process isolation.
+Git operands do not receive this message-read exception.
+
+Recursive reads that could enter the store are also denied, including `rg`,
+`find`, `du`, recursive `grep`, and `ls -R` from an ancestor directory. Name
+explicit safe subdirectories; glob exclusions do not grant an exception.
+Child shell workdirs cannot be inside the store. These are shell-operand
+guardrails, not filesystem isolation: Claude native `Read` remains ungated,
+and arbitrary executable internals and concurrent same-user filesystem swaps
+are not covered. Update both plugins and restart affected panes; there is no
+schema or store migration. Rollback restores the executor read failure and
+the broader reviewer access.
 
 Under strict-v1 (workspace 0.7.1), reviewers, executors, and confined coordinators
 with a validated `messages` grant may use native edit tools to create, revise,

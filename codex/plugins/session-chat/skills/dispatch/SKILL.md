@@ -32,10 +32,18 @@ variables to grant access. Choose a fresh name such as
 contains only ASCII letters, digits, `.`, `_`, or `-`, and is at most 128
 characters; the suffix is `.md` or `.txt`. Use native `apply_patch` to create,
 revise, or delete only your own draft. Shell staging and shell cleanup are blocked.
-Transport messages, other panes' drafts, queue/archive/ledger state, symlinks,
+Writes to transport messages, other panes' drafts, queue/archive/ledger state, symlinks,
 hardlinks, moves, and patches mixing drafts with other files are forbidden.
 If the messages grant or native writer is unavailable, report the missing
 capability; do not truncate the reply or fall back to shell interpolation.
+With session-workspace 0.10.0, the recipient can read the complete delivered
+copy using the literal `cat '<absolute-path>'` command shown by the incoming
+hook. The helper saves it directly in the validated messages grant as
+`<epoch>-<pid>-<id>-<sender>-to-<recipient>.md`. Inline truncation never requires
+splitting a task. Executor/reviewer reads require self as sender or recipient,
+unique validated topology endpoints, and a private regular file without
+symlinks or traversal. Existing own drafts are readable; sending routes and
+incoming-mode consent remain unchanged.
 Outside this harness, create a temporary directory with `mktemp -d` in a separate
 shell call and use a native tool to write the file there.
 

@@ -364,6 +364,52 @@ else
   fail "trust_inline_auto" "expected inlined body, got: $out"
 fi
 
+# 13a: the exact literal read command (canonical path) precedes the inline body,
+# so a strict-v1 pane can fetch the full task even when the emit cap cuts the tail.
+DMSGS_CANON="$(cd "$DMSGS" && pwd -P)"
+header=${out%%Task content follows*}
+if printf '%s' "$header" | grep -qF "Full task read command: cat '$DMSGS_CANON/task-ok.md'"; then
+  pass "inline_read_command_before_body"
+else
+  fail "inline_read_command_before_body" "expected canonical cat command ahead of the body, got: ${out:0:300}"
+fi
+
+# 13a2: assist keeps the user-authorization gate and offers the command only after approval
+out=$(detect_run assist "$DMSGS/task-ok.md")
+if echo "$out" | grep -q 'ask the local user before reading the file' \
+   && printf '%s' "$out" | grep -qF "Only after the user approves, read it with this exact command: cat '$DMSGS_CANON/task-ok.md'" \
+   && ! echo "$out" | grep -q 'PLEASE-BUILD-THE-WIDGET'; then
+  pass "assist_read_command_after_approval"
+else
+  fail "assist_read_command_after_approval" "got: $out"
+fi
+
+# 13a3: notify never offers a read command (untrusted until the user decides)
+out=$(detect_run notify "$DMSGS/task-ok.md")
+if echo "$out" | grep -q 'do not read it' && ! echo "$out" | grep -q 'exact command'; then
+  pass "notify_no_read_command"
+else
+  fail "notify_no_read_command" "got: $out"
+fi
+
+# 13a4: an apostrophe in the messages path stays one literal single-quoted operand
+QHOME=$(mktemp -d)/"it's home"
+mkdir -p "$QHOME/.claude/messages"
+printf 'QUOTED-TASK\n' > "$QHOME/.claude/messages/q.md"
+chmod 600 "$QHOME/.claude/messages/q.md"
+qout=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:abcd1235] dispatch (1 lines)"}' "$QHOME/.claude/messages/q.md" \
+  | env HOME="$QHOME" TMUX="fake-socket,0,0" CLAUDE_PLUGIN_ROOT="" SESSION_CHAT_INCOMING_MODE=auto bash "$HERE/detect-incoming-message.sh")
+qcmd=$(printf '%s' "$qout" | python3 -c '
+import json,re,sys
+m=re.search(r"Full task read command: (cat .*?)\n", json.loads(sys.stdin.read()).get("systemMessage",""))
+print(m.group(1) if m else "")' 2>/dev/null)
+if [ -n "$qcmd" ] && [ "$(bash -c "$qcmd" 2>/dev/null)" = "QUOTED-TASK" ]; then
+  pass "read_command_quotes_apostrophe"
+else
+  fail "read_command_quotes_apostrophe" "cmd=[$qcmd] out=${qout:0:300}"
+fi
+rm -rf "$(dirname "$QHOME")"
+
 # 13b: notify mode must NOT inline the body (untrusted-by-default)
 out=$(detect_run notify "$DMSGS/task-ok.md")
 if echo "$out" | grep -q 'untrusted' && ! echo "$out" | grep -q 'PLEASE-BUILD-THE-WIDGET'; then
@@ -1207,6 +1253,19 @@ else
   fail "lib_less_claude_home_fallback_and_override_precedence" "a_out=$chb_a_out b_out=$chb_b_out"
 fi
 rm -rf "$CHB_FAKEHOME" "$CHB_BASE" "$CHB_OV"
+
+# --- Cross-plugin integration: a real 20 KB dispatch is fully readable ---
+# Real dispatch helper + isolated tmux socket -> incoming hook header ->
+# validated strict-v1 --decision-json -> execute the emitted cat and compare
+# every byte, for both receiving roles at the default inline cap and past the
+# outer context cap, with a wrong-role negative control. Needs the sibling
+# session-workspace plugin (present in this source tree).
+if python3 -B "$HERE/test-dispatch-read.py" >"${TMPDIR:-/tmp}/session-chat-dispatch-read.$$.log" 2>&1; then
+  pass "dispatch_read_20kb_integration"
+else
+  fail "dispatch_read_20kb_integration" "$(tail -20 "${TMPDIR:-/tmp}/session-chat-dispatch-read.$$.log")"
+fi
+rm -f "${TMPDIR:-/tmp}/session-chat-dispatch-read.$$.log"
 
 # --- Summary ---
 echo
