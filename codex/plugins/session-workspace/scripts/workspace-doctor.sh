@@ -402,6 +402,25 @@ check_secrets() {
   [ -n "$CONFIG_JSON" ] || return 0
   [ "$CONFIG_VALID" -eq 1 ] || return 0
 
+  local policy_details
+  policy_details="$(printf '%s' "$CONFIG_JSON" | jq -r -L "$HERE" '
+    include "secret-policy";
+    select((.secrets.allow // [] | length) > 0) |
+    secret_keys_by_role as $roles |
+    ($roles | to_entries[] | "role " + .key + ": " + (.value | tojson)),
+    (secret_entries[].key as $key |
+     select([$roles[] | index($key) | select(. != null)] | length == 0) |
+     "INFO no effective recipient: " + $key)
+  ')" || {
+    add_check "secrets.visibility" "secret visibility" "ERROR" "cannot compute secret visibility" \
+      "Check the installed secret-policy.jq module and jq runtime."
+    return 0
+  }
+  if [ -n "$policy_details" ]; then
+    add_check "secrets.visibility" "secret visibility" "INFO" \
+      "effective key names by configured role (no values)" "" "$policy_details"
+  fi
+
   local env_file
   env_file="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.env_file // empty')"
   if [ -z "$env_file" ]; then
@@ -499,7 +518,11 @@ WARN git-ignore status unverifiable (project root is not a git repository, or gi
     on_missing="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.on_missing // "warn"')"
     key_status="WARN"
     [ "$on_missing" = "fail" ] && key_status="ERROR"
-    allow_rows="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.allow[]?')"
+    allow_rows="$(printf '%s' "$CONFIG_JSON" | jq -r -L "$HERE" 'include "secret-policy"; secret_doctor_keys[]')" || {
+      add_check "secrets.env_file" "secrets file" "ERROR" "cannot compute keys for secret file checks" \
+        "Check the installed secret-policy.jq module and jq runtime."
+      return 0
+    }
     while IFS= read -r key; do
       [ -n "$key" ] || continue
       value=""
@@ -525,6 +548,12 @@ WARN quote-wrapped allowed key: $key"
 $key_status unresolvable allowed key: $key"
           ;;
       esac
+      if [ "$value_status" -ne 0 ] && printf '%s' "$CONFIG_JSON" | jq -e -L "$HERE" 'include "secret-policy"; secret_has_role_rules' >/dev/null; then
+        local affected_roles
+        affected_roles="$(printf '%s' "$CONFIG_JSON" | jq -c -L "$HERE" --arg k "$key" 'include "secret-policy"; secret_keys_by_role | to_entries | map(select(.value | index($k)) | .key)')"
+        details="$details
+affected roles for $key: $affected_roles"
+      fi
     done <<<"$allow_rows"
 
     if [ "$missing_count" -gt 0 ]; then

@@ -1,4 +1,5 @@
 include "runtime";
+include "secret-policy";
 
 ## compute-plan.jq — pure jq half of `workspace-plan`.
 ##
@@ -94,6 +95,7 @@ def coordination_var_name(store):
 ({
   schema_version: $cfg.schema_version,
   config_path: $config_path,
+  secret_keys_by_role: ($cfg | secret_keys_by_role),
   environments: ($cfg.environments // []),
   integrations: ($cfg.integrations // {}),
   integration_store: (if ($pin | index("integrations")) != null then store_path($store_base; $store_overrides; "integrations") else null end),
@@ -139,6 +141,7 @@ def coordination_var_name(store):
           | {
               name: $p.name,
               role: $p.role,
+              secret_keys: ($cfg | secret_keys_for_role($p.role)),
               scope: (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then {
                 environments: ($cfg.environments | map(del(.jev))),
                 environment: ([$cfg.environments[] | select((.development + .services) | index($s.id)) | .id][0] // null),

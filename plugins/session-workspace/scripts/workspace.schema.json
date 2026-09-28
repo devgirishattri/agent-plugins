@@ -803,20 +803,50 @@
         "allow": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "key",
+                  "roles"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                  },
+                  "roles": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Configured role names; intersected with visible_to_roles. Empty grants nothing."
+                  }
+                }
+              }
+            ]
+          },
+          "description": "Unique case-sensitive secret keys. Strings inherit visible_to_roles; objects narrow it by intersection with roles. Empty roles grant nothing. Duplicate keys across either form are invalid."
         },
         "visible_to_roles": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Global access ceiling for all allow entries. Omitted or empty grants nothing, even for objects."
         },
         "on_missing": {
           "enum": [
             "warn",
             "fail"
-          ]
+          ],
+          "description": "Applies only to keys the receiving role is entitled to. Default warn."
         }
       }
     },
@@ -937,7 +967,10 @@
                   "type": "array",
                   "maxItems": 16,
                   "uniqueItems": true,
-                  "items": {"type": "string", "minLength": 1}
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
                 },
                 "command": {
                   "type": "array",

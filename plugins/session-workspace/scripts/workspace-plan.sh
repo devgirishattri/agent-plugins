@@ -140,6 +140,7 @@ flag_or_none() {
 printf 'session-workspace plan — %s\n' "$CONFIG_PATH"
 printf '%s\n' "$PLAN_JSON" | jq -r '
   "project: \(.project.id) (\(.project.display_name))  root=\(.project.root)",
+  "secret_keys_by_role (names only): " + (.secret_keys_by_role | tojson),
   (if .harness.active then
      "harness: active  mode=\(.harness.mode)  profile=\(.harness.profile)",
      (if .harness.guards then "guards: " + (.harness.guards | tojson) else empty end)
@@ -202,6 +203,7 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
     printf '\n'
     printf '    role=%s  runtime=%s  program=%s\n' "$p_role" "$p_rt" "$p_prog"
     printf '    cwd=%s\n' "$p_cwd"
+    printf '%s\n' "$pane" | jq -r '"    secret_keys (names only): " + (.secret_keys | tojson)'
     printf '%s\n' "$pane" | jq -r 'if (.read_paths // [] | length) > 0 then "    read_paths (shell only): " + (.read_paths | tojson) else empty end'
     [ -n "$p_command" ] && printf '    command: %s\n' "$p_command"
     [ -n "$p_port" ] && printf '    port: %s\n' "$p_port"

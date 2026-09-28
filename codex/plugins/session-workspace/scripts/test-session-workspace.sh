@@ -1415,6 +1415,11 @@ else
 fi
 
 echo "== Phase C: secrets =="
+if python3 -B "$HERE/test-secret-roles.py"; then
+  pass "per-secret roles: legacy, grants, denial, validation, missing scope, names-only reporting"
+else
+  fail "per-secret roles regressions" "see unittest output"
+fi
 SECRET_VALUE="SUPER-SECRET-VALUE-9f8e7d2c1b"
 SECRETS2_DIR="$TMPROOT/secrets2-project"
 mkdir -p "$SECRETS2_DIR/.agent-workspace"

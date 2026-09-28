@@ -39,7 +39,7 @@
 #     KNOWLEDGE_PANE_NAME is an authorization boundary.
 #
 # secret-file resolves every secrets.allow[] key this pane's role may see
-# (per secrets.visible_to_roles) and writes "KEY=VALUE" lines to a fresh,
+# (global visibility intersected with per-key roles) and writes "KEY=VALUE" lines to a fresh,
 # private (mode 0600), single-use temp file, printing only the file's PATH on
 # stdout -- never the value. lifecycle.sh embeds that path (not secret) into
 # the pane's own launch script, which reads the file with shell builtins
@@ -524,9 +524,8 @@ _is_valid_identifier() {
 # Caller environment wins over the file (per the plan's binding rule). Prints
 # the resolved value on stdout and returns 0, or returns 1 with nothing
 # printed if neither source has it. Never logs the value anywhere else —
-# callers must be equally careful (see secret-argv below: the value only ever
-# lands inside the ADAPT_ARGV-style tmux set-environment argv array, never in
-# an echoed message).
+# callers must be equally careful: delivery writes only the private transfer
+# file; the explicit secret-value lookup returns the value on stdout.
 #
 # SECURITY: KEY comes straight from config (secrets.allow[]) and must never
 # be resolved via bash indirect expansion ("${!key}") — indirect expansion
@@ -551,18 +550,6 @@ resolve_secret_value() {
     return 0
   fi
   _parse_env_file_value "$env_file" "$key"
-}
-
-# role_may_see_secret ROLE VISIBLE_TO_ROLES_CSV
-# VISIBLE_TO_ROLES_CSV is a space-joined list (from secrets.visible_to_roles).
-role_may_see_secret() {
-  local role="$1"
-  shift
-  local r
-  for r in "$@"; do
-    [ "$r" = "$role" ] && return 0
-  done
-  return 1
 }
 
 # ============================================================================
@@ -796,23 +783,16 @@ cmd_secret_value() {
 
   _load_plan_and_pane "$config_override" "$pane_name" || return 1
 
-  local allow_json
-  allow_json="$(printf '%s' "$CONFIG_JSON" | jq -c '.secrets.allow // []')"
-  if ! printf '%s' "$allow_json" | jq -e --arg k "$key" 'index($k) != null' >/dev/null; then
-    echo "ERROR: adapters: \"$key\" is not in secrets.allow" >&2
-    return 1
-  fi
-
-  local visible_json
-  visible_json="$(printf '%s' "$CONFIG_JSON" | jq -c '.secrets.visible_to_roles // []')"
-  local visible_roles=()
-  while IFS= read -r r; do
-    [ -n "$r" ] && visible_roles+=("$r")
-  done < <(printf '%s' "$visible_json" | jq -r '.[]')
-  if ! role_may_see_secret "$ROLE_NAME" "${visible_roles[@]:-}"; then
-    echo "ERROR: adapters: role \"$ROLE_NAME\" is not in secrets.visible_to_roles" >&2
-    return 1
-  fi
+  # Authorize before inspecting either value source. Denials reveal policy only.
+  local denial
+  denial="$(printf '%s' "$CONFIG_JSON" | jq -r -L "$HERE" --arg r "$ROLE_NAME" --arg k "$key" 'include "secret-policy"; secret_denial($r; $k) // empty')" || return 1
+  case "$denial" in
+    '') ;;
+    not_allowed) echo "ERROR: adapters: \"$key\" is not in secrets.allow" >&2; return 1 ;;
+    global_role) echo "ERROR: adapters: role \"$ROLE_NAME\" is denied by secrets.visible_to_roles for key \"$key\"" >&2; return 1 ;;
+    key_role) echo "ERROR: adapters: role \"$ROLE_NAME\" is denied by secrets.allow entry roles for key \"$key\"" >&2; return 1 ;;
+    *) echo "ERROR: adapters: secret access denied: unknown role or policy result" >&2; return 1 ;;
+  esac
 
   local root_abs env_file_rel env_file_abs=""
   root_abs="$(printf '%s' "$PLAN_JSON" | jq -r '.project.root')"
@@ -851,17 +831,10 @@ cmd_secret_file() {
 
   _load_plan_and_pane "$config_override" "$pane_name" || return 1
 
+  # Filtering precedes resolution and on_missing; no entitled keys means no file.
   local allow_json
-  allow_json="$(printf '%s' "$CONFIG_JSON" | jq -c '.secrets.allow // []')"
+  allow_json="$(printf '%s' "$CONFIG_JSON" | jq -c -L "$HERE" --arg r "$ROLE_NAME" 'include "secret-policy"; secret_keys_for_role($r)')" || return 1
   [ "$(printf '%s' "$allow_json" | jq 'length')" -gt 0 ] || return 0
-
-  local visible_json
-  visible_json="$(printf '%s' "$CONFIG_JSON" | jq -c '.secrets.visible_to_roles // []')"
-  local visible_roles=()
-  while IFS= read -r r; do
-    [ -n "$r" ] && visible_roles+=("$r")
-  done < <(printf '%s' "$visible_json" | jq -r '.[]')
-  role_may_see_secret "$ROLE_NAME" "${visible_roles[@]:-}" || return 0
 
   local on_missing
   on_missing="$(printf '%s' "$CONFIG_JSON" | jq -r '.secrets.on_missing // "warn"')"

@@ -72,6 +72,38 @@ git-ignore state).
 
 ### Secret delivery
 
+From 0.8.0, `secrets.allow` accepts strings and closed objects with required
+`key` and `roles` fields, for example
+`["SHARED_TOKEN", {"key":"MCP_TOKEN","roles":["master"]}]`.
+Strings inherit `secrets.visible_to_roles`; objects receive its intersection
+with their own `roles`. The global list is always a ceiling. Omitted/empty
+global visibility or empty per-key roles grants nothing. Role names reference
+the configured `roles` map, not fixed semantic role labels. Unknown roles,
+duplicate object role names, duplicate keys (exact, case-sensitive across both
+forms), invalid identifiers, unknown object fields, and missing/null object
+fields fail validation. Keys match `^[A-Za-z_][A-Za-z0-9_]*$`.
+
+Both secret-file delivery and the explicit single-key lookup authorize before
+resolving values. `on_missing` applies only to entitled keys; a missing
+master-only token cannot warn or block executor delivery. Lookup denials name
+the allowlist, global ceiling, or per-key roles rule without revealing value
+presence. Plan reports `secret_keys_by_role` and each pane's `secret_keys` as
+names only. Doctor reports effective names by role and keys with no recipient;
+for object/mixed configs its file checks cover only effective keys and name
+affected roles. Legacy string-only doctor file checks still scan every key.
+Doctor is workspace-wide and diagnoses the file; caller environment overrides
+still apply at delivery. The authorized `secret-value` command intentionally
+returns the resolved value; never use it to populate reports or logs.
+
+Migration: existing unique-key string configs need no change. Before adding a
+role to global visibility, convert keys that role must not receive to object
+entries in the same edit. Update both providers, inspect plan/doctor, then
+restart affected panes and MCP processes. No `schema_version` or store migration
+is required. Restore a safely restricted string-only config before downgrading;
+never flatten object entries into strings under a widened global list. This
+controls workspace delivery, not same-user filesystem access or independently
+inherited credentials.
+
 A secret is delivered to exactly one pane's spawned PROCESS environment via
 a private, single-use, mode-0600 file: `adapters.sh secret-file` resolves
 and gates it (`secrets.allow` / `visible_to_roles` / `on_missing`), writes

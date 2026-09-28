@@ -130,10 +130,16 @@ into the environment of new processes — only regular (non-secret) pinned
 env uses that mechanism (see `env.groups.*.pin_to_session` below).
 
 `secrets.allow` is the list of keys a pane may request; `secrets.visible_to_roles`
-restricts which *roles* ever receive a secret file at all — a role absent
-from that list gets no file, so it can never see any key regardless of
-`allow`. `secrets.on_missing` (`"warn"` or `"fail"`) controls what happens
-when an allowed key isn't present in the file or the caller's environment
+is the global ceiling on which *roles* receive any secret at all — a role
+absent from that list (or every role, when the list is omitted or empty)
+gets nothing regardless of `allow`. Each `allow` entry is either a key string,
+which every ceiling role receives, or a closed `{"key": "KEY", "roles": [...]}`
+object, which narrows that key to the listed roles *within* the ceiling (a
+listed role outside the ceiling, or an empty `roles`, grants nothing). Keys
+are unique and case-sensitive across both forms; unknown roles are rejected.
+`workspace-plan` shows each pane's `secret_keys` and the per-role key map,
+names only. `secrets.on_missing` (`"warn"` or `"fail"`) controls what happens
+when a key the pane's role is entitled to isn't present in the file or the caller's environment
 (the caller's environment is checked first, then `env_file`; a value in the
 caller's environment wins): `"fail"` aborts
 that pane's launch outright; `"warn"` starts the pane without it.
@@ -961,9 +967,9 @@ hand-added pane in that session present itself as a different pane.
 | Field | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `secrets.env_file` | string | no | — | Relative (to `project.root`) or absolute path to a `KEY=value` file. Optional even when `secrets` exists: without it, allowlisted keys resolve from the launching process's environment only. When set, the file gates in "Secrets" above apply. |
-| `secrets.allow` | array of strings, `^[A-Za-z_][A-Za-z0-9_]*$` | no | `[]` | The only keys any pane may ever request from `env_file`. |
-| `secrets.visible_to_roles` | array of strings | no | `[]` | Roles whose panes receive a secret-transfer file at all. A role not listed here gets nothing, regardless of `allow`. |
-| `secrets.on_missing` | enum: `warn`, `fail` | no | `warn` | Behavior when an allowed key is present in neither the launching process's environment nor `env_file`. `fail` aborts that pane's launch; `warn` starts it without the key. |
+| `secrets.allow` | array of key strings (`^[A-Za-z_][A-Za-z0-9_]*$`) or `{key, roles}` objects | no | `[]` | The only keys any pane may ever request from `env_file`. A string inherits `visible_to_roles`; an object's `roles` (unique, known role names, may be empty) intersects with it. Duplicate keys across either form are invalid. |
+| `secrets.visible_to_roles` | array of strings | no | `[]` | Global ceiling: roles whose panes may receive any key. A role not listed here gets nothing, regardless of `allow`. |
+| `secrets.on_missing` | enum: `warn`, `fail` | no | `warn` | Behavior when a key the pane's role is entitled to is present in neither the launching process's environment nor `env_file`. `fail` aborts that pane's launch; `warn` starts it without the key. |
 
 ### `sessions` (required, array, minimum 1 entry)
 
@@ -1053,8 +1059,9 @@ config values get rejected:
   of the rendered `export NAME=VALUE;` string the pane's shell evaluates —
   even though the *value* half of that string is always `%q`-quoted, an
   unquoted, attacker-chosen *name* could still inject a second shell
-  statement. (`secrets.visible_to_roles` entries are validated differently —
-  as references to existing role names, not as export names.)
+  statement. (`secrets.visible_to_roles` and `secrets.allow[].roles` entries are
+  validated differently — as references to existing role names, not as
+  export names.)
 
 ## Schema v5 root-scoped environment orchestrators
 

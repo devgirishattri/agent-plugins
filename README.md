@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.12 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.30 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.7.4 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.8.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -309,6 +309,68 @@ Per project, create two things at the repository root:
    `templates/workspace.sh`. It resolves `SESSION_WORKSPACE_CONFIG` and
    `SESSION_WORKSPACE_PLUGIN_ROOT` and execs the engine. It holds no project
    logic, and project-specific behavior belongs in the JSON rather than here.
+
+### Secret visibility by role
+
+Session-workspace 0.8.0 supports per-key recipients in every supported
+`schema_version`. The global role list remains an access ceiling:
+
+| Setting | Meaning |
+|---|---|
+| `secrets.allow` string entry | Key is available to every globally visible role. |
+| `secrets.allow` object entry | Required `key` and `roles`; key is available only to roles in both its list and the global list. Unknown fields are rejected. |
+| `secrets.visible_to_roles` | Configured role names; omitted/empty means no grants. Known per-key roles outside this ceiling receive nothing. |
+| `secrets.on_missing` | `warn` (default) or `fail`, applied only after filtering to keys the receiving role may see. |
+| `secrets.env_file` | Optional value source; when configured it must pass the existing owner-only, mode-0600, non-symlink, project-contained, git-ignore gates. Nonempty caller environment values still take precedence. |
+
+For example, with `master`, `executor`, and `reviewer` declared in `roles`:
+
+```json
+{
+  "secrets": {
+    "env_file": ".agent-workspace/secrets.env",
+    "visible_to_roles": ["master", "executor", "reviewer"],
+    "allow": [
+      {"key": "GH_TOKEN", "roles": ["executor", "reviewer"]},
+      {"key": "SECOND_READ_TOKEN", "roles": ["executor", "reviewer"]},
+      {"key": "GITHUB_MCP_TOKEN", "roles": ["master"]}
+    ],
+    "on_missing": "fail"
+  }
+}
+```
+
+Master receives only `GITHUB_MCP_TOKEN`; executor and reviewer receive the
+other two keys. A missing master token cannot warn or block executor delivery.
+Empty per-key `roles` grants nothing. Unknown roles, duplicate per-key roles,
+duplicate keys across either form (exact case-sensitive matches), invalid key
+names, and missing/null object fields are validation errors. Keys must match
+`^[A-Za-z_][A-Za-z0-9_]*$`. Both adapter paths use the same authorization rule;
+single-key denial errors identify the rule without revealing value presence.
+
+Plan shows `secret_keys_by_role` and per-pane `secret_keys`; doctor shows
+effective key names by role and keys with no recipient. Neither prints values.
+Doctor remains a workspace-wide file diagnostic: object/mixed configs check
+only keys with an effective recipient and name affected roles; string-only
+configs retain the legacy scan of all listed keys. File diagnostics do not
+resolve caller-environment overrides. The explicit authorized `secret-value`
+lookup returns a value on stdout and must not be used for reporting.
+
+Delivery still uses private single-use 0600 files and never mirrors secrets
+into the tmux session environment. This controls workspace delivery, not
+same-user file access or credentials inherited through other mechanisms.
+
+**Migration and rollback:** existing unique-key string-only configs need no
+change. Upgrade both providers before adopting objects. Convert restricted
+string entries to objects in the same edit that expands global visibility;
+otherwise those strings intentionally grant access to the newly listed role.
+Inspect plan/doctor and restart affected panes and MCP processes. No schema
+version or store migration is required. Before downgrading, restore a safely
+restricted legacy config; do not flatten objects to strings under a widened
+global list. Previously delivered credentials remain in running processes
+until those processes restart. Duplicate key rejection tightens old validation.
+
+### Coordination directories
 
 Create the coordination directories yourself. The engine deliberately does not:
 for ordinary pane/session lifecycle it creates only its own state directory and

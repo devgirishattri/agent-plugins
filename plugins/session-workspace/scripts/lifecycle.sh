@@ -218,9 +218,9 @@ _sw_launch_pane() {
   fi
 
   # Secret delivery (plan defect #1): resolved and gated entirely by
-  # adapters.sh (secrets.allow / secrets.visible_to_roles / on_missing), which
+  # adapters.sh (secrets.allow per-key roles / visible_to_roles / on_missing), which
   # writes a private, single-use "KEY=VALUE" file for exactly this pane (or
-  # nothing, if this role is not in secrets.visible_to_roles) and prints only
+  # nothing, if no key permits this role under the global ceiling) and prints only
   # its PATH. `on_missing: fail` makes adapters.sh exit non-zero, which MUST
   # abort this pane's launch (plan defect #2) rather than warn-and-continue.
   local secret_file=""

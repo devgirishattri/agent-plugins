@@ -116,6 +116,21 @@ def require_tokens(path: pathlib.Path, *tokens: str) -> None:
         fail(f"{path}: missing semantic parity contract token(s): {missing}")
 
 
+# Secret policy is authorization code shared by both provider launchers.
+# Check bytes, not only module basenames, including the regression contract.
+for secret_file in (
+    "secret-policy.jq", "validate-structural.jq", "workspace.schema.json",
+    "adapters.sh", "compute-plan.jq", "workspace-plan.sh", "workspace-doctor.sh",
+    "test-secret-roles.py",
+):
+    claude_secret = root / "plugins/session-workspace/scripts" / secret_file
+    codex_secret = root / "codex/plugins/session-workspace/scripts" / secret_file
+    if not claude_secret.is_file() or not codex_secret.is_file():
+        fail(f"missing session-workspace secret policy file: {secret_file}")
+    if claude_secret.read_bytes() != codex_secret.read_bytes():
+        fail(f"session-workspace secret policy differs between providers: {secret_file}")
+
+
 def require_phrases(path: pathlib.Path, *phrases: str) -> None:
     """Like require_tokens, but whitespace-normalized so a phrase may wrap
     across lines in prose while still being contractually present."""

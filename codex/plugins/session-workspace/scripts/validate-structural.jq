@@ -24,6 +24,56 @@ def chk(o; allowed; required; lbl):
     "expected an object at " + lbl + ", got " + (o | type)
   end;
 
+# Guard every secret field's type before iterating or invoking string filters.
+# Error messages contain policy names/keys only; values are never loaded here.
+def secret_validation_errors:
+  . as $cfg | (.secrets // {}) as $s |
+  if ($s | type) != "object" then empty else
+    (if ($s | has("allow")) and ($s.allow | type) != "array" then
+       "secrets.allow must be an array"
+     elif ($s.allow | type) == "array" then
+       ($s.allow | to_entries[] | .key as $i | .value |
+         (if type == "string" then .
+          elif type == "object" then .key
+          else null end) as $key |
+         (if type == "object" then
+            chk(.; ["key", "roles"]; ["key", "roles"]; "secrets.allow[" + ($i | tostring) + "]"),
+            (if (.roles | type) != "array" then
+               "secrets.allow[" + ($i | tostring) + "].roles must be an array"
+             else
+               (if (.roles | length) != (.roles | unique | length) then
+                  "secrets.allow[" + ($i | tostring) + "].roles contains duplicate roles"
+                else empty end),
+               (.roles[] |
+                if type != "string" then "secrets.allow roles must be role-name strings"
+                else empty end)
+             end)
+          elif type != "string" then "secrets.allow entries must be strings or objects"
+          else empty end),
+         (if ($key | type) != "string" then "secrets.allow key must be a string"
+          elif ($key | test("\\A[A-Za-z_][A-Za-z0-9_]*\\z") | not) then
+            "secrets.allow entry \"" + $key + "\" must match ^[A-Za-z_][A-Za-z0-9_]*$"
+          else empty end)),
+       ([$s.allow[] | if type == "string" then . elif type == "object" then .key else empty end | select(type == "string")]
+        | group_by(.)[] | select(length > 1) | "secrets.allow contains duplicate key \"" + .[0] + "\""),
+       ($s.allow[] | select(type == "object") | select(.roles | type == "array") | .roles[] | select(type == "string") | . as $role |
+        if (($cfg.roles // {}) | has($role)) then empty
+        else "secrets.allow roles references unknown role \"" + $role + "\"" end)
+     else empty end),
+    (if ($s | has("visible_to_roles")) then
+       if ($s.visible_to_roles | type) != "array" then "secrets.visible_to_roles must be an array"
+       else ($s.visible_to_roles[] | . as $role |
+         if type != "string" then "secrets.visible_to_roles entries must be role-name strings"
+         elif (($cfg.roles // {}) | has($role)) then empty
+         else "secrets.visible_to_roles references unknown role \"" + $role + "\"" end)
+       end
+     else empty end),
+    (if ($s | has("on_missing")) and (($s.on_missing | type) != "string" or (["warn", "fail"] | index($s.on_missing)) == null) then
+       "secrets.on_missing must be warn or fail" else empty end),
+    (if ($s | has("env_file")) and ($s.env_file | type) != "string" then
+       "secrets.env_file must be a string" else empty end)
+  end;
+
 def perm_allowed: ["inherit", "default", "plan", "acceptEdits", "dontAsk"];
 def ref_name_valid:
   type == "string"
@@ -569,10 +619,7 @@ def harness_engine_vars: [
   #      charset-restricted here as defense in depth against any future
   #      lookup mechanism that would reintroduce the hazard, and because a
   #      key is inherently meant to be a plain env-var identifier. ----
-  ((.secrets.allow // [])[] | . as $key |
-    if ($key | test("\\A[A-Za-z_][A-Za-z0-9_]*\\z") | not) then
-      "secrets.allow entry \"" + $key + "\" must match ^[A-Za-z_][A-Za-z0-9_]*$"
-    else empty end),
+  secret_validation_errors,
 
   # ---- behavior.default_start_target must name something startable: it IS
   #      the TARGET a bare `start` uses, so an unresolvable value would only
@@ -617,10 +664,6 @@ def harness_engine_vars: [
   ((.sessions // [])[] | (.panes // [])[] | . as $p |
     if ($role_names | index($p.role)) == null then
       "pane " + ($p.name // "?") + " references unknown role \"" + ($p.role // "") + "\""
-    else empty end),
-  ((.secrets.visible_to_roles // [])[] | . as $vr |
-    if ($role_names | index($vr)) == null then
-      "secrets.visible_to_roles references unknown role \"" + $vr + "\""
     else empty end)
 ]
 | flatten
