@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.12 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.3.30 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.8.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.9.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -435,6 +435,43 @@ review, scheduler-tracked implementation, independent audit, commit, push, and
 deploy as separate gates. Configuration contains only safe Git coordinates;
 every mutation executes in the owning executor pane, and explicit user
 confirmations are never inferred from harness or ledger state.
+
+From session-workspace 0.9.0, active strict-v1 orchestrators (including confined
+environment coordinators) explicitly deny remote-mutating `gh` commands even
+when their operands do not resolve to a child checkout. Projects that previously
+ran these commands from an orchestrator must route them to an executor. Reviewed
+single-command reads remain available: `run list/view`, `pr list/view/diff/checks`,
+`workflow list/view`, `release list/view` with `--repo`/`-R OWNER/NAME`,
+`repo view OWNER/NAME`, and `api repos/OWNER/NAME/...` or
+`api repositories/ID/...` with effective GET. No owner allowlist is applied.
+
+Use `--json`, `--jq` and supported `--limit` flags instead of pipelines. Aliases,
+extensions, unknown commands/options, path-valued repository selectors, browser
+launches, wrappers, inline environment assignments, expansions, redirections and
+composed shell commands are outside the allowance. Supply credentials through
+the existing launch-inherited secret contract, not inline assignments. API
+fields and `--input` require explicit uppercase `--method GET` or `-X GET`;
+otherwise they imply POST and are denied. File-backed fields and input still
+transmit file contents to GitHub even on GET, and confined orchestrators retain
+filesystem containment for those paths. Stdin inputs, command-line host
+overrides (`://` endpoints and `--hostname`), request headers and explicit API
+caching are unsupported. Inherited `GH_HOST` and gh configuration remain trusted
+launch environment; this does not guarantee a fixed destination host. A literal
+`gh` operand to a non-data command (for example `git log --author gh`) is also
+refused conservatively.
+
+The reviewed grammar is based on `gh` 2.100.0; unreviewed future options fail
+closed. Executor containment and reviewer command permissions are unchanged;
+delivering `GH_TOKEN` does not authorize reviewer `gh` calls. No configuration or
+store migration is needed. Update both provider plugins and restart affected
+agents; accept Codex hook trust when prompted. Downgrading restores the remote
+mutation gap and previous read restrictions. This is an argv guardrail for root
+and confined orchestrators, not subprocess isolation: script files and
+interpreters fed on stdin (and, for root, inline interpreter code) can still
+invoke gh. Where remote mutations must be impossible, withhold write-scoped
+GitHub credentials from orchestrators using per-role secret visibility.
+Unclassified MCP calls retain their existing limits. Git stderr-redirection and
+loop handling are unchanged.
 
 ### Hooks and restarts
 

@@ -310,6 +310,54 @@ class Environments(unittest.TestCase):
                 p.validate_bash(ctx, 'cat /outside/selected-plugin/SKILL.md', {})
             self.assertEqual(caught.exception.rule, 'executor.containment')
 
+    def test_orchestrator_gh_role_and_file_boundaries(self):
+        for name in ('root', 'web-master'):
+            p, ctx, env = self.context(name)
+            (ctx.pane_cwd / 'body.json').write_text('{}')
+            (ctx.pane_cwd / 'outside-gh').symlink_to(self.root / 'component-b', target_is_directory=True)
+            commands = [
+                ('gh pr list -R sample-org/component-a --json number --jq ".[] | .number?"', 'allow', 'orchestrator.gh_read'),
+                ('gh api repositories/123/actions/runs -X GET -F per_page=5', 'allow', 'orchestrator.gh_read'),
+                ('gh api repos/sample-org/component-a/issues -X GET --input body.json', 'allow', 'orchestrator.gh_read'),
+                ('gh api repos/sample-org/component-a/issues -X GET -F body=@body.json', 'allow', 'orchestrator.gh_read'),
+                ('gh api repositories/123/actions/runs -X DELETE', 'deny', 'orchestrator.gh_mutation'),
+                ('gh pr merge 1 -R sample-org/component-a', 'deny', 'orchestrator.gh_mutation'),
+                ('gh api repositories/123/actions/runs --input body.json', 'deny', 'orchestrator.gh_mutation'),
+                ('gh api repositories/123/actions/runs -f per_page=5', 'deny', 'orchestrator.gh_mutation'),
+                ('gh pr list -R sample-org/component-a | cat', 'deny', 'orchestrator.gh_unsupported'),
+                ('gh alias-name -R sample-org/component-a', 'deny', 'orchestrator.gh_unsupported'),
+                ('timeout 5 gh pr merge 1 -R sample-org/component-a', 'deny', 'orchestrator.gh_unsupported'),
+                ('nice gh pr merge 1 -R sample-org/component-a', 'deny', 'orchestrator.gh_unsupported'),
+                ('find . -maxdepth 0 -exec gh pr merge 1 -R sample-org/component-a \\;', 'deny', 'orchestrator.gh_unsupported'),
+                ('echo gh', 'allow', 'allow'),
+            ]
+            if ctx.confined_orchestrator:
+                commands += [
+                    ('gh api repositories/123/actions/runs -X GET --input ../component-b/body.json', 'deny', 'executor.containment'),
+                    ('gh api repositories/123/actions/runs -X GET -F body=@outside-gh/body.json', 'deny', 'executor.containment'),
+                    ('gh pr list -R sample-org/component-a --head ../component-b', 'deny', 'executor.containment'),
+                ]
+            for command, decision, rule in commands:
+                with self.subTest(pane=name, command=command), patch.dict(os.environ, env, clear=True):
+                    result = p.evaluate(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': command}})).normalized()
+                    self.assertEqual((result['decision'], result['rule']), (decision, rule), result)
+            if ctx.confined_orchestrator:
+                with self.assertRaises(p.PolicyFailure) as caught:
+                    p.validate_bash(ctx, 'gh pr list -R sample-org/component-a', {'workdir': str(self.root)})
+                self.assertEqual(caught.exception.rule, 'executor.containment')
+                nested = ctx.pane_cwd / 'nested'
+                nested.mkdir()
+                (nested / 'body.json').write_text('{}')
+                (nested / 'outside').symlink_to(self.root / 'component-b', target_is_directory=True)
+                command = 'gh api repositories/123/actions/runs -X GET --input body.json'
+                self.assertEqual(p.validate_bash(ctx, command, {'workdir': str(nested)}), 'orchestrator.gh_read')
+                with self.assertRaises(p.PolicyFailure) as caught:
+                    p.validate_bash(ctx, command.replace('body.json', 'outside/body.json'), {'workdir': str(nested)})
+                self.assertEqual(caught.exception.rule, 'executor.containment')
+                with self.assertRaises(p.PolicyFailure) as caught:
+                    p.validate_bash(ctx, command, {'workdir': str(nested), 'cwd': str(ctx.pane_cwd)})
+                self.assertEqual(caught.exception.rule, 'executor.containment')
+
     def test_root_only_administration(self):
         operations = [('session-workspace', 'workspace-install.sh', []),
                       ('session-workspace', 'workspace-browser-config.sh', ['--browser', 'service-web']),

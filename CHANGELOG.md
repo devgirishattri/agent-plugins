@@ -1,5 +1,28 @@
 # Changelog
 
+## session-workspace 0.9.0 — 2026-09-28
+
+- **Behavior change:** orchestrator remote mutations through direct `gh` calls
+  are now denied even when no argument resolves to a child checkout. This closes
+  the direct-command named-repository and numeric API-route gap; projects relying on those
+  mutations must route them to their executor. Audit mode reports the denial.
+- Allow a closed set of literal orchestrator reads using `OWNER/NAME` repository
+  selectors, positional `repo view`, and reviewed repository API endpoints with
+  effective GET. API fields/input require explicit GET. File input still sends
+  contents to GitHub; confined coordinators retain filesystem containment.
+- Reject aliases, extensions, unsupported flags, wrappers, shell composition,
+  dynamic operands and path-valued repository selectors. Emit distinct
+  `orchestrator.gh_read`, `orchestrator.gh_mutation`, and
+  `orchestrator.gh_unsupported` decision rules. Executor and reviewer rules are
+  unchanged. No owner allowlist or new configuration key is introduced.
+- No schema/store migration. Update both providers and restart affected agents;
+  accept Codex hook trust if prompted. Rollback restores the old mutation gap
+  and read restrictions. Git redirections and loops remain out of scope. The
+  policy remains an argv guardrail for root and confined orchestrators, not
+  subprocess isolation: script files and stdin-fed interpreters can still run
+  gh. Withhold write-scoped orchestrator credentials where remote mutations
+  must be impossible.
+
 ## session-workspace 0.7.0 — 2026-09-23
 
 - Support root-scoped environment orchestrators with own-worker routing and task

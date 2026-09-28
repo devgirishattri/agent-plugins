@@ -793,6 +793,93 @@ as_master "orchestrator child Write is denied" "$(jq -cn --arg p "$CHILD/new.ts"
 as_master "orchestrator apply_patch touching a child is denied" '{"tool_name":"apply_patch","tool_input":{"patch":"*** Begin Patch\n*** Update File: component-a/src/file.ts\n*** End Patch"}}' '.decision == "deny" and .rule == "orchestrator.child_write"'
 as_master "orchestrator child read is allowed" "$(bash_payload 'cat component-a/README.md')" '.decision == "allow"'
 as_master "orchestrator git -C child read is allowed" "$(bash_payload 'git -C component-a status --short')" '.decision == "allow"'
+
+# 0.9.0: remote identifiers never need to collide with filesystem paths for
+# the orchestrator gh mutation floor to apply. Every deny family below shares
+# a nearby read control; no gh command is actually executed or authenticated.
+GH_ALLOW='.decision == "allow" and .role == "orchestrator" and .rule == "orchestrator.gh_read"'
+GH_MUTATE='.decision == "deny" and .role == "orchestrator" and .rule == "orchestrator.gh_mutation"'
+GH_UNSUPPORTED='.decision == "deny" and .role == "orchestrator" and .rule == "orchestrator.gh_unsupported"'
+for gh_read in 'run list' 'run view 123' 'run view 123 --log' 'run view 123 --log-failed' \
+  'pr list' 'pr view 1' 'pr diff 1' 'pr checks 1' 'workflow list' 'workflow view 1 --yaml' 'release list' 'release view v1'; do
+  as_master "gh read $gh_read" "$(bash_payload "gh $gh_read --repo sample-org/component-a")" "$GH_ALLOW"
+done
+for gh_repo in '--repo sample-org/component-a' '--repo=sample-org/component-a' '-R sample-org/component-a' '-Rsample-org/component-a'; do
+  as_master "gh repository spelling $gh_repo" "$(bash_payload "gh run list $gh_repo --limit 5")" "$GH_ALLOW"
+done
+as_master "gh positional repo view" "$(bash_payload 'gh repo view sample-org/component-a --json name --jq .name')" "$GH_ALLOW"
+as_master "gh quoted jq metacharacters are data" "$(bash_payload "gh pr list -R sample-org/component-a --json number --jq '.[] | .number?'")" "$GH_ALLOW"
+as_master "gh single quoted pipe is formatting data" "$(bash_payload "gh pr list -R sample-org/component-a --template '|'")" "$GH_ALLOW"
+as_master "gh workflow -w filter is not browser launch" "$(bash_payload 'gh run list -R sample-org/component-a -w ci.yml')" "$GH_ALLOW"
+as_master "gh workflow list JSON recipe" "$(bash_payload "gh workflow list -R sample-org/component-a --json name --jq '.[] | .name' --limit 5")" "$GH_ALLOW"
+for gh_endpoint in repos/sample-org/component-a/actions/runs repositories/123/actions/runs; do
+  as_master "gh implicit API GET $gh_endpoint" "$(bash_payload "gh api $gh_endpoint")" "$GH_ALLOW"
+  for gh_method in '-X GET' '-XGET' '--method GET' '--method=GET'; do
+    as_master "gh explicit GET $gh_method $gh_endpoint" "$(bash_payload "gh api $gh_endpoint $gh_method -F per_page=5")" "$GH_ALLOW"
+  done
+  for gh_method in POST PUT PATCH DELETE HEAD OPTIONS TRACE CONNECT Post delete; do
+    as_master "gh remote method $gh_method $gh_endpoint denied without path collision" "$(bash_payload "gh api $gh_endpoint -X $gh_method")" "$GH_MUTATE"
+  done
+  for gh_method in '-XDELETE' '--method=PATCH' '--method PUT'; do
+    as_master "gh attached remote method $gh_method denied" "$(bash_payload "gh api $gh_endpoint $gh_method")" "$GH_MUTATE"
+  done
+  for gh_field in '-f per_page=5' '-F per_page=5' '-fper_page=5' '-Fper_page=5' '--raw-field=per_page=5' '--field per_page=5' '--input AGENTS.md' '--input=AGENTS.md'; do
+    as_master "gh implicit POST $gh_field $gh_endpoint denied" "$(bash_payload "gh api $gh_endpoint $gh_field")" "$GH_MUTATE"
+    as_master "gh explicit GET control $gh_field $gh_endpoint" "$(bash_payload "gh api $gh_endpoint $gh_field --method GET")" "$GH_ALLOW"
+  done
+done
+as_master "gh file field explicit GET" "$(bash_payload 'gh api repos/sample-org/component-a/issues -X GET -F body=@AGENTS.md')" "$GH_ALLOW"
+as_master "gh raw field at sign is data" "$(bash_payload 'gh api repos/sample-org/component-a/issues -X GET -f body=@-')" "$GH_ALLOW"
+as_master "gh quoted API query punctuation" "$(bash_payload "gh api 'repos/sample-org/component-a/actions/runs?per_page=5&page=2'")" "$GH_ALLOW"
+for gh_mutation in 'run rerun' 'run cancel' 'run delete' 'workflow run' 'workflow enable' 'workflow disable' \
+  'pr create' 'pr merge' 'pr close' 'pr comment' 'pr review' 'pr edit' 'release create' 'release delete' 'release upload' 'repo edit' 'repo delete'; do
+  as_master "gh $gh_mutation remote mutation denied without path collision" "$(bash_payload "gh $gh_mutation --repo sample-org/component-a")" "$GH_MUTATE"
+done
+for gh_bad in 'gh pv -R sample-org/component-a' 'gh extension exec helper' 'gh unknown -R sample-org/component-a' \
+  'gh pr checkout 1 -R sample-org/component-a' 'gh repo clone sample-org/component-a' \
+  'gh run list -R component-a' 'gh run list -R ./component-a' 'gh run list -R ../component-a' \
+  'gh run list -R /tmp/component-a' 'gh run list -R ~/component-a' 'gh run list -R $HOME/component-a' \
+  'gh run list -R sample-org/component-a/extra' 'gh run list -R sample-org/..' \
+  'gh run list --repo' 'gh run list -R sample-org/component-a --repo sample-org/component-b' \
+  'gh run list -R sample-org/component-a --future-flag' 'gh run list -R sample-org/component-a --web' \
+  'gh pr view 1 -R sample-org/component-a -w' 'gh run list -R sample-org/component-a --limit=-1' \
+  'gh api graphql' 'gh api https://example.invalid/repos/sample-org/component-a/issues' \
+  'gh api //example.invalid/repos/sample-org/component-a/issues' 'gh api repos/sample-org/component-a/../issues' \
+  'gh api repos/sample-org/component-a/issues --hostname example.invalid' \
+  'gh api repos/sample-org/component-a/issues -H X-HTTP-Method-Override:DELETE' \
+  'gh api repos/sample-org/component-a/issues --cache 1h' \
+  'gh api repos/sample-org/component-a/issues -X GET --method GET' \
+  'gh api repos/sample-org/component-a/issues -X get' \
+  'gh api repos/sample-org/component-a/issues -X GET --input -' \
+  'gh api repos/sample-org/component-a/issues -X GET -F body=@-' \
+  'gh api repos/sample-org/component-a/issues -X GET -F body={owner}' \
+  'gh pr list -R sample-org/component-a | gh pr merge 1 -R sample-org/component-a' \
+  'gh pr list -R sample-org/component-a | cat' 'true && gh pr list -R sample-org/component-a' \
+  'gh pr list -R sample-org/component-a; true' 'gh pr list -R sample-org/component-a 2>/dev/null' \
+  'gh pr list -R $(echo sample-org/component-a)' 'GH_CONFIG_DIR=/tmp gh pr list -R sample-org/component-a' \
+  'timeout 5 gh pr merge 1 -R sample-org/component-a' 'nice gh pr merge 1 -R sample-org/component-a' \
+  'find . -maxdepth 0 -exec gh pr merge 1 -R sample-org/component-a \;' \
+  'env gh pr list -R sample-org/component-a' 'command gh pr list -R sample-org/component-a' '/usr/bin/gh pr list -R sample-org/component-a'; do
+  as_master "gh unsupported $gh_bad" "$(bash_payload "$gh_bad")" "$GH_UNSUPPORTED"
+done
+as_master "gh newline composition denied" "$(bash_payload $'gh pr list -R sample-org/component-a\ngh pr merge 1 -R sample-org/component-a')" "$GH_UNSUPPORTED"
+as_master "gh after newline denied" "$(bash_payload $'true\ngh pr merge 1 -R sample-org/component-a')" "$GH_UNSUPPORTED"
+as_master "gh continued executable denied" "$(bash_payload $'g\\\nh pr merge 1 -R sample-org/component-a')" "$GH_UNSUPPORTED"
+as_master "literal gh operand to read command is unchanged" "$(bash_payload 'echo gh')" '.decision == "allow" and .rule == "allow"'
+# An OWNER/NAME that also resolves to a child is still a remote identifier,
+# but the exact same spelling remains a path for ordinary commands.
+as_master "gh identifier colliding with child path" "$(bash_payload 'gh pr list -R component-a/src')" "$GH_ALLOW"
+as_master "non-gh colliding child path still denied" "$(bash_payload 'rm component-a/src')" '.decision == "deny" and .rule == "orchestrator.child_write"'
+as_master "git stderr redirect unchanged" "$(bash_payload 'git -C component-a status 2>/dev/null')" '.decision == "deny" and .rule == "orchestrator.child_write"'
+as_master "git loop unchanged" "$(bash_payload 'for repo in component-a; do git -C "$repo" status; done')" '.decision == "deny" and .rule == "orchestrator.child_write"'
+as_exec "executor gh remote mutation floor unchanged" "$(bash_payload 'gh api repositories/123/actions/runs -X DELETE')" '.decision == "allow" and .rule == "allow"'
+as_exec "executor gh local config control" "$(bash_payload 'GH_CONFIG_DIR=./config gh pr list --repo sample-org/component-a')" '.decision == "allow" and .rule == "allow"'
+as_exec "executor gh config escape unchanged" "$(bash_payload 'GH_CONFIG_DIR=../component-b gh pr list --repo sample-org/component-a')" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "executor gh repo path escape unchanged" "$(bash_payload 'gh pr list --repo ../component-b')" '.decision == "deny" and .rule == "executor.containment"'
+as_review "reviewer gh still denied" "$(bash_payload 'gh pr list --repo sample-org/component-a')" '.decision == "deny" and .rule == "reviewer.command"'
+as_review "reviewer git control" "$(bash_payload 'git status --short')" '.decision == "allow" and .rule == "allow"'
+expect "gh audit mutation retains rule" master "$MASTER_PANE" "$ROOT" "$AUDIT_CONFIG" audit \
+  "$(bash_payload 'gh api repositories/123/actions/runs -X DELETE')" '.decision == "audit" and .rule == "orchestrator.gh_mutation"'
 as_master "orchestrator git -C child commit is denied" "$(bash_payload 'git -C component-a commit -m "log"')" '.decision == "deny" and .rule == "orchestrator.child_write"'
 as_master "orchestrator rm inside child is denied" "$(bash_payload 'rm component-a/src/file.ts')" '.decision == "deny" and .rule == "orchestrator.child_write"'
 as_master "orchestrator cd child && mutate is denied" "$(bash_payload 'cd component-a && git commit -m x')" '.decision == "deny" and .rule == "orchestrator.child_write"'

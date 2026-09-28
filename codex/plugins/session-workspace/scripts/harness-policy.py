@@ -2364,7 +2364,185 @@ def executor_inline_code(segment: List[str]) -> bool:
     return executable == "eval"
 
 
-def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
+# gh 2.100.0 reviewed grammar. This is intentionally role-local: never teach
+# candidate_path that arbitrary OWNER/NAME strings are not filesystem paths.
+GH_REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
+GH_MUTATIONS = {
+    "run": {"rerun", "cancel", "delete"},
+    "pr": {"create", "merge", "close", "comment", "review", "edit", "ready", "reopen", "lock", "unlock", "revert", "update-branch"},
+    "workflow": {"run", "enable", "disable"},
+    "release": {"create", "delete", "upload", "edit", "delete-asset"},
+    "repo": {"create", "edit", "delete", "archive", "unarchive", "fork", "rename", "sync"},
+}
+# Option definitions are (canonical long name, short name, value kind).
+# Only formatting values and reviewed repository slots escape path inference.
+GH_FORMAT = [("json", "", "format"), ("jq", "q", "format"), ("template", "t", "format")]
+GH_REPO = [("repo", "R", "repo")]
+# These commands consume operands as data, rather than launching them. All
+# other argv containing a literal gh executable are unsupported launch attempts
+# (timeout/nice/find -exec included). Inline program strings remain outside the
+# root policy's argv floor; this is not a general shell interpreter.
+GH_DATA_COMMANDS = {"grep", "rg", "cat", "head", "tail", "echo", "printf", "wc", "ls", "sort", "uniq", "nl", "tr"}
+GH_READ_OPTIONS = {
+    ("run", "list"): GH_FORMAT + GH_REPO + [("all", "a", "bool"), ("branch", "b", "value"), ("commit", "c", "value"), ("created", "", "value"), ("event", "e", "value"), ("limit", "L", "number"), ("status", "s", "value"), ("user", "u", "value"), ("workflow", "w", "value")],
+    ("run", "view"): GH_FORMAT + GH_REPO + [("attempt", "a", "number"), ("exit-status", "", "bool"), ("job", "j", "number"), ("log", "", "bool"), ("log-failed", "", "bool"), ("verbose", "v", "bool")],
+    ("pr", "list"): GH_FORMAT + GH_REPO + [("app", "", "value"), ("assignee", "a", "value"), ("author", "A", "value"), ("base", "B", "value"), ("draft", "d", "bool"), ("head", "H", "value"), ("label", "l", "value"), ("limit", "L", "number"), ("search", "S", "value"), ("state", "s", "value")],
+    ("pr", "view"): GH_FORMAT + GH_REPO + [("comments", "c", "bool")],
+    ("pr", "diff"): GH_REPO + [("color", "", "value"), ("name-only", "", "bool"), ("patch", "", "bool")],
+    ("pr", "checks"): GH_FORMAT + GH_REPO + [("required", "", "bool"), ("watch", "", "bool"), ("fail-fast", "", "bool"), ("interval", "i", "number")],
+    ("workflow", "list"): GH_FORMAT + GH_REPO + [("all", "a", "bool"), ("limit", "L", "number")],
+    ("workflow", "view"): GH_REPO + [("ref", "r", "value"), ("yaml", "y", "bool")],
+    ("release", "list"): GH_FORMAT + GH_REPO + [("exclude-drafts", "", "bool"), ("exclude-pre-releases", "", "bool"), ("limit", "L", "number"), ("order", "O", "value")],
+    ("release", "view"): GH_FORMAT + GH_REPO,
+    ("repo", "view"): GH_FORMAT + [("branch", "b", "value")],
+    ("api", ""): [("method", "X", "method"), ("field", "F", "field"), ("raw-field", "f", "raw-field"), ("input", "", "file"), ("jq", "q", "format"), ("template", "t", "format"), ("include", "i", "bool"), ("paginate", "", "bool"), ("slurp", "", "bool"), ("silent", "", "bool")],
+}
+
+
+def gh_endpoint(value: str) -> bool:
+    path, _, query = value.partition("?")
+    if not re.fullmatch(r"[A-Za-z0-9_./-]+", path) or any(part in {"", ".", ".."} for part in path.rstrip("/").split("/")):
+        return False
+    if query and not re.fullmatch(r"[A-Za-z0-9_.%=&+,~-]+", query):
+        return False
+    parts = path.split("/")
+    return ((len(parts) >= 4 and parts[0] == "repos" and GH_REPO_RE.fullmatch("/".join(parts[1:3])) is not None)
+            or (len(parts) >= 3 and parts[0] == "repositories" and POSITIVE_RE.fullmatch(parts[1]) is not None))
+
+
+def validate_orchestrator_gh(ctx: Context, tokens: List[str], command: str, tool_input: dict) -> str:
+    """One literal builtin gh read; unsupported/mutating gh NEVER falls through.
+
+    Explicit GET can transmit local files. Retain those as real path operands,
+    including @file field values; confined coordinators use their existing
+    containment, never reviewer grants. No network/config/alias lookup here.
+    """
+    def unsupported(reason: str) -> None:
+        raise PolicyFailure("orchestrator.gh_unsupported", reason)
+
+    if tokens[0] != "gh" or has_unquoted_expansion(command) or has_unquoted_glob(command):
+        unsupported("gh requires one literal direct command without wrappers, expansion, composition or redirection")
+    # shlex strips quotes. Raw scanning above distinguishes quoted jq | from a
+    # shell pipe; do not run is_control over the resulting data values.
+    if len(tokens) < 2:
+        unsupported("gh requires an exact reviewed subcommand")
+    group = tokens[1]
+    verb = "" if group == "api" else (tokens[2] if len(tokens) > 2 else "")
+    if verb in GH_MUTATIONS.get(group, set()):
+        raise PolicyFailure("orchestrator.gh_mutation", "orchestrator gh mutations belong to the owning executor")
+    spec = GH_READ_OPTIONS.get((group, verb))
+    if spec is None:
+        unsupported("gh subcommand is not read-only allowlisted (aliases and extensions are unsupported)")
+    options = {}
+    for name, short, kind in spec:
+        options["--" + name] = (name, kind)
+        if short:
+            options["-" + short] = (name, kind)
+    seen = set()
+    positionals: List[str] = []
+    paths: List[str] = []
+    method = None
+    fields = False
+    index = 2 if group == "api" else 3
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
+        if not token.startswith("-"):
+            positionals.append(token)
+            continue
+        if token.startswith("--"):
+            option, equals, value = token.partition("=")
+            attached = bool(equals)
+        else:
+            option, value = token[:2], token[2:]
+            attached = bool(value)
+        if option not in options:
+            unsupported("gh option is not read-only allowlisted: %s" % option)
+        name, kind = options[option]
+        if name in seen and kind not in {"field", "raw-field"}:
+            unsupported("duplicate gh option is ambiguous: %s" % option)
+        seen.add(name)
+        if kind == "bool":
+            if attached:
+                unsupported("gh boolean options require their standalone spelling")
+            continue
+        if not attached:
+            if index >= len(tokens) or tokens[index].startswith("-") and tokens[index] != "-":
+                unsupported("gh option requires a literal value: %s" % option)
+            value = tokens[index]
+            index += 1
+        if not value:
+            unsupported("empty gh option value")
+        if kind == "repo":
+            if GH_REPO_RE.fullmatch(value) is None:
+                unsupported("gh repository selector must be OWNER/NAME, never a filesystem path")
+        elif kind == "method":
+            if value != "GET":
+                raise PolicyFailure("orchestrator.gh_mutation" if value.upper() != "GET" else "orchestrator.gh_unsupported",
+                                    "orchestrator gh api requires the explicit method GET")
+            method = value
+        elif kind == "number":
+            if POSITIVE_RE.fullmatch(value) is None:
+                unsupported("gh numeric option requires a positive integer")
+        elif kind in {"field", "raw-field"}:
+            fields = True
+            key, equals, data = value.partition("=")
+            if not equals or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                unsupported("gh fields require a simple literal key=value")
+            if kind == "field" and data.startswith("@"):
+                filename = data[1:]
+                if not filename or filename == "-" or any(c in filename for c in "$`*?{}["):
+                    unsupported("gh field file must be a literal filename, not stdin or expansion")
+                paths.append(filename if "/" in filename else "./" + filename)
+            else:
+                if kind == "field" and any(c in data for c in "{}"):
+                    unsupported("gh field placeholders are unsupported")
+                paths.append(data)
+        elif kind == "file":
+            fields = True
+            if value == "-" or any(c in value for c in "$`*?{}["):
+                unsupported("gh input must be a literal filename, not stdin or expansion")
+            paths.append(value if "/" in value else "./" + value)
+        elif kind != "format":
+            paths.append(value)
+    if group == "api":
+        if fields and method is None:
+            raise PolicyFailure("orchestrator.gh_mutation", "gh api fields/input imply POST unless GET is explicit")
+        if len(positionals) != 1 or not gh_endpoint(positionals[0]):
+            unsupported("gh api requires repos/OWNER/NAME/ or repositories/ID/ endpoint")
+    elif (group, verb) == ("repo", "view"):
+        if len(positionals) != 1 or GH_REPO_RE.fullmatch(positionals[0]) is None:
+            unsupported("gh repo view requires a literal OWNER/NAME")
+    else:
+        if "repo" not in seen:
+            unsupported("gh read requires an explicit OWNER/NAME repository selector")
+        if len(positionals) > (0 if verb == "list" else 1):
+            unsupported("unexpected gh positional operand")
+        if group in {"run", "pr"} and any(POSITIVE_RE.fullmatch(p) is None for p in positionals):
+            unsupported("gh run/pr selectors must be numeric in the reviewed grammar")
+        paths.extend(positionals)
+    if ctx.confined_orchestrator:
+        bases = set()
+        for key in ("cwd", "workdir"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                raw = Path(value.strip()).expanduser()
+                bases.add(canonical(raw if raw.is_absolute() else ctx.pane_cwd / raw))
+        if len(bases) > 1:
+            raise PolicyFailure("executor.containment", "gh tool cwd and workdir disagree")
+        base = next(iter(bases)) if bases else ctx.pane_cwd
+        ensure_paths_within(["gh", "--"] + paths, base,
+                            lambda p: within(p, ctx.pane_cwd) and not any(within(p, r) for r in ctx.message_roots),
+                            "executor.containment")
+    else:
+        # Preserve conservative rejection of dynamic filesystem operands even
+        # though root coordinators may read literal child files.
+        for value in paths:
+            candidate_path(value, ctx.pane_cwd, literal=True)
+    return "orchestrator.gh_read"
+
+
+def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]:
     if ctx.semantic_role != "orchestrator" or ctx.confined_orchestrator:
         if tool_input.get("dangerouslyDisableSandbox") is True or tool_input.get("with_escalated_permissions") is True:
             raise PolicyFailure("shell.sandbox_escape", "child roles cannot request a sandbox/approval escape")
@@ -2421,6 +2599,18 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> None:
     bypass = child_transport_bypass(tokens, ctx.semantic_role != "orchestrator" or bool(ctx.environment))
     if bypass is not None:
         raise PolicyFailure("routing.master", "coordination transport may only run as the selected session-chat helper (%s)" % bypass)
+
+    if ctx.semantic_role == "orchestrator":
+        # shlex otherwise folds newlines into whitespace. Detection must also
+        # see a gh command after a newline, or a continued executable spelling;
+        # normalization only detects attempts, never authorizes execution.
+        gh_detection = parse_shell(command.replace("\\\n", "").replace("\n", ";"))
+        for segment in segments(gh_detection):
+            argv = unwrap_prefixes(segment)
+            if argv and (Path(argv[0]).name == "gh" or (
+                Path(argv[0]).name not in GH_DATA_COMMANDS and any(Path(t).name == "gh" for t in argv[1:])
+            )):
+                return validate_orchestrator_gh(ctx, tokens, command, tool_input)
 
     if ctx.semantic_role == "reviewer":
         validate_reviewer_read(tokens, command, ctx, reviewer_base)
@@ -2617,7 +2807,9 @@ def evaluate(raw: str) -> Decision:
             command = extract_command(tool_input)
             if command is None:
                 raise PolicyFailure("bash.command", "active harness could not read the shell command")
-            validate_bash(ctx, command, tool_input)
+            rule = validate_bash(ctx, command, tool_input)
+            if rule is not None:
+                return allow(ctx, tool_name, rule, "reviewed literal orchestrator gh read")
         elif lower in EDIT_TOOL_NAMES:
             if lower in {"str_replace_editor", "str_replace_based_edit_tool"} and tool_input.get("command") == "view":
                 return allow(ctx, tool_name, "tool.read", "read-only editor view")

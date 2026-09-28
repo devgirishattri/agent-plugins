@@ -203,6 +203,25 @@ compare_case "audit identity drift remains blocked" reviewer "$EXEC_PANE" "$CHIL
 compare_case "audit malformed input remains blocked" executor "$EXEC_PANE" "$CHILD" "$AUDIT_CONFIG" audit '{bad'
 compare_case "malformed input" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce '{bad'
 
+# gh remote policy must agree even when no filesystem operand names a child.
+for gh_read in 'run list' 'run view 123 --log-failed' 'pr list' 'pr view 1' 'pr diff 1' 'pr checks 1' 'workflow list' 'workflow view 1' 'release list' 'release view v1'; do
+  compare_case "gh read $gh_read" master "$MASTER_PANE" "$PROJECT" "$CONFIG" enforce "$(payload_bash "gh $gh_read -R sample-org/component-a")" allow
+done
+compare_case "gh repo positional view" master "$MASTER_PANE" "$PROJECT" "$CONFIG" enforce "$(payload_bash 'gh repo view sample-org/component-a')" allow
+compare_case "gh GET field control" master "$MASTER_PANE" "$PROJECT" "$CONFIG" enforce "$(payload_bash 'gh api repositories/123/actions/runs -X GET -F per_page=5')" allow
+for gh_method in POST PUT PATCH DELETE HEAD OPTIONS TRACE CONNECT; do
+  compare_case "gh remote $gh_method denied" master "$MASTER_PANE" "$PROJECT" "$CONFIG" enforce "$(payload_bash "gh api repositories/123/actions/runs -X $gh_method")" deny
+done
+for gh_bad in 'gh api repositories/123/actions/runs -f per_page=5' 'gh api repos/sample-org/component-a/issues --input body.json' \
+  'gh pr merge 1 -R sample-org/component-a' 'gh workflow run 1 -R sample-org/component-a' \
+  'gh pr list -R sample-org/component-a | cat' 'gh alias-name -R sample-org/component-a' 'gh pr list -R ./component-a'; do
+  compare_case "gh denied $gh_bad" master "$MASTER_PANE" "$PROJECT" "$CONFIG" enforce "$(payload_bash "$gh_bad")" deny
+done
+compare_case "gh executor mutation unchanged" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'gh api repositories/123/actions/runs -X DELETE')" allow
+compare_case "gh executor config containment unchanged" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'GH_CONFIG_DIR=../component-b gh pr list -R sample-org/component-a')" deny
+compare_case "gh reviewer unchanged" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'gh pr list -R sample-org/component-a')" deny
+compare_case "gh audit mutation parity" master "$MASTER_PANE" "$PROJECT" "$AUDIT_CONFIG" audit "$(payload_bash 'gh api repositories/123/actions/runs -X DELETE')" deny
+
 PATCH_PAYLOAD="$(jq -cn --arg patch $'*** Begin Patch\n*** Update File: src/file.ts\n@@\n-old\n+new\n*** End Patch' '{tool_name:"apply_patch",tool_input:{patch:$patch}}')"
 compare_case "decoded apply_patch path" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$PATCH_PAYLOAD"
 

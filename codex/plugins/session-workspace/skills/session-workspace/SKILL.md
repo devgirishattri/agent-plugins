@@ -216,6 +216,34 @@ them:
 - **Orchestrator**: cannot edit or run mutating commands against a child
   checkout; routes only to its configured executor/reviewer panes;
   `broadcast` is not available under strict-v1.
+- From **0.9.0**, root and confined orchestrators also deny direct remote-mutating
+  `gh` commands even without a child filesystem operand. Route mutations to the
+  executor. Reviewed reads are `run list/view` (including logs),
+  `pr list/view/diff/checks`, `workflow list/view`, `release list/view` with an
+  explicit `--repo`/`-R OWNER/NAME`, positional `repo view OWNER/NAME`, and
+  `api repos/OWNER/NAME/...` or `api repositories/ID/...` with effective GET.
+  API `-f`/`-F`/`--input` require explicit uppercase `--method GET`/`-X GET`;
+  file-backed inputs send contents to GitHub even on GET. File paths retain
+  confined coordinator containment; stdin inputs are unsupported. The closed
+  grammar is reviewed against gh 2.100.0; unknown flags fail closed. Use supported
+  `--json`, `--jq` and `--limit` options instead of pipes. Quoted jq `|` and `?`
+  are formatting data. Only direct single literal `gh` calls qualify: no aliases,
+  extensions, executable paths, inline env assignments, wrappers, shell
+  composition, expansions or redirections. Use launch-inherited secrets for
+  credentials. Browser flags, command-line host overrides, headers and API caching
+  are unsupported; inherited `GH_HOST`/gh configuration remain trusted launch
+  environment, not a fixed-host guarantee. Run/PR selectors are numeric. No owner
+  allowlist is applied. A literal `gh` operand to a non-data command (for example
+  `git log --author gh`) is also conservatively refused.
+  Decision rules are `orchestrator.gh_read`, `orchestrator.gh_mutation` and
+  `orchestrator.gh_unsupported`; existing containment/integrity rules still apply.
+  Executor/reviewer permissions and Git redirects/loops are unchanged. No new
+  config key or schema/store migration; update both providers and restart agents.
+  Downgrading restores the remote-mutation gap and earlier read restrictions.
+  This is an argv guardrail for root and confined orchestrators, not subprocess
+  isolation: scripts and stdin-fed interpreters (and root inline code) can still
+  invoke gh. Withhold write-scoped orchestrator credentials where remote mutations
+  must be impossible. Unclassified MCP calls retain their existing limits.
 - From 0.7.4, shared shell path checks include attached short-option values
   and literal operands after `--`, including through accepted wrappers.
   Known `grep`/`rg` pattern and `sort` key/separator values remain data;
@@ -229,7 +257,8 @@ them:
 - `sudo`/`doas`/`su`/`runuser`/`pkexec` are refused for every role at any
   wrapper hop, as is any unsupported wrapper option (`exec -a`, `nohup --`,
   `time -o`, `env -S` all fail closed); the accepted `env`/`command`/
-  `builtin`/`exec`/`nohup`/`time` forms are enumerated in the plugin README.
+  `builtin`/`exec`/`nohup`/`time` forms are enumerated by `parse_wrappers` in
+  [harness-policy.py](../../scripts/harness-policy.py).
 - Installed helpers must be invoked as one literal
   `bash <selected-cache-path>/scripts/<name>.sh args...` — no env prefix,
   wrapper, chaining, expansion, stale version, or copied script.

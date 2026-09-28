@@ -230,6 +230,28 @@ them:
 - **Orchestrator**: cannot edit or run mutating commands against a child
   checkout; routes only to its configured executor/reviewer panes;
   `broadcast` is not available under strict-v1.
+- From **0.9.0**, root and confined orchestrators deny direct remote-mutating
+  `gh` commands (`orchestrator.gh_mutation`) even without a child filesystem
+  operand; route mutations to the executor. Reviewed reads
+  (`orchestrator.gh_read`) are `run list/view`, `pr list/view/diff/checks`,
+  `workflow list/view`, `release list/view` with an explicit
+  `--repo`/`-R OWNER/NAME`, positional `repo view OWNER/NAME`, and
+  `api repos/OWNER/NAME/...` or `api repositories/ID/...` with effective GET.
+  API `-f`/`-F`/`--input` need an explicit uppercase `--method GET`/`-X GET`;
+  file-backed inputs send the file contents to GitHub even on GET, and
+  confined coordinators keep filesystem containment for them. Everything
+  else gh-shaped is `orchestrator.gh_unsupported`: aliases, extensions,
+  executable paths, env assignments, wrappers and launchers (`timeout`,
+  `nice`, `find -exec`, ...), composition, expansions, redirections, stdin
+  inputs, browser flags, command-line host overrides, headers, API caching, and unknown
+  flags (grammar reviewed against gh 2.100.0). Use `--json`/`--jq`/`--limit`
+  instead of pipes; quoted jq `|`/`?` is data. A `gh` argument to a
+  non-data command (for example `git log --author gh`) is also refused.
+  Executor/reviewer rules are unchanged. This is an argv guardrail for both
+  orchestrator kinds, not subprocess isolation: a script file or an
+  interpreter fed on stdin can still run `gh`. Scope the orchestrator pane's
+  GitHub token (per-role secret visibility) where remote mutations must be
+  impossible.
 - `sudo`/`doas`/`su`/`runuser`/`pkexec` are refused for every role at any
   wrapper hop, as is any unsupported wrapper option (`exec -a`, `nohup --`,
   `time -o`, `env -S` all fail closed); the accepted `env`/`command`/

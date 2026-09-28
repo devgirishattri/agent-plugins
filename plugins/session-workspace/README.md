@@ -554,6 +554,33 @@ Executor `read_paths` need 0.6.3 or later: before downgrading below 0.6.3,
 remove `read_paths` from every executor pane and restart, even though
 0.6.2 still accepts the field on reviewers (it rejects it on executors).
 
+**Orchestrator `gh` grammar (0.9.0).** Root and confined orchestrators
+route every command whose argv shows a `gh` attempt (the executable, or a
+`gh` argument to a non-data command such as a launcher) through one closed
+parser before the generic floor; `gh` hidden inside interpreter strings or
+script files is not detected. Direct remote mutations (`pr merge/create/close/comment/review/edit/...`,
+`run rerun/cancel/delete`, `workflow run/enable/disable`,
+`release create/delete/upload/edit`, `repo create/edit/delete/fork/sync/...`,
+and `gh api` with any non-GET method, or with fields/`--input` and no
+explicit method) are denied as `orchestrator.gh_mutation`. Reviewed literal
+reads are allowed as `orchestrator.gh_read`: `run list/view`,
+`pr list/view/diff/checks`, `workflow list/view`, `release list/view` with an
+explicit `--repo`/`-R OWNER/NAME` (numeric run/PR selectors), positional
+`repo view OWNER/NAME`, and `gh api repos/OWNER/NAME/...` or
+`repositories/ID/...` with effective GET. With an explicit uppercase `GET`,
+`-f`/`-F` fields and `--input FILE`/`-F key=@FILE` are allowed; gh 2.100.0
+sends file contents to GitHub even on GET, and confined coordinators keep
+path containment for those files. Every other gh-shaped command is
+`orchestrator.gh_unsupported`: other subcommands, aliases, extensions, a
+path-spelled executable, env assignments, wrappers or launchers (`timeout`,
+`nice`, `find -exec`, ...), shell composition, expansions, redirections,
+stdin inputs, command-line host overrides (`://` endpoints, `--hostname`),
+headers, `--cache`, browser flags, path-valued `-R`, and unknown flags. The
+inherited `GH_HOST`/gh configuration remains trusted launch environment, so
+this is not a fixed-host guarantee. No owner allowlist or config key
+is added; executor and reviewer rules are unchanged. Downgrading restores
+the earlier remote-mutation gap and read denials.
+
 ### Trusted helpers: exact provenance, literal argv
 
 For **every role**, an installed-plugin helper is recognized only as one
@@ -661,8 +688,19 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   enablement (Claude) are outside its reach.
 - Outside the global gates (escape flags, exact trusted-helper provenance
   and grammar, master-only routing), arbitrary orchestrator shell is gated
-  only by the child-root floor and the `git push` denial; project
-  release/build rules stay in `AGENTS.md` and project hooks.
+  only by the child-root floor, the `git push` denial, and (0.9.0) the
+  closed `gh` grammar; project release/build rules stay in `AGENTS.md` and
+  project hooks.
+- The 0.9.0 `gh` rules are an argv guardrail for root *and* confined
+  orchestrators, not subprocess isolation: a script file the pane may run,
+  an interpreter fed on stdin, or (root only) `sh -c`/inline interpreter
+  code can still invoke `gh`. Where remote mutations must be impossible,
+  withhold write-scoped GitHub credentials from orchestrator panes (per-role
+  secret visibility). File-backed `gh api` GET inputs transmit the file's
+  contents to GitHub.
+- Pre-existing (tracked, unchanged in 0.9.0): `find` is classified as a read
+  command, so a root orchestrator's `find <child> -delete` or
+  `find <child> -exec ...` is not caught by the child-root floor.
 - Codex `PreToolUse` carries no per-call `exec_command` workdir (only the
   turn's top-level `cwd`), so executor/reviewer shell containment on Codex
   is incomplete for commands that set their own workdir; see "The hook".
