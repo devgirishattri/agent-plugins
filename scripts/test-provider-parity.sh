@@ -514,6 +514,8 @@ diff "$TMP/claude-ack-normalized.md" "$TMP/codex-ack-normalized.md" >/dev/null \
 # the current snapshot has already disappeared.
 CLAUDE_CONTEXT_SCRIPTS="$ROOT/plugins/knowledge/scripts"
 CODEX_CONTEXT_SCRIPTS="$ROOT/codex/plugins/knowledge/scripts"
+cmp -s "$CLAUDE_CONTEXT_SCRIPTS/remove-context.sh" "$CODEX_CONTEXT_SCRIPTS/remove-context.sh" \
+  || fail "knowledge remove-context helper differs between providers"
 for provider in claude codex; do
   if [ "$provider" = "claude" ]; then
     context_scripts="$CLAUDE_CONTEXT_SCRIPTS"
@@ -541,6 +543,15 @@ for provider in claude codex; do
   mkdir -p "$orphan_store/.history"
   orphan_history="$orphan_store/.history/orphan.20260710-000000Z.md"
   printf 'private orphan history\n' > "$orphan_history"
+  SESSION_CONTEXT_HOME="$orphan_store" \
+    bash "$context_scripts/remove-context.sh" orphan --dry-run \
+    > "$TMP/${provider}-orphan-preview.out" 2>&1 \
+    || fail "$provider context could not preview orphan-only history"
+  grep -Fxq "$(cd "$orphan_store" && pwd -P)/.history/orphan.20260710-000000Z.md" \
+    "$TMP/${provider}-orphan-preview.out" || fail "$provider preview omitted its orphan path"
+  grep -Fxq 'Would delete 1 file(s).' "$TMP/${provider}-orphan-preview.out" \
+    || fail "$provider preview count differs from its deletion set"
+  [ -f "$orphan_history" ] || fail "$provider preview deleted orphan-only history"
   SESSION_CONTEXT_HOME="$orphan_store" \
     bash "$context_scripts/remove-context.sh" orphan --confirmed \
     > "$TMP/${provider}-orphan-remove.out" 2>&1 \

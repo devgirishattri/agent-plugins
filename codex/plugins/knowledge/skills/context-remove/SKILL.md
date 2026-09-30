@@ -5,7 +5,7 @@ description: "Remove a saved session context snapshot for the current Codex proj
 
 # Context Remove
 
-When this skill is invoked, do not add a preamble or narrate the plan. This action is destructive: never run the removal script before a separate explicit confirmation for the displayed snapshot.
+When this skill is invoked, do not add a preamble or narrate the plan. This action is destructive: never run the removal script with `--confirmed` before a separate explicit confirmation for the displayed snapshot.
 
 Resolve the absolute plugin root from this selected skill's installed source
 path: it is the directory two levels above this `SKILL.md`. Substitute that
@@ -29,13 +29,16 @@ If no snapshot name is provided:
 
 For either a provided or selected name, require it to match
 `^[a-z0-9]+(_[a-z0-9]+)*$` before interpolating it into any path; reject any other value
-without previewing or removing it. Then produce a point-in-time preview of
-exactly the files currently visible to read-only filesystem inspection:
-enumerate the current `$SESSION_CONTEXT_HOME/<snapshot-name>.md` file and every
-matching `$SESSION_CONTEXT_HOME/.history/<snapshot-name>.*.md` file. Show the
-exact paths and history-file count without invoking `remove-context.sh`. If
-neither current nor archived data exists, suggest `$knowledge:context-list`
-and stop. Explain that the removal helper later revalidates under its writer lock,
+without previewing or removing it. Then run the read-only point-in-time preview:
+
+```bash
+bash "<PLUGIN_ROOT>/scripts/remove-context.sh" "<snapshot-name>" --dry-run
+```
+
+Relay the listed files and total count, including any orphaned-history notice.
+If the helper fails, relay its error and stop; if neither current nor archived
+data exists, suggest `$knowledge:context-list`.
+Explain that the real run re-checks under its writer lock,
 so a concurrent overwrite may add history after this preview and the helper's
 final removal count is authoritative.
 
@@ -53,4 +56,4 @@ bash "<PLUGIN_ROOT>/scripts/remove-context.sh" "<snapshot-name>" --confirmed
 
 The `--confirmed` guard is a second line of defense and must be supplied only after the explicit confirmation above. Never infer, pre-fill, or bypass confirmation.
 
-If the snapshot was removed, confirm the name and report how many archived history files were removed. Removal deletes the current snapshot and all matching `.history/<snapshot-name>.*.md` versions while leaving every other snapshot's history intact. If no snapshot is found, suggest `$knowledge:context-list`. If cancelled, say no snapshot was removed and do not invoke the script.
+If the context was removed, confirm the name and relay the helper's final file count. Removal deletes the current snapshot and all matching archived versions while leaving every other snapshot's history intact. If no snapshot is found, suggest `$knowledge:context-list`. If cancelled, say no snapshot was removed and do not invoke the confirmed run.

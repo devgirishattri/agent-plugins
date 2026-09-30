@@ -28,16 +28,18 @@ argument-hint: <snapshot-name>
    `$knowledge:context-generate` and stop.
 4. Before interpolating `SNAPSHOT_NAME` into any path, require it to match
    `^[a-z0-9]+(_[a-z0-9]+)*$`; reject any other value and do not preview or remove it.
-   Then produce a point-in-time preview of exactly the files currently visible
-   to read-only filesystem inspection: enumerate the current
-   `$SESSION_CONTEXT_HOME/<snapshot-name>.md` file and every matching
-   `$SESSION_CONTEXT_HOME/.history/<snapshot-name>.*.md` file. Show the exact
-   paths and history-file count. Do not invoke `remove-context.sh` during the
-   preview. If neither current nor archived data exists, suggest
-   `$knowledge:context-list` and stop. State that the removal helper later
-   revalidates under its writer lock, so a concurrent overwrite may add history
+   Then run the read-only point-in-time preview:
+
+   ```bash
+   bash "<PLUGIN_ROOT>/scripts/remove-context.sh" "<snapshot-name>" --dry-run
+   ```
+
+   Relay the listed files and total count, including any orphaned-history notice.
+   If the helper fails, relay its error and stop; if neither current nor archived
+   data exists, suggest `$knowledge:context-list`.
+   State that the real run re-checks under its writer lock, so a concurrent overwrite may add history
    after this preview and the helper's final removal count is authoritative.
-5. Show the exact `SNAPSHOT_NAME` and ask a separate Yes/No confirmation. Prefer `request_user_input` when available, with Cancel recommended/default; otherwise ask directly and wait. Anything other than explicit confirmation cancels. Never invoke the removal script before confirmation.
+5. Show the exact `SNAPSHOT_NAME` and ask a separate Yes/No confirmation. Prefer `request_user_input` when available, with Cancel recommended/default; otherwise ask directly and wait. Anything other than explicit confirmation cancels. Never invoke the removal script with `--confirmed` before confirmation.
 
 6. After explicit confirmation, run:
 
@@ -47,5 +49,5 @@ argument-hint: <snapshot-name>
 
    The `--confirmed` guard must be passed only after the explicit confirmation in step 5. Never infer, pre-fill, or bypass confirmation.
 
-7. If removed successfully, confirm that the current snapshot and its archived history were removed, including the script's history-file count.
+7. If removed successfully, relay the script's final file count and whether it removed a snapshot plus history or orphaned history only.
 8. If no snapshot is found, suggest `$knowledge:context-list`. If cancelled, say no snapshot was removed.

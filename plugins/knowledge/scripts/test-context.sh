@@ -26,6 +26,9 @@ unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
 # ---------------------------------------------------------------------------
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Every remove-context invocation goes through this override so a rewritten
+# regression can be shown failing against the original script.
+REMOVE_SCRIPT="${KNOWLEDGE_TEST_REMOVE_CONTEXT_SCRIPT:-$HERE/remove-context.sh}"
 SOCKET="knowledge-context-test-$$"
 SESSION="sctx"
 PASS=0
@@ -437,15 +440,15 @@ printf '# v1\n' > "$RMHOME/.history/rmproj.20200101-000000Z.md"
 printf '# v2\n' > "$RMHOME/.history/rmproj.20200102-000000Z.md"
 printf '# other\n' > "$RMHOME/other.md"
 printf '# ov1\n' > "$RMHOME/.history/other.20200101-000000Z.md"
-out=$(SESSION_CONTEXT_HOME="$RMHOME" bash "$HERE/remove-context.sh" rmproj 2>&1); rc=$?
-if [ "$rc" -ne 0 ] && echo "$out" | grep -q "REFUSED" && [ -f "$RMHOME/rmproj.md" ]; then
+out=$(SESSION_CONTEXT_HOME="$RMHOME" bash "$REMOVE_SCRIPT" rmproj 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && echo "$out" | grep -q "REFUSED" && [ -f "$RMHOME/rmproj.md" ]; then
   pass "remove_refuses_without_confirmed"
 else
   fail "remove_refuses_without_confirmed" "rc=$rc out=$out"
 fi
 
 # --- Test 11: confirmed removal deletes snapshot + its history, preserves others ---
-out=$(SESSION_CONTEXT_HOME="$RMHOME" bash "$HERE/remove-context.sh" rmproj --confirmed 2>&1); rc=$?
+out=$(SESSION_CONTEXT_HOME="$RMHOME" bash "$REMOVE_SCRIPT" rmproj --confirmed 2>&1); rc=$?
 hist_left=$(ls "$RMHOME/.history/rmproj."*.md 2>/dev/null | wc -l | tr -d ' ')
 if [ "$rc" -eq 0 ] && [ ! -f "$RMHOME/rmproj.md" ] && [ "$hist_left" = "0" ] \
    && [ -f "$RMHOME/other.md" ] && [ -f "$RMHOME/.history/other.20200101-000000Z.md" ] \
@@ -478,7 +481,7 @@ fi
 ORPH="$TMP/orphstore"; mkdir -p "$ORPH/.history"
 printf '# v1' > "$ORPH/.history/gone.20200101-000000Z.md"
 printf '# v2' > "$ORPH/.history/gone.20200102-000000Z.md"
-out=$(SESSION_CONTEXT_HOME="$ORPH" bash "$HERE/remove-context.sh" gone --confirmed 2>&1); rc=$?
+out=$(SESSION_CONTEXT_HOME="$ORPH" bash "$REMOVE_SCRIPT" gone --confirmed 2>&1); rc=$?
 left=$(ls "$ORPH/.history/gone."*.md 2>/dev/null | wc -l | tr -d ' ')
 if [ "$rc" -eq 0 ] && [ "$left" = "0" ] && echo "$out" | grep -q "orphaned history"; then
   pass "remove_orphan_history"
@@ -487,7 +490,7 @@ else
 fi
 
 # --- Test 14: removal errors only when NEITHER snapshot nor history exists ---
-out=$(SESSION_CONTEXT_HOME="$ORPH" bash "$HERE/remove-context.sh" totally_absent --confirmed 2>&1); rc=$?
+out=$(SESSION_CONTEXT_HOME="$ORPH" bash "$REMOVE_SCRIPT" totally_absent --confirmed 2>&1); rc=$?
 if [ "$rc" -ne 0 ] && echo "$out" | grep -q "No current or archived context snapshot"; then
   pass "remove_errors_when_nothing_exists"
 else
@@ -495,11 +498,211 @@ else
 fi
 
 # --- Test 14b: remove rejects an unexpected extra operand (capability boundary) ---
-out=$(SESSION_CONTEXT_HOME="$ORPH" bash "$HERE/remove-context.sh" rmproj extra --confirmed 2>&1); rc=$?
+out=$(SESSION_CONTEXT_HOME="$ORPH" bash "$REMOVE_SCRIPT" rmproj extra --confirmed 2>&1); rc=$?
 if [ "$rc" -ne 0 ] && echo "$out" | grep -q "unexpected argument"; then
   pass "remove_rejects_extra_operand"
 else
   fail "remove_rejects_extra_operand" "rc=$rc out=$out"
+fi
+
+# --- Tests 14c-14i: remove-context --dry-run (leaves snapshot/history files and permissions unchanged; store bootstrap and lock bookkeeping may still occur) ---
+mode_of() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
+
+# 14c (a): dry-run lists exactly the snapshot + its history, deletes nothing;
+# a confirmed run on the same store then removes them and reports the same count.
+# Expected paths are physical (pwd -P): bootstrap prints resolved paths, and a
+# macOS TMPDIR under /var resolves to /private/var.
+DRY="$TMP/drystore"; mkdir -p "$DRY/.history"
+printf '# snap\n' > "$DRY/rmproj.md"
+printf '# v1\n' > "$DRY/.history/rmproj.20200101-000000Z.md"
+printf '# v2\n' > "$DRY/.history/rmproj.20200102-000000Z.md"
+printf '# other\n' > "$DRY/other.md"
+printf '# ov1\n' > "$DRY/.history/other.20200101-000000Z.md"
+DRYP="$(cd "$DRY" && pwd -P)"
+pre_ok=1
+for f in "$DRY/rmproj.md" "$DRY/.history/rmproj.20200101-000000Z.md" "$DRY/.history/rmproj.20200102-000000Z.md"; do
+  [ -f "$f" ] || pre_ok=0   # control: the files exist before the run
+done
+out=$(SESSION_CONTEXT_HOME="$DRY" bash "$REMOVE_SCRIPT" rmproj --dry-run 2>&1); rc=$?
+expected=$(printf '%s\n' "$DRYP/rmproj.md" "$DRYP/.history/rmproj.20200101-000000Z.md" "$DRYP/.history/rmproj.20200102-000000Z.md" "Would delete 3 file(s).")
+still_ok=1
+for f in "$DRY/rmproj.md" "$DRY/.history/rmproj.20200101-000000Z.md" "$DRY/.history/rmproj.20200102-000000Z.md" "$DRY/other.md" "$DRY/.history/other.20200101-000000Z.md"; do
+  [ -f "$f" ] || still_ok=0
+done
+if [ "$pre_ok" -eq 1 ] && [ "$rc" -eq 0 ] && [ "$out" = "$expected" ] && [ "$still_ok" -eq 1 ]; then
+  pass "remove_dry_run_lists_and_keeps_files"
+else
+  fail "remove_dry_run_lists_and_keeps_files" "pre_ok=$pre_ok rc=$rc still_ok=$still_ok out=$out"
+fi
+out=$(SESSION_CONTEXT_HOME="$DRY" bash "$REMOVE_SCRIPT" rmproj --confirmed 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "3 file(s) deleted" && [ ! -e "$DRY/rmproj.md" ] \
+   && [ ! -e "$DRY/.history/rmproj.20200101-000000Z.md" ] && [ ! -e "$DRY/.history/rmproj.20200102-000000Z.md" ] \
+   && [ -f "$DRY/other.md" ] && [ -f "$DRY/.history/other.20200101-000000Z.md" ]; then
+  pass "remove_dry_run_count_matches_confirmed"
+else
+  fail "remove_dry_run_count_matches_confirmed" "rc=$rc out=$out"
+fi
+
+# 14d (b): orphan-only history previews with the orphan notice; files remain.
+DORPH="$TMP/dryorph"; mkdir -p "$DORPH/.history"
+printf '# v1' > "$DORPH/.history/gone.20200101-000000Z.md"
+printf '# v2' > "$DORPH/.history/gone.20200102-000000Z.md"
+DORPHP="$(cd "$DORPH" && pwd -P)"
+out=$(SESSION_CONTEXT_HOME="$DORPH" bash "$REMOVE_SCRIPT" gone --dry-run 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -qF "Orphaned history for 'gone' (no current snapshot)." \
+   && echo "$out" | grep -qxF "$DORPHP/.history/gone.20200101-000000Z.md" \
+   && echo "$out" | grep -qxF "$DORPHP/.history/gone.20200102-000000Z.md" \
+   && echo "$out" | grep -qF "Would delete 2 file(s)." \
+   && [ "$(printf '%s\n' "$out" | tail -n 1)" = "Would delete 2 file(s)." ] \
+   && [ "$(printf '%s\n' "$out" | sed -n '3p')" = "Orphaned history for 'gone' (no current snapshot)." ] \
+   && [ -f "$DORPH/.history/gone.20200101-000000Z.md" ] && [ -f "$DORPH/.history/gone.20200102-000000Z.md" ]; then
+  pass "remove_dry_run_orphan_history"
+else
+  fail "remove_dry_run_orphan_history" "rc=$rc out=$out"
+fi
+# Control: a name WITH a current snapshot does not print the orphan notice.
+DRY2="$TMP/drystore2"; mkdir -p "$DRY2"; printf '# s\n' > "$DRY2/present.md"
+out=$(SESSION_CONTEXT_HOME="$DRY2" bash "$REMOVE_SCRIPT" present --dry-run 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q "Orphaned history" && echo "$out" | grep -qF "Would delete 1 file(s)."; then
+  pass "remove_dry_run_orphan_notice_control"
+else
+  fail "remove_dry_run_orphan_notice_control" "rc=$rc out=$out"
+fi
+
+# 14e (c, g): an absent name exits 1 listing the existing names, and the dry-run
+# performs NO chmod (0644 snapshot, 0755 store/history dirs and 0644 history stay).
+DABS="$TMP/dryabsent"; mkdir -p "$DABS/.history"
+printf '# keep\n' > "$DABS/keepme.md"; chmod 644 "$DABS/keepme.md"
+printf '# h\n' > "$DABS/.history/keepme.20200101-000000Z.md"; chmod 644 "$DABS/.history/keepme.20200101-000000Z.md"
+chmod 755 "$DABS" "$DABS/.history"
+before="$(mode_of "$DABS") $(mode_of "$DABS/.history") $(mode_of "$DABS/keepme.md") $(mode_of "$DABS/.history/keepme.20200101-000000Z.md")"
+out=$(SESSION_CONTEXT_HOME="$DABS" bash "$REMOVE_SCRIPT" nosuchname --dry-run 2>&1); rc=$?
+after="$(mode_of "$DABS") $(mode_of "$DABS/.history") $(mode_of "$DABS/keepme.md") $(mode_of "$DABS/.history/keepme.20200101-000000Z.md")"
+if [ "$rc" -eq 1 ] && echo "$out" | grep -q "No current or archived context snapshot found for 'nosuchname'" \
+   && echo "$out" | grep -q "Available snapshots:" && echo "$out" | grep -qx "keepme" \
+   && [ "$before" = "755 755 644 644" ] && [ "$before" = "$after" ]; then
+  pass "remove_dry_run_absent_name_lists_available_no_chmod"
+else
+  fail "remove_dry_run_absent_name_lists_available_no_chmod" "rc=$rc before=$before after=$after out=$out"
+fi
+# Control: an existing name does not exit 1 (the rc assertion above can fail),
+# and its dry-run leaves the 0644 snapshot and 0755 dirs untouched too.
+out=$(SESSION_CONTEXT_HOME="$DABS" bash "$REMOVE_SCRIPT" keepme --dry-run 2>&1); rc=$?
+after="$(mode_of "$DABS") $(mode_of "$DABS/.history") $(mode_of "$DABS/keepme.md") $(mode_of "$DABS/.history/keepme.20200101-000000Z.md")"
+if [ "$rc" -eq 0 ] && echo "$out" | grep -qF "Would delete 2 file(s)." && [ "$after" = "$before" ]; then
+  pass "remove_dry_run_present_snapshot_no_chmod"
+else
+  fail "remove_dry_run_present_snapshot_no_chmod" "rc=$rc before=$before after=$after out=$out"
+fi
+# Control for the no-chmod assertions: the non-dry-run (hardening) path DOES
+# normalize modes on the same store, so "unchanged" above is a meaningful result.
+out=$(SESSION_CONTEXT_HOME="$DABS" bash "$REMOVE_SCRIPT" nosuchname --confirmed 2>&1); rc=$?
+hardened="$(mode_of "$DABS") $(mode_of "$DABS/.history") $(mode_of "$DABS/keepme.md")"
+if [ "$rc" -eq 1 ] && [ "$hardened" = "700 700 600" ]; then
+  pass "remove_confirmed_path_hardens_modes_control"
+else
+  fail "remove_confirmed_path_hardens_modes_control" "rc=$rc hardened=$hardened out=$out"
+fi
+
+# 14f (d): --dry-run and --confirmed together are rejected (usage error, exit 1,
+# on stdout), in either order, and nothing is deleted.
+MX="$TMP/mxstore"; mkdir -p "$MX"; printf '# s\n' > "$MX/mxproj.md"
+for order in "--dry-run --confirmed" "--confirmed --dry-run"; do
+  # shellcheck disable=SC2086
+  out=$(SESSION_CONTEXT_HOME="$MX" bash "$REMOVE_SCRIPT" mxproj $order 2>/dev/null); rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -qF "ERROR: Usage: remove-context.sh <project-name> (--dry-run | --confirmed)" \
+     && echo "$out" | grep -qF "List available snapshots with the context-list command." \
+     && [ -f "$MX/mxproj.md" ]; then
+    pass "remove_dry_run_confirmed_exclusive ($order)"
+  else
+    fail "remove_dry_run_confirmed_exclusive ($order)" "rc=$rc out=$out"
+  fi
+done
+# Control: either flag alone is accepted for the same store.
+out=$(SESSION_CONTEXT_HOME="$MX" bash "$REMOVE_SCRIPT" mxproj --dry-run 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q "ERROR: Usage" && echo "$out" | grep -qF "Would delete 1 file(s)."; then
+  pass "remove_dry_run_alone_accepted_control"
+else
+  fail "remove_dry_run_alone_accepted_control" "rc=$rc out=$out"
+fi
+
+# 14g (e): exact name boundary — rmproj never matches rmproj_two.
+BND="$TMP/bndstore"; mkdir -p "$BND/.history"
+printf '# a\n' > "$BND/rmproj.md"
+printf '# a1\n' > "$BND/.history/rmproj.20200101-000000Z.md"
+printf '# b\n' > "$BND/rmproj_two.md"
+printf '# b1\n' > "$BND/.history/rmproj_two.20200101-000000Z.md"
+out=$(SESSION_CONTEXT_HOME="$BND" bash "$REMOVE_SCRIPT" rmproj --dry-run 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q "rmproj_two" && echo "$out" | grep -qF "Would delete 2 file(s)."; then
+  pass "remove_dry_run_exact_name_boundary"
+else
+  fail "remove_dry_run_exact_name_boundary" "rc=$rc out=$out"
+fi
+# Control: the sibling name is itself previewable (its own files are matched).
+out=$(SESSION_CONTEXT_HOME="$BND" bash "$REMOVE_SCRIPT" rmproj_two --dry-run 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "rmproj_two.md" && echo "$out" | grep -qF "Would delete 2 file(s)."; then
+  pass "remove_dry_run_boundary_sibling_control"
+else
+  fail "remove_dry_run_boundary_sibling_control" "rc=$rc out=$out"
+fi
+out=$(SESSION_CONTEXT_HOME="$BND" bash "$REMOVE_SCRIPT" rmproj --confirmed 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "2 file(s) deleted" && [ ! -e "$BND/rmproj.md" ] \
+   && [ -f "$BND/rmproj_two.md" ] && [ -f "$BND/.history/rmproj_two.20200101-000000Z.md" ]; then
+  pass "remove_confirmed_leaves_sibling_name"
+else
+  fail "remove_confirmed_leaves_sibling_name" "rc=$rc out=$out"
+fi
+
+# 14h (f): invalid names are rejected and never create a store directory.
+for bad in "Bad.Name" "../x"; do
+  NOSTORE="$TMP/nostore-${#bad}"
+  out=$(SESSION_CONTEXT_HOME="$NOSTORE" bash "$REMOVE_SCRIPT" "$bad" --dry-run 2>&1); rc=$?
+  # The validator's own error must be what rejected it (not a parser error).
+  if [ "$rc" -ne 0 ] && [ ! -e "$NOSTORE" ] && echo "$out" | grep -q "canonical snake_case"; then
+    pass "remove_dry_run_invalid_name_no_store ($bad)"
+  else
+    fail "remove_dry_run_invalid_name_no_store ($bad)" "rc=$rc exists=$([ -e "$NOSTORE" ] && echo yes || echo no) out=$out"
+  fi
+done
+# Control: a VALID absent name against a not-yet-existing store does bootstrap it
+# (documented, accepted), proving the no-directory assertion above can fail.
+NOSTORE="$TMP/nostore-valid"
+out=$(SESSION_CONTEXT_HOME="$NOSTORE" bash "$REMOVE_SCRIPT" valid_name --dry-run 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && [ -d "$NOSTORE" ] && echo "$out" | grep -q "(none)"; then
+  pass "remove_dry_run_valid_name_bootstraps_store_control"
+else
+  fail "remove_dry_run_valid_name_bootstraps_store_control" "rc=$rc out=$out"
+fi
+
+# 14h2: an unknown option is rejected (exit 1) and nothing is deleted. The
+# control below shows the same fixture is valid without the bogus option.
+UNK="$TMP/unkstore"; mkdir -p "$UNK/.history"
+printf '# s\n' > "$UNK/rmproj.md"
+printf '# h\n' > "$UNK/.history/rmproj.20200101-000000Z.md"
+for mode_flag in "--dry-run" "--confirmed"; do
+  out=$(SESSION_CONTEXT_HOME="$UNK" bash "$REMOVE_SCRIPT" rmproj --bogus "$mode_flag" 2>&1); rc=$?
+  if [ "$rc" -eq 1 ] && echo "$out" | grep -qF "ERROR: unknown option '--bogus'." \
+     && [ -f "$UNK/rmproj.md" ] && [ -f "$UNK/.history/rmproj.20200101-000000Z.md" ]; then
+    pass "remove_rejects_unknown_option ($mode_flag)"
+  else
+    fail "remove_rejects_unknown_option ($mode_flag)" "rc=$rc out=$out"
+  fi
+done
+# Control: without the bogus option the same fixture previews fine (exit 0).
+out=$(SESSION_CONTEXT_HOME="$UNK" bash "$REMOVE_SCRIPT" rmproj --dry-run 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -qF "Would delete 2 file(s)." && ! echo "$out" | grep -q "unknown option"; then
+  pass "remove_unknown_option_fixture_control"
+else
+  fail "remove_unknown_option_fixture_control" "rc=$rc out=$out"
+fi
+
+# 14i: both flags are rejected BEFORE any store access (no store created).
+NOSTORE="$TMP/nostore-mx"
+out=$(SESSION_CONTEXT_HOME="$NOSTORE" bash "$REMOVE_SCRIPT" valid_name --dry-run --confirmed 2>&1); rc=$?
+if [ "$rc" -eq 1 ] && [ ! -e "$NOSTORE" ]; then
+  pass "remove_exclusive_flags_rejected_before_store_access"
+else
+  fail "remove_exclusive_flags_rejected_before_store_access" "rc=$rc out=$out"
 fi
 
 # --- Test 15: concurrent first-use saves serialize — one safe store, all land ---

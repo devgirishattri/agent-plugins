@@ -277,15 +277,26 @@ promotion's destination write already succeeded and stands).
 **Context source** (handoff or plain snapshot) — follow `/knowledge:context-remove`'s
 own preview-then-delete shape, since that is the existing, separately
 confirmed surface for this deletion (do not reinvent it):
-1. Preview exactly what will be deleted:
+1. Preview exactly what will be deleted with the script's `--dry-run` preview
+   (it leaves snapshot/history files and their permissions unchanged — store
+   bootstrap and lock bookkeeping may still occur; the `<name>` must already
+   match `^[a-z0-9]+(_[a-z0-9]+)*$`; the preview is allowed before the
+   confirmation, only the confirmed removal is gated):
    ```
-   ls -1 "$SESSION_CONTEXT_HOME/<name>.md" "$SESSION_CONTEXT_HOME/.history/<name>."*.md 2>/dev/null
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/remove-context.sh" "<name>" --dry-run
    ```
+   Relay the listed paths, the orphan notice when one is printed, and the
+   "Would delete N file(s)" count. If it exits 1, relay the helper's actual
+   error output; only when that output says no current or archived snapshot
+   was found, also relay the available list and stop — for any other failure,
+   relay it and stop. The confirmed run below rechecks under the writer lock,
+   so its final count is authoritative.
 2. Run the removal with the capability flag:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/remove-context.sh" "<name>" --confirmed
    ```
-   Relay the "N file(s) deleted" result. (Context-store writes are
+   Relay the helper's actual result line and final count (including the
+   orphan-only "Removed N orphaned history file(s)" line). (Context-store writes are
    reviewer-ALLOWED per the baseline's coordination-state exception —
    `remove-context.sh` carries no reviewer gate, by design.)
 

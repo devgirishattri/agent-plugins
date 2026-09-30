@@ -22,6 +22,8 @@ unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Test-only override: git-show originals in scratch exercise these same regressions.
+REMOVE_CONTEXT_SCRIPT="${KNOWLEDGE_TEST_REMOVE_CONTEXT_SCRIPT:-$SCRIPT_DIR/remove-context.sh}"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/knowledge-context-test.XXXXXX")"
 # The exact-root regression makes a parent directory read-only; restore write
@@ -587,6 +589,111 @@ TMUX_CAPTURE="$TMP/tmux.capture" \
 assert_contains "$TMP/share-fallback.out" 'Transport: tmux-fallback'
 assert_contains "$TMP/tmux.capture" '[context:alpha]'
 
+# Dry-run regression fixtures are isolated from all other lifecycle tests.
+DRY_STORE="$TMP/dry-contexts"
+mkdir -p "$DRY_STORE/.history"
+DRY_STORE=$(cd "$DRY_STORE" && pwd -P)
+printf 'current\n' > "$DRY_STORE/preview_name.md"
+printf 'v1\n' > "$DRY_STORE/.history/preview_name.20200101-000000Z.md"
+printf 'v2\n' > "$DRY_STORE/.history/preview_name.20200102-000000Z.md"
+printf 'prefix\n' > "$DRY_STORE/.history/preview.20200101-000000Z.md"
+printf 'longer\n' > "$DRY_STORE/.history/preview_name_more.20200101-000000Z.md"
+printf 'other\n' > "$DRY_STORE/other.md"
+chmod 755 "$DRY_STORE" "$DRY_STORE/.history"
+chmod 644 "$DRY_STORE"/*.md "$DRY_STORE/.history"/*.md
+printf '%s\n' "$DRY_STORE/preview_name.md" \
+  "$DRY_STORE/.history/preview_name.20200101-000000Z.md" \
+  "$DRY_STORE/.history/preview_name.20200102-000000Z.md" \
+  'Would delete 3 file(s).' > "$TMP/dry-expected.out"
+SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" preview_name --dry-run \
+  > "$TMP/dry-preview.out" 2>&1 && ok || fail "snapshot/history dry-run failed"
+cmp -s "$TMP/dry-expected.out" "$TMP/dry-preview.out" \
+  && ok || fail "dry-run did not list the exact three paths and count"
+# Positive controls: content, permissions and both name boundaries are unchanged.
+for dry_file in "$DRY_STORE/preview_name.md" \
+  "$DRY_STORE/.history/preview_name.20200101-000000Z.md" \
+  "$DRY_STORE/.history/preview_name.20200102-000000Z.md" \
+  "$DRY_STORE/.history/preview.20200101-000000Z.md" \
+  "$DRY_STORE/.history/preview_name_more.20200101-000000Z.md"; do
+  [ -f "$dry_file" ] && ok || fail "dry-run deleted $dry_file"
+  assert_mode 644 "$dry_file"
+done
+[ "$(cat "$DRY_STORE/preview_name.md")" = current ] && ok || fail "dry-run changed content"
+assert_mode 755 "$DRY_STORE"
+assert_mode 755 "$DRY_STORE/.history"
+[ ! -e "$DRY_STORE/.knowledge-context.lock" ] && ok || fail "dry-run retained the lock"
+
+# Missing-name listing must also remain read-only (generic listing chmods).
+dry_rc=0
+SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" absent --dry-run \
+  > "$TMP/dry-absent.out" 2>&1 || dry_rc=$?
+[ "$dry_rc" -eq 1 ] && ok || fail "absent dry-run did not exit 1"
+assert_contains "$TMP/dry-absent.out" 'No current or archived context snapshot found'
+assert_contains "$TMP/dry-absent.out" 'Available snapshots:'
+assert_contains "$TMP/dry-absent.out" 'preview_name'
+assert_contains "$TMP/dry-absent.out" 'other'
+assert_mode 644 "$DRY_STORE/preview_name.md"
+assert_mode 644 "$DRY_STORE/other.md"
+assert_mode 755 "$DRY_STORE"
+assert_mode 755 "$DRY_STORE/.history"
+
+# Every negative has the successful preview above and surviving target controls.
+dry_rc=0
+SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" preview_name --dry-run --confirmed \
+  > "$TMP/dry-conflict.out" 2>&1 || dry_rc=$?
+[ "$dry_rc" -ne 0 ] && ok || fail "conflicting flags accepted"
+assert_contains "$TMP/dry-conflict.out" 'Usage:'
+dry_rc=0
+SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" bad-name --dry-run \
+  > "$TMP/dry-invalid.out" 2>&1 || dry_rc=$?
+[ "$dry_rc" -eq 1 ] && ok || fail "dry-run invalid name accepted"
+assert_contains "$TMP/dry-invalid.out" 'canonical snake_case'
+for dry_args in none unknown extra; do
+  dry_rc=0
+  case "$dry_args" in
+    none) SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" preview_name \
+      > "$TMP/dry-$dry_args.out" 2>&1 || dry_rc=$? ;;
+    unknown) SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" preview_name --unknown \
+      > "$TMP/dry-$dry_args.out" 2>&1 || dry_rc=$? ;;
+    extra) SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" preview_name other --confirmed \
+      > "$TMP/dry-$dry_args.out" 2>&1 || dry_rc=$? ;;
+  esac
+  if [ "$dry_args" = none ]; then
+    [ "$dry_rc" -eq 2 ] && ok || fail "unconfirmed remove did not exit 2"
+    assert_contains "$TMP/dry-$dry_args.out" REFUSED
+  else
+    [ "$dry_rc" -eq 1 ] && ok || fail "$dry_args removal did not exit 1"
+  fi
+done
+assert_contains "$TMP/dry-unknown.out" 'unknown option'
+assert_contains "$TMP/dry-extra.out" 'unexpected argument'
+for dry_file in "$DRY_STORE/preview_name.md" \
+  "$DRY_STORE/.history/preview_name.20200101-000000Z.md" \
+  "$DRY_STORE/.history/preview_name.20200102-000000Z.md"; do
+  [ -f "$dry_file" ] && ok || fail "rejected removal deleted $dry_file"
+done
+SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" preview_name --confirmed > "$TMP/dry-remove.out"
+assert_contains "$TMP/dry-remove.out" '3 file(s) deleted'
+for dry_file in "$DRY_STORE/preview_name.md" \
+  "$DRY_STORE/.history/preview_name.20200101-000000Z.md" \
+  "$DRY_STORE/.history/preview_name.20200102-000000Z.md"; do
+  [ ! -e "$dry_file" ] && ok || fail "confirmed removal retained $dry_file"
+done
+[ -f "$DRY_STORE/.history/preview.20200101-000000Z.md" ] && ok || fail "removed prefix history"
+[ -f "$DRY_STORE/.history/preview_name_more.20200101-000000Z.md" ] && ok || fail "removed longer-name history"
+[ -f "$DRY_STORE/other.md" ] && ok || fail "removed another snapshot"
+
+printf 'orphan\n' > "$DRY_STORE/.history/orphan.20200101-000000Z.md"
+SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" orphan --dry-run > "$TMP/dry-orphan.out"
+printf '%s\n' "$DRY_STORE/.history/orphan.20200101-000000Z.md" \
+  "Orphaned history for 'orphan' (no current snapshot)." \
+  'Would delete 1 file(s).' > "$TMP/dry-orphan-expected.out"
+cmp -s "$TMP/dry-orphan-expected.out" "$TMP/dry-orphan.out" && ok || fail "orphan preview differs"
+[ -f "$DRY_STORE/.history/orphan.20200101-000000Z.md" ] && ok || fail "dry-run deleted orphan"
+SESSION_CONTEXT_HOME="$DRY_STORE" bash "$REMOVE_CONTEXT_SCRIPT" orphan --confirmed > "$TMP/dry-orphan-remove.out"
+assert_contains "$TMP/dry-orphan-remove.out" '1 orphaned history file(s)'
+[ ! -e "$DRY_STORE/.history/orphan.20200101-000000Z.md" ] && ok || fail "confirmed orphan removal failed"
+
 # Prepare unrelated history and prove confirmed removal does not over-delete.
 printf 'beta one\n' > "$TMP/beta.md"
 bash "$SCRIPT_DIR/save-context.sh" beta "$TMP/beta.md" > /dev/null
@@ -595,15 +702,15 @@ bash "$SCRIPT_DIR/save-context.sh" beta "$TMP/beta.md" > /dev/null
 beta_history=$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'beta.*.md' -print -quit)
 [ -n "$beta_history" ] && ok || fail "beta history fixture is missing"
 
-if bash "$SCRIPT_DIR/remove-context.sh" alpha > "$TMP/remove-guard.out" 2>&1; then
+if bash "$REMOVE_CONTEXT_SCRIPT" alpha > "$TMP/remove-guard.out" 2>&1; then
   fail "remove-context bypassed the --confirmed guard"
 fi
 assert_contains "$TMP/remove-guard.out" "--confirmed"
 [ -f "$SESSION_CONTEXT_HOME/alpha.md" ] && ok || fail "unguarded removal deleted alpha"
 
-bash "$SCRIPT_DIR/remove-context.sh" alpha --confirmed > "$TMP/remove.out"
+bash "$REMOVE_CONTEXT_SCRIPT" alpha --confirmed > "$TMP/remove.out"
 [ ! -e "$SESSION_CONTEXT_HOME/alpha.md" ] && ok || fail "remove left alpha.md behind"
-assert_contains "$TMP/remove.out" "history file(s)"
+assert_contains "$TMP/remove.out" "file(s) deleted"
 [ -z "$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'alpha.*.md' -print -quit)" ] \
   && ok || fail "remove left alpha history behind"
 [ -f "$beta_history" ] && ok || fail "removing alpha deleted beta history"
@@ -617,10 +724,10 @@ bash "$SCRIPT_DIR/save-context.sh" orphan "$TMP/orphan.md" > /dev/null
 rm "$SESSION_CONTEXT_HOME/orphan.md"
 orphan_history=$(find "$SESSION_CONTEXT_HOME/.history" -type f -name 'orphan.*.md' -print -quit)
 [ -n "$orphan_history" ] && ok || fail "orphan history fixture is missing"
-bash "$SCRIPT_DIR/remove-context.sh" orphan --confirmed > "$TMP/remove-orphan.out"
-assert_contains "$TMP/remove-orphan.out" "0 current snapshot and 1 history file(s)"
+bash "$REMOVE_CONTEXT_SCRIPT" orphan --confirmed > "$TMP/remove-orphan.out"
+assert_contains "$TMP/remove-orphan.out" "1 orphaned history file(s)"
 [ ! -e "$orphan_history" ] && ok || fail "confirmed remove retained orphan history"
-if bash "$SCRIPT_DIR/remove-context.sh" missing --confirmed > "$TMP/remove-missing.out" 2>&1; then
+if bash "$REMOVE_CONTEXT_SCRIPT" missing --confirmed > "$TMP/remove-missing.out" 2>&1; then
   fail "remove succeeded when neither current nor history data existed"
 fi
 assert_contains "$TMP/remove-missing.out" "No current or archived context snapshot"
@@ -650,6 +757,8 @@ for remove_doc in \
   "$PLUGIN_ROOT/skills/context-remove/SKILL.md"; do
   grep -Fq 'point-in-time preview' "$remove_doc" \
     && ok || fail "context-remove doc omits its point-in-time pre-confirmation preview: $remove_doc"
+  grep -Eq 'remove-context.sh.*--dry-run' "$remove_doc" \
+    && ok || fail "context-remove doc omits the helper dry-run: $remove_doc"
   grep -Fq '^[a-z0-9]+(_[a-z0-9]+)*$' "$remove_doc" \
     && ok || fail "context-remove doc omits pre-preview label validation: $remove_doc"
   grep -Fq 'writer lock' "$remove_doc" \

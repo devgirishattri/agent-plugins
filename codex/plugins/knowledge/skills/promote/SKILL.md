@@ -279,13 +279,17 @@ own preview-then-delete shape, since that is the existing, separately
 confirmed surface for this deletion (do not reinvent it):
 1. Preview exactly what will be deleted:
    ```
-   ls -1 "$SESSION_CONTEXT_HOME/<name>.md" "$SESSION_CONTEXT_HOME/.history/<name>."*.md 2>/dev/null
+   bash "<PLUGIN_ROOT>/scripts/remove-context.sh" "<name>" --dry-run
    ```
+   Relay the listed files and total count, including any orphaned-history notice.
+   If the helper fails, relay its error and stop. The real run re-checks under
+   its writer lock, so concurrent changes can alter the set after this preview;
+   the final removal count is authoritative.
 2. Run the removal with the capability flag:
    ```
    bash "<PLUGIN_ROOT>/scripts/remove-context.sh" "<name>" --confirmed
    ```
-   Relay the helper's current-snapshot and history-file counts. (Context-store writes are
+   Relay the helper's final file count. (Context-store writes are
    reviewer-ALLOWED per the baseline's coordination-state exception —
    `remove-context.sh` carries no reviewer gate, by design.)
 
