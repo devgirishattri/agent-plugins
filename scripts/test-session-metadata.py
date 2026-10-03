@@ -69,7 +69,10 @@ class Metadata(unittest.TestCase):
         self.assertIn(b"missing upgrade", result.stderr)
 
     def wire(self, mode):
-        return M.RPC([sys.executable, "-u", __file__, "--wire-fixture", mode], timeout=0.3)
+        # Includes a fresh interpreter and fixture imports; 300 ms flakes under
+        # concurrent CI load. The partial-frame fixture stalls for five seconds,
+        # so two seconds still exercises the bounded-timeout negative control.
+        return M.RPC([sys.executable, "-u", __file__, "--wire-fixture", mode], timeout=2)
 
     def test_websocket_wire(self):
         for mode in ("normal", "extended16", "extended64", "fragment_ping", "notification"):
