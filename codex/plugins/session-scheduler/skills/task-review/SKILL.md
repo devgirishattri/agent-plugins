@@ -50,3 +50,8 @@ outbox evidence proves no packet was delivered; never duplicate a delivered
 review packet.
 
 The executor (or orchestrator) runs this when work is ready for audit. Legal only from `assigned`. If the task has a `reviewer`, the script builds a private review packet containing the shared ledger homes and original assignment, then dispatches it automatically. Review state is retained if delivery fails so it can be retried. Independently, an eligible assigner receives a durable file-backed lifecycle acknowledgement that is queued when busy; the ledger remains authoritative and `meta.last_ack` records its outcome without replacing reviewer-dispatch metadata. An assigner-ack failure does not undo review or authorize rerunning the transition. The reviewer approves with `$session-scheduler:task-done` or rejects with `$session-scheduler:task-block`.
+
+For a task with a verification contract, read `../task-contract/SKILL.md`.
+Contract assignment accepts only pane, id and one prompt. Review, done and block
+require `<id> --generation <N> "<note>"`; only the bound reviewer may complete.
+Force never bypasses the contract. Inspect the task first to use its generation.

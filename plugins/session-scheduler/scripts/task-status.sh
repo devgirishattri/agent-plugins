@@ -64,6 +64,9 @@ if [ -n "$SINGLE_ID" ]; then
       [ -z "$dep" ] && continue
       if task_exists "$dep"; then
         dstatus=$(task_get "$dep" '.status')
+        if task_has_contract "$dep"; then
+          dstatus="$dstatus (contract: $(contract_state "$dep"))"
+        fi
       else
         dstatus="missing"
       fi

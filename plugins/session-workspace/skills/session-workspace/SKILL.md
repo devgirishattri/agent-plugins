@@ -26,6 +26,12 @@ argv/env construction, and create/adopt/reconcile/stop/restart.
 | `/session-workspace:harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), and does this pane's engine identity match the plan |
 | `/session-workspace:harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
 | `/session-workspace:workspace-orchestrator` | Schema-v4 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
+| `/session-workspace:verification-recipe` | Author or maintain a project-local launch/doctor/drive/evidence/cleanup recipe; guidance only, no new runtime, permission, or approval gate |
+| `/session-workspace:blast-radius` | Report-only review of a diff's indirect consumers and safety assumptions, with checks only within existing authorization |
+| `/session-workspace:adversarial-review` | Optional budgeted independent pass that tries to break an exact subject; evidence-based dispositions; consensus is not approval |
+| `/session-workspace:benchmark-check` | Check a performance claim: comparable inputs, correctness/work counts, interleaved repeated samples, limiter, explicit inconclusive |
+| `/session-workspace:behavioral-eval` | Design/assess behavioral evals: baseline, positive/negative controls, grading on completed executions and artifacts; model spend only when authorized |
+| `/session-workspace:pr-status` | Read-only GitHub PR blocker report (ready/blocked/waiting/inconclusive); orchestrator-only under strict-v1; never merges or comments |
 
 ## Configuration model (enforced)
 

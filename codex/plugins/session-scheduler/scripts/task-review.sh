@@ -9,6 +9,8 @@ set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
+contract_route_if_needed "review" "${1:-}" "$@"
+
 if [ "$#" -lt 2 ]; then
   echo "ERROR: Usage: task-review.sh <task-id> [--force] <note>   (note required, e.g. a commit SHA)" >&2
   exit 1
@@ -16,6 +18,8 @@ fi
 
 require_jq || exit 1
 ensure_dirs || exit 1
+
+
 
 ID="$1"
 shift

@@ -1259,6 +1259,191 @@ else
   fail "task_new_fails_closed_on_write_error" "rc=$ro_rc out=$ro_out ctrl_rc=$ok_rc"
 fi
 
+# --- Test 46: task_write refuses anything but exactly one JSON object ---
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "write-guard" 2>&1)
+WG_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+WG_FILE="$SESSION_SCHEDULER_HOME/tasks/$WG_ID.json"
+WG_BEFORE=$(cksum < "$WG_FILE")
+wg_bad=0
+for content in "" "not json" "[]" '{"a":1}{"b":2}' '{"a":'; do
+  if SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash -c 'source "$1"; task_write "$2" "$3"' wg "$HERE/lib.sh" "$WG_ID" "$content" 2>/dev/null; then
+    wg_bad=1
+  fi
+done
+WG_AFTER=$(cksum < "$WG_FILE")
+# Control: a valid object is written.
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash -c 'source "$1"; task_write "$2" "$(jq ".name = \"rewritten\"" "$3")"' wg "$HERE/lib.sh" "$WG_ID" "$WG_FILE" 2>/dev/null; wg_ok=$?
+if [ -n "$WG_ID" ] && [ "$wg_bad" = 0 ] && [ "$WG_BEFORE" = "$WG_AFTER" ] && [ "$wg_ok" = 0 ] \
+   && [ "$(jq -r '.name' "$WG_FILE")" = "rewritten" ] && ! ls "$SESSION_SCHEDULER_HOME/tasks/$WG_ID.json.tmp."* >/dev/null 2>&1; then
+  pass "task_write_rejects_non_object_content"
+else
+  fail "task_write_rejects_non_object_content" "id=$WG_ID bad=$wg_bad before=$WG_BEFORE after=$WG_AFTER ok=$wg_ok"
+fi
+
+# --- Test 47: a failed jq during a status flip leaves the task intact ---
+# The real task-block.sh runs against a lib.sh whose jq fails only for the
+# status-flip filter, the way a jq error would inside task_set_status_unlocked.
+JQLIB="$TMP/jqfail"
+mkdir -p "$JQLIB"
+cp "$HERE/task-block.sh" "$JQLIB/task-block.sh"
+out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" bash "$HERE/task-new.sh" "jq-failure" 2>&1)
+JF_ID=$(echo "$out" | awk '/Created task:/ {print $3}')
+JF_FILE="$SESSION_SCHEDULER_HOME/tasks/$JF_ID.json"
+JF_BEFORE=$(cksum < "$JF_FILE")
+printf '%s\n' "source \"$HERE/lib.sh\"" \
+  'jq() { case "$*" in *".status = \$status"*) return 5 ;; esac; command jq "$@"; }' > "$JQLIB/lib.sh"
+jf_out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/no-chat" bash "$JQLIB/task-block.sh" "$JF_ID" "jq broke" 2>&1); jf_rc=$?
+JF_AFTER=$(cksum < "$JF_FILE")
+# Control: the same copy with the real lib performs the transition.
+printf '%s\n' "source \"$HERE/lib.sh\"" > "$JQLIB/lib.sh"
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/no-chat" bash "$JQLIB/task-block.sh" "$JF_ID" "control" >/dev/null 2>&1
+if [ -n "$JF_ID" ] && [ "$jf_rc" != 0 ] && [ "$JF_BEFORE" = "$JF_AFTER" ] && echo "$jf_out" | grep -q "NOT marked blocked" \
+   && [ "$(jq -r '.status' "$JF_FILE")" = "blocked" ]; then
+  pass "status_flip_jq_failure_preserves_task"
+else
+  fail "status_flip_jq_failure_preserves_task" "id=$JF_ID rc=$jf_rc before=$JF_BEFORE after=$JF_AFTER status=$(jq -r '.status' "$JF_FILE" 2>&1) out=$jf_out"
+fi
+
+# --- Tests 48-54: verification-contract routing and guards (0.7.0) ---
+# A copy of the scripts with a stub task-contract.sh that records its argv and
+# answers `inspect` from a per-task state file, so these tests pin the legacy
+# side of the interface without depending on the engine itself.
+CT_DIR="$TMP/contract-scripts"
+mkdir -p "$CT_DIR"
+cp "$HERE"/*.sh "$CT_DIR/"
+CT_HOME="$TMP/contract-home"
+mkdir -p "$CT_HOME"
+CT_LOG="$TMP/contract-argv.log"
+CT_STATE="$TMP/contract-state"
+mkdir -p "$CT_STATE"
+cat > "$CT_DIR/task-contract.sh" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  route) printf '%s\n' "$@" > "$CT_LOG"; echo "stub-route $2"; exit 0 ;;
+  inspect)
+    state=$(cat "$CT_STATE/$2" 2>/dev/null || echo invalid)
+    case "$state" in admitted) rc=0 ;; closed-unadmitted|active) rc=1 ;; *) rc=2 ;; esac
+    printf '{"state":"%s"}\n' "$state"; exit "$rc" ;;
+esac
+exit 2
+STUB
+export CT_LOG CT_STATE
+ct() { SESSION_SCHEDULER_HOME="$CT_HOME" SESSION_CHAT_ROOT_OVERRIDE="$STUB_DIR/.." bash "$CT_DIR/$1" "${@:2}"; }
+ct_new() { ct task-new.sh "$1" 2>&1 | awk '/Created task:/ {print $3}'; }
+ct_attach() { # simulate an attached contract (the engine's job) directly in the file
+  jq '.contract = {"schema_version": 1, "generation": 1}' "$CT_HOME/tasks/$1.json" > "$CT_HOME/tasks/$1.json.tmp" \
+    && mv "$CT_HOME/tasks/$1.json.tmp" "$CT_HOME/tasks/$1.json"
+}
+
+# 48: every legacy entry point hands a contracted task to the engine verbatim.
+CR_ID=$(ct_new "contract-route"); ct_attach "$CR_ID"
+CR_BEFORE=$(cksum < "$CT_HOME/tasks/$CR_ID.json")
+cr_ok=1
+for spec in "task-done.sh|done|$CR_ID|--generation|1|all good" "task-review.sh|review|$CR_ID|--generation|1|sha abc" \
+            "task-block.sh|block|$CR_ID|--force|why" "task-assign.sh|assign|exec-pane|$CR_ID|do it"; do
+  IFS='|' read -r script op a1 a2 a3 a4 <<< "$spec"
+  rm -f "$CT_LOG"
+  args=("$a1" "$a2" "$a3"); [ -n "$a4" ] && args+=("$a4")
+  out=$(ct "$script" "${args[@]}" 2>&1); rc=$?
+  expected=$(printf '%s\n' route "$op" "${args[@]}")
+  if [ "$rc" != 0 ] || [ "$(cat "$CT_LOG" 2>/dev/null)" != "$expected" ]; then cr_ok=0; echo "    route mismatch for $script: rc=$rc out=$out" >&2; fi
+done
+CR_AFTER=$(cksum < "$CT_HOME/tasks/$CR_ID.json")
+# Control: an uncontracted task never reaches the engine.
+CN_ID=$(ct_new "no-contract"); rm -f "$CT_LOG"
+ct task-block.sh "$CN_ID" "legacy reason" >/dev/null 2>&1; cn_rc=$?
+if [ "$cr_ok" = 1 ] && [ "$CR_BEFORE" = "$CR_AFTER" ] && [ "$cn_rc" = 0 ] && [ ! -e "$CT_LOG" ] \
+   && [ "$(jq -r '.status' "$CT_HOME/tasks/$CN_ID.json")" = "blocked" ]; then
+  pass "contract_early_route_hands_off_verbatim"
+else
+  fail "contract_early_route_hands_off_verbatim" "ok=$cr_ok before=$CR_BEFORE after=$CR_AFTER ctrl_rc=$cn_rc"
+fi
+
+# 49: a contracted task with no engine installed fails closed; the file is untouched.
+mv "$CT_DIR/task-contract.sh" "$CT_DIR/task-contract.sh.off"
+out=$(ct task-done.sh "$CR_ID" --force "closing anyway" 2>&1); ne_rc=$?
+mv "$CT_DIR/task-contract.sh.off" "$CT_DIR/task-contract.sh"
+if [ "$ne_rc" = 2 ] && echo "$out" | grep -q "task-contract.sh is not installed" \
+   && [ "$CR_BEFORE" = "$(cksum < "$CT_HOME/tasks/$CR_ID.json")" ]; then
+  pass "contract_without_engine_fails_closed"
+else
+  fail "contract_without_engine_fails_closed" "rc=$ne_rc out=$out"
+fi
+
+# 50: legacy writers re-check under the lock and refuse even when forced, so a
+# contract attached after a caller's early check cannot be overwritten.
+GL_ID=$(ct_new "guard-legacy"); ct_attach "$GL_ID"
+GL_BEFORE=$(cksum < "$CT_HOME/tasks/$GL_ID.json")
+gl_out=$(SESSION_SCHEDULER_HOME="$CT_HOME" SESSION_SCHEDULER_FORCE=1 bash -c \
+  'source "$1"; task_set_status "$2" done tester forced; a=$?; task_update "$2" ".name = \"x\""; b=$?; echo "rc=$a/$b"' g "$CT_DIR/lib.sh" "$GL_ID" 2>&1)
+GL_AFTER=$(cksum < "$CT_HOME/tasks/$GL_ID.json")
+# Control: the same calls succeed on an uncontracted task.
+GC_ID=$(ct_new "guard-control")
+gc_out=$(SESSION_SCHEDULER_HOME="$CT_HOME" bash -c \
+  'source "$1"; task_set_status "$2" blocked tester ok; a=$?; task_update "$2" ".name = \"x\""; b=$?; echo "rc=$a/$b"' g "$CT_DIR/lib.sh" "$GC_ID" 2>&1)
+if echo "$gl_out" | grep -q "rc=1/1" && echo "$gl_out" | grep -q "has a verification contract" \
+   && [ "$GL_BEFORE" = "$GL_AFTER" ] && echo "$gc_out" | grep -q "rc=0/0"; then
+  pass "contract_legacy_writers_refuse_under_lock"
+else
+  fail "contract_legacy_writers_refuse_under_lock" "contracted=$gl_out control=$gc_out"
+fi
+
+# 51: a contracted dependency counts only when admitted, and --force cannot skip it.
+DP_DEP=$(ct_new "contract-dep"); ct_attach "$DP_DEP"
+jq '.status = "done"' "$CT_HOME/tasks/$DP_DEP.json" > "$CT_HOME/tasks/$DP_DEP.json.tmp" && mv "$CT_HOME/tasks/$DP_DEP.json.tmp" "$CT_HOME/tasks/$DP_DEP.json"
+DP_ID=$(ct task-new.sh "dependent" --depends-on "$DP_DEP" 2>&1 | awk '/Created task:/ {print $3}')
+echo closed-unadmitted > "$CT_STATE/$DP_DEP"
+dp_out=$(ct task-assign.sh exec-pane "$DP_ID" --force "go" 2>&1); dp_rc=$?
+dp_status=$(jq -r '.status' "$CT_HOME/tasks/$DP_ID.json")
+echo admitted > "$CT_STATE/$DP_DEP"
+dp_ok=$(SESSION_SCHEDULER_HOME="$CT_HOME" bash -c 'source "$1"; unadmitted_contract_deps "$2"' g "$CT_DIR/lib.sh" "$DP_ID" 2>&1)
+rm -f "$CT_STATE/$DP_DEP"
+dp_missing=$(SESSION_SCHEDULER_HOME="$CT_HOME" bash -c 'source "$1"; unadmitted_contract_deps "$2"' g "$CT_DIR/lib.sh" "$DP_ID" 2>&1)
+# With the engine absent, an "admitted" state file must not count.
+echo admitted > "$CT_STATE/$DP_DEP"
+mv "$CT_DIR/task-contract.sh" "$CT_DIR/task-contract.sh.off"
+dp_noengine=$(SESSION_SCHEDULER_HOME="$CT_HOME" bash -c 'source "$1"; unadmitted_contract_deps "$2"' g "$CT_DIR/lib.sh" "$DP_ID" 2>&1)
+mv "$CT_DIR/task-contract.sh.off" "$CT_DIR/task-contract.sh"
+rm -f "$CT_STATE/$DP_DEP"
+if [ -n "$DP_ID" ] && [ "$dp_rc" != 0 ] && echo "$dp_out" | grep -q "closed-unadmitted" && [ "$dp_status" = "created" ] \
+   && [ -z "$dp_ok" ] && [ "$dp_missing" = "$DP_DEP (invalid)" ] && [ "$dp_noengine" = "$DP_DEP (invalid)" ]; then
+  pass "contract_dependency_requires_admission_even_forced"
+else
+  fail "contract_dependency_requires_admission_even_forced" "id=$DP_ID rc=$dp_rc status=$dp_status out=$dp_out admitted=[$dp_ok] invalid=[$dp_missing] noengine=[$dp_noengine]"
+fi
+
+# 52: status flags carry the admission state of contracted tasks only.
+echo closed-unadmitted > "$CT_STATE/$DP_DEP"
+fl_c=$(SESSION_SCHEDULER_HOME="$CT_HOME" bash -c 'source "$1"; task_flags "$(task_path "$2")"' g "$CT_DIR/lib.sh" "$DP_DEP" 2>&1)
+fl_l=$(SESSION_SCHEDULER_HOME="$CT_HOME" bash -c 'source "$1"; task_flags "$(task_path "$2")"' g "$CT_DIR/lib.sh" "$GC_ID" 2>&1)
+if [ "$fl_c" = "CONTRACT:closed-unadmitted" ] && [ "$fl_l" = "-" ]; then
+  pass "contract_state_in_status_flags"
+else
+  fail "contract_state_in_status_flags" "contracted=$fl_c legacy=$fl_l"
+fi
+
+# 53: cleanup retains every contracted task (any age/status) and still deletes legacy ones.
+for id in "$DP_DEP" "$GC_ID"; do
+  jq '.updated_at = "2020-01-01T00:00:00+05:30"' "$CT_HOME/tasks/$id.json" > "$CT_HOME/tasks/$id.json.tmp" && mv "$CT_HOME/tasks/$id.json.tmp" "$CT_HOME/tasks/$id.json"
+done
+# DP_ID depends on DP_DEP; drop that edge so only the contract can keep DP_DEP.
+jq '.depends_on = []' "$CT_HOME/tasks/$DP_ID.json" > "$CT_HOME/tasks/$DP_ID.json.tmp" && mv "$CT_HOME/tasks/$DP_ID.json.tmp" "$CT_HOME/tasks/$DP_ID.json"
+cl_out=$(ct tasks-clean.sh --older-than 30 --apply 2>&1); cl_rc=$?
+if [ "$cl_rc" = 0 ] && [ -f "$CT_HOME/tasks/$DP_DEP.json" ] && [ ! -e "$CT_HOME/tasks/$GC_ID.json" ] \
+   && echo "$cl_out" | grep -q "kept $DP_DEP (verification contract retained)" && [ -z "$(ls -A "$CT_HOME/locks")" ]; then
+  pass "contract_tasks_survive_cleanup"
+else
+  fail "contract_tasks_survive_cleanup" "rc=$cl_rc out=$cl_out locks=$(ls -A "$CT_HOME/locks")"
+fi
+
+# 54: doctor reports contracted tasks closed without admission.
+dr_out=$(SESSION_SCHEDULER_HOME="$CT_HOME" bash "$CT_DIR/scheduler-doctor.sh" 2>&1)
+if echo "$dr_out" | grep -q "contracts: .*contracted task" && echo "$dr_out" | grep -q "closed-unadmitted"; then
+  pass "contract_doctor_reports_unadmitted"
+else
+  fail "contract_doctor_reports_unadmitted" "$(echo "$dr_out" | grep -A4 contracts)"
+fi
+
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -gt 0 ]; then

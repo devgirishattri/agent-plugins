@@ -7,6 +7,8 @@ set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
+contract_route_if_needed "assign" "${2:-}" "$@"
+
 if [ "$#" -lt 3 ]; then
   echo "ERROR: Usage: task-assign.sh <pane> <task-id> [--eta MINUTES] [--stage NAME] [--context NAME|auto] [--reviewer PANE] [--workflow ID] [--force] <prompt>" >&2
   exit 1
@@ -14,6 +16,8 @@ fi
 
 require_jq || exit 1
 ensure_dirs || exit 1
+
+
 
 ASSIGNEE="$1"
 ID="$2"
@@ -51,6 +55,7 @@ if [ ! -f "$FILE" ]; then
   echo "ERROR: Task not found: $ID" >&2
   exit 1
 fi
+contract_dependencies "$ID" || exit 1
 
 if [ -n "$ETA_MIN" ] && ! [[ "$ETA_MIN" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: --eta expects a positive integer number of minutes, got: $ETA_MIN" >&2
@@ -68,6 +73,10 @@ fi
 
 # Pre-flight: status transition must be legal (or forced) BEFORE we touch the
 # prompt file or dispatch anything.
+if jq -e 'has("contract")' "$FILE" >/dev/null; then
+  echo "ERROR: contracted task changed during legacy dispatch; reconcile delivery before retrying." >&2
+  exit 1
+fi
 CURRENT_STATUS=$(jq -r '.status // ""' "$FILE")
 if ! transition_allowed "$CURRENT_STATUS" "assigned" && ! scheduler_force_enabled; then
   echo "ERROR: Illegal status transition '$CURRENT_STATUS' -> 'assigned' for task $ID." >&2
@@ -298,6 +307,10 @@ fi
 # after an earlier review was successfully dispatched and then rejected.
 lock_task_for_command "$ID" || exit 1
 [ -f "$FILE" ] || { echo "ERROR: dispatch succeeded but task disappeared: $ID" >&2; exit 1; }
+if jq -e 'has("contract")' "$FILE" >/dev/null; then
+  echo "ERROR: contracted task changed during legacy dispatch; reconcile delivery before retrying." >&2
+  exit 1
+fi
 CURRENT_STATUS=$(jq -r '.status' "$FILE")
 if ! transition_allowed "$CURRENT_STATUS" assigned && ! scheduler_force_enabled; then
   echo "ERROR: dispatch succeeded but task changed to $CURRENT_STATUS; assignment not committed." >&2

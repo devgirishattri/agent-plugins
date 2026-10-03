@@ -8,6 +8,8 @@ allowed-tools: Bash(bash:*)
 
 Lead with the result; add text only for errors or the follow-ups below. This is a destructive command — deletion is gated behind an explicit confirmation. Default behavior is dry-run with `--older-than 7` (**days**; a bare integer is days on both providers).
 
+Tasks with a verification contract (see the `task-contract` skill) are always retained, whatever their age or status.
+
 What one task's cleanup removes, by exact name (never an `<id>-*` glob): `tasks/<id>.json`, `prompts/<id>.md`, `prompts/<id>-review.md`, `prompts/<id>-ack-{done,blocked,review}.md`, the whole `handoffs/<id>/` directory, and a leftover `locks/<id>.lock/`. A candidate still listed in `depends_on` by a task that is *not* being deleted is kept and reported as `kept <id> (referenced by …)`. The same run also lists **orphans** — handoff dirs and known-suffix prompt files whose task JSON is gone and whose mtime is past the threshold — under an `Orphans:` heading; `--apply` deletes those too.
 
 `SESSION_SCHEDULER_HOME` must already be present in this session's environment, inherited when the agent process started (the pane/session launcher sets it — never export or derive it here). Every invocation below must be exactly one Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it. If the script reports the variable is not set, stop and request that this pane/session be relaunched with the correct environment instead of deriving another ledger.

@@ -100,3 +100,14 @@ Intentionally includes task ids, assignment, explicit reviewer routes, workflow 
 - Scripts require `SESSION_SCHEDULER_HOME` and fail closed without it rather than guessing a cwd/.tmp location; the fix is to relaunch the pane/session with the correct environment. With project-local defaults, recorded provenance looks like `"context_home": "/abs/.../.tmp/contexts"` and `"scheduler_home": "/abs/.../.tmp/scheduler"`. Direct human script use may set the variable in the parent shell before invoking a script, but generated agent instructions never combine environment setup with helper execution.
 - Only explicit `$session-scheduler:task-assign --context NAME` requires `SESSION_CONTEXT_HOME` under the same inherited-at-startup contract. Auto handoffs use the shared scheduler home alone. Explicit context packets repeat both absolute homes as provenance and relaunch guidance.
 - `scheduler-doctor` reports the ledger home, whether it is inside the current git root, the handoffs directory count, and whether `SESSION_CONTEXT_HOME` is set, without creating or resolving the context home. Custom workspace store locations are supported; there is no fixed `.tmp/scheduler` expectation. Legacy `auto_handoff_*.md` context files produce a warning with manual removal guidance; diagnostics never delete them.
+
+## Verification contracts (opt-in, 0.7.0)
+
+Use `$session-scheduler:task-contract` to attach pinned checks to a new task
+with a distinct reviewer. Contracted assignments carry generations and bounded
+attempts; review/done/block require `<id> --generation <N> "<note>"`.
+Every writer refuses legacy contract updates under lock, including forced ones.
+Completion consumers require a valid reviewer admission, not a bare done status.
+Cleanup retains all contracted tasks. Every participating pane and consumer
+must use scheduler 0.7.0 or later; see the task-contract skill for evidence,
+recovery, migration and rollback limits.

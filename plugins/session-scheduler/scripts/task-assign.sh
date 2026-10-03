@@ -13,6 +13,9 @@ USAGE="Usage: task-assign.sh <pane> <id> [--eta MINUTES] [--stage NAME] [--conte
 
 PANE="${1:-}"
 ID="${2:-}"
+# A contracted task is handed to task-contract.sh with the original arguments
+# before any validation side effect or write; it never returns in that case.
+contract_route_if_needed assign "$ID" "$@"
 shift 2 2>/dev/null || true
 
 # A value-taking flag with nothing after it must error, not spin: under
@@ -83,6 +86,18 @@ if [ -n "$UNMET" ] && ! scheduler_force_enabled; then
     printf '  %s\n' "$dep_line" >&2
   done <<< "$UNMET"
   echo "Complete them first, or re-run with --force to assign anyway." >&2
+  exit 1
+fi
+
+# Pre-flight: a contracted dependency counts only when its done is admitted.
+# Not bypassable with --force.
+UNADMITTED=$(unadmitted_contract_deps "$ID")
+if [ -n "$UNADMITTED" ]; then
+  echo "ERROR: task $ID depends on contracted task(s) whose completion is not admitted:" >&2
+  while IFS= read -r dep_line; do
+    printf '  %s\n' "$dep_line" >&2
+  done <<< "$UNADMITTED"
+  echo "A done status alone is closure, not acceptance; --force does not override this." >&2
   exit 1
 fi
 
@@ -318,6 +333,11 @@ if ! task_lock "$ID"; then
   exit 1
 fi
 CURRENT_JSON=$(cat "$(task_path "$ID")")
+if ! contract_legacy_guard "$ID" "$CURRENT_JSON"; then
+  task_unlock "$ID"
+  echo "ERROR: dispatch already happened but task $ID gained a verification contract; the ledger was NOT updated. Reconcile with task-contract.sh." >&2
+  exit 1
+fi
 UPDATED_JSON=$(printf '%s' "$CURRENT_JSON" | jq \
   --arg assignee "$PANE" \
   --arg prompt_file "$PROMPT_FILE" \

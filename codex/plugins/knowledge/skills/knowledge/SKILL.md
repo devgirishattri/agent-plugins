@@ -53,6 +53,7 @@ pending.
 | Inspect memory matches or links | `search`, `graph` |
 | Check store health | `doctor`; `lint` for memory schema/index |
 | Capture a learning for review | `remember` |
+| Propose learnings from the current task without writes | `reflect` |
 | Review and apply durable memory updates | `consolidate` |
 | Promote stable knowledge | `promote` |
 | Bootstrap a memory store | `init` |

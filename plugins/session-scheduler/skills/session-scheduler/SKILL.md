@@ -80,6 +80,7 @@ Every ledger write is atomic (tmp + mv), and every read-modify-write (status tra
 | `/task-block <id> [--force] <reason>` | Executor or reviewer calls this when blocked/rejecting; reason required. |
 | `/task-board` | Stage-grouped dashboard: id, name, status, assignee, age, flags, unmet deps + totals. |
 | `/tasks-clean [--older-than DAYS] [--status S] [--apply]` | Dry-run by default. Removes owned prompt/packet/handoff files too; keeps referenced prerequisites; sweeps aged orphans. |
+| `/session-scheduler:task-contract` | Opt-in verification contracts (0.7.0): pinned checks, generation-bound receipts, reviewer admission. Contracted tasks reject `--force` and route through the engine. |
 | `/scheduler-doctor` | Diagnose dirs (tasks/prompts/handoffs/locks), session-chat install, incoming-mode, context home (reported, never created), legacy knowledge-store residue, jq/tmux, date math. |
 
 ## Ledger schema
@@ -120,6 +121,19 @@ Every ledger write is atomic (tmp + mv), and every read-modify-write (status tra
 `started_at`, `eta_at`, `duration_seconds`, `stage`, `reviewer`, and `depends_on` are optional — older task files without them still work.
 
 Atomic writes (tmp + mv) plus the per-task lock — concurrent actors updating the same task won't lose an update; different tasks never contend.
+
+## Verification contracts (opt-in, 0.7.0)
+
+A task carrying a root `contract` object is owned by `scripts/task-contract.sh`.
+`/task-assign`, `/task-review`, `/task-done`, and `/task-block` hand such a task
+to the engine before writing anything, and every legacy writer re-checks for a
+contract under the task lock and refuses, even with `--force`. Contracted
+transitions take `<id> --generation <N> "<note>"`. A contracted task counts as
+complete only when `task-contract.sh inspect` reports `admitted`; a bare `done`
+is `closed-unadmitted`. Cleanup keeps contracted tasks. Every pane sharing the
+ledger needs 0.7.0 or later, because older copies can close a contracted task
+without admission. See the `task-contract` skill for roles, the spec format,
+harness behavior, and limits.
 
 ## Conventions
 

@@ -13,9 +13,9 @@ Every plugin below ships for both providers at the same version number.
 |--------|---------|---------|
 | `session-manager` | 1.7.10 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.13 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.6.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.3.31 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.10.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-scheduler` | 0.7.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `knowledge` | 0.4.0 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-workspace` | 0.11.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -27,11 +27,14 @@ version here along with the other four.
 
 Supported platforms are macOS and Linux; `session-manager` also runs on Windows
 under WSL. The scripts run on the bash 3.2 that macOS ships, which is verified
-rather than assumed: the `session-scheduler` suite passes 72/72 under 3.2.57.
+rather than assumed: the `session-scheduler` Claude suite passes 81/81 under 3.2.57.
 
 | Dependency | Needed by | Hard or optional |
 |------------|-----------|------------------|
 | `jq` | `session-scheduler`, `session-workspace` | Hard. Both refuse to run without it. |
+| `python3`, `git` | `session-scheduler` contracts | Required for contracted verification; legacy tasks retain existing dependencies. |
+| `python3`, `gh` | `session-workspace` PR status | Python is required; live GitHub reads additionally require authenticated `gh`. |
+| `python3`, `bash`, `tmux`, `jq`, `git`, `rg` | Scheduler verification pilot | Required by the source-checkout runner; not an installed helper. |
 | `jq` | `chronos` | Optional. Claude falls back to hand-built JSON; the Codex build never uses jq. |
 | `curl` | `session-workspace` browser integration | Hard only when a top-level `browser` block is configured; used for DevTools readiness checks. |
 | `tmux` | `session-chat`, `session-workspace` | Hard. `session-chat` additionally requires that the agent itself be running inside a tmux pane, not merely that tmux be installed. |
@@ -211,6 +214,10 @@ default.
 
 ### knowledge
 
+Knowledge 0.4.0 adds `reflect`: a write-free review of the current task that
+proposes lessons and routes approved changes to existing knowledge writers.
+It never silently rewrites instructions, saves memory, or creates tickets.
+
 The memory store is per repository and must be created once, from inside the
 repository:
 
@@ -275,7 +282,7 @@ file-backed ledger on that transport, so set up `session-chat` first and confirm
 panes can actually message each other before assigning tasks.
 
 The ledger itself does not touch tmux, so creating and querying tasks works
-outside it. Assigning, reviewing, completing, and blocking all notify through
+outside it. Legacy assigning, reviewing, completing, and blocking notify through
 `session-chat`, which does require tmux. Attaching an explicit knowledge
 context (`--context NAME`) additionally requires `SESSION_CONTEXT_HOME`;
 `--context auto` writes a scheduler-owned handoff under the ledger home and
@@ -286,7 +293,40 @@ its version, ledger-home drift, and the current pane's incoming mode, and it
 warns when an executor sits in the default `notify` mode, where it will not act
 on dispatched tasks.
 
+Scheduler 0.7.0 adds opt-in `task-contract` verification. Attach existing tracked
+checks to a new task with a distinct reviewer, show the check list, and verify
+with its exact spec digest. Assignments carry generations and bounded attempts;
+completion requires source-bound executed evidence and independent reviewer
+admission. Dependencies use durable admission; `inspect --fresh` and
+`inspect --committed` add current-source checks for commit and release preflight.
+Reconcile ambiguous outcomes explicitly before reassignment. No automatic retry
+or force flag bypasses the contract. Contracted done/block write the ledger
+without an assigner acknowledgement; the coordinator reads task status. Receipts remain in the existing scheduler
+handoff directory; cleanup retains contracted tasks. All participating panes
+and consumers need scheduler 0.7.0. Verification needs Python 3 and Git, runs
+with an isolated environment, and preserves the active harness policy. Local
+digests do not authenticate an external runner or authorize a release.
+
 ### session-workspace
+
+Version 0.11.0 adds `verification-recipe` and `blast-radius` skills. The first
+creates or maintains a project-local recipe with real behavior checks, isolated
+fixtures, retained evidence, and explicit coverage limits. The second reviews
+indirect consumers and tests the assumptions that make a change safe. Both use
+existing role and authorization boundaries; neither creates an approval ledger
+or changes the workspace schema. `adversarial-review` adds bounded independent
+critique with explicit finding dispositions; `benchmark-check` checks correctness,
+comparable repeated measurements, and end-to-end effects. `behavioral-eval`
+grades observable actions and artifacts, with model runs still requiring an
+explicit spending ceiling. `pr-status` performs one structured, read-only GitHub
+check for CI, review, thread and merge blockers; unknown data never becomes ready.
+
+In this source checkout, run the isolated scheduler pilot with
+`python3 -B scripts/verify-scheduler-workflow.py run --provider codex --output .tmp/verification/codex-run-1`
+(or `--provider claude` with a new output path). Use `check --output <same-path>`
+to compare a recorded pass with current source and artifact hashes. Evidence
+survives fixture cleanup. This root helper is not installed with the plugin;
+its local consistency checks do not authenticate execution or authorize release.
 
 Needs tmux and `jq`. Setup is once per machine, then once per project.
 
@@ -638,7 +678,7 @@ rule as the scheduler's transport-bearing helpers.
 | `SESSION_SCHEDULER_HOME` | Yes | Yes | Required (inherited) | Shared task ledger root. Must already be present in the environment a pane/agent inherits at startup; scheduler commands and skills never export or derive it, and scripts fail closed when it is unset. |
 | `SESSION_CONTEXT_HOME` | Yes | Yes | Required for explicit context (inherited) | Resolves an explicit `--context NAME` snapshot. `--context auto` uses scheduler-owned handoffs and does not require this variable. |
 | `SESSION_SCHEDULER_STALE_MINUTES` | Yes | Yes | `30` | Age after which assigned or review tasks are marked `STALE`. |
-| `SESSION_SCHEDULER_FORCE` | Yes | Yes | `0` | Set to `1` to permit otherwise illegal status transitions. Prefer the `--force` option. |
+| `SESSION_SCHEDULER_FORCE` | Yes | Yes | `0` | Set to `1` to permit otherwise illegal legacy status transitions. Prefer `--force`. Contracted tasks refuse both overrides. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the scheduler's `session-chat` dependency. |
 | `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for `session-chat`. |
 | `SESSION_SCHEDULER_SKIP_VERSION_CHECK` | Yes | No | `0` | Claude-only escape hatch that bypasses the minimum `session-chat` version check when set to `1`. |
@@ -658,7 +698,9 @@ review packets) never combine environment setup with helper execution. Packets
 repeat the absolute homes only as provenance and relaunch guidance.
 
 The four transport-bearing helpers (`task-assign`, `task-review`, `task-done`,
-`task-block`) additionally perform nested session-chat/tmux transport. A
+`task-block`) perform nested session-chat/tmux transport for legacy tasks.
+Contracted assignment/review also use transport; contracted done/block are
+ledger-only and send no acknowledgement. A
 sandboxed runtime (e.g. Codex) should grant scoped escalation/approval for the
 exact installed helper on its first invocation; the helpers never self-escalate,
 and agents must not bypass a transport denial with wrappers or command
@@ -902,12 +944,18 @@ These checks do not themselves enable repository merge protection.
   disposable Codex home and checks skill names, duplicate wrappers, and helper
   references. It makes no model calls.
 - `python3 -B scripts/plugin-evals.py` validates portable `evals/*/case.json`
-  scenarios without model calls. Opt into bounded Codex probes with
+  scenarios without model calls. The root runner's `expectations.executions`
+  grades completed command events, exit codes, counts, optional argument constraints,
+  trusted helper paths and pre/post whole-plugin content digests;
+  `json_contains` checks resulting JSON fields. Claude-native `case.yaml` graders
+  do not enforce these extra fields. Opt into bounded Codex probes with
   `--plugin knowledge --run --max-cases 3 --timeout 90 --output <local-report.json>`.
   Probes use disposable stores, disable external integrations, and retain the
   child workspace sandbox. On macOS, run from a normal terminal if an enclosing
   sandbox prevents the child sandbox from starting. Model grades are report-only;
-  deterministic script suites remain the blocking checks. Native hook injection
+  deterministic script suites remain the blocking checks. Event observations cannot
+  detect modify/run/restore or shell startup/function shadowing, and do not
+  authenticate execution. Native hook injection
   requires separately established hook trust; the runner does not bypass it.
 - Claude's matching scenarios include native prompts, graders, and scaffolds.
   Run from the plugin directory with `claude plugin eval . --scaffold --no-publish

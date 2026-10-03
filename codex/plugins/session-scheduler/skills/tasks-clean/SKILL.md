@@ -45,3 +45,5 @@ Never honor `--apply` without confirmation. Report cancellation or the deleted c
 Keep any task referenced in `depends_on` by a task outside the deletion set, reporting `kept <id> (referenced by <ids>)`. Each deleted task removes exactly `tasks/<id>.json`, `prompts/<id>.md`, `prompts/<id>-review.md`, `prompts/<id>-ack-done.md`, `prompts/<id>-ack-blocked.md`, `prompts/<id>-ack-review.md`, `handoffs/<id>/`, and `locks/<id>.lock/`. Never use task-prefix globs that could consume another task's artifacts.
 
 The same age threshold selects orphan `handoffs/<id>/` directories and known-suffix prompt files whose task JSON is absent, using their mtime. Preview these under `Orphans:` and delete only with confirmed `--apply`. Cleanup is explicit, not automatic.
+
+Cleanup always retains contracted tasks and their evidence in v1.

@@ -56,3 +56,8 @@ Auto records `meta.handoff_file` and `meta.handoff_home`, clearing prior context
 Reassignment without `--context` clears all four attachment keys: `meta.context`, `meta.context_home`, `meta.handoff_file`, and `meta.handoff_home`. Locks cover ledger read-modify-write operations only, not transport; simultaneous assignments to the same task can race prompt writes and rollback, so coordinate assignments to each task serially.
 
 Assignment is refused while any `depends_on` task is not `done`. Report success or the precise session-chat error. The dispatch records the absolute shared scheduler home and, for explicit NAME only, context home; the recipient must preserve the relevant inherited environment. Remind the user that executor panes need `SESSION_CHAT_INCOMING_MODE=auto` or `assist`.
+
+For a task with a verification contract, read `../task-contract/SKILL.md`.
+Contract assignment accepts only pane, id and one prompt. Review, done and block
+require `<id> --generation <N> "<note>"`; only the bound reviewer may complete.
+Force never bypasses the contract. Inspect the task first to use its generation.

@@ -515,12 +515,18 @@ task_get() {
 
 # Atomic write of JSON content to a task file. Returns non-zero on any
 # write/mv failure so callers can refuse to claim success on a corrupted
-# ledger.
+# ledger. The content must be exactly one JSON object: callers build it with
+# `updated=$(... | jq ...)` under `set -uo pipefail` without errexit, so a
+# failed jq leaves it empty or partial and must never replace the task file.
 task_write() {
   local id="$1"
   local json="$2"
   local target
   target=$(task_path "$id")
+  if ! printf '%s' "$json" | jq -s -e 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1; then
+    echo "ERROR: refusing to write non-object ledger content for $id; $target left unchanged." >&2
+    return 1
+  fi
   local tmp="${target}.tmp.$$"
   if ! printf '%s\n' "$json" > "$tmp"; then
     rm -f "$tmp" 2>/dev/null
@@ -564,6 +570,76 @@ task_record_last_ack() {
   return 0
 }
 
+# --- Verification contracts (opt-in, 0.7.0) ---
+# A task with a root `contract` object is owned by task-contract.sh. Legacy
+# writers never mutate it: the early route hands the whole command to the
+# engine, and the under-lock guard below refuses any legacy write that races an
+# attach. Neither honors --force or SESSION_SCHEDULER_FORCE.
+SCHEDULER_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+task_has_contract() {
+  local file
+  file=$(task_path "$1")
+  [ -f "$file" ] && jq -e 'type == "object" and has("contract")' "$file" >/dev/null 2>&1
+}
+
+# Usage: contract_route_if_needed <assign|review|done|block> <id> <original args...>
+# Returns only when the task is not contracted (or the id is unusable, which
+# the caller's own validation then reports). Otherwise it never returns.
+contract_route_if_needed() {
+  local op="$1" id="$2"
+  shift 2
+  validate_task_id "$id" >/dev/null 2>&1 || return 0
+  task_has_contract "$id" || return 0
+  if [ ! -f "$SCHEDULER_SCRIPTS_DIR/task-contract.sh" ]; then
+    echo "ERROR: task $id has a verification contract but task-contract.sh is not installed; refusing the legacy $op path." >&2
+    exit 2
+  fi
+  exec bash "$SCHEDULER_SCRIPTS_DIR/task-contract.sh" route "$op" "$@"
+}
+
+# Under-lock guard for legacy writers. Usage: contract_legacy_guard <id> <current-json>
+contract_legacy_guard() {
+  if printf '%s' "$2" | jq -e 'type == "object" and has("contract")' >/dev/null 2>&1; then
+    echo "ERROR: task $1 has a verification contract; use task-contract.sh" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Admission state of a contracted task. Prints admitted|closed-unadmitted|
+# active|invalid and returns the engine's exit code (0 admitted, 1 not
+# admitted, 2 invalid/unavailable). A missing engine is invalid, never admitted.
+contract_state() {
+  local id="$1" out rc state
+  if [ ! -f "$SCHEDULER_SCRIPTS_DIR/task-contract.sh" ]; then
+    echo "invalid"; return 2
+  fi
+  out=$(bash "$SCHEDULER_SCRIPTS_DIR/task-contract.sh" inspect "$id" 2>/dev/null); rc=$?
+  state=$(printf '%s' "$out" | jq -r 'if type == "object" then (.state // "invalid") else "invalid" end' 2>/dev/null)
+  case "$rc:$state" in
+    0:admitted) echo "admitted"; return 0 ;;
+    1:closed-unadmitted|1:active) echo "$state"; return 1 ;;
+    *) echo "invalid"; return 2 ;;
+  esac
+}
+
+# Contracted dependencies of <id> that are not admitted, one "dep (state)" per
+# line. Enforced even with --force: a contracted task's done status alone is
+# closure, not acceptance.
+unadmitted_contract_deps() {
+  local id="$1" dep deps state
+  deps=$(task_get "$id" '(.depends_on // [])[]')
+  [ -z "$deps" ] && return 0
+  while IFS= read -r dep; do
+    [ -z "$dep" ] && continue
+    validate_task_id "$dep" >/dev/null 2>&1 || continue
+    task_has_contract "$dep" || continue
+    state=$(contract_state "$dep") && continue
+    printf '%s (%s)\n' "$dep" "$state"
+  done <<< "$deps"
+}
+
 # Locked generic read-modify-write. Usage: task_update <id> <jq-filter> [jq args...]
 # Applies the filter to the current task JSON under the per-task lock and
 # writes the result atomically. Returns non-zero on lock, jq, or write failure.
@@ -573,6 +649,7 @@ task_update() {
   local current updated rc
   task_lock "$id" || return 1
   current=$(cat "$(task_path "$id")") || { task_unlock "$id"; return 1; }
+  contract_legacy_guard "$id" "$current" || { task_unlock "$id"; return 1; }
   updated=$(printf '%s' "$current" | jq "$@" "$filter") || { task_unlock "$id"; return 1; }
   task_write "$id" "$updated"; rc=$?
   task_unlock "$id"
@@ -640,6 +717,7 @@ task_set_status() {
 task_set_status_unlocked() {
   local id="$1" status="$2" actor="$3" note="${4:-}"
   local current_status
+  contract_legacy_guard "$id" "$(cat "$(task_path "$id")")" || return 1
   current_status=$(task_get "$id" '.status')
   if ! transition_allowed "$current_status" "$status"; then
     if scheduler_force_enabled; then
@@ -843,5 +921,17 @@ task_flags() {
       fi
       ;;
   esac
+  # Contracted tasks carry their admission state; a done without admission is
+  # CONTRACT:closed-unadmitted, never a clean completion.
+  if jq -e 'has("contract")' "$file" >/dev/null 2>&1; then
+    local cid cstate
+    cid=$(jq -r '.id // ""' "$file" 2>/dev/null)
+    if validate_task_id "$cid" >/dev/null 2>&1 && [ "$(task_path "$cid")" = "$file" ]; then
+      cstate=$(contract_state "$cid")
+    else
+      cstate="invalid"
+    fi
+    flags="${flags:+$flags,}CONTRACT:$cstate"
+  fi
   printf '%s\n' "${flags:--}"
 }

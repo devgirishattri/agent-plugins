@@ -12,6 +12,9 @@ require_jq || exit 1
 ensure_dirs || exit 1
 
 ID="${1:-}"
+# A contracted task is handed to task-contract.sh with the original arguments
+# before any write; it never returns in that case.
+contract_route_if_needed review "$ID" "$@"
 shift 2>/dev/null || true
 if [ "${1:-}" = "--force" ]; then
   SESSION_SCHEDULER_FORCE=1; export SESSION_SCHEDULER_FORCE

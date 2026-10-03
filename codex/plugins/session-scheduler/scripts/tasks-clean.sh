@@ -88,6 +88,10 @@ for file in "$TASKS_DIR"/*.json; do
   [ "$age" -lt "$threshold" ] && continue
   # Filesystem names, never ledger-provided paths, define cleanup targets.
   id=${file##*/}; id=${id%.json}
+  if jq -e 'has("contract")' "$file" >/dev/null; then
+    printf 'kept %s (verification contract)\n' "$id"
+    continue
+  fi
   candidates=$(jq -c --arg id "$id" '. + [$id]' <<< "$candidates")
 done
 
@@ -119,10 +123,14 @@ while IFS= read -r id; do
   status=$(jq -r '.status // ""' "$file")
   updated_epoch=$(iso_to_epoch "$(jq -r '.updated_at // ""' "$file")")
   age=$((now - updated_epoch))
-  count=$((count + 1))
   if [ "$APPLY" -eq 1 ]; then
     acquire_task_lock "$id" || exit 1
     CLEAN_LOCK_ID=$id
+    if jq -e 'has("contract")' "$file" >/dev/null; then
+      release_task_lock "$id"; CLEAN_LOCK_ID=''
+      printf 'kept %s (verification contract)\n' "$id"
+      continue
+    fi
     # An assignment may have refreshed this task while cleanup was planning.
     updated_epoch=$(iso_to_epoch "$(jq -r '.updated_at // ""' "$file" 2>/dev/null)")
     status=$(jq -r '.status // ""' "$file" 2>/dev/null)
@@ -142,8 +150,10 @@ while IFS= read -r id; do
     fi
     release_task_lock "$id"
     CLEAN_LOCK_ID=''
+    count=$((count + 1))
     printf 'Deleted\t%s\n' "$id"
   else
+    count=$((count + 1))
     printf 'Would delete\t%s\tstatus=%s\tage=%ss\n' "$id" "$status" "$age"
   fi
 done < <(jq -r '.[]' <<< "$candidates")

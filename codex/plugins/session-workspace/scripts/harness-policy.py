@@ -390,6 +390,26 @@ def provider_homes() -> Tuple[Path, Path]:
     return claude_home, codex_home
 
 
+def scheduler_store_root(pane: dict, owned_panes: List[dict], semantic: str) -> Optional[Path]:
+    """The validated scheduler store this pane's contract checks read.
+
+    Children carry it as an explicit grant. The orchestrator works from the
+    project root and normally has no grants, but it coordinates the same single
+    store its children are granted, so it resolves to that shared grant. Two
+    different child scheduler grants are ambiguous and resolve to none.
+    """
+    def grant_of(entry: dict) -> List[Path]:
+        return [canonical(Path(g["path"])) for g in entry.get("grants", []) or []
+                if isinstance(g, dict) and g.get("store") == "scheduler" and isinstance(g.get("path"), str) and g["path"]]
+    own = grant_of(pane)
+    if own:
+        return own[0]
+    if semantic != "orchestrator":
+        return None
+    shared = {path for entry in owned_panes for path in grant_of(entry)}
+    return next(iter(shared)) if len(shared) == 1 else None
+
+
 def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
     config_text = os.environ.get("SESSION_WORKSPACE_CONFIG", "").strip()
     env_mode = os.environ.get("SESSION_WORKSPACE_HARNESS_MODE", "").strip()
@@ -591,7 +611,7 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         scoped=scoped,
         read_paths=tuple((Path(entry["path"]), entry["kind"]) for entry in read_paths) if semantic in {"reviewer", "executor"} else (),
         session_ids=frozenset(own["development"] + own["services"]) if scoped and own else frozenset(),
-        scheduler_root=next((canonical(Path(g["path"])) for g in pane.get("grants", []) if g.get("store") == "scheduler"), None),
+        scheduler_root=scheduler_store_root(pane, owned_panes, semantic),
     )
     return context, None
 
@@ -1584,6 +1604,25 @@ def no_args(ctx: Context, script: str, args: List[str]) -> None:
         raise PolicyFailure("helper.argv", "%s accepts no arguments" % script)
 
 
+def pr_status(ctx: Context, script: str, args: List[str]) -> None:
+    values = {}
+    remaining = list(args)
+    while remaining:
+        flag = remaining.pop(0)
+        if flag not in {"--repo", "--pr", "--snapshot", "--expected-head"} or flag in values or not remaining:
+            raise PolicyFailure("helper.argv", "pr-status requires unique known value-taking options")
+        values[flag] = remaining.pop(0)
+    if "--expected-head" in values and not re.fullmatch(r"[a-f0-9]{40}", values["--expected-head"]):
+        raise PolicyFailure("helper.argv", "expected-head requires a full SHA")
+    if "--snapshot" in values:
+        if "--repo" in values or "--pr" in values:
+            raise PolicyFailure("helper.argv", "snapshot cannot be combined with repo/pr")
+        literal_file(ctx, values["--snapshot"], "PR snapshot")
+    elif (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", values.get("--repo", ""))
+          or not POSITIVE_RE.fullmatch(values.get("--pr", ""))):
+        raise PolicyFailure("helper.argv", "pr-status requires --repo OWNER/NAME --pr NUMBER")
+
+
 def tmp_roots() -> Tuple[Path, ...]:
     return tuple(canonical(Path(p)) for p in (os.environ.get("TMPDIR", ""), "/tmp") if p)
 
@@ -1721,12 +1760,65 @@ def task_transition(note_required: bool) -> Callable[[Context, str, List[str]], 
     def check(ctx: Context, script: str, args: List[str]) -> None:
         if "--force" in args:
             raise PolicyFailure("helper.argv", "%s: forced transitions are not routine strict-v1 operations" % script)
+        if len(args)==4 and LABEL_RE.fullmatch(args[0]) and args[1]=='--generation' and POSITIVE_RE.fullmatch(args[2]) and args[3] and not args[3].startswith('--'):
+            if not isinstance(contract_actor(ctx,script,args[0]).get('contract'),dict):
+                raise PolicyFailure('task.contract','the --generation form applies only to a contracted task')
+            return
         if len(args) not in {1, 2} or not LABEL_RE.fullmatch(args[0]):
             raise PolicyFailure("helper.argv", "%s requires a literal task id and at most one note operand" % script)
         if note_required and len(args) != 2:
             raise PolicyFailure("helper.argv", "%s requires a literal reason/note" % script)
 
     return check
+
+
+def task_object(data: object) -> dict:
+    """A scheduler task file must be one JSON object whose meta, if present, is an object.
+
+    Anything else is refused as data, never dereferenced: an unexpected shape must
+    deny, not crash the hook (a crashed hook does not block the tool call).
+    """
+    if not isinstance(data, dict):
+        raise ValueError("task file is not a JSON object")
+    if "meta" in data and not isinstance(data["meta"], dict):
+        raise ValueError("task meta is not a JSON object")
+    return data
+
+
+def contract_actor(ctx: Context, script: str, task_id: str) -> dict:
+    if ctx.scheduler_root is None:
+        raise PolicyFailure('task.contract','contract operation requires the configured scheduler store')
+    path=ctx.scheduler_root/'tasks'/(task_id+'.json')
+    try:
+        if path.is_symlink() or not within(canonical(path),ctx.scheduler_root) or path.stat().st_nlink!=1:
+            raise ValueError('unsafe task')
+        data=task_object(json.loads(path.read_text()))
+        operation=script.replace('task-','').replace('.sh','')
+        expected=data.get('assigner') if operation in {'attach','assign','reconcile'} else data.get('reviewer') if operation=='done' or (operation=='block' and data.get('status')=='review') else data.get('assignee')
+        if operation!='inspect' and expected!=ctx.pane_name: raise ValueError('actor mismatch')
+        if data.get('assigner')!=ctx.orchestrator_pane or data.get('reviewer') not in ctx.reviewer_panes:
+            raise ValueError('foreign route')
+        if data.get('assignee') and data['assignee'] not in ctx.executor_panes: raise ValueError('foreign executor')
+        if ctx.scoped and data.get('meta',{}).get('environment')!=(ctx.environment or 'root'): raise ValueError('foreign scope')
+        return data
+    except (OSError,ValueError,TypeError,AttributeError):
+        raise PolicyFailure('task.contract','contract task identity or route mismatch')
+
+
+def task_contract(ctx: Context, script: str, args: List[str]) -> None:
+    if len(args)<2 or not LABEL_RE.fullmatch(args[1]):
+        raise PolicyFailure('helper.argv','task-contract requires a public operation and literal task id')
+    operation,task_id=args[:2];rest=args[2:]
+    roles={'attach':'orchestrator','verify':'executor','reconcile':'orchestrator','inspect':ctx.semantic_role}
+    if operation not in roles or roles[operation]!=ctx.semantic_role:
+        raise PolicyFailure('task.contract','contract operation is outside this role')
+    contract_actor(ctx,operation,task_id)
+    if operation=='attach' and len(rest)==2 and rest[0]=='--spec':
+        literal_file(ctx,rest[1],'contract spec');return
+    if operation=='inspect' and rest in ([],['--committed'],['--fresh']): return
+    if operation=='verify' and len(rest)==4 and rest[0]=='--generation' and POSITIVE_RE.fullmatch(rest[1]) and rest[2]=='--spec-digest' and re.fullmatch(r'[0-9a-f]{64}',rest[3]): return
+    if operation=='reconcile' and len(rest)==4 and rest[0]=='--generation' and POSITIVE_RE.fullmatch(rest[1]) and rest[2]=='--note' and rest[3] and not rest[3].startswith('--'): return
+    raise PolicyFailure('helper.argv','contract arguments are outside the reviewed grammar')
 
 
 DEPENDS_RE = re.compile(r"\A[A-Za-z0-9_.-]+(,[A-Za-z0-9_.-]+)*\Z")
@@ -2151,6 +2243,7 @@ HELPERS = {
         "scheduler-doctor.sh": ("oer", no_args),
         "task-new.sh": ("o", task_new),
         "task-assign.sh": ("o", task_assign),
+        "task-contract.sh": ("oer", task_contract),
         "tasks-clean.sh": ("o", tasks_clean),
         "task-review.sh": ("e", task_transition(note_required=True)),
         "task-done.sh": ("er", task_transition(note_required=False)),
@@ -2178,6 +2271,7 @@ HELPERS = {
         "docs-write.sh": ("o", docs_write),
     },
     "session-workspace": {
+        "pr-status.sh": ("o", pr_status),
         "workspace-plan.sh": ("oer", workspace_read),
         "workspace-status.sh": ("oer", workspace_read),
         "workspace-doctor.sh": ("oer", workspace_read),
@@ -2260,7 +2354,7 @@ def scoped_task(ctx: Context, script: str, args: List[str]) -> None:
     try:
         if not within(canonical(task), ctx.scheduler_root) or task.is_symlink() or task.stat().st_nlink != 1:
             raise ValueError("unsafe task")
-        data = json.loads(task.read_text())
+        data = task_object(json.loads(task.read_text()))
         if data.get("meta", {}).get("environment") != expected:
             raise ValueError("foreign task")
         allowed_assignees = ctx.executor_panes | ctx.reviewer_panes
@@ -2270,7 +2364,7 @@ def scoped_task(ctx: Context, script: str, args: List[str]) -> None:
             raise ValueError("foreign reviewer")
         if data.get("assigner") and data["assigner"] != ctx.orchestrator_pane:
             raise ValueError("foreign assigner")
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, AttributeError):
         raise PolicyFailure("task.scope", "task does not belong to this environment")
 
 
@@ -2970,7 +3064,10 @@ def main(argv: List[str]) -> int:
         return 2
     decision_json = "--decision-json" in argv
     codex_hook_output = "--codex-hook-output" in argv
-    decision = evaluate(sys.stdin.read())
+    try:
+        decision = evaluate(sys.stdin.read())
+    except Exception as exc:  # fail closed: a crashed hook would not block the tool call
+        decision = deny(None, "", "policy.internal", "strict-v1 policy error (%s); refusing" % type(exc).__name__, integrity=True)
     if decision_json:
         print(json.dumps(decision.normalized(), sort_keys=True, separators=(",", ":")))
         return 0

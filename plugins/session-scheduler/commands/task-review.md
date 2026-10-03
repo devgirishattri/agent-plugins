@@ -8,6 +8,8 @@ allowed-tools: Bash(bash:*)
 
 Lead with the result; add text only for errors or the follow-ups below. The note is required — typically a commit SHA or a one-line summary of what to audit.
 
+For a task with a verification contract (see the `task-contract` skill), pass `<id> --generation <N> "<note>"` as the assignee, after a passing `task-contract.sh verify`; `--force` is refused.
+
 `SESSION_SCHEDULER_HOME` must already be present in this session's environment, inherited when the agent process started (the pane/session launcher sets it — never export or derive it here). Run the helper as exactly one Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it:
 
 ```

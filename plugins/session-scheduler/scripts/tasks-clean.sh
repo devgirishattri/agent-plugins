@@ -59,6 +59,7 @@ shopt -s nullglob
 files=("$TASKS_DIR"/*.json)
 shopt -u nullglob
 
+contract_kept=()   # contracted tasks that cleanup always retains
 candidates=()      # task JSON paths
 candidate_ids=()   # their ids (from file content, validated)
 for f in "${files[@]}"; do
@@ -78,6 +79,12 @@ for f in "${files[@]}"; do
     echo "WARN: skipping $(basename "$f"): .id '$id' does not match its filename." >&2
     continue
   fi
+  # Verification contracts keep their task and evidence in v1: cleanup never
+  # deletes a contracted task, whatever its status or age.
+  if jq -e 'has("contract")' "$f" >/dev/null 2>&1; then
+    contract_kept+=("kept $id (verification contract retained)")
+    continue
+  fi
   candidates+=("$f")
   candidate_ids+=("$id")
 done
@@ -89,7 +96,7 @@ is_candidate() {
   for x in "${candidate_ids[@]+"${candidate_ids[@]}"}"; do [ "$x" = "$1" ] && return 0; done
   return 1
 }
-kept_lines=()
+kept_lines=("${contract_kept[@]+"${contract_kept[@]}"}")
 final_ids=()
 for cid in "${candidate_ids[@]+"${candidate_ids[@]}"}"; do
   referrers=""
@@ -167,6 +174,17 @@ fi
 
 deleted=0
 for id in "${final_ids[@]+"${final_ids[@]}"}"; do
+  # Delete under the task lock and re-check, so a contract attached (or a
+  # writer that started) after the scan above cannot lose its task.
+  if ! task_lock "$id"; then
+    echo "WARN: kept $id: its task lock could not be taken." >&2
+    continue
+  fi
+  if task_has_contract "$id"; then
+    task_unlock "$id"
+    echo "WARN: kept $id: a verification contract was attached during cleanup." >&2
+    continue
+  fi
   rm -f "$(task_path "$id")"
   while IFS= read -r artifact; do
     # Dual-ownership rule (same as the orphan sweep): prompts/<id>-review.md is
@@ -177,7 +195,7 @@ for id in "${final_ids[@]+"${final_ids[@]}"}"; do
     rm -f "$artifact"
   done < <(task_prompt_artifacts "$id")
   rm -rf "$(handoff_dir "$id")"
-  rm -rf "$(task_lock_path "$id")"
+  task_unlock "$id"
   deleted=$((deleted + 1))
 done
 orphans_deleted=0

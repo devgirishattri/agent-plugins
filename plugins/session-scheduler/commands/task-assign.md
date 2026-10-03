@@ -8,6 +8,8 @@ allowed-tools: Bash(bash:*)
 
 Lead with the result; add text only for errors or the follow-ups below. Parse `$ARGUMENTS` as: first word = pane, second = task id, then optional flags, rest = prompt. Flags must come before the prompt text.
 
+For a task with a verification contract (see the `task-contract` skill), only `<pane> <id> <prompt>` is accepted; options must already be task metadata, and `--force` never bypasses the contract or an unadmitted contracted dependency.
+
 `SESSION_SCHEDULER_HOME` (and `SESSION_CONTEXT_HOME` when using `--context NAME`; `--context auto` does not need it) must already be present in this session's environment, inherited when the agent process started (the pane/session launcher sets them — never export or derive them here). Run the helper as exactly one Bash segment, with no `export` beforehand, no `env` or variable-assignment prefix, and no other command chained, piped, redirected, or substituted around it:
 
 ```

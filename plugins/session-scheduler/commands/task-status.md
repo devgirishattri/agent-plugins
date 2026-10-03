@@ -12,6 +12,8 @@ allowed-tools: Bash(bash:*)
 
 `SESSION_SCHEDULER_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports it is not set, stop and request that this pane/session be relaunched with the correct environment — do not export the variable or derive another ledger.
 
+Contracted tasks show `CONTRACT:<state>` (admitted, closed-unadmitted, active, invalid) in the flags column; a bare `done` is not acceptance.
+
 If the output starts with a JSON object (single task), pretty-print it as-is, then relay the trailing `Flags:` line (OVERDUE/STALE) and `Dependencies:` list (dep id + status) if present.
 
 For `--by-stage`, relay the grouped output as-is (one `Stage: <name>` block per stage, `(none)` for unstaged tasks).

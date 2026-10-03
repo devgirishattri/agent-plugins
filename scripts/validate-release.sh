@@ -1115,7 +1115,14 @@ python3 -B scripts/test-reviewer-read-paths.py
 python3 -B scripts/test-message-drafts.py
 python3 -B scripts/test-skill-reads.py
 python3 -B scripts/test-argv-scope.py
-python3 scripts/test-plugin-evals.py
+python3 -B scripts/test-plugin-evals.py
+python3 -B scripts/test-verification-evidence.py
+python3 -B scripts/test-pr-status.py
+python3 -B scripts/test-task-contract.py
+python3 -B scripts/test-contract-legacy.py
+python3 -B scripts/test-reliability-grammar.py
+python3 -B scripts/test-contract-harness.py --provider claude
+python3 -B scripts/test-contract-harness.py --provider codex
 python3 scripts/plugin-evals.py
 python3 scripts/test-shared-helpers.py
 python3 scripts/package-shared-helpers.py

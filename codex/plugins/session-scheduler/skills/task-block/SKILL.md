@@ -46,3 +46,11 @@ authorized, send a separate exact session-chat message to the recorded
 recipient.
 
 Legal from `created`, `assigned`, or `review` (review rejection); other transitions are rejected unless `--force`. Unblock by re-running task-assign (blocked → assigned is legal). Report that the task was marked blocked.
+
+For a task with a verification contract, read `../task-contract/SKILL.md`.
+Contract assignment accepts only pane, id and one prompt. Review, done and block
+require `<id> --generation <N> "<note>"`; only the bound reviewer may complete.
+Force never bypasses the contract. Inspect the task first to use its generation.
+
+Contracted done/block are ledger-only and do not send the legacy assigner
+acknowledgement. The coordinator reads task status for these outcomes.

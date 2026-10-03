@@ -32,6 +32,12 @@ is not a scaffold.
 | `/harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), and does this pane's engine identity match the plan |
 | `/harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
 | `$session-workspace:workspace-orchestrator` | Schema-v4 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
+| `$session-workspace:verification-recipe` | Create or maintain a project-local, executed verification recipe with retained evidence |
+| `$session-workspace:blast-radius` | Report indirect breakage risks and check the assumptions that make a diff safe |
+| `$session-workspace:adversarial-review` | Optional independent review with bounded effort and evidence-based dispositions |
+| `$session-workspace:benchmark-check` | Validate comparable measurements, correctness, work counts, and uncertainty |
+| `$session-workspace:behavioral-eval` | Assess skill/workflow changes using actual actions and artifacts |
+| `$session-workspace:pr-status` | Read-only structured PR blockers, pending checks, and unknowns |
 
 ## Configuration model (enforced)
 

@@ -33,3 +33,5 @@ Only explicit `--context NAME` needs that variable; auto handoffs use the
 scheduler home. Surface any WARN listing legacy `auto_handoff_*.md` context
 files and the manual removal command. Diagnostics are read-only and never
 delete legacy residue.
+
+The doctor also reports verification contracts, prerequisites, admission failures and the minimum shared scheduler version.

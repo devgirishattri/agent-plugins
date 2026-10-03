@@ -48,6 +48,10 @@ case "$MODE" in
         dfile=$(task_file "$dep" 2>/dev/null) || dfile=""
         if [ -n "$dfile" ] && [ -f "$dfile" ]; then
           dstatus=$(jq -r '.status // ""' "$dfile")
+          if task_has_contract "$dep"; then
+            cstate=$(contract_state "$dep") || true
+            dstatus="$dstatus (contract: $cstate)"
+          fi
         else
           dstatus="missing"
         fi

@@ -24,3 +24,5 @@ If the script reports `SESSION_SCHEDULER_HOME` is not set, stop and request a
 pane relaunch with the correct environment instead of deriving another ledger.
 
 Relay the output as-is inside a fenced code block. Per task it shows id, name, status, assignee, reviewer, workflow, age, OVERDUE/STALE flags, and unmet dependencies, grouped by stage. Highlight any OVERDUE or STALE tasks.
+
+Contract flags and warnings expose missing admission. A bare done status does not establish acceptance.

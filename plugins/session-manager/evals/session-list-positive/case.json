@@ -11,6 +11,16 @@
     ],
     "tool_used_any": [],
     "forbidden_skills": [],
-    "files": {}
-  }
+    "files": {},
+    "executions": [
+      {
+        "script": "list-sessions.sh",
+        "exit_code": 0,
+        "min_count": 1,
+        "max_count": 2,
+        "args": []
+      }
+    ]
+  },
+  "note": "Neutral read-only positive control for execution receipts: list-sessions.sh needs no inherited store and exits 0 even when no projects directory exists, so a completed direct run with exit 0 is the observable."
 }

@@ -77,6 +77,20 @@ Report exact changed paths and verification results.
 
 ## Commit
 
+For a task with a verification contract, require a fresh successful
+`task-contract inspect <id> --fresh` before authorizing the commit preflight. It checks
+the actual current source, generation, receipt and independent reviewer
+admission. A ledger `done` value or old helper's closing note cannot substitute.
+After committing, use `task-contract inspect <id> --committed` before push or
+deployment preflight. That mode requires a clean tree with exactly the reviewed
+file bytes, an unchanged check specification, and the verified base as an
+ancestor of the resulting commit. If files differ, evidence expires, or a check
+is unavailable, stop and obtain fresh verification/review. Never rewrite an
+admission to make it fit a new revision.
+
+These checks add evidence requirements; all existing explicit approval and
+authorization gates below still apply. They do not authorize commit or push.
+
 Requires a user-explicit commit request and fresh audit approval.
 
 Dispatch the executor to verify the work branch and pending reviewed changes,

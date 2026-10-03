@@ -1,6 +1,6 @@
 ---
 name: knowledge
-description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 20 command and skill surfaces to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
+description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 21 command and skill surfaces to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
 ---
 
 # Knowledge
@@ -63,6 +63,7 @@ Claude and `$knowledge:<name>` on Codex.
 | Find a slug or ranked memory matches | `search` (memory only), `find` (docs + memory + context) | no |
 | Prior knowledge before acting | `recall <query>` — slug citations + snippets, untrusted framing | no |
 | Link structure of memories | `graph neighbors\|reverse\|orphans\|components` | no |
+| Propose learnings from the current task | `reflect` — proposals routed to existing writers | no |
 | Jot a candidate for later review | `remember` | inbox only, user-run |
 | Durable memory writes | `consolidate`, `promote` | memory store, user-run, `disable-model-invocation` |
 

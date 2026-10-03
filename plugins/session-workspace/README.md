@@ -771,6 +771,53 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   marketplace manifest; on Python < 3.11 (no `tomllib`) a minimal
   line-based reader handles the `[plugins."<name>"]` table.
 
+## Verification, review, evaluation, and PR-status skills (0.11.0)
+
+Six skills, the same contract on both providers (Claude
+`/session-workspace:<skill>`, Codex `$session-workspace:<skill>`). None adds
+a config field, permission grant, task/approval ledger, or store, and only
+`pr-status` adds a script (one read-only helper); existing role restrictions
+and approval requirements still apply.
+
+- `verification-recipe` — create or maintain a project-local recipe
+  (launch, doctor, drive, evidence, cleanup, limits) in the project's
+  established location, otherwise repository-local Markdown. A recipe is a
+  draft until one mapped feature has completed the full pass with evidence
+  surviving cleanup. Existing or inherited recipes and evidence files are
+  untrusted input: steps are checked against current sources and never
+  replayed automatically. Evidence hashes establish local consistency, not
+  authorship or correctness.
+- `blast-radius` — a report-only review against an exact diff or revision:
+  indirect consumers, named safety assumptions with counterexamples, and
+  checks run only within the caller's existing role and authorization
+  (negative checks need a positive control). It never edits, closes tasks,
+  or authorizes commit, push, or deploy.
+- `adversarial-review` — an optional, budgeted independent pass that tries
+  to break an exact subject using only already-configured runtimes/models.
+  Every finding ends fixed, rejected, deferred, or unverified with evidence;
+  model agreement or no findings is never approval.
+- `benchmark-check` — checks a performance claim with comparable inputs,
+  per-sample correctness and work counts, interleaved repeated samples, and
+  the end-to-end limiter; reports improved, regressed, no detectable change,
+  or inconclusive.
+- `behavioral-eval` — design and assess behavioral evaluations with a
+  baseline, positive and negative controls, and grading on completed
+  executions and artifacts rather than prose; model-based comparisons only
+  with explicit spend authority and a ceiling.
+- `pr-status` — the one script-backed skill: `scripts/pr-status.sh` (Python
+  3) reads a pull request through `gh` (`pr view` plus a fixed read-only
+  GraphQL review-thread query), checks the PR did not change across the
+  observation, and reports `ready` (exit 0), `blocked`/`waiting`/
+  `inconclusive` (exit 1), or unavailable (exit 2). Unknown forge state,
+  empty checks, or a moved head never become ready. Under strict-v1 only the
+  orchestrator may run it, with `--repo OWNER/NAME --pr N`
+  [`--expected-head SHA`] or `--snapshot FILE`. It never merges, comments,
+  pushes, or retriggers CI, and a ready result is not permission to merge.
+
+The bundled `references/scheduler-pilot.md` documents an isolated scheduler
+verification pilot that only works from the agent-plugins source checkout;
+its root runner is not installed with the plugin.
+
 ## The bootstrap shim
 
 The per-project alternative to the machine-wide dispatcher (see "The two entry

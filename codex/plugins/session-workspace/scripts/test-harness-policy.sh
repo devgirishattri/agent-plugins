@@ -92,7 +92,7 @@ make_helper_tree() {
   done
 }
 CHAT_HELPERS="send-message.sh dispatch-to-session.sh check-replies.sh list-panes.sh pane-health.sh get-my-name.sh messages-list.sh message-search.sh broadcast-message.sh"
-SCHED_HELPERS="task-status.sh task-board.sh task-review.sh task-done.sh task-block.sh task-new.sh task-assign.sh tasks-clean.sh scheduler-doctor.sh"
+SCHED_HELPERS="task-status.sh task-board.sh task-review.sh task-done.sh task-block.sh task-new.sh task-assign.sh tasks-clean.sh scheduler-doctor.sh task-contract.sh"
 KNOW_HELPERS="save-context.sh load-context.sh list-contexts.sh share-context.sh search-contexts.sh memory-search.sh memory-remember.sh docs-write.sh doctor.sh memory-lint.sh memory-backlinks.sh memory-write.sh memory-index.sh init.sh remove-context.sh memory-auto-capture.sh"
 WS_HELPERS="workspace.sh workspace-status.sh harness-status.sh workspace-start.sh workspace-stop.sh workspace-restart.sh workspace-reconcile.sh workspace-install.sh workspace-browser-config.sh"
 SM_HELPERS="list-sessions.sh search-sessions.sh session-stats.sh delete-session.sh delete-all-sessions.sh find-or-skip.sh"
@@ -722,6 +722,79 @@ as_review "reviewer forced transition is denied" "$(bash_payload "bash $SCHED/ta
 as_review "reviewer task-review (executor-only) is denied" "$(bash_payload "bash $SCHED/task-review.sh t-1234 note")" '.decision == "deny" and .rule == "coordination.write"'
 as_review "reviewer task-new (creation) is denied" "$(bash_payload "bash $SCHED/task-new.sh 'new task'")" '.decision == "deny" and .rule == "coordination.write"'
 as_review "reviewer task-assign (assignment) is denied" "$(bash_payload "bash $SCHED/task-assign.sh $EXEC_PANE t-1 'do it'")" '.decision == "deny" and .rule == "coordination.write"'
+
+# --- Contracted task files: malformed shapes deny (never crash), the
+# --generation form needs a real contract, and reconcile notes are literal.
+# A crashed policy exits 1, which a PreToolUse hook treats as non-blocking, so
+# every unexpected shape must become a deny decision.
+CT_TASKS="$ROOT/.tmp/scheduler/tasks"
+mkdir -p "$CT_TASKS"
+ct_task() { # ct_task ID EXTRA_JQ
+  jq -cn --arg id "$1" --arg a "$MASTER_PANE" --arg r "$REVIEW_PANE" --arg e "$EXEC_PANE" \
+    "{id:\$id,assigner:\$a,reviewer:\$r,assignee:\$e,status:\"review\"} $2" > "$CT_TASKS/$1.json"
+}
+ct_task ct-good '| .contract = {version: 1}'
+ct_task ct-plain ''
+ct_task ct-meta '| .contract = {version: 1} | .meta = "x"'
+printf '[]\n' > "$CT_TASKS/ct-list.json"
+printf 'null\n' > "$CT_TASKS/ct-null.json"
+as_review "contracted --generation done by the bound reviewer is allowed (control)" "$(bash_payload "bash $SCHED/task-done.sh ct-good --generation 1 'APPROVE abc123'")" '.decision == "allow"'
+for shape in ct-list ct-null ct-meta; do
+  as_review "malformed task file ($shape) denies instead of crashing" "$(bash_payload "bash $SCHED/task-done.sh $shape --generation 1 'APPROVE abc123'")" '.decision == "deny" and .rule == "task.contract"'
+done
+as_review "--generation form on an uncontracted task is denied" "$(bash_payload "bash $SCHED/task-done.sh ct-plain --generation 1 'APPROVE abc123'")" '.decision == "deny" and .rule == "task.contract"'
+as_review "legacy note form on the same uncontracted task stays allowed (control)" "$(bash_payload "bash $SCHED/task-done.sh ct-plain 'approved at abc123'")" '.decision == "allow"'
+as_master "contract reconcile with a literal note is allowed (control)" "$(bash_payload "bash $SCHED/task-contract.sh reconcile ct-good --generation 1 --note 'worker stopped; no external effects'")" '.decision == "allow"'
+as_master "contract reconcile with an option-like note is denied" "$(bash_payload "bash $SCHED/task-contract.sh reconcile ct-good --generation 1 --note --force")" '.decision == "deny" and .rule == "helper.argv"'
+
+# Module-level: an unexpected exception in evaluate() must deny with exit 2
+# (positive control: a normal allow still exits 0), and scoped_task refuses
+# non-object task files and meta instead of raising AttributeError.
+h1_out=$("$PY" -B - "$POLICY" 2>&1 <<'PY'
+import contextlib, importlib.util, io, json, sys, tempfile, types
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("harness_policy_h1", sys.argv[1])
+m = importlib.util.module_from_spec(spec); sys.modules[spec.name] = m; spec.loader.exec_module(m)
+results = {}
+def run_main(fn):
+    m.evaluate = fn; sys.stdin = io.StringIO("{}"); err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        rc = m.main([])
+    return rc, err.getvalue()
+def boom(raw): raise AttributeError("unexpected")
+rc, err = run_main(boom); results["crash_denies"] = rc == 2 and "policy.internal" in err
+rc, err = run_main(lambda raw: m.allow(None, "")); results["allow_control"] = rc == 0
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp).resolve(); (root / "tasks").mkdir()
+    ctx = types.SimpleNamespace(environment="", scheduler_root=root, executor_panes={"e"}, reviewer_panes={"r"}, orchestrator_pane="o")
+    def scoped(body):
+        (root / "tasks" / "t1.json").write_text(body)
+        try:
+            m.scoped_task(ctx, "task-done.sh", ["t1"]); return "allow"
+        except m.PolicyFailure:
+            return "deny"
+        except Exception as exc:
+            return "crash:" + type(exc).__name__
+    results["scoped_control"] = scoped(json.dumps({"meta": {"environment": "root"}, "assignee": "e", "reviewer": "r", "assigner": "o"})) == "allow"
+    for name, body in [("list", "[]"), ("null", "null"), ("meta_string", json.dumps({"meta": "x"}))]:
+        results["scoped_" + name] = scoped(body) == "deny"
+    # scheduler_store_root: a child uses its own grant; the orchestrator
+    # resolves to the single shared child grant; anything else is none.
+    a, b = root / "store-a", root / "store-b"
+    def g(path): return {"store": "scheduler", "path": str(path)}
+    child = lambda *grants: {"grants": list(grants)}
+    resolve = m.scheduler_store_root
+    results["store_child_own"] = resolve(child(g(a)), [], "executor") == m.canonical(a)
+    results["store_child_ungranted"] = resolve(child(), [child(g(a))], "executor") is None
+    results["store_orch_unique"] = resolve(child(), [child(g(a)), child(g(a))], "orchestrator") == m.canonical(a)
+    results["store_orch_ambiguous"] = resolve(child(), [child(g(a)), child(g(b))], "orchestrator") is None
+    results["store_orch_ungranted"] = resolve(child(), [child(), child({"store": "messages", "path": str(a)})], "orchestrator") is None
+    results["store_orch_malformed_grants"] = resolve({"grants": None}, [{"grants": ["scheduler"]}, child({"store": "scheduler"})], "orchestrator") is None
+bad = [k for k, v in results.items() if not v]
+print("H1-OK" if not bad else "H1-BAD " + ",".join(bad))
+PY
+)
+if [ "$h1_out" = "H1-OK" ]; then pass "unexpected policy errors deny (exit 2) and scoped tasks refuse malformed shapes"; else fail "unexpected policy errors deny (exit 2) and scoped tasks refuse malformed shapes" "$h1_out"; fi
 as_review "reviewer task-status is allowed" "$(bash_payload "bash $SCHED/task-status.sh --mine")" '.decision == "allow"'
 as_review "reviewer task-board is allowed" "$(bash_payload "bash $SCHED/task-board.sh")" '.decision == "allow"'
 as_review "reviewer memory write (remember) is denied" "$(bash_payload "bash $KNOW/memory-remember.sh --staged x")" '.decision == "deny" and .rule == "coordination.write"'

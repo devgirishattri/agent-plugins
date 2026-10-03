@@ -133,3 +133,38 @@ if [ "$now_epoch" -gt 0 ]; then
 else
   echo "date math:      WARN: ISO->epoch failed; OVERDUE/STALE flags and durations will not work."
 fi
+
+# Verification contracts (0.7.0, opt-in): the engine needs python3, and a
+# contracted done counts only when admitted. Older installed scheduler copies
+# preserve a contract but can still mark the task done; consumers then report
+# it as closed-unadmitted, which this check surfaces.
+contracted=0; closed_unadmitted=0; invalid=0
+shopt -s nullglob
+for f in "$TASKS_DIR"/*.json; do
+  jq -e 'has("contract")' "$f" >/dev/null 2>&1 || continue
+  contracted=$((contracted + 1))
+  cid=$(jq -r '.id // ""' "$f" 2>/dev/null)
+  if ! validate_task_id "$cid" >/dev/null 2>&1 || [ "$(task_path "$cid")" != "$f" ]; then
+    invalid=$((invalid + 1)); continue
+  fi
+  state=$(contract_state "$cid")
+  case "$state" in
+    closed-unadmitted) closed_unadmitted=$((closed_unadmitted + 1)) ;;
+    invalid) invalid=$((invalid + 1)) ;;
+  esac
+done
+shopt -u nullglob
+if [ "$contracted" -eq 0 ]; then
+  echo "contracts:      none (opt-in; legacy tasks unaffected)"
+else
+  echo "contracts:      $contracted contracted task(s)"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "  WARN: python3 missing; contracted operations fail closed until it is installed."
+  fi
+  if [ ! -f "$SCHEDULER_SCRIPTS_DIR/task-contract.sh" ]; then
+    echo "  WARN: task-contract.sh missing from this installed copy; contracted tasks are refused."
+  fi
+  [ "$closed_unadmitted" -gt 0 ] && echo "  WARN: $closed_unadmitted contracted task(s) are done without admission (closed-unadmitted); a pre-0.7.0 helper or a hand edit may have closed them."
+  [ "$invalid" -gt 0 ] && echo "  WARN: $invalid contracted task(s) could not be inspected (invalid/unavailable)."
+  echo "  NOTE: every pane sharing this ledger needs session-scheduler >= 0.7.0; older copies can close contracted tasks without admission."
+fi

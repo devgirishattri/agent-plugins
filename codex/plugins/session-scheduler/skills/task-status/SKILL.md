@@ -26,3 +26,5 @@ pane relaunch with the correct environment instead of deriving another ledger.
 Present tab-separated output as id, status, workflow, stage, assignee, reviewer, assigner, updated time, flags, and name. `--by-stage` groups active tasks. `--by-workflow` groups the full lifecycle of tasks carrying a workflow id, including completed steps, and omits ungrouped tasks. `--workflow ID` filters one workflow. The single-task view also reports the recorded shared scheduler home and dependency states.
 
 `--pending` selects only status `created`; `--active` selects non-terminal tasks. `--mine` matches the current pane as assigner, assignee, or reviewer. Value-taking flags require a value.
+
+Contract flags report CONTRACT:<state>. A bare done status does not establish admission.
