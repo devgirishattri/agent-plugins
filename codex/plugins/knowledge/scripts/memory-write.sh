@@ -22,7 +22,26 @@
 #   memory-write.sh unlock    --store <path> --confirm <path>
 #
 # Exit codes (shared map): 0 ok / 2 usage / 3 store-resolution / 4 store-
-# integrity / 5 store locked-or-recovery-busy / 6 role refusal.
+# integrity / 5 store locked-or-recovery-busy / 6 role refusal / 7 capture
+# policy refusal (`capture` only: an auto_capture candidate with no evidence,
+# or one that would exceed the pending-inbox cap or the per-session pending
+# cap; nothing is written).
+#
+# Capture policy tunables (read per invocation, enforced HERE under the store
+# lock — the auto-capture wrapper's pre-checks are only a fast path):
+# KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING (default 20) caps pending inbox candidates;
+# KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT (default 5) caps PENDING auto_capture
+# candidates per origin session (not a lifetime budget). Both are bounded
+# decimals 0..999999 (leading zeros stripped, base 10; anything else falls back
+# to the default). The writer only checks
+# that evidence is PRESENT and well-formed; it never verifies what it claims.
+#
+# Compatibility / rollback: 0.5.0 writes `origin_session:` / `origin_pane:` on
+# EVERY new candidate (manual ones too) and may write `evidence:`. A pre-0.5.0
+# (0.4.x) reader REJECTS those keys as unknown, so new-format inbox candidates
+# are not transparently readable after a downgrade: back up or reconcile
+# (consolidate/dismiss) them before downgrading. Pre-0.5.0 candidates remain
+# valid for 0.5.0 readers, and their capture ids are unchanged.
 #
 # Test-only hooks (INERT unless the env var is set — never touch these in
 # normal operation): KNOWLEDGE_TEST_DIE_AT_STEP=<step> exits 137 immediately
@@ -115,7 +134,7 @@ _km_validate_ids_csv() {
 # apply-transaction contract, step 1).
 # ---------------------------------------------------------------------------
 _km_lock_acquire() {
-  local store="$1" pid="$$" nonce ts claim attempt=0
+  local store="$1" pid="$$" nonce ts claim attempt=0 vanished=0
   local lock="$store/.lock"
   local max_attempts="${KNOWLEDGE_TEST_LOCK_RETRY_MAX:-50}"
   local delay="${KNOWLEDGE_TEST_LOCK_RETRY_DELAY:-0.2}"
@@ -140,10 +159,19 @@ _km_lock_acquire() {
       return 0
     fi
     if [ ! -e "$lock" ]; then
+      # The holder can release between our failed `ln` and this existence check
+      # (AGENTS.md lock rule: recheck before erroring). Retry `ln` at once, no
+      # sleep, bounded by its own small counter so a persistent non-EEXIST `ln`
+      # failure still ends in rc 4. The rc 5 contention path below is untouched.
+      vanished=$((vanished + 1))
+      if [ "$vanished" -le 5 ]; then
+        continue
+      fi
       rm -f "$claim" 2>/dev/null || true
       km_error "cannot acquire store lock (unexpected failure): $lock"
       return 4
     fi
+    vanished=0
     attempt=$((attempt + 1))
     if [ "$attempt" -ge "$max_attempts" ]; then
       local holder="(unreadable)"
@@ -711,6 +739,41 @@ KM_PROPOSED_SCALAR_KEYS="schema_version name description created updated last_ve
 KM_PROPOSED_LIST_KEYS="tags"
 KM_PROPOSED_MAP_KEYS="metadata"
 KM_METADATA_SCALAR_KEYS="type"
+KM_EVIDENCE_MAX_BYTES=300
+
+# km_bounded_int <value> <default>
+# Normalizes a numeric tunable: 1-6 decimal digits only (so 0..999999); leading
+# zeros are stripped and the value is forced to base 10 (never octal); anything
+# else (empty, signs, non-digits, >6 digits) falls back to <default>. This keeps
+# a huge or zero-padded value from overflowing or mis-parsing in bash arithmetic
+# and silently disabling a cap.
+km_bounded_int() {
+  local v="$1" d="$2"
+  if [[ "$v" =~ ^[0-9]{1,6}$ ]]; then
+    printf '%s' "$((10#$v))"
+  else
+    printf '%s' "$d"
+  fi
+}
+KM_ORIGIN_RE='^[A-Za-z0-9._:%-]{1,128}$'
+
+# km_capture_origin
+# Sets KM_ORIGIN_SESSION / KM_ORIGIN_PANE for a NEW capture from INHERITED
+# environment only (session: CLAUDE_CODE_SESSION_ID, else CODEX_THREAD_ID;
+# pane: KNOWLEDGE_PANE_NAME, else SESSION_CHAT_PANE_NAME). Never shells out
+# to tmux and never exports or derives any store variable. This is
+# ATTRIBUTION for review defaults, NOT authorization: any same-uid process can
+# set these variables, so nothing may grant access based on them. Values that
+# do not match KM_ORIGIN_RE become "unknown".
+km_capture_origin() {
+  local s="${CLAUDE_CODE_SESSION_ID:-}" p="${KNOWLEDGE_PANE_NAME:-}"
+  [ -n "$s" ] || s="${CODEX_THREAD_ID:-}"
+  [ -n "$p" ] || p="${SESSION_CHAT_PANE_NAME:-}"
+  [[ "$s" =~ $KM_ORIGIN_RE ]] || s="unknown"
+  [[ "$p" =~ $KM_ORIGIN_RE ]] || p="unknown"
+  KM_ORIGIN_SESSION="$s"
+  KM_ORIGIN_PANE="$p"
+}
 
 _km_cap_scalar() {
   local raw="$1" trimmed
@@ -755,10 +818,14 @@ _km_cap_scalar() {
 
 # km_parse_capture <file> [staged|stored]
 # Populates: KM_CAP_SOURCE, KM_CAP_SENSITIVITY, KM_CAP_BODY, KM_CAP_ID,
-# KM_CAP_CREATED, KM_CAP_FM_LINES[], KM_CAP_PROPOSED_NAMES/TYPES/VALUES[].
+# KM_CAP_CREATED, KM_CAP_EVIDENCE (optional, staged+stored, in the hash only
+# when non-empty), KM_CAP_ORIGIN_SESSION / KM_CAP_ORIGIN_PANE (writer-assigned,
+# stored only, optional, NOT hashed), KM_CAP_FM_LINES[],
+# KM_CAP_PROPOSED_NAMES/TYPES/VALUES[].
 km_parse_capture() {
   local file="$1" mode="${2:-staged}"
   KM_CAP_SOURCE="" KM_CAP_SENSITIVITY="" KM_CAP_BODY="" KM_CAP_ID="" KM_CAP_CREATED=""
+  KM_CAP_EVIDENCE="" KM_CAP_ORIGIN_SESSION="" KM_CAP_ORIGIN_PANE=""
   KM_CAP_PROPOSED_NAMES=() KM_CAP_PROPOSED_TYPES=() KM_CAP_PROPOSED_VALUES=()
   KM_CAP_FM_LINES=()
 
@@ -806,6 +873,7 @@ km_parse_capture() {
   fi
 
   local seen_source=0 seen_sensitivity=0 seen_proposed=0 seen_id=0 seen_created=0
+  local seen_evidence=0 seen_osess=0 seen_opane=0
   local cur_l1_key="" cur_l1_type=""
   local -a seen_l1_keys=()
   local -a list_items=()
@@ -913,6 +981,36 @@ km_parse_capture() {
             seen_created=1
             # shellcheck disable=SC2034  # documented out-param for callers (e.g. future consumers)
             KM_CAP_CREATED=$(_km_cap_scalar "$top_val") || return 2
+            ;;
+          evidence)
+            [ "$seen_evidence" -eq 0 ] || { km_error "duplicate key: evidence"; return 2; }
+            seen_evidence=1
+            KM_CAP_EVIDENCE=$(_km_cap_scalar "$top_val") || return 2
+            [ -n "$KM_CAP_EVIDENCE" ] || { km_error "evidence must be non-empty"; return 2; }
+            case "$KM_CAP_EVIDENCE" in
+              *$'\r'* | *$'\n'*) km_error "evidence must be a single line"; return 2 ;;
+            esac
+            if [ "$(printf '%s' "$KM_CAP_EVIDENCE" | wc -c | tr -d ' ')" -gt "$KM_EVIDENCE_MAX_BYTES" ]; then
+              km_error "evidence exceeds ${KM_EVIDENCE_MAX_BYTES} bytes"
+              return 2
+            fi
+            ;;
+          origin_session | origin_pane)
+            if [ "$mode" != "stored" ]; then
+              km_error "staged file may not contain $top_key (writer-assigned)"
+              return 2
+            fi
+            if [ "$top_key" = origin_session ]; then
+              [ "$seen_osess" -eq 0 ] || { km_error "duplicate key: origin_session"; return 2; }
+              seen_osess=1
+              KM_CAP_ORIGIN_SESSION=$(_km_cap_scalar "$top_val") || return 2
+              [[ "$KM_CAP_ORIGIN_SESSION" =~ $KM_ORIGIN_RE ]] || { km_error "invalid origin_session"; return 2; }
+            else
+              [ "$seen_opane" -eq 0 ] || { km_error "duplicate key: origin_pane"; return 2; }
+              seen_opane=1
+              KM_CAP_ORIGIN_PANE=$(_km_cap_scalar "$top_val") || return 2
+              [[ "$KM_CAP_ORIGIN_PANE" =~ $KM_ORIGIN_RE ]] || { km_error "invalid origin_pane"; return 2; }
+            fi
             ;;
           *)
             km_error "unknown top-level field: $top_key"
@@ -1058,6 +1156,11 @@ km_capture_canonical_hash() {
 
   _km_emit_field "$tmp" "source" "$KM_CAP_SOURCE"
   _km_emit_field "$tmp" "sensitivity" "$KM_CAP_SENSITIVITY"
+  # evidence joins the hash ONLY when present, so every pre-0.5.0 candidate
+  # keeps its capture_id. origin_* are writer-assigned attribution: never hashed.
+  if [ -n "${KM_CAP_EVIDENCE:-}" ]; then
+    _km_emit_field "$tmp" "evidence" "$KM_CAP_EVIDENCE"
+  fi
 
   local i
   : > "$sortfile"
@@ -1204,6 +1307,40 @@ cmd_disposition() {
   return "$rc"
 }
 
+# km_count_pending <store> — pending inbox candidates (regular sha-named .md
+# files directly under .inbox; the .dismissed subdir is not pending).
+km_count_pending() {
+  local store="$1" f n=0 b
+  [ -d "$store/.inbox" ] && [ ! -L "$store/.inbox" ] || { echo 0; return 0; }
+  for f in "$store/.inbox"/*.md; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    b=$(basename "$f" .md)
+    _km_is_sha256 "$b" || continue
+    n=$((n + 1))
+  done
+  echo "$n"
+}
+
+# km_count_pending_session <store> <session> — pending stored candidates with
+# source auto_capture and origin_session == <session>. Candidates without an
+# origin_session count toward the shared "unknown" bucket. Parsing happens in
+# a subshell so the caller's KM_CAP_* globals are untouched.
+km_count_pending_session() {
+  local store="$1" sess="$2" f n=0 b
+  [ -d "$store/.inbox" ] && [ ! -L "$store/.inbox" ] || { echo 0; return 0; }
+  for f in "$store/.inbox"/*.md; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    b=$(basename "$f" .md)
+    _km_is_sha256 "$b" || continue
+    if ( km_parse_capture "$f" stored >/dev/null 2>&1 || exit 1
+         [ "$KM_CAP_SOURCE" = "auto_capture" ] || exit 1
+         [ "${KM_CAP_ORIGIN_SESSION:-unknown}" = "$sess" ] ); then
+      n=$((n + 1))
+    fi
+  done
+  echo "$n"
+}
+
 _km_capture_body() {
   local store="$1" staged_file="$2" key="$3"
   local target="$store/.inbox/${key}.md" existing_hash new_hash ts tmp l
@@ -1237,12 +1374,42 @@ _km_capture_body() {
   fi
 
   km_parse_capture "$staged_file" staged || return 2
+
+  # Policy for NEW auto_capture writes only (manual captures are never capped
+  # here; no-op/dismissed paths above already returned). Enforced under the
+  # store lock so concurrent writers cannot race past the caps.
+  if [ "$KM_CAP_SOURCE" = "auto_capture" ]; then
+    if [ -z "$KM_CAP_EVIDENCE" ]; then
+      km_error "auto_capture candidate requires an evidence: field (nothing written)"
+      return 7
+    fi
+    local max_pending sess_limit
+    max_pending=$(km_bounded_int "${KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING:-20}" 20)
+    sess_limit=$(km_bounded_int "${KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT:-5}" 5)
+    km_capture_origin
+    local n_pending n_sess
+    n_pending=$(km_count_pending "$store")
+    if [ "$n_pending" -ge "$max_pending" ]; then
+      km_error "inbox already holds $n_pending pending candidate(s) (>= MAX_PENDING=$max_pending); run /knowledge:consolidate (nothing written)"
+      return 7
+    fi
+    n_sess=$(km_count_pending_session "$store" "$KM_ORIGIN_SESSION")
+    if [ "$n_sess" -ge "$sess_limit" ]; then
+      km_error "session already has $n_sess pending auto_capture candidate(s) (>= SESSION_LIMIT=$sess_limit); run /knowledge:consolidate (nothing written)"
+      return 7
+    fi
+    # the counters parse other candidates; restore this candidate's globals
+    km_parse_capture "$staged_file" staged || return 2
+  fi
+  km_capture_origin
   ts=$(km_now_utc)
   tmp=$(mktemp "$store/.inbox/.capture.tmp.XXXXXX") || { km_error "cannot create capture temp file"; return 4; }
   {
     echo "---"
     echo "capture_id: $key"
     echo "created: $ts"
+    echo "origin_session: $KM_ORIGIN_SESSION"
+    echo "origin_pane: $KM_ORIGIN_PANE"
     if [ "${#KM_CAP_FM_LINES[@]}" -gt 0 ]; then
       for l in "${KM_CAP_FM_LINES[@]}"; do printf '%s\n' "$l"; done
     fi

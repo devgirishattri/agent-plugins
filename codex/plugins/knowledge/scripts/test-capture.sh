@@ -27,7 +27,8 @@ unset KNOWLEDGE_MEMORY_HOME
 unset KNOWLEDGE_AUTO_RECALL KNOWLEDGE_AUTO_RECALL_LIMIT KNOWLEDGE_AUTO_RECALL_TERMS
 unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_AUTO_RECALL_GRAPH KNOWLEDGE_CONSOLIDATE_NUDGE
 unset KNOWLEDGE_AUTO_CAPTURE KNOWLEDGE_AUTO_CAPTURE_LIMIT
-unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
+unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT
+unset CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID
 # KNOWLEDGE_PANE_NAME is deliberately NOT unset: it is the writer's role-detection
 # identity, and clearing it pushes role checks onto a tmux probe that fails closed
 # for an unnamed pane. Suites that test role behaviour set it explicitly.
@@ -223,7 +224,7 @@ assert_eq "basic_capture_inbox_mode_700" "700" "$dir_mode"
 file_mode=$(mw_call "km_path_mode '$store/.inbox/${key1}.md'")
 assert_eq "basic_capture_file_mode_600" "600" "$file_mode"
 
-# capture_id then created as the FIRST TWO frontmatter keys, followed by
+# capture_id, created, origin_session, origin_pane (writer-assigned), followed by
 # the envelope keys as staged (source, sensitivity, proposed:, ...).
 mapfile_lines=()
 while IFS= read -r line; do mapfile_lines+=("$line"); done < "$store/.inbox/${key1}.md"
@@ -233,9 +234,11 @@ case "${mapfile_lines[2]}" in
   "created: "*) pass "basic_capture_line3_created" ;;
   *) fail "basic_capture_line3_created" "got: ${mapfile_lines[2]}" ;;
 esac
-assert_eq "basic_capture_line4_source" "source: sess-basic-1" "${mapfile_lines[3]}"
-assert_eq "basic_capture_line5_sensitivity" "sensitivity: normal" "${mapfile_lines[4]}"
-assert_eq "basic_capture_line6_proposed" "proposed:" "${mapfile_lines[5]}"
+assert_eq "basic_capture_line4_origin_session" "origin_session: unknown" "${mapfile_lines[3]}"
+assert_eq "basic_capture_line5_origin_pane" "origin_pane: test-executor" "${mapfile_lines[4]}"
+assert_eq "basic_capture_line6_source" "source: sess-basic-1" "${mapfile_lines[5]}"
+assert_eq "basic_capture_line7_sensitivity" "sensitivity: normal" "${mapfile_lines[6]}"
+assert_eq "basic_capture_line8_proposed" "proposed:" "${mapfile_lines[7]}"
 
 # ===========================================================================
 # 2. IDEMPOTENT DUPLICATE CAPTURE
@@ -733,6 +736,305 @@ if [ -x "$HERE/memory-backlinks.sh" ]; then
 else
   echo "  SKIP  scanner_boundary_backlinks -- memory-backlinks.sh does not exist yet (Phase B2 concurrent, not landed)"
 fi
+
+# ===========================================================================
+# 15b. EVIDENCE + ORIGIN PROVENANCE + PENDING CAPS (knowledge 0.5.0)
+# ===========================================================================
+echo "--- evidence / origin / caps ---"
+
+# stage_ev <path> <source> <name> <evidence-line-or-empty>
+# Staged candidate with a UNIQUE name/description (the wrapper de-duplicates
+# on those) and an optional raw `evidence:` line (passed verbatim).
+stage_ev() {
+  local path="$1" src="$2" name="$3" ev="${4:-}"
+  {
+    echo "---"
+    echo "source: $src"
+    echo "sensitivity: normal"
+    [ -z "$ev" ] || echo "$ev"
+    echo "proposed:"
+    echo "  schema_version: \"1\""
+    echo "  name: $name"
+    echo "  description: unique description for $name"
+    echo "  metadata:"
+    echo "    type: project"
+    echo "---"
+    printf '%s\n' "**Why:** synthetic $name."
+  } > "$path"
+}
+pending_count() { find "$1/.inbox" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' '; }
+
+unset CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID SESSION_CHAT_PANE_NAME KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT
+
+# --- evidence required for auto_capture; positive control with evidence ---
+evs=$(bootstrap_store "$TMP/ev_store")
+f="$TMP/ev_none.md"; stage_ev "$f" auto_capture "Ev None" ""
+out=$(CLAUDE_CODE_SESSION_ID=sessA bash "$REMEMBER" --store "$evs" --staged "$f" 2>&1); rc=$?
+assert_rc "evidence_auto_capture_without_evidence_rejected_rc7" 7 "$rc"
+assert_eq "evidence_auto_capture_without_evidence_writes_nothing" "0" "$(pending_count "$evs")"
+f="$TMP/ev_ok.md"; stage_ev "$f" auto_capture "Ev Ok" "evidence: src/app.sh:42"
+out=$(CLAUDE_CODE_SESSION_ID=sessA bash "$REMEMBER" --store "$evs" --staged "$f" 2>&1); rc=$?
+assert_rc "evidence_auto_capture_with_evidence_accepted" 0 "$rc"
+assert_eq "evidence_auto_capture_with_evidence_written" "1" "$(pending_count "$evs")"
+f="$TMP/ev_manual.md"; stage_ev "$f" sess-manual "Ev Manual" ""
+out=$(CLAUDE_CODE_SESSION_ID=sessA bash "$REMEMBER" --store "$evs" --staged "$f" 2>&1); rc=$?
+assert_rc "evidence_manual_capture_without_evidence_still_accepted" 0 "$rc"
+
+# --- evidence grammar: too long / multiline / empty / duplicate (+control) ---
+long=$(printf 'x%.0s' $(seq 1 301)); ok300=$(printf 'x%.0s' $(seq 1 300))
+f="$TMP/ev_long.md"; stage_ev "$f" sess-g "Ev Long" "evidence: $long"
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "evidence_301_bytes_rejected" 2 $?
+f="$TMP/ev_300.md"; stage_ev "$f" sess-g "Ev Three Hundred" "evidence: $ok300"
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "evidence_300_bytes_accepted_control" 0 $?
+f="$TMP/ev_multi.md"; stage_ev "$f" sess-g "Ev Multi" $'evidence: first line\n  continued line'
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "evidence_multiline_rejected" 2 $?
+f="$TMP/ev_empty.md"; stage_ev "$f" sess-g "Ev Empty" "evidence:"
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "evidence_empty_rejected" 2 $?
+f="$TMP/ev_dup.md"; stage_ev "$f" sess-g "Ev Dup" $'evidence: one\nevidence: two'
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "evidence_duplicate_rejected" 2 $?
+f="$TMP/ev_quoted.md"; stage_ev "$f" sess-g "Ev Quoted" 'evidence: "user said: keep it"'
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "evidence_quoted_scalar_accepted_control" 0 $?
+
+# --- staged origin_* rejected; control: same file without them accepted ---
+f="$TMP/ev_osess.md"; stage_ev "$f" sess-g "Ev Osess" "origin_session: forged"
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "staged_origin_session_rejected" 2 $?
+f="$TMP/ev_opane.md"; stage_ev "$f" sess-g "Ev Opane" "origin_pane: forged"
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "staged_origin_pane_rejected" 2 $?
+f="$TMP/ev_noorigin.md"; stage_ev "$f" sess-g "Ev No Origin" ""
+bash "$REMEMBER" --store "$evs" --staged "$f" >/dev/null 2>&1; assert_rc "staged_without_origin_accepted_control" 0 $?
+
+# --- legacy stored candidate (no evidence/origin): parses, hash verifies ---
+# Fixture hash was computed by the pre-0.5.0 (HEAD) writer; it must not change.
+LEGACY_ID=599fd577c258e208939f3a5d828b5d06d28fb9c2d9f3149f710596dba78aed9c
+lgs=$(bootstrap_store "$TMP/legacy_store")
+mkdir -p "$lgs/.inbox"; chmod 700 "$lgs/.inbox"
+{
+  echo "---"; echo "capture_id: $LEGACY_ID"; echo "created: 2026-01-01T00:00:00Z"
+  echo "source: sess-legacy-fixture"; echo "sensitivity: normal"; echo "proposed:"
+  echo '  schema_version: "1"'; echo "  name: Legacy Fixture Item"
+  echo "  description: pre-0.5.0 candidate without evidence"
+  echo "  metadata:"; echo "    type: project"; echo "---"
+  printf '%s\n' "**Why:** synthetic legacy fixture."; echo; printf '%s\n' "**How to apply:** n/a."
+} > "$lgs/.inbox/$LEGACY_ID.md"
+chmod 600 "$lgs/.inbox/$LEGACY_ID.md"
+got=$(mw_call "km_parse_capture '$lgs/.inbox/$LEGACY_ID.md' stored && km_capture_canonical_hash")
+assert_eq "legacy_stored_candidate_hash_unchanged" "$LEGACY_ID" "$got"
+got=$(mw_call "km_parse_capture '$lgs/.inbox/$LEGACY_ID.md' stored && printf '[%s][%s]' \"\$KM_CAP_ORIGIN_SESSION\" \"\$KM_CAP_ORIGIN_PANE\"")
+assert_eq "legacy_stored_candidate_has_no_origin" "[][]" "$got"
+write_legacy_staged() {
+  cat > "$1" <<'LEG'
+---
+source: sess-legacy-fixture
+sensitivity: normal
+LEG
+  [ -z "${2:-}" ] || echo "$2" >> "$1"
+  cat >> "$1" <<'LEG'
+proposed:
+  schema_version: "1"
+  name: Legacy Fixture Item
+  description: pre-0.5.0 candidate without evidence
+  metadata:
+    type: project
+---
+**Why:** synthetic legacy fixture.
+
+**How to apply:** n/a.
+LEG
+}
+f="$TMP/legacy_staged.md"; write_legacy_staged "$f" ""
+assert_eq "legacy_staged_recapture_same_id" "$LEGACY_ID" "$(expected_key "$f")"
+# control: evidence DOES change the id
+f2="$TMP/legacy_staged_ev.md"; write_legacy_staged "$f2" "evidence: x"
+[ "$(expected_key "$f2")" != "$LEGACY_ID" ] && pass "evidence_changes_capture_id_control" || fail "evidence_changes_capture_id_control" "hash identical with evidence"
+# origin lines are not hashed: adding them to a stored file leaves the hash unchanged
+sed -i.bak 's/^created: .*/&\norigin_session: sessZ\norigin_pane: paneZ/' "$lgs/.inbox/$LEGACY_ID.md"; rm -f "$lgs/.inbox/$LEGACY_ID.md.bak"
+got=$(mw_call "km_parse_capture '$lgs/.inbox/$LEGACY_ID.md' stored && km_capture_canonical_hash")
+assert_eq "stored_origin_lines_excluded_from_hash" "$LEGACY_ID" "$got"
+# stored duplicate origin rejected (control above: single origin parses)
+sed -i.bak 's/^origin_pane: .*/&\norigin_pane: dup/' "$lgs/.inbox/$LEGACY_ID.md"; rm -f "$lgs/.inbox/$LEGACY_ID.md.bak"
+mw_call "km_parse_capture '$lgs/.inbox/$LEGACY_ID.md' stored" >/dev/null 2>&1; assert_rc "stored_duplicate_origin_pane_rejected" 2 $?
+
+# --- origin lines written from env for ALL new captures ---
+ors=$(bootstrap_store "$TMP/origin_store")
+f="$TMP/or1.md"; stage_ev "$f" sess-manual "Or One" ""
+out=$(CLAUDE_CODE_SESSION_ID=sessA KNOWLEDGE_PANE_NAME=paneA bash "$REMEMBER" --store "$ors" --staged "$f" 2>&1)
+k=$(printf '%s\n' "$out" | sed -n 's/^capture_id: //p')
+assert_eq "origin_lines_after_created" "origin_session: sessA|origin_pane: paneA" "$(sed -n '4p;5p' "$ors/.inbox/$k.md" | paste -sd'|' -)"
+f="$TMP/or2.md"; stage_ev "$f" sess-manual "Or Two" ""
+out=$(env -u CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID=thr-9 KNOWLEDGE_PANE_NAME=paneB bash "$REMEMBER" --store "$ors" --staged "$f" 2>&1)
+k=$(printf '%s\n' "$out" | sed -n 's/^capture_id: //p')
+assert_eq "origin_codex_thread_fallback" "origin_session: thr-9" "$(sed -n '4p' "$ors/.inbox/$k.md")"
+f="$TMP/or3.md"; stage_ev "$f" sess-manual "Or Three" ""
+out=$(CLAUDE_CODE_SESSION_ID='bad value;rm' env -u KNOWLEDGE_PANE_NAME SESSION_CHAT_PANE_NAME=chatpane bash "$REMEMBER" --store "$ors" --staged "$f" 2>&1)
+k=$(printf '%s\n' "$out" | sed -n 's/^capture_id: //p')
+assert_eq "origin_invalid_session_unknown_and_chat_pane_fallback" "origin_session: unknown|origin_pane: chatpane" "$(sed -n '4p;5p' "$ors/.inbox/$k.md" | paste -sd'|' -)"
+
+# --- identical content from two sessions: same id, second is a no-op even at the cap ---
+dps=$(bootstrap_store "$TMP/dup_store")
+f="$TMP/dup.md"; stage_ev "$f" auto_capture "Dup Item" "evidence: a.sh:1"
+o1=$(CLAUDE_CODE_SESSION_ID=sessA KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=1 bash "$REMEMBER" --store "$dps" --staged "$f" 2>&1); r1=$?
+CLAUDE_CODE_SESSION_ID=sessA KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=1 bash "$REMEMBER" --store "$dps" --staged "$f" >/dev/null 2>&1; r2=$?
+o3=$(CLAUDE_CODE_SESSION_ID=sessB KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=0 KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING=0 bash "$REMEMBER" --store "$dps" --staged "$f" 2>&1); r3=$?
+assert_rc "dup_first_capture_ok" 0 "$r1"
+assert_rc "dup_recapture_same_session_at_cap_noop_not_refused" 0 "$r2"
+assert_rc "dup_recapture_other_session_with_zero_caps_noop" 0 "$r3"
+assert_contains "dup_other_session_reports_noop" "$o3" "no-op"
+assert_eq "dup_same_capture_id" "$(printf '%s\n' "$o1" | sed -n 's/^capture_id: //p')" "$(printf '%s\n' "$o3" | sed -n 's/^capture_id: //p')"
+assert_eq "dup_single_candidate_stored" "1" "$(pending_count "$dps")"
+dk=$(printf '%s\n' "$o1" | sed -n 's/^capture_id: //p')
+assert_eq "dup_origin_stays_first_session" "origin_session: sessA" "$(sed -n '4p' "$dps/.inbox/$dk.md")"
+
+# --- per-session pending cap (writer, direct) ---
+sls=$(bootstrap_store "$TMP/sess_cap_store")
+for n in 1 2; do
+  f="$TMP/sc_a$n.md"; stage_ev "$f" auto_capture "Sc A$n" "evidence: a.sh:$n"
+  CLAUDE_CODE_SESSION_ID=sessA KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=2 bash "$REMEMBER" --store "$sls" --staged "$f" >/dev/null 2>&1; assert_rc "session_cap_a${n}_accepted" 0 $?
+done
+f="$TMP/sc_a3.md"; stage_ev "$f" auto_capture "Sc A3" "evidence: a.sh:3"
+CLAUDE_CODE_SESSION_ID=sessA KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=2 bash "$REMEMBER" --store "$sls" --staged "$f" >/dev/null 2>&1; assert_rc "session_cap_third_from_session_a_refused_rc7" 7 $?
+f="$TMP/sc_b1.md"; stage_ev "$f" auto_capture "Sc B1" "evidence: b.sh:1"
+CLAUDE_CODE_SESSION_ID=sessB KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=2 bash "$REMEMBER" --store "$sls" --staged "$f" >/dev/null 2>&1; assert_rc "session_cap_session_b_accepted_control" 0 $?
+f="$TMP/sc_a4.md"; stage_ev "$f" sess-manual "Sc Manual A" ""
+CLAUDE_CODE_SESSION_ID=sessA KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=2 bash "$REMEMBER" --store "$sls" --staged "$f" >/dev/null 2>&1; assert_rc "session_cap_does_not_cap_manual_captures" 0 $?
+assert_eq "session_cap_inbox_count" "4" "$(pending_count "$sls")"
+f="$TMP/sc_nonnum.md"; stage_ev "$f" auto_capture "Sc Nonnum" "evidence: n.sh:1"
+CLAUDE_CODE_SESSION_ID=sessC KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=abc bash "$REMEMBER" --store "$sls" --staged "$f" >/dev/null 2>&1; assert_rc "session_cap_non_numeric_falls_back_to_default" 0 $?
+# direct writer call (no planner) enforces the same cap
+f="$TMP/sc_direct.md"; stage_ev "$f" auto_capture "Sc Direct" "evidence: d.sh:1"
+dkey=$(expected_key "$f")
+CLAUDE_CODE_SESSION_ID=sessA KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=2 bash "$WRITER" capture --store "$sls" --staged "$f" --idempotency-key "$dkey" >/dev/null 2>&1; assert_rc "session_cap_enforced_by_direct_writer_call" 7 $?
+assert_file_absent "session_cap_refused_candidate_not_written" "$sls/.inbox/$dkey.md"
+
+# --- unknown-session bucket is one shared cap ---
+uks=$(bootstrap_store "$TMP/unknown_store")
+for n in 1 2; do
+  f="$TMP/uk$n.md"; stage_ev "$f" auto_capture "Uk $n" "evidence: u.sh:$n"
+  env -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=2 bash "$REMEMBER" --store "$uks" --staged "$f" >/dev/null 2>&1; assert_rc "unknown_bucket_capture_${n}_accepted" 0 $?
+done
+f="$TMP/uk3.md"; stage_ev "$f" auto_capture "Uk 3" "evidence: u.sh:3"
+env -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=2 bash "$REMEMBER" --store "$uks" --staged "$f" >/dev/null 2>&1; assert_rc "unknown_bucket_shared_cap_refused_rc7" 7 $?
+CLAUDE_CODE_SESSION_ID=sessK KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=2 bash "$REMEMBER" --store "$uks" --staged "$f" >/dev/null 2>&1; assert_rc "unknown_bucket_does_not_cap_named_session_control" 0 $?
+
+# --- MAX_PENDING enforced by the writer when invoked directly ---
+mps=$(bootstrap_store "$TMP/maxpend_store")
+for n in 1 2; do
+  f="$TMP/mp$n.md"; stage_ev "$f" auto_capture "Mp $n" "evidence: m.sh:$n"
+  CLAUDE_CODE_SESSION_ID="s$n" KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING=2 bash "$REMEMBER" --store "$mps" --staged "$f" >/dev/null 2>&1; assert_rc "max_pending_capture_${n}_accepted" 0 $?
+done
+f="$TMP/mp3.md"; stage_ev "$f" auto_capture "Mp 3" "evidence: m.sh:3"
+mkey=$(expected_key "$f")
+CLAUDE_CODE_SESSION_ID=s3 KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING=2 bash "$WRITER" capture --store "$mps" --staged "$f" --idempotency-key "$mkey" >/dev/null 2>&1; assert_rc "max_pending_enforced_by_direct_writer_rc7" 7 $?
+assert_file_absent "max_pending_refused_not_written" "$mps/.inbox/$mkey.md"
+CLAUDE_CODE_SESSION_ID=s3 KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING=3 bash "$WRITER" capture --store "$mps" --staged "$f" --idempotency-key "$mkey" >/dev/null 2>&1; assert_rc "max_pending_raised_limit_accepts_control" 0 $?
+
+# --- wrapper: evidence fast path, session fast path, rc7 mapping, purge rejection ---
+AUTOCAP="$HERE/memory-auto-capture.sh"
+was=$(bootstrap_store "$TMP/wrap_store")
+f="$TMP/w_noev.md"; stage_ev "$f" auto_capture "W Noev" ""
+out=$(CLAUDE_CODE_SESSION_ID=sessA bash "$AUTOCAP" --store "$was" --staged "$f" 2>&1); rc=$?
+assert_rc "wrapper_missing_evidence_rejects_candidate_exit0" 0 "$rc"
+assert_contains "wrapper_missing_evidence_message" "$out" "without an evidence"
+assert_eq "wrapper_missing_evidence_writes_nothing" "0" "$(pending_count "$was")"
+f="$TMP/w_ev.md"; stage_ev "$f" auto_capture "W Ev" "evidence: w.sh:1"
+out=$(CLAUDE_CODE_SESSION_ID=sessA bash "$AUTOCAP" --store "$was" --staged "$f" 2>&1)
+assert_contains "wrapper_with_evidence_captures_control" "$out" "captured: "
+for n in 2 3; do f="$TMP/w_ev$n.md"; stage_ev "$f" auto_capture "W Ev$n" "evidence: w.sh:$n"; done
+out=$(CLAUDE_CODE_SESSION_ID=sessA KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=1 bash "$AUTOCAP" --store "$was" --staged "$TMP/w_ev2.md" 2>&1)
+assert_contains "wrapper_session_limit_fast_path_rejects" "$out" "SESSION_LIMIT=1"
+out=$(CLAUDE_CODE_SESSION_ID=sessB KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=1 bash "$AUTOCAP" --store "$was" --staged "$TMP/w_ev3.md" 2>&1)
+assert_contains "wrapper_session_limit_other_session_captures_control" "$out" "captured: "
+# writer rc 7 -> per-candidate rejection: run the wrapper from a copy whose
+# memory-remember.sh is a stub (rc 7 = policy refusal; rc 1 = control).
+STUB="$TMP/stub_scripts"; rm -rf "$STUB"; cp -R "$HERE" "$STUB"
+printf '#!/usr/bin/env bash\nexit 7\n' > "$STUB/memory-remember.sh"
+out=$(CLAUDE_CODE_SESSION_ID=sessE bash "$STUB/memory-auto-capture.sh" --store "$was" --staged "$TMP/w_ev2.md" 2>&1); rc=$?
+assert_rc "wrapper_maps_writer_rc7_to_candidate_rejection_exit0" 0 "$rc"
+assert_contains "wrapper_rc7_message" "$out" "capture policy"
+assert_contains "wrapper_rc7_counts_rejected" "$out" "1 rejected"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/memory-remember.sh"
+out=$(CLAUDE_CODE_SESSION_ID=sessE bash "$STUB/memory-auto-capture.sh" --store "$was" --staged "$TMP/w_ev2.md" 2>&1)
+assert_not_contains "wrapper_generic_failure_is_not_policy_message_control" "$out" "capture policy"
+for flag in --purge --confirm; do
+  bash "$AUTOCAP" --store "$was" --staged "$TMP/w_ev2.md" "$flag" x >/dev/null 2>&1; assert_rc "wrapper_rejects_${flag#--}_flag" 2 $?
+done
+bash "$AUTOCAP" --store "$was" --staged "$TMP/w_ev2.md" --nonsense >/dev/null 2>&1; assert_rc "wrapper_unknown_flag_rejected_control" 2 $?
+out=$(CLAUDE_CODE_SESSION_ID=sessD bash "$AUTOCAP" --store "$was" --staged "$TMP/w_ev2.md" 2>&1); rc=$?
+assert_rc "wrapper_plain_invocation_ok_control" 0 "$rc"
+
+# --- bounded numeric tunables (no octal parse, no overflow, fail to default) ---
+for case_ in "0005:9:5" "0008:9:8" "0:9:0" "999999:9:999999" "99999999999999999999:9:9" "1234567:9:9" ":9:9" "-1:9:9" "abc:9:9" "0x10:9:9" "007:9:7"; do
+  v="${case_%%:*}"; rest="${case_#*:}"; d="${rest%%:*}"; want="${rest#*:}"
+  got=$(mw_call "km_bounded_int '$v' $d")
+  assert_eq "bounded_int_[$v]" "$want" "$got"
+done
+# writer: zero-padded limit is honoured (control: plain 2), huge limit falls back to the default 5 (fail closed)
+bis=$(bootstrap_store "$TMP/bounded_store")
+for n in 1 2; do
+  f="$TMP/bi$n.md"; stage_ev "$f" auto_capture "Bi $n" "evidence: b.sh:$n"
+  CLAUDE_CODE_SESSION_ID=sessP KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=0002 bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1; assert_rc "bounded_zero_padded_limit_accepts_$n" 0 $?
+done
+f="$TMP/bi3.md"; stage_ev "$f" auto_capture "Bi 3" "evidence: b.sh:3"
+CLAUDE_CODE_SESSION_ID=sessP KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=0002 bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1; assert_rc "bounded_zero_padded_limit_enforced_rc7" 7 $?
+CLAUDE_CODE_SESSION_ID=sessP KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=0003 bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1; assert_rc "bounded_zero_padded_larger_limit_accepts_control" 0 $?
+for n in 4 5; do
+  f="$TMP/bi$n.md"; stage_ev "$f" auto_capture "Bi $n" "evidence: b.sh:$n"
+  CLAUDE_CODE_SESSION_ID=sessQ bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1
+done
+f="$TMP/bi6.md"; stage_ev "$f" auto_capture "Bi 6" "evidence: b.sh:6"
+CLAUDE_CODE_SESSION_ID=sessQ KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=99999999999999999999 bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1; assert_rc "bounded_huge_limit_below_default_cap_accepts" 0 $?
+for n in 7 8 9 10; do
+  f="$TMP/bi$n.md"; stage_ev "$f" auto_capture "Bi $n" "evidence: b.sh:$n"
+  CLAUDE_CODE_SESSION_ID=sessQ bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1
+done
+f="$TMP/bi11.md"; stage_ev "$f" auto_capture "Bi 11" "evidence: b.sh:11"
+CLAUDE_CODE_SESSION_ID=sessQ KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=99999999999999999999 bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1; assert_rc "bounded_huge_limit_falls_back_to_default_cap_rc7" 7 $?
+CLAUDE_CODE_SESSION_ID=sessQ KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=9 bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1; assert_rc "bounded_explicit_larger_limit_accepts_control" 0 $?
+# huge MAX_PENDING also falls back to its default (20): 20 pending then refused
+f="$TMP/bi_mp.md"; stage_ev "$f" auto_capture "Bi Mp" "evidence: b.sh:mp"
+for n in $(seq 1 20); do ff="$TMP/bimp$n.md"; stage_ev "$ff" sess-manual "Bimp $n" ""; CLAUDE_CODE_SESSION_ID=sessR bash "$REMEMBER" --store "$bis" --staged "$ff" >/dev/null 2>&1; done
+CLAUDE_CODE_SESSION_ID=sessR KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING=99999999999999999999 bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1; assert_rc "bounded_huge_max_pending_falls_back_to_default_rc7" 7 $?
+CLAUDE_CODE_SESSION_ID=sessR KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING=0100 bash "$REMEMBER" --store "$bis" --staged "$f" >/dev/null 2>&1; assert_rc "bounded_zero_padded_max_pending_accepts_control" 0 $?
+
+# --- wrapper: LIMIT bounded; no-op reporting; source forgery ---
+wl=$(bootstrap_store "$TMP/wrap_limit_store")
+mkdir -p "$TMP/wl_batch"; rm -f "$TMP/wl_batch"/*.md
+for n in 1 2 3 4; do stage_ev "$TMP/wl_batch/$n.md" auto_capture "Wl $n" "evidence: wl.sh:$n"; done
+args=(); for n in 1 2 3 4; do args+=(--staged "$TMP/wl_batch/$n.md"); done
+out=$(CLAUDE_CODE_SESSION_ID=sessW KNOWLEDGE_AUTO_CAPTURE_LIMIT=99999999999999999999 bash "$AUTOCAP" --store "$wl" "${args[@]}" 2>/dev/null)
+assert_eq "wrapper_huge_limit_falls_back_to_default_3" "3" "$(printf '%s\n' "$out" | grep -c '^captured: ')"
+wl2=$(bootstrap_store "$TMP/wrap_limit_store2")
+out=$(CLAUDE_CODE_SESSION_ID=sessW KNOWLEDGE_AUTO_CAPTURE_LIMIT=0004 bash "$AUTOCAP" --store "$wl2" "${args[@]}" 2>/dev/null)
+assert_eq "wrapper_zero_padded_limit_4_captures_4_control" "4" "$(printf '%s\n' "$out" | grep -c '^captured: ')"
+
+nos=$(bootstrap_store "$TMP/wrap_noop_store")
+f="$TMP/noop.md"; stage_ev "$f" auto_capture "Noop Item" "evidence: noop.sh:1"
+out=$(CLAUDE_CODE_SESSION_ID=sessN bash "$AUTOCAP" --store "$nos" --staged "$f" 2>/dev/null)
+assert_contains "wrapper_new_candidate_prints_captured_control" "$out" "captured: "
+nid=$(printf '%s\n' "$out" | sed -n 's/^captured: //p')
+out=$(CLAUDE_CODE_SESSION_ID=sessN bash "$AUTOCAP" --store "$nos" --staged "$f" 2>/dev/null)
+assert_contains "wrapper_unchanged_existing_prints_skipped" "$out" "skipped: $nid (no-op"
+assert_not_contains "wrapper_unchanged_existing_not_captured" "$out" "captured:"
+assert_eq "wrapper_unchanged_existing_still_one_pending" "1" "$(pending_count "$nos")"
+dh=$(shasum -a 256 "$nos/.inbox/$nid.md" | awk '{print $1}')
+bash "$WRITER" dismiss --store "$nos" --candidate "$nid" --expect-candidate "$dh" >/dev/null 2>&1; assert_rc "wrapper_noop_fixture_dismiss_ok" 0 $?
+out=$(CLAUDE_CODE_SESSION_ID=sessN bash "$AUTOCAP" --store "$nos" --staged "$f" 2>/dev/null)
+assert_contains "wrapper_dismissed_prints_skipped" "$out" "skipped: $nid (no-op (dismissed))"
+assert_not_contains "wrapper_dismissed_not_captured" "$out" "captured:"
+assert_eq "wrapper_dismissed_not_requeued" "0" "$(pending_count "$nos")"
+# a no-op at the session cap is still a no-op (not cap-refused)
+out=$(CLAUDE_CODE_SESSION_ID=sessN KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT=0 bash "$AUTOCAP" --store "$nos" --staged "$f" 2>&1)
+assert_contains "wrapper_dismissed_noop_even_at_zero_session_limit" "$out" "skipped: $nid"
+
+fs=$(bootstrap_store "$TMP/wrap_forge_store")
+f="$TMP/forged.md"; stage_ev "$f" sess-manual "Forged Source" "evidence: forged.sh:1"
+out=$(CLAUDE_CODE_SESSION_ID=sessF bash "$AUTOCAP" --store "$fs" --staged "$f" 2>&1); rc=$?
+assert_rc "wrapper_forged_manual_source_exit0" 0 "$rc"
+assert_contains "wrapper_forged_source_rejected_message" "$out" "source is not auto_capture"
+assert_eq "wrapper_forged_source_writes_nothing" "0" "$(pending_count "$fs")"
+f="$TMP/genuine.md"; stage_ev "$f" auto_capture "Genuine Source" "evidence: genuine.sh:1"
+out=$(CLAUDE_CODE_SESSION_ID=sessF bash "$AUTOCAP" --store "$fs" --staged "$f" 2>&1)
+assert_contains "wrapper_genuine_auto_capture_accepted_control" "$out" "captured: "
+assert_eq "wrapper_genuine_auto_capture_written" "1" "$(pending_count "$fs")"
 
 # ===========================================================================
 # 16. CROSS-PROVIDER LIST VISIBILITY

@@ -1,6 +1,6 @@
 ---
 name: knowledge
-description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 21 command and skill surfaces to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
+description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 22 command and skill surfaces to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
 ---
 
 # Knowledge
@@ -27,8 +27,9 @@ A session's working state or a resumable handoff is Context. Tracking items
 (TODO/ISSUES/tickets) are their own tracker, not a knowledge store — every
 autonomous surface here only ever holds *pointers* to them (a `type:
 reference` memory, a handoff's `tickets:` list), never a mirror; the one
-exception is `docs-create`'s explicitly user-invoked TODO/ISSUES
-maintenance (see "Non-goals" below).
+exceptions are `docs-create`'s explicitly user-directed TODO/ISSUES
+maintenance and `distill`'s approved, configured tracker operations (see
+"Non-goals" below). Trackers remain their own system of record.
 
 ## Forward-looking retention principle
 
@@ -64,7 +65,8 @@ Claude and `$knowledge:<name>` on Codex.
 | Prior knowledge before acting | `recall <query>` — slug citations + snippets, untrusted framing | no |
 | Link structure of memories | `graph neighbors\|reverse\|orphans\|components` | no |
 | Propose learnings from the current task | `reflect` — proposals routed to existing writers | no |
-| Jot a candidate for later review | `remember` | inbox only, user-run |
+| Jot a candidate for later review (also selected implicitly for verified lessons) | `remember` | inbox only; implicit capture needs `evidence:`, never promotes or purges |
+| Wrap up session docs, memory, configured tickets and context in one reviewed batch | `distill` | one explicit in-conversation approval, then existing writers |
 | Durable memory writes | `consolidate`, `promote` | memory store, user-run, `disable-model-invocation` |
 
 Context snapshot and handoff names are canonical knowledge item names:
@@ -106,6 +108,14 @@ universal funnel or one universal rule:
 including reviewer panes; `lint` is read-only too EXCEPT `lint --fix`, whose
 repairs are delegated to `memory-write.sh` and therefore inherit its
 reviewer-role refusal (exit 6).
+
+## Automatic recall and capture
+
+`recall` and inbox-only `remember` can be selected implicitly during work.
+Remember uses the guarded capture wrapper with `evidence:` and writer-assigned
+session provenance; it never promotes or purges implicitly. `distill` composes
+existing writers after one explicit approval of the concrete batch. These
+surfaces are best-effort skill selection, not guaranteed lifecycle hooks.
 
 ## Automatic recall / capture hooks (opt-in, OFF by default)
 
@@ -199,7 +209,8 @@ these commands:
   `retire`/`purge`/`context-remove` action.
 - Never create, edit, close, or sync TODO/ISSUES/ticket entries from an
   autonomous surface (`doctor`/`lint`/`search`/`recall`/`consolidate`/
-  `promote`/`remember`); the one exception is `docs-create`'s explicitly
+  `promote`/`remember`); exceptions are `distill`'s explicitly approved
+  configured tracker operations and `docs-create`'s explicitly
   user-invoked TODO/ISSUES maintenance, which is user-directed authoring,
   not automation. Ticket IDs live only as pointers (a `type: reference`
   memory, a handoff's `tickets:` list) — never mirrored state.

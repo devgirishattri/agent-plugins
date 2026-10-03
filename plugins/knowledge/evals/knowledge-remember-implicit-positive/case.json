@@ -1,0 +1,26 @@
+{
+  "id": "knowledge-remember-implicit-positive",
+  "kind": "positive",
+  "prompt": "I just confirmed that tests/run.sh only passes when TZ=UTC is set (it fails at tests/run.sh:12 otherwise). What command should I use to run the tests? Answer in one line.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "TZ=UTC"
+    ],
+    "tool_used": [],
+    "forbidden_skills": [
+      "consolidate",
+      "promote"
+    ],
+    "files": {},
+    "executions": [
+      {
+        "script": "memory-auto-capture.sh",
+        "exit_code": 0,
+        "min_count": 1,
+        "max_count": 1
+      }
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED (no model run was made). Portable-schema limits: this runner has no multi-turn input, no before/after hash delta and no file-content assertion. The scaffold writes .eval-snapshot; after a run, `bash evals/check-outcome.sh unchanged|candidate <workspace>` supplies the zero-delta / candidate-content assertion (not wired into the portable grader). Exit 0 of the wrapper is not sufficient (all candidates could be rejected); check-outcome.sh candidate asserts a real .inbox/<id>.md with source auto_capture, non-empty evidence, origin_session and origin_pane."
+}

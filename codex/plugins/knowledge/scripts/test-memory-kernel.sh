@@ -1182,6 +1182,38 @@ assert_contains "lock_contention_prints_unlock_cmd" "$out" "memory-write.sh unlo
 wait "$holder_pid" 2>/dev/null || true
 bash "$WRITER" unlock --store "$store" --confirm "$store" > /dev/null 2>&1
 
+# vanished-lock recheck (AGENTS.md lock rule): `ln` fails, but the lock is gone by
+# the time we look (the holder released in between). acquire must retry `ln`
+# instead of erroring rc 4. A PATH-shimmed `ln` simulates the vanish.
+lvstore=$(bootstrap_store "$TMP/lock_vanish")
+shim="$TMP/lock_vanish_shim"; mkdir -p "$shim"
+real_ln=$(command -v ln)
+cat > "$shim/ln" <<SHIM
+#!/usr/bin/env bash
+# fail the first N calls (lock file absent => "vanished"), then defer to real ln
+n=\$(cat "$shim/count" 2>/dev/null || echo 0)
+n=\$((n + 1)); echo "\$n" > "$shim/count"
+if [ "\$n" -le "\${LN_SHIM_FAILS:-1}" ]; then exit 1; fi
+exec "$real_ln" "\$@"
+SHIM
+chmod +x "$shim/ln"
+rm -f "$shim/count"
+PATH="$shim:$PATH" LN_SHIM_FAILS=1 bash -c "source '$WRITER'; _km_lock_acquire '$lvstore'; exit \$?"; rc=$?
+assert_rc "lock_vanished_after_failed_ln_retries_and_acquires" 0 "$rc"
+assert_eq "lock_vanished_ln_retried_once" "2" "$(cat "$shim/count")"
+rm -f "$lvstore/.lock" "$lvstore"/.lock.claim.*
+rm -f "$shim/count"
+PATH="$shim:$PATH" LN_SHIM_FAILS=5 bash -c "source '$WRITER'; _km_lock_acquire '$lvstore'; exit \$?"; rc=$?
+assert_rc "lock_vanished_five_consecutive_still_acquires_bound_edge" 0 "$rc"
+rm -f "$lvstore/.lock" "$lvstore"/.lock.claim.*
+rm -f "$shim/count"
+out=$(PATH="$shim:$PATH" LN_SHIM_FAILS=1000 bash -c "source '$WRITER'; _km_lock_acquire '$lvstore'; exit \$?" 2>&1); rc=$?
+assert_rc "lock_persistent_ln_failure_without_lock_is_rc4_after_bound" 4 "$rc"
+assert_contains "lock_persistent_ln_failure_message" "$out" "unexpected failure"
+assert_eq "lock_persistent_ln_failure_bounded_attempts" "6" "$(cat "$shim/count")"
+claims=$(find "$lvstore" -maxdepth 1 -name '.lock.claim.*' | wc -l | tr -d ' ')
+assert_eq "lock_persistent_ln_failure_leaves_no_claim" "0" "$claims"
+
 # concurrent writers serialize without corruption: launch N apply calls for
 # DISTINCT new files against the SAME store concurrently; all must land and
 # MEMORY.md must end up listing every one exactly once.

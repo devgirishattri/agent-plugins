@@ -53,7 +53,9 @@
 #   locked-or-recovery-busy (propagated from the writer, --staged only);
 #   6 reviewer-role refusal (propagated from the writer, --staged only —
 #   --list performs no role check, matching the read-anywhere rule shared
-#   by lint/index/search/graph).
+#   by lint/index/search/graph); 7 capture-policy refusal (propagated from the
+#   writer, --staged only: an auto_capture candidate lacking `evidence:` or
+#   exceeding the pending-inbox / per-session pending caps; nothing written).
 # Supported platforms: macOS, Linux
 set -uo pipefail
 

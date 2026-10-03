@@ -24,6 +24,16 @@ complete diff set (step 7), and never propose a fix for anything outside
 `.agents/memory/` (docs, TODO/ISSUES trackers, and context snapshots are other
 surfaces' jobs — see "Non-goals" at the end).
 
+`distill` may compose this workflow for a user-directed session wrap-up: the
+user approves the same complete target/index diffs and candidate dispositions
+within Distill's batch. That approval is sufficient; no second invocation or
+duplicate approval is needed. All baseline, role, CAS and exit gates still apply.
+When selecting candidates for Distill, match writer-assigned `origin_session`
+against the inherited runtime session ID. Missing/unknown or foreign origins
+stay pending by default. Ordinary explicit consolidation retains its full-inbox
+scope. Show evidence and origin when reviewing candidates; attribution is not
+authorization and does not establish truth.
+
 ## 0. Invocation discipline (read this first)
 
 Every call into a plugin helper script below is **exactly one literal Bash

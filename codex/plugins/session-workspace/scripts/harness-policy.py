@@ -2033,6 +2033,16 @@ def memory_remember(ctx: Context, script: str, args: List[str]) -> None:
     raise PolicyFailure("helper.argv", "memory-remember.sh accepts [--store PATH] --staged FILE | [--store PATH] --list [--expired-only]")
 
 
+def memory_auto_capture(ctx: Context, script: str, args: List[str]) -> None:
+    remaining = take_knowledge_store(ctx, args)
+    if not remaining or len(remaining) % 2:
+        raise PolicyFailure("helper.argv", "memory-auto-capture.sh requires --staged FILE pairs")
+    for index in range(0, len(remaining), 2):
+        if remaining[index] != "--staged":
+            raise PolicyFailure("helper.argv", "memory-auto-capture.sh accepts only --staged FILE pairs")
+        literal_file(ctx, remaining[index + 1], "memory-auto-capture.sh --staged file")
+
+
 SHA_RE = re.compile(r"\A[a-f0-9]{64}\Z")
 MEMORY_WRITE_SUBCOMMANDS = {"capture", "apply", "index", "retire", "purge", "bootstrap", "unlock", "dismiss", "restore"}
 MEMORY_WRITE_PATH_FLAGS = {"--staged", "--staged-target", "--staged-index", "--confirm", "--manifest"}
@@ -2219,7 +2229,7 @@ def session_delete(ctx: Context, script: str, args: List[str]) -> None:
 # Helper table: basename -> (allowed roles, exact argv grammar). Roles:
 # o=orchestrator e=executor r=reviewer. EVERY entry carries a reviewed
 # grammar -- there is no grammar-less pass for any role. A helper absent from
-# this table (broadcast, auto-capture, internal helpers, unknown basenames)
+# this table (broadcast, internal helpers, unknown basenames)
 # is denied for every role. Both providers' basenames are listed where the
 # Claude and Codex trees name the same helper differently.
 HELPERS = {
@@ -2264,6 +2274,7 @@ HELPERS = {
         "validate-links.sh": ("oer", no_args),
         "check-todos.sh": ("oer", no_args),
         "memory-remember.sh": ("oe", memory_remember),
+        "memory-auto-capture.sh": ("oe", memory_auto_capture),
         "memory-write.sh": ("o", memory_write),
         "memory-index.sh": ("o", store_only),
         "init.sh": ("o", knowledge_init),

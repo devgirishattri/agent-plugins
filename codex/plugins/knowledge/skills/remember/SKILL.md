@@ -1,11 +1,51 @@
 ---
 name: remember
-description: "Capture a low-friction memory candidate into the inbox for later consolidation, list pending candidates, or purge explicitly selected candidates."
+description: "Capture a verified reusable lesson or user preference from the current work into the memory inbox, including implicitly when one emerges. Also list candidates or perform explicitly requested candidate cleanup."
 ---
 
 # Remember
 
-This skill is explicitly invoked only. Run only the accepted helper workflow below and return its formatted result or the shortest actionable failure.
+Capture may be selected implicitly during work. Listing and cleanup follow the
+user's request; automatic selection never authorizes promotion, dismissal,
+restoration, or purge. Run only the helper workflows below.
+
+## Implicit capture
+
+When a verified reusable lesson or explicit user preference emerges, stage a
+candidate without asking the user to invoke this skill. Skip task status,
+speculation, secrets, transcript summaries, and facts already captured. Read
+plausible existing matches before adding a duplicate; use `recall` if needed.
+Respect an explicit user instruction not to remember something.
+
+Stage with the native file-editing tool outside the memory store. Under
+strict-v1 use a permitted scratch file within this pane's checkout; an arbitrary
+OS temporary path may fail the harness's literal-file containment check.
+Use the candidate envelope below with `source: auto_capture` and a non-empty
+top-level `evidence:` scalar (at most 300 bytes): an observed file/function,
+commit, tool result, or short user quote. Evidence is a provenance claim, not
+independent verification. Do not stage `origin_session` or `origin_pane`; the
+writer supplies these from inherited runtime identity. Unknown identity stays
+unknown; never set environment variables to manufacture attribution.
+
+Call only the capture wrapper, as one literal Bash segment:
+
+```
+bash "<PLUGIN_ROOT>/scripts/memory-auto-capture.sh" [--store <path>] --staged <staged-file>
+```
+
+The wrapper screens known secret patterns and duplicates, caps candidate bytes
+(`KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES`, default 4096) and per-pass count
+(`KNOWLEDGE_AUTO_CAPTURE_LIMIT`, default 3). The writer enforces pending inbox
+capacity (`KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING`, default 20) and pending candidates
+per originating session (`KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT`, default 5).
+These are pending limits, not a lifetime budget; consolidation frees capacity.
+Capture tunables accept one to six decimal digits (0–999999); leading zeros
+are interpreted as decimal, and other values fall back to their defaults.
+The unknown-session bucket shares its limit. Never switch source/session or
+fall back to manual capture to bypass a rejection. The wrapper accepts capture
+arguments only; it cannot purge or promote. Report an accepted candidate briefly;
+on rejection report the reason without retry loops. A zero-exit skip is not a
+successful capture. Selection is best effort, not a guaranteed background hook.
 
 ## Instructions
 
@@ -23,11 +63,12 @@ Pass `--store <path>` to every Bash call below only if the user supplied one in 
 
 ### Capturing a candidate
 
-1. Compose the staged candidate file yourself (do not ask the user to hand-write YAML). It is a strict envelope: YAML frontmatter with exactly three top-level keys, then a markdown body. Use the **Write** tool to create it at a scratch path (e.g. under the OS temp directory) — never construct it via a Bash heredoc, so the single literal Bash segment rule below stays intact. Grammar (closed — nothing outside this shape is accepted, and the script exits `2` on any violation):
+1. Compose the staged candidate file yourself (do not ask the user to hand-write YAML). It is a strict envelope: YAML frontmatter with source, sensitivity, proposed, and optional evidence, then a markdown body. Use the file-editing tool to create it at a scratch path — never construct it via a Bash heredoc. Grammar (closed — nothing outside this shape is accepted, and the script exits `2` on any violation):
    ```
    ---
    source: <this session/context id — any short non-empty label, e.g. the session name>
    sensitivity: normal
+   evidence: <optional for manual capture; required when source is auto_capture>
    proposed:
      schema_version: "1"
      name: <display name>
@@ -44,7 +85,7 @@ Pass `--store <path>` to every Bash call below only if the user supplied one in 
    - `source` is required and non-empty; it is the envelope's own provenance field (distinct from the optional `proposed.source`, which is the memory schema's own field — do not conflate them).
    - `sensitivity` is `normal` or `sensitive` — use `sensitive` for anything containing credentials, tokens, or other data the user would not want surfaced casually in recall output.
    - Under `proposed:`, only the v1 memory schema's own fields are accepted as scalars (`schema_version`, `name`, `description`, `created`, `updated`, `last_verified`, `review_after`, `status`, `confidence`, `source`, `supersedes`, `migrated`), the list field `tags`, and the one-level mapping `metadata:` (with its own scalar `type`). Omit any field you are not proposing a value for — in particular, do not include `created`/`updated` unless you have a real reason to backdate them; consolidation stamps these at promotion time.
-   - Never include `capture_id` or `created` at the top level — those are writer-assigned; the script rejects a staged file containing either.
+   - Never include `capture_id`, `created`, `origin_session`, or `origin_pane` at the top level — those are writer-assigned; the script rejects them in staged input. Optional `evidence` is a non-empty single-line scalar, at most 300 bytes; it is required for `source: auto_capture`.
    - The body (after the closing `---`) becomes the candidate's proposed memory body; include `**Why:**` / `**How to apply:**` when `metadata.type` is `feedback` or `project`.
 
 2. Run exactly one literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection):
@@ -60,6 +101,7 @@ Pass `--store <path>` to every Bash call below only if the user supplied one in 
    - Exit `4`: a store-integrity problem (e.g. `.inbox` pre-exists as something unsafe, or a colliding candidate with different content already exists under the same id) — relay the message verbatim and stop; do not attempt to fix the store yourself.
    - Exit `5`: the store is locked by a concurrent writer — relay the message (it names the exact `unlock` recovery command) and stop; do not retry in a loop.
    - Exit `6`: reviewer-role refusal, or an unresolved fleet identity inside tmux — relay the single stderr line verbatim and stop; this is expected behavior in a `*-reviewer` pane, not a bug.
+   - Exit `7`: automatic-capture evidence or capacity policy refused the candidate. Report the reason; do not change source/identity or retry through a less restricted path.
 
 ### Listing candidates
 

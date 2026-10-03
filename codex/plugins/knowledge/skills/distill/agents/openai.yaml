@@ -1,0 +1,5 @@
+interface:
+  display_name: "Distill"
+  short_description: "Review and apply session knowledge updates in one batch"
+policy:
+  allow_implicit_invocation: true

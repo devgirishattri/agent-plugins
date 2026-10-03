@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: knowledge-remember-implicit-positive
+tags: [knowledge, positive, contract]
+context:
+  scaffold_script: scaffold.sh

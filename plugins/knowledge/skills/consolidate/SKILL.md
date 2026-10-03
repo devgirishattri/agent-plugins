@@ -23,6 +23,20 @@ complete diff set (step 7), and never propose a fix for anything outside
 `.agents/memory/` (docs, TODO/ISSUES trackers, and context snapshots are other
 surfaces' jobs — see "Non-goals" at the end).
 
+`distill` may compose this workflow for a user-directed session wrap-up: the
+user approves the same complete target/index diffs and candidate dispositions
+within Distill's batch. That approval is sufficient; no second invocation or
+duplicate approval is needed. All baseline, role, CAS and exit gates still apply.
+When reviewing candidates, show each candidate's `evidence:` and writer-assigned
+`origin_session` / `origin_pane` (see step 4). Attribution is not authorization
+and does not establish truth; evidence is a provenance claim the writer never
+verified.
+
+Compatibility note: 0.5.0 candidates carry `origin_session` / `origin_pane` (and
+optionally `evidence`), which a pre-0.5.0 reader rejects. Before a downgrade,
+consolidate or dismiss (or back up) the pending inbox; rollback is not
+transparent for new-format candidates.
+
 ## 0. Invocation discipline (read this first)
 
 Every call into a plugin helper script below is **exactly one literal Bash
@@ -171,6 +185,18 @@ Two sources, both in scope for this run:
    For each candidate you intend to consider, **Read**
    `<STORE_PATH>/.inbox/<id>.md` to see its full proposed frontmatter and body
    (the `--list` row alone is not enough to judge duplication).
+
+   **Evidence and origin.** In the review step, display each candidate's
+   `evidence:` (absent on older or manual candidates — say so) and its
+   `origin_session` / `origin_pane` (absent on pre-0.5.0 candidates: treat as
+   unattributed). Ordinary explicit consolidation keeps its full-inbox scope.
+   Only when `distill` composes this workflow are candidates selected by
+   matching `origin_session` against the inherited session ID, read with the
+   single read-only Bash segment `printenv CLAUDE_CODE_SESSION_ID` (never set
+   or export it); missing, `unknown`, or foreign origins then stay pending
+   unless the user explicitly selects them. Selection only narrows what is
+   proposed; the approval contract in step 7 is unchanged, and `origin_*` is
+   attribution, not authorization.
 
 You now have one flat worklist of **items**, each either a *session learning*
 (no stored candidate backing it) or an *inbox candidate* (backed by

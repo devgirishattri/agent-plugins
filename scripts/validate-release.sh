@@ -506,17 +506,23 @@ for name in sorted(claude_plugins):
             fail(f"skill name does not match directory for {skill_file}")
 
     if name == "knowledge":
-        # Per-skill Codex invocation policy: write-capable knowledge skills are
-        # explicit-only, matching Claude's disable-model-invocation behavior.
-        # these five skills must never be implicitly invoked by the model —
-        # the twin of Claude's disable-model-invocation.
-        for policy_skill in ("consolidate", "promote", "remember", "init", "docs-create"):
+        # Durable writers retain explicit selection; guarded inbox capture and
+        # Distill planning are discoverable without authorizing their writes.
+        for policy_skill in ("consolidate", "promote", "init", "docs-create"):
             policy_path = codex_dir / "skills" / policy_skill / "agents" / "openai.yaml"
             if not policy_path.is_file():
                 fail(f"knowledge: missing Codex invocation policy file {policy_path}")
             policy_text = policy_path.read_text()
             if "allow_implicit_invocation: false" not in policy_text:
                 fail(f"{policy_path}: must set policy.allow_implicit_invocation: false")
+
+        for implicit_skill in ("remember", "distill"):
+            implicit_policy = codex_dir / "skills" / implicit_skill / "agents/openai.yaml"
+            if not implicit_policy.is_file() or "allow_implicit_invocation: true" not in implicit_policy.read_text():
+                fail(f"{implicit_policy}: guarded implicit workflow must be discoverable")
+        for provider_dir in (claude_dir, codex_dir):
+            if not (provider_dir / "skills/distill/SKILL.md").is_file():
+                fail(f"knowledge: missing distill skill in {provider_dir}")
 
         # assets/recall-snippet.md is the single source doctor.sh byte-
         # compares AGENTS.md against; it must be byte-identical across both
@@ -1111,6 +1117,7 @@ python3 scripts/test-session-metadata.py
 python3 scripts/test-deletion-boundaries.py
 python3 -B scripts/test-memory-inbox-boundaries.py
 python3 -B scripts/test-memory-dismissal.py
+python3 -B scripts/test-capture-capacity.py
 python3 -B scripts/test-reviewer-read-paths.py
 python3 -B scripts/test-message-drafts.py
 python3 -B scripts/test-skill-reads.py

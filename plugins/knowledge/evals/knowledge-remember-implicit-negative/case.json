@@ -1,0 +1,27 @@
+{
+  "id": "knowledge-remember-implicit-negative",
+  "kind": "negative",
+  "prompt": "Quick status check, one sentence please: I am about halfway through the migration and I guess the cache might be the culprit, but I have not verified anything.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "(?i)halfway|cache"
+    ],
+    "tool_used": [],
+    "forbidden_skills": [
+      "remember",
+      "consolidate",
+      "promote"
+    ],
+    "files": {},
+    "executions": [
+      {
+        "script": "memory-auto-capture.sh",
+        "exit_code": 0,
+        "min_count": 0,
+        "max_count": 0
+      }
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED (no model run was made). Portable-schema limits: this runner has no multi-turn input, no before/after hash delta and no file-content assertion. The scaffold writes .eval-snapshot; after a run, `bash evals/check-outcome.sh unchanged|candidate <workspace>` supplies the zero-delta / candidate-content assertion (not wired into the portable grader). Zero-delta of memory files, MEMORY.md, .inbox (incl. .dismissed) and docs via check-outcome.sh unchanged; contexts live outside the workspace and are not snapshotted."
+}

@@ -5,6 +5,11 @@ description: This skill should be used when creating new documentation files or 
 
 # Creating Documentation
 
+Distill may compose this workflow after the user approves its exact document
+patches in a combined batch. No additional skill invocation is needed. Preserve
+the role preflight, validation and independent review below; include discovered
+tracker changes in the batch before applying them.
+
 A structured process for creating and updating project documentation. Documents use **reference-based notation** (function names, table names, file paths) for describing what exists, because references stay accurate as code evolves while line numbers and copied code rot immediately. Use **focused code examples** for showing how to do things — recurring patterns, conventions, and interfaces that developers need to copy and adapt.
 
 ## Process

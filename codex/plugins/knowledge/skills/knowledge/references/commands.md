@@ -4,6 +4,17 @@ Read when selecting command flags, context naming/evidence rules, or memory rank
 
 ## Which command, when
 
+`$knowledge:distill` (or “wrap up this session”) prepares session documents,
+memory, configured ticket updates and context as one batch, then applies only
+the exact approved changes through their existing writers. Missing integration
+capability yields a draft/skip; actual outcomes go into context last. It does
+not delete sources or transition task status. See the installed Distill skill.
+
+`remember` supports implicit inbox-only capture of evidenced reusable lessons;
+`recall` supports bounded implicit lookup of newly relevant topics. No special
+syntax is required for model selection. Neither guarantees activation; prompt
+recall hooks remain separately configurable.
+
 `$knowledge:find [--source all|docs|memory|context] [--store <path>] [--limit N] <query>` searches local docs, resolved memory, and configured context together, grouped by source with authority/lifetime labels. See the installed `find` skill for bounds and partial-result handling.
 
 **Docs — see each installed command skill for the full process:**

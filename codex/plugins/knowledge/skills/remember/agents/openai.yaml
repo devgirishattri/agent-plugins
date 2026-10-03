@@ -1,5 +1,3 @@
-# Per-skill Codex invocation policy: explicit invocation only.
-# Twin of Claude's disable-model-invocation: this skill must never be
-# implicitly invoked by the model.
+# Automatic selection permits inbox capture only; cleanup needs user direction.
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true

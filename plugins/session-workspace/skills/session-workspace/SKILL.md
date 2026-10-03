@@ -279,6 +279,15 @@ them:
   interpreter fed on stdin can still run `gh`. Scope the orchestrator pane's
   GitHub token (per-role secret visibility) where remote mutations must be
   impossible.
+- From **0.11.1**, orchestrators and executors may run the knowledge
+  `memory-auto-capture.sh` helper (implicit inbox-only `remember`) with
+  exactly `[--store PATH] --staged FILE [--staged FILE ...]`; `--batch-dir`
+  and every other argument are refused, and reviewers are denied. The
+  writer, not the policy, enforces evidence presence, provenance stamping,
+  and the pending caps. Each `--staged` file must pass normal literal-file
+  containment. Knowledge 0.5 implicit capture needs this release under
+  strict-v1; an older harness refusing capture is a compatibility limit,
+  not permission to bypass it — update and restart agents, then retry.
 - `sudo`/`doas`/`su`/`runuser`/`pkexec` are refused for every role at any
   wrapper hop, as is any unsupported wrapper option (`exec -a`, `nohup --`,
   `time -o`, `env -S` all fail closed); the accepted `env`/`command`/

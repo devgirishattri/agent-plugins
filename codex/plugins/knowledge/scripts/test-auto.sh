@@ -24,7 +24,8 @@ unset KNOWLEDGE_MEMORY_HOME
 unset KNOWLEDGE_AUTO_RECALL KNOWLEDGE_AUTO_RECALL_LIMIT KNOWLEDGE_AUTO_RECALL_TERMS
 unset KNOWLEDGE_AUTO_RECALL_BUDGET KNOWLEDGE_AUTO_RECALL_GRAPH KNOWLEDGE_AUTO_RECALL_GRAPH_MODE KNOWLEDGE_CONSOLIDATE_NUDGE
 unset KNOWLEDGE_AUTO_CAPTURE KNOWLEDGE_AUTO_CAPTURE_LIMIT
-unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
+unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT
+unset CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID SESSION_CHAT_PANE_NAME
 # KNOWLEDGE_PANE_NAME is deliberately NOT unset: it is the writer's role-detection
 # identity, and clearing it pushes role checks onto a tmux probe that fails closed
 # for an unnamed pane. Suites that test role behaviour set it explicitly.
@@ -89,7 +90,9 @@ EOF
 stage_candidate() {
   # stage_candidate <path> <source> <name> <desc> <type>
   {
-    echo "---"; echo "source: $2"; echo "sensitivity: normal"; echo "proposed:"
+    echo "---"; echo "source: $2"; echo "sensitivity: normal"
+    [ "$2" = "auto_capture" ] && echo "evidence: test-fixture:1"
+    echo "proposed:"
     echo "  schema_version: \"1\""; echo "  name: $3"; echo "  description: $4"
     echo "  metadata:"; echo "    type: $5"; echo "---"
     echo "**Why:** synthetic capture."; echo; echo "**How to apply:** n/a."

@@ -1,6 +1,8 @@
-# Automatic recall / capture hooks (opt-in, OFF by default)
+# Recall and capture: implicit skills and opt-in hooks
 
-Beyond the agent-invoked `recall`/`remember` surfaces, the plugin ships
+`recall` and inbox-only `remember` support implicit selection during work.
+Read their skills for bounded queries and evidence-backed capture. Skill selection
+is best effort, with no guarantee of activation. Beyond those surfaces, the plugin ships
 hook-driven **automatic** recall and capture-nudge. Both are OFF unless you
 opt in with an environment variable (inherited at launch), because prompt-time
 injection still needs latency / false-positive tuning before it is on by
@@ -69,28 +71,32 @@ silently (never breaks or stalls a session).
   inbox has pending candidates, prints ONE reminder to run
   `$knowledge:consolidate`. Nudge only — it never writes and never
   auto-consolidates. Script: `scripts/nudge-consolidate.sh`.
-- **Autonomous capture (0.3)** — **not offered on Codex.** Codex plugin hooks
-  support only `type:"command"`, which can force a capture pass at `Stop` solely
-  via `{"decision":"block",…}`; Codex renders that as a blocked-hook line on
-  **every** turn, so a default autonomous-capture Stop hook is pure noise. It has
-  therefore been retired from the Codex `hooks/hooks.json` (and the paired
-  `KNOWLEDGE_AUTO_CAPTURE` env gate). On Codex, capture memory manually via the
-  bridge below (`$knowledge:remember` mid-task, `$knowledge:consolidate` at
-  session end). Autonomous Stop-capture ships on Claude only, as an opt-in
-  `type:"prompt"` snippet — the Claude tree's
-  `plugins/knowledge/assets/capture-stop-hook.md`, not shipped in this Codex tree
-  — that returns the silent `{"ok":…}` shape Codex hooks cannot. The shared enforcement wrapper
-  `scripts/memory-auto-capture.sh` (caps count/bytes, rejects secrets, dedups,
-  inbox-only) is still present and remains the sole write path whenever candidates
-  are staged; `$knowledge:consolidate` stays the persist gate.
-- **Capture bridge** — `assets/capture-snippet.md` is the paste-into-AGENTS.md
-  instruction (companion to the recall bridge) telling the agent to
-  `$knowledge:remember` mid-task and `$knowledge:consolidate` at session end.
+- **Implicit capture (0.5)** — both providers may select `remember` when a
+  verified reusable lesson or user preference emerges. It stages
+  `source: auto_capture` plus `evidence`, then invokes
+  `memory-auto-capture.sh --staged <file>`. The writer stamps originating
+  session/pane; model-supplied origins are rejected. Capture stays inbox-only.
+  `KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT` (default 5) caps pending automatic
+  candidates per session under the writer lock; consolidation frees capacity.
+  Missing identity uses a shared unknown bucket. Count/byte/secret-pattern and
+  duplicate checks remain in effect. This is not a lifetime capture budget.
+- **Claude Stop capture** remains an optional prompt-hook snippet at
+  `plugins/knowledge/assets/capture-stop-hook.md`. It must stage evidence too.
+  Codex does not run prompt/agent hook handlers. Do not force a continuation on
+  every Stop just to capture memory; SessionEnd cannot run a full Distill pass.
+  The retired `KNOWLEDGE_AUTO_CAPTURE` variable remains unused.
+- **Strict-v1 compatibility** — implicit capture through the wrapper needs
+  session-workspace 0.11.1's reviewed `--staged FILE` helper grammar. Older
+  harnesses refuse it; report that limitation, never bypass the harness.
+- **Capture bridge** — `assets/capture-snippet.md` remains optional guidance
+  for environments whose skill selection misses captures. Do not require the
+  user to repeatedly invoke remember.
 
-The five write-capable agent surfaces — `docs-create`, `init`, `remember`,
-`consolidate`, and `promote` — are explicit-only on both providers. Their Codex
-skills set `policy.allow_implicit_invocation: false`; invoke them only through
-their corresponding `$knowledge:*` command.
+The durable-write surfaces `docs-create`, `init`, `consolidate`, and
+`promote` retain explicit-only selection. A user-directed Distill batch may
+compose docs-create and consolidate with the exact approved diffs, preserving
+their role, CAS and validation gates. Remember is implicitly selectable only
+for guarded inbox capture; cleanup still needs explicit user direction.
 
 Direct prompt hits report scored terms and their matching fields, such as
 `(matched: redis(name,tags);tls(body))`, in queried-term order. Related hits include the seed and, in selective mode, matching link-text evidence.

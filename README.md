@@ -14,8 +14,8 @@ Every plugin below ships for both providers at the same version number.
 | `session-manager` | 1.7.10 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.13 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.4.0 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.11.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `knowledge` | 0.5.0 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-workspace` | 0.11.1 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -214,9 +214,27 @@ default.
 
 ### knowledge
 
-Knowledge 0.4.0 adds `reflect`: a write-free review of the current task that
-proposes lessons and routes approved changes to existing knowledge writers.
-It never silently rewrites instructions, saves memory, or creates tickets.
+Knowledge 0.5.0 adds `distill`: say “wrap up this session” or invoke
+`/knowledge:distill` (Codex: `$knowledge:distill`) to prepare relevant docs,
+memory, configured tickets and context as one concrete batch. After approval,
+it applies the changes through existing writers and saves context last with
+actual outcomes. It does not ask you to invoke each writer separately.
+`reflect` remains the write-free current-task alternative.
+
+Distill uses existing, configured tracker tools; it does not ship a Jira client
+or configure credentials. Missing tracker access yields drafts. It avoids
+duplicate posts after ambiguous results, leaves unrelated candidates pending,
+and excludes deletion, promotion and status transitions. One batch is capped
+at 10 mutations / 30,000 UTF-8 bytes of proposed diffs/payloads; larger work is
+reviewed in separate batches. Approval is of exact content, not skill selection
+or a tool-permission prompt. Document pre-write checks are not atomic CAS.
+
+`remember` can now capture a verified lesson or preference implicitly into
+the inbox, with evidence and writer-assigned session/pane provenance.
+`recall` can perform bounded targeted lookups when a new topic emerges.
+Implicit selection is best effort, not a guarantee on every task. Durable
+memory promotion remains reviewed. Under strict-v1, capture needs
+session-workspace 0.11.1 or later; old harnesses refuse the new helper path.
 
 The memory store is per repository and must be created once, from inside the
 repository:
@@ -233,20 +251,28 @@ a store exists, the search, recall, and remember surfaces have nothing to read.
 Docs and context surfaces work without a store. Context snapshots additionally
 need `SESSION_CONTEXT_HOME`.
 
-Automatic recall and automatic capture are **off** on a fresh install and are
-enabled by different mechanisms:
+Prompt-hook recall remains **off** on a fresh plugin install:
+`KNOWLEDGE_AUTO_RECALL=1` enables session-start and prompt injection;
+`session` or `prompt` selects one. `KNOWLEDGE_AUTO_RECALL_GRAPH=1`
+additionally enables selective outgoing-link expansion. A launcher or workspace
+configuration may set `KNOWLEDGE_AUTO_RECALL` for its sessions.
 
-- **Recall** is an environment gate. `KNOWLEDGE_AUTO_RECALL=1` enables injection
-  at session start and on each prompt (`session` or `prompt` selects just one).
-  `KNOWLEDGE_AUTO_RECALL_GRAPH=1` additionally enables selective outgoing-link
-  expansion and is deliberately strict, accepting only `1`, `yes`, `on`, or `true`.
-- **Capture** is a hook gate, not a variable. The retired `KNOWLEDGE_AUTO_CAPTURE`
-  variable governs nothing. On Claude you enable capture by adding the opt-in
-  `type: "prompt"` Stop-hook snippet from
-  `plugins/knowledge/assets/capture-stop-hook.md` to your user or project
-  `settings.json`. The hook's presence is the opt-in. This is **Claude only**:
-  Codex plugin hooks support only `type: "command"`, so Codex users capture
-  manually with `$knowledge:remember` and `$knowledge:consolidate`.
+Implicit `remember` and `recall` skill selection is available without a
+hook or repeated user commands. Automatic capture uses
+`memory-auto-capture.sh`, requires evidence, and stays inbox-only. The
+retired `KNOWLEDGE_AUTO_CAPTURE` variable governs nothing. Claude's optional
+prompt Stop-hook snippet at `plugins/knowledge/assets/capture-stop-hook.md`
+is an additional capture trigger; Codex skips prompt/agent handlers. Neither
+provider should run a full Distill pass on every Stop.
+
+Capture format compatibility: 0.5 reads older inbox candidates unchanged; new
+captures add writer-assigned origin fields and may include evidence. Older
+versions reject those fields. Before downgrading, review/consume pending new-format
+candidates on 0.5 or retain a private backup and keep the 0.5 writer available;
+do not edit candidate envelopes to fake compatibility (their IDs bind content).
+Retained new-format dismissals also require 0.5 to inspect/restore. No inbox or
+archive is deleted by a downgrade. Updating/restarting installed plugins is
+required for runtime activation; changed hooks still require trust review.
 
 `plugins/knowledge/assets/recall-snippet.md` holds a short instruction block you
 can paste into `CLAUDE.md` or `AGENTS.md` so agents query the store before
@@ -308,6 +334,9 @@ with an isolated environment, and preserves the active harness policy. Local
 digests do not authenticate an external runner or authorize a release.
 
 ### session-workspace
+
+Since 0.11.1, strict-v1 permits `memory-auto-capture.sh [--store P] --staged FILE...`
+for orchestrators and executors. Reviewers are denied, and `--batch-dir` is refused.
 
 Version 0.11.0 adds `verification-recipe` and `blast-radius` skills. The first
 creates or maintains a project-local recipe with real behavior checks, isolated
@@ -823,8 +852,18 @@ This conservative filter reduces noise; it can miss useful weak-overlap links
 such as “ship” versus “shipping”. See the [evaluation contract](plugins/knowledge/scripts/fixtures/README.md)
 for the frozen original and independent corpora and their limitations.
 
-Once automatic recall and capture are enabled, these tunables bound them. The
+These tunables bound hook recall and implicit/optional-hook capture. The
 defaults are chosen to keep injected context small, so raise them deliberately.
+
+Capture limits accept one to six decimal digits (0–999999), including leading
+zeros; invalid or oversized values fall back to defaults rather than disabling
+the limit. The pending/session caps are enforced for `source: auto_capture`;
+manual explicit capture retains its existing behavior.
+
+Writer exit 7 means a capture-policy refusal (missing evidence or a pending
+capacity limit). `memory-remember.sh` propagates it. `memory-auto-capture.sh`
+reports per-candidate refusals on stderr but exits 0; its exit status alone
+does not establish that a candidate was captured.
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
@@ -833,7 +872,8 @@ defaults are chosen to keep injected context small, so raise them deliberately.
 | `KNOWLEDGE_AUTO_RECALL_TERMS` | Yes | Yes | `4` | Maximum salient prompt terms queried per pass. |
 | `KNOWLEDGE_AUTO_RECALL_BUDGET` | Yes | Yes | `4000` | Byte cap on the injected recall block. |
 | `KNOWLEDGE_AUTO_CAPTURE_LIMIT` | Yes | Yes | `3` | Maximum candidates accepted into the capture inbox per pass. |
-| `KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING` | Yes | Yes | `20` | Skip the whole capture pass once the inbox holds this many pending items. |
+| `KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING` | Yes | Yes | `20` | Pending inbox capacity for automatic capture; checked again under the writer lock. |
+| `KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT` | Yes | Yes | `5` | Pending automatic candidates per originating session, enforced under the writer lock. Unknown sessions share one bucket; consolidation or dismissal frees capacity. |
 | `KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES` | Yes | Yes | `4096` | Hard per-candidate raw-byte cap. |
 | `KNOWLEDGE_CONSOLIDATE_NUDGE` | Yes | Yes | Unset (off) | Off unless set to a non-empty value other than `0`, `no`, `off`, or `false`. When on, reminds the session to run `/knowledge:consolidate` while pending candidates remain. Reviewed dismissals are retained separately and do not trigger reminders. Silent on any error. |
 | `KNOWLEDGE_PANE_NAME` | Yes | Yes | Auto-detected | First entry in the writer's pane-identity resolution chain, used for role detection and write provenance. Set it where tmux pane lookup is unavailable; writers fail closed with `unresolved pane identity` rather than guessing. |

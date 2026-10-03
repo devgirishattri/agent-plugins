@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# memory-auto-capture.sh — knowledge 0.3 autonomous-capture ENFORCEMENT wrapper
+# memory-auto-capture.sh — knowledge autonomous-capture ENFORCEMENT wrapper
 # (shared, byte-identical across providers). The capture flow — the Claude opt-in
-# `type:"prompt"` Stop hook (assets/capture-stop-hook.md), or a manual staging
+# `type:"prompt"` Stop hook (assets/capture-stop-hook.md), implicit `remember`
+# selection (both providers), or a manual staging
 # pass — asks the AGENT for one bounded capture; the agent stages 0-N structured
 # candidates and routes them THROUGH THIS WRAPPER. The wrapper is the single
 # enforcement point:
@@ -29,17 +30,36 @@
 #   KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING  skip the whole pass when the inbox already
 #                                       holds >= this many pending candidates (default 20)
 #   KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES    hard per-candidate raw-byte cap (default 4096)
+#   KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT  max PENDING auto_capture candidates per
+#                                       origin session (default 5). This is a
+#                                       PENDING limit, NOT a lifetime budget:
+#                                       consolidating/dismissing frees capacity.
+#
+# The wrapper REQUIRES `source: auto_capture` on every candidate (any other
+# source is rejected with no write; manual captures use memory-remember.sh).
+# Numeric tunables are bounded decimals 0..999999 (leading zeros stripped,
+# base 10); empty, signed, non-numeric or longer values fall back to the default.
+# Every `source: auto_capture` candidate MUST carry a staged `evidence:` field
+# (file:line, commit, or a quoted user statement; single line, <= 300 bytes).
+# The writer (memory-write.sh capture, exit 7) is AUTHORITATIVE for evidence,
+# MAX_PENDING and the per-session cap, enforced under the store lock; this
+# wrapper's checks are only a fast path. The writer validates only that evidence
+# is present and well-formed — it never trusts or verifies what it claims.
+# There is NO purge API here: `--purge` / `--confirm` are rejected (exit 2).
 #
 # NOTE: this wrapper has no opt-in gate of its own. Whether a capture pass is
-# REQUESTED is decided upstream — on Claude by the presence of the opt-in
-# `type:"prompt"` Stop-hook snippet (assets/capture-stop-hook.md); the retired
-# 0.3.0/0.3.1 KNOWLEDGE_AUTO_CAPTURE env gate no longer governs anything.
+# REQUESTED is decided upstream — on Claude by the opt-in `type:"prompt"`
+# Stop-hook snippet (assets/capture-stop-hook.md), and on both providers by
+# implicit `remember` selection; the retired 0.3.0/0.3.1 KNOWLEDGE_AUTO_CAPTURE
+# env gate no longer governs anything.
 # Invoking this wrapper is an explicit act of capture (like memory-remember.sh),
 # so it always runs when called.
 #
 # Output: accepted candidates print `captured: <capture_id>` to stdout, one per
-# line; all warnings/rejections/summaries go to stderr. Exit codes: 0 ok (incl.
-# zero candidates and skipped-because-full); 2 usage; 6 reviewer-role refusal
+# line; writer no-ops (identical pending candidate, or one already dismissed)
+# print `skipped: <capture_id> (no-op ...)` and are NOT counted as captured; all warnings/rejections/summaries go to stderr. Exit codes: 0 ok (incl.
+# zero candidates, skipped-because-full and per-candidate rejections incl. the
+# writer's exit-7 policy refusals); 2 usage; 6 reviewer-role refusal
 # (propagated from the writer, hard stop). Store-resolution/unsafe-store failures
 # FAIL SAFE: a note to stderr, no write, exit 0. Caps FAIL CLOSED (skip/reject,
 # never delete). Zero network egress.
@@ -73,6 +93,8 @@ while [ $# -gt 0 ]; do
     --staged)
       [ $# -ge 2 ] || { echo "ERROR: --staged requires a value" >&2; exit 2; }
       staged_files+=("$2"); shift 2 ;;
+    --purge | --purge=* | --confirm | --confirm=*)
+      echo "ERROR: $1 is not supported: this wrapper has no purge API (purge is user-confirmed via memory-write.sh only)" >&2; exit 2 ;;
     *) echo "ERROR: unknown argument: $1" >&2; _kac_usage; exit 2 ;;
   esac
 done
@@ -106,9 +128,12 @@ fi
 LIMIT="${KNOWLEDGE_AUTO_CAPTURE_LIMIT:-3}"
 MAX_PENDING="${KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING:-20}"
 MAX_BYTES="${KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES:-4096}"
-case "$LIMIT"       in ''|*[!0-9]*) LIMIT=3 ;;     esac
-case "$MAX_PENDING" in ''|*[!0-9]*) MAX_PENDING=20 ;; esac
-case "$MAX_BYTES"   in ''|*[!0-9]*) MAX_BYTES=4096 ;; esac
+SESSION_LIMIT="${KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT:-5}"
+# Bounded decimals (0..999999, base 10, leading zeros stripped; else default).
+LIMIT="$(km_bounded_int "$LIMIT" 3)"
+MAX_PENDING="$(km_bounded_int "$MAX_PENDING" 20)"
+MAX_BYTES="$(km_bounded_int "$MAX_BYTES" 4096)"
+SESSION_LIMIT="$(km_bounded_int "$SESSION_LIMIT" 5)"
 
 # ---- resolve store (fail SAFE: no store -> no write, exit 0) ---------------
 store="$(km_resolve_store "$store_arg" 2>/dev/null)" || {
@@ -125,6 +150,11 @@ if [ "$pending" -ge "$MAX_PENDING" ]; then
   echo "auto-capture: inbox already holds ${pending} pending candidate(s) (>= MAX_PENDING=${MAX_PENDING}); skipping capture — run /knowledge:consolidate to clear it. Nothing captured or deleted." >&2
   exit 0
 fi
+
+# Origin attribution for the per-session fast path (inherited env only).
+km_capture_origin
+session_pending="$(km_count_pending_session "$store" "$KM_ORIGIN_SESSION")"
+case "$session_pending" in ''|*[!0-9]*) session_pending=0 ;; esac
 
 # ---- helpers ---------------------------------------------------------------
 # Normalize a string for cheap comparison: lowercase, strip surrounding quotes,
@@ -191,6 +221,7 @@ _kac_collect_known
 # ---- process candidates ----------------------------------------------------
 total="${#candidates[@]}"
 accepted=0
+skipped=0
 rejected=0
 i=0
 for cand in "${candidates[@]}"; do
@@ -229,12 +260,37 @@ for cand in "${candidates[@]}"; do
     echo "auto-capture: rejecting malformed candidate (bad capture grammar): $cand" >&2
     rejected=$((rejected + 1)); continue
   fi
+  # Only genuine auto-capture may use this wrapper: any other source (e.g. a
+  # forged manual source that would dodge the writer's caps) is rejected with no
+  # write. Manual captures go through memory-remember.sh.
+  if [ "$KM_CAP_SOURCE" != "auto_capture" ]; then
+    echo "auto-capture: rejecting candidate whose source is not auto_capture (manual capture uses memory-remember.sh): $cand" >&2
+    rejected=$((rejected + 1)); continue
+  fi
+  # Evidence is required for auto-captured candidates (writer re-enforces).
+  if [ -z "$KM_CAP_EVIDENCE" ]; then
+    echo "auto-capture: rejecting candidate without an evidence: field: $cand" >&2
+    rejected=$((rejected + 1)); continue
+  fi
+  # An identical candidate already pending or dismissed is a writer no-op: skip
+  # the cap and heuristic-duplicate fast paths so it is reported as skipped.
+  identical=0
+  pre_id="$(km_capture_canonical_hash 2>/dev/null || true)"
+  if [[ "$pre_id" =~ ^[0-9a-f]{64}$ ]] && { [ -e "$store/.inbox/$pre_id.md" ] || [ -e "$store/.inbox/.dismissed/$pre_id.md" ]; }; then
+    identical=1
+  fi
+  # Per-session PENDING cap fast path (the writer is authoritative).
+  if [ "$identical" -eq 0 ] && [ "$session_pending" -ge "$SESSION_LIMIT" ]; then
+    echo "auto-capture: session already has ${session_pending} pending auto_capture candidate(s) (>= SESSION_LIMIT=${SESSION_LIMIT}); rejecting: $cand" >&2
+    rejected=$((rejected + 1)); continue
+  fi
   cand_name="$(_kac_proposed name || true)"
   cand_desc="$(_kac_proposed description || true)"
   n_name="$(_kac_norm "$cand_name")"
   n_desc="$(_kac_norm "$cand_desc")"
-  if { [ -n "$n_name" ] && printf '%s' "$known_names" | LC_ALL=C grep -qxF "$n_name"; } \
-     || { [ -n "$n_desc" ] && printf '%s' "$known_descs" | LC_ALL=C grep -qxF "$n_desc"; }; then
+  if [ "$identical" -eq 0 ] && {
+       { [ -n "$n_name" ] && printf '%s' "$known_names" | LC_ALL=C grep -qxF "$n_name"; } \
+       || { [ -n "$n_desc" ] && printf '%s' "$known_descs" | LC_ALL=C grep -qxF "$n_desc"; }; }; then
     echo "auto-capture: skipping duplicate (name/description already pending or indexed): ${cand_name:-$cand}" >&2
     rejected=$((rejected + 1)); continue
   fi
@@ -245,14 +301,26 @@ for cand in "${candidates[@]}"; do
     echo "auto-capture: reviewer-role refusal from the writer; aborting the pass (nothing further captured)." >&2
     exit 6
   fi
+  if [ "$rc" -eq 7 ]; then
+    echo "auto-capture: writer refused candidate by capture policy (evidence missing, MAX_PENDING or SESSION_LIMIT reached; rc=7): $cand" >&2
+    rejected=$((rejected + 1)); continue
+  fi
   if [ "$rc" -ne 0 ]; then
     echo "auto-capture: writer rejected candidate (rc=$rc): $cand" >&2
     rejected=$((rejected + 1)); continue
   fi
 
   cid="$(printf '%s\n' "$out" | grep -m1 '^capture_id: ' | sed 's/^capture_id: //')"
+  noop="$(printf '%s\n' "$out" | grep -m1 '^status: no-op' | sed 's/^status: //')"
+  if [ -n "$noop" ]; then
+    # Existing-unchanged or dismissed candidate: nothing was queued.
+    printf 'skipped: %s (%s)\n' "${cid:-unknown}" "$noop"
+    skipped=$((skipped + 1))
+    continue
+  fi
   printf 'captured: %s\n' "${cid:-unknown}"
   accepted=$((accepted + 1))
+  session_pending=$((session_pending + 1))
   # Track within-pass so a later duplicate in the same batch is also caught.
   [ -n "$n_name" ] && known_names="${known_names}${n_name}"$'\n'
   [ -n "$n_desc" ] && known_descs="${known_descs}${n_desc}"$'\n'
@@ -261,5 +329,5 @@ done
 if [ "$total" -gt "$LIMIT" ]; then
   echo "auto-capture: received $total candidate(s); accepted up to LIMIT=$LIMIT, rejected $rejected (overflow not silently dropped)." >&2
 fi
-echo "auto-capture: ${accepted} candidate(s) queued to the inbox, ${rejected} rejected. Run /knowledge:consolidate to review and persist." >&2
+echo "auto-capture: ${accepted} candidate(s) queued to the inbox, ${skipped} no-op, ${rejected} rejected. Run /knowledge:consolidate to review and persist." >&2
 exit 0

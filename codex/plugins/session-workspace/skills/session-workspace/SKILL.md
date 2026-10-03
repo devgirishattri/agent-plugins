@@ -5,6 +5,14 @@ description: When and how to use session-workspace lifecycle commands, its stric
 
 # session-workspace: config-driven tmux workspace engine
 
+Knowledge 0.5 implicit inbox capture requires workspace 0.11.1 or later under
+strict-v1. The reviewed helper grammar admits `memory-auto-capture.sh` for
+orchestrators/executors with optional `--store PATH` followed by one or more
+`--staged FILE` pairs. Each file must pass normal literal-file containment.
+Reviewers, batch directories and mutation verbs such as purge remain denied.
+An older installed harness refusing capture is a compatibility limitation, not
+permission to bypass it. Update/restart the configured harness before retrying.
+
 `session-workspace` is a shared engine that replaces hand-maintained
 per-project `workspace.sh` launchers. Instead of six near-identical scripts
 drifting independently, one engine reads a versioned, project-local
