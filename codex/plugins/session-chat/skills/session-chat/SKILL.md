@@ -74,17 +74,19 @@ unchanged. Update both plugins and restart affected panes.
 
 Under an active strict-v1 harness, a reviewer, executor, or confined coordinator
 must stage in `<validated-messages-grant>/drafts/<validated-pane-name>/`.
-Resolve the grant and identity from the validated workspace plan or launch context;
-use `$session-workspace:workspace-plan` if needed. Never derive or export store
-variables to grant access. Choose a fresh name such as
-`reply-<incoming-id>-<nonce>.md`: the stem starts with an ASCII letter or digit,
-contains only ASCII letters, digits, `.`, `_`, or `-`, and is at most 128
-characters; the suffix is `.md` or `.txt`. Use native `apply_patch` to create,
-revise, or delete only your own draft. Shell staging and shell cleanup are blocked.
-Writes to transport messages, other panes' drafts, queue/archive/ledger state, symlinks,
-hardlinks, moves, and patches mixing drafts with other files are forbidden.
-If the messages grant or native writer is unavailable, report the missing
-capability; do not truncate the reply or fall back to shell interpolation.
+
+1. Resolve the grant and identity from the validated workspace plan or launch context.
+   Use `$session-workspace:workspace-plan` if needed. Never derive or export store variables to grant access.
+2. If the messages grant or native writer is unavailable, stop and report the missing capability.
+   Do not truncate the reply or fall back to shell interpolation.
+3. Choose a fresh filename, such as `reply-<incoming-id>-<nonce>.md`.
+   The stem starts with an ASCII letter or digit and contains only ASCII letters, digits, `.`, `_`, or `-`.
+   Its maximum length is 128 characters. Use the suffix `.md` or `.txt`.
+4. Use native `apply_patch` to create, revise, or delete only your own draft.
+   Shell staging and shell cleanup are blocked.
+   Never write transport messages, other panes' drafts, or queue/archive/ledger state.
+   Symlinks, hardlinks, moves, and patches mixing drafts with other files are forbidden.
+
 Outside this harness, create a temporary directory with `mktemp -d` in a separate
 shell call and use a native tool to write the file there.
 
@@ -99,6 +101,15 @@ hard failure. Cleanup is explicit, with no automatic draft retention sweep.
 Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies either a marker or a newly-created `[Pasted text #N]` placeholder in `capture-pane -S -200`, then sends a three-pair line-edit clear sequence (`C-e C-u`, `C-a C-k`, `C-e C-u`) for any partial paste, backs off, and retries before returning failure.
 
 Codex TUI redraws, wrapping, approval prompts, and active command output can still hide typed markers from `capture-pane`. The wrapper converts that timeout into a durable `Queued ...` success when the fallback was recorded; do not retry a queued result. Raising the verification timeout only increases the chance of immediate live delivery.
+
+| Delivery outcome | Required action |
+|---|---|
+| Live delivery succeeds | Continue. Do not resend. |
+| Durable `Queued ...` success | The fallback is recorded. Do not retry the message. |
+| Hard failure without a queued success | Fix the reported cause before retrying. |
+
+A delivery receipt does not prove that the recipient completed the task.
+Use correlated replies to check that separately.
 
 For durable fallback, the sender writes the queue row and dispatch file into the recipient runtime's message directory. Codex recipients use `${CODEX_HOME:-~/.codex}/messages`; Claude recipients use `${CLAUDE_HOME:-~/.claude}/messages`. When `SESSION_CHAT_TARGET_MESSAGES_DIR` is exported in every participating pane, it becomes the shared sender and receiver mailbox root instead. Queue operations lock under that message directory so mixed Codex/Claude fallback does not depend on both runtimes sharing the same `TMPDIR`.
 

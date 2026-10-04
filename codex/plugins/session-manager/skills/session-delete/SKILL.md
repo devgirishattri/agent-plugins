@@ -5,15 +5,21 @@ description: "Permanently delete one local Codex session by name, ID, or project
 
 # Session Delete
 
-Do not add a preamble. Resolve `PLUGIN_ROOT` from the selected skill's absolute path: it is the session-manager directory containing `skills/` and `scripts/`. Never hard-code a marketplace cache version.
+Do not add a preamble. Resolve `PLUGIN_ROOT` from the selected skill's absolute path.
+It is the session-manager directory containing `skills/` and `scripts/`.
+Never hard-code a marketplace cache version.
 
-Treat the user's initial deletion request as intent to start the flow, not as final confirmation. Never delete until a separate final confirmation question has been answered affirmatively; identification or selection alone is insufficient.
+The initial deletion request starts this workflow. It is not final confirmation.
+Before deletion, obtain an affirmative answer to a separate final confirmation question.
+Identification or selection alone is insufficient.
 
 For a selection or confirmation:
 
 - Use `request_user_input` when it is available in the current mode and can represent the choices.
 - Otherwise, ask one direct blocking question and stop. Do not run a deletion command until the user answers in a later turn.
-- Make cancellation the default. For final confirmation, put `No, cancel (Recommended)` before `Yes, delete it` (or `Yes, delete all`). Treat anything except an explicit affirmative answer to that final question as cancellation.
+- Make cancellation the default.
+  For final confirmation, put `No, cancel (Recommended)` before `Yes, delete it` (or `Yes, delete all`).
+  Treat anything except an explicit affirmative response to the final question as cancellation.
 
 ## Delete all sessions for the current project
 
@@ -64,7 +70,8 @@ Interpret its first line:
 - `STATUS<TAB>MULTIPLE`: show the matches and ask for a more specific name or full UUID. Do not delete.
 - `STATUS<TAB>ONE`: show the name, full UUID, project, and size, then ask the separate final confirmation question.
 
-Selection never counts as final confirmation. A message such as `delete <full-uuid>` also starts this flow and never bypasses confirmation.
+Selection never counts as final confirmation.
+A message such as `delete <full-uuid>` starts this flow. It never bypasses confirmation.
 
 Only after the user explicitly affirms the final question for the displayed UUID, run:
 
@@ -72,4 +79,6 @@ Only after the user explicitly affirms the final question for the displayed UUID
 bash "$PLUGIN_ROOT/scripts/delete-session.sh" "<full-uuid>" --confirmed
 ```
 
-The helper validates the UUID and delegates to the native `codex delete --force` command. Never pass a name or partial ID to it. Report native output, or `Deletion cancelled.` for every non-affirmative response.
+The helper validates the UUID and delegates to the native `codex delete --force` command.
+Never pass a name or partial ID to it.
+Report native output. For every non-affirmative response, report `Deletion cancelled.`

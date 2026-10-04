@@ -23,7 +23,18 @@ Use this skill when the user asks to coordinate multiple panes, track assigned w
 
 ## Lifecycle
 
-Legal status transitions (enforced by every command): `created→assigned`, `created→blocked`, `assigned→review`, `assigned→done`, `assigned→blocked`, `assigned→assigned` (reassignment), `review→done` (approve), `review→blocked` (reject), `blocked→assigned`. Anything else is rejected with the current status and legal next steps; override with `--force` (or `SESSION_SCHEDULER_FORCE=1`), which records "forced" in history.
+Every command enforces these legal status transitions:
+
+| Current state | Allowed next states |
+|---|---|
+| `created` | `assigned`, `blocked` |
+| `assigned` | `review`, `done`, `blocked`, `assigned` (reassignment) |
+| `review` | `done` (approve), `blocked` (reject) |
+| `blocked` | `assigned` |
+
+Other transitions are rejected with the current status and legal next steps.
+For legacy tasks, `--force` or `SESSION_SCHEDULER_FORCE=1` overrides this gate and records "forced" in history.
+These overrides never bypass verification contracts.
 
 - First assignment stamps `started_at`; `task-done` records `duration_seconds`.
 - `--eta MINUTES` on assign stores `eta_at`; overdue tasks are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
@@ -53,7 +64,13 @@ Example auto-handoff ledger metadata (explicit context assignments use `context`
 }
 ```
 
-Every task JSON read-modify-write uses a non-reentrant lock at `$SESSION_SCHEDULER_HOME/locks/<id>.lock/`, with the holder PID in `pid`. Atomic directory creation coordinates both providers; acquisition waits up to `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS` (default 10) and names the lock path on timeout. Only a confirmed dead holder can be reclaimed; permission-denied PID checks count as alive. The private `locks/` directory is outside the vetted content subtrees. Assignment metadata and status are one locked mutation, and new tasks are written atomically.
+Every task JSON read-modify-write uses a non-reentrant lock at `$SESSION_SCHEDULER_HOME/locks/<id>.lock/`.
+The `pid` file records its holder. Atomic directory creation coordinates both providers.
+Acquisition waits up to `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS` (default 10).
+A timeout names the lock path. The helper reclaims a lock only when its holder is verified dead.
+Permission-denied PID checks count as alive.
+The private `locks/` directory is outside the vetted content subtrees.
+Assignment metadata and status form one locked mutation. New tasks are written atomically.
 
 Reassignment without `--context` clears all four attachment keys: `meta.context`, `meta.context_home`, `meta.handoff_file`, and `meta.handoff_home`. Locks cover ledger read-modify-write operations only, not transport; simultaneous assignments to the same task can race prompt writes and rollback, so coordinate assignments to each task serially.
 

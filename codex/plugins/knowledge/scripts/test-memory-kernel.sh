@@ -140,6 +140,15 @@ assert_rc() {
   fi
 }
 
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  if [ "$actual" = "$expected" ]; then
+    pass "$label"
+  else
+    fail "$label" "expected [$expected] got [$actual]"
+  fi
+}
+
 assert_contains() {
   local label="$1" haystack="$2" needle="$3"
   case "$haystack" in

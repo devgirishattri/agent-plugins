@@ -1122,13 +1122,20 @@ km_parse_capture() {
   return 0
 }
 
+# Emit one length-framed field to STDOUT: name, byte length, value, newline.
+# No temp files: the canonical stream is piped straight into the hash tool.
 _km_emit_field() {
-  local out="$1" name="$2" value="$3" len
-  printf '%s\n' "$name" >> "$out"
-  len=$(printf '%s' "$value" | wc -c | tr -d ' ')
-  printf '%s\n' "$len" >> "$out"
-  printf '%s' "$value" >> "$out"
-  printf '\n' >> "$out"
+  local name="$1" value="$2" len
+  # Fail closed on every stage: pipefail is set by km_capture_canonical_hash's
+  # subshell (inherited by this command substitution), and the result must be
+  # a plain decimal before anything is emitted.
+  len=$(printf '%s' "$value" | wc -c) || return 1
+  len="${len//[[:space:]]/}"
+  [[ "$len" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$name" || return 1
+  printf '%s\n' "$len" || return 1
+  printf '%s' "$value" || return 1
+  printf '\n' || return 1
 }
 
 km_normalize_capture_body() {
@@ -1148,58 +1155,72 @@ km_normalize_capture_body() {
   '
 }
 
-# Requires KM_CAP_* globals already populated by km_parse_capture.
-km_capture_canonical_hash() {
-  local tmp sortfile hash
-  tmp=$(mktemp) || return 1
-  sortfile=$(mktemp) || { rm -f "$tmp"; return 1; }
-
-  _km_emit_field "$tmp" "source" "$KM_CAP_SOURCE"
-  _km_emit_field "$tmp" "sensitivity" "$KM_CAP_SENSITIVITY"
+# Canonical byte stream for the capture id (stdout). Pure pipeline, NO temp
+# files (bare mktemp ignores TMPDIR on macOS and fails under a sandbox that
+# denies /var/folders). The caller runs it under pipefail and fails closed.
+_km_capture_canonical_stream() {
+  _km_emit_field "source" "$KM_CAP_SOURCE" || return 1
+  _km_emit_field "sensitivity" "$KM_CAP_SENSITIVITY" || return 1
   # evidence joins the hash ONLY when present, so every pre-0.5.0 candidate
   # keeps its capture_id. origin_* are writer-assigned attribution: never hashed.
   if [ -n "${KM_CAP_EVIDENCE:-}" ]; then
-    _km_emit_field "$tmp" "evidence" "$KM_CAP_EVIDENCE"
+    _km_emit_field "evidence" "$KM_CAP_EVIDENCE" || return 1
   fi
 
   local i
-  : > "$sortfile"
   for ((i = 0; i < ${#KM_CAP_PROPOSED_NAMES[@]}; i++)); do
-    printf '%s\t%d\n' "${KM_CAP_PROPOSED_NAMES[i]}" "$i" >> "$sortfile"
-  done
-
-  local nm idx val joined first item
-  while IFS=$'\t' read -r nm idx; do
-    [ -n "$nm" ] || continue
-    if [ "${KM_CAP_PROPOSED_TYPES[idx]}" = "list" ]; then
-      val="${KM_CAP_PROPOSED_VALUES[idx]}"
-      joined="" first=1
-      if [ -n "$val" ]; then
-        local -a items=()
-        IFS=$'\x1f' read -r -a items <<< "$val"
-        local ii
-        for ((ii = 0; ii < ${#items[@]}; ii++)); do
-          item="${items[ii]}"
-          if [ "$first" -eq 1 ]; then
-            joined="$item"
-            first=0
-          else
-            joined="${joined}"$'\n'"${item}"
-          fi
-        done
+    printf '%s\t%d\n' "${KM_CAP_PROPOSED_NAMES[i]}" "$i"
+  done | LC_ALL=C sort -t "$(printf '\t')" -k1,1 | {
+    local nm idx val joined first item seen=0
+    while IFS=$'\t' read -r nm idx; do
+      [ -n "$nm" ] || continue
+      seen=$((seen + 1))
+      if [ "${KM_CAP_PROPOSED_TYPES[idx]}" = "list" ]; then
+        val="${KM_CAP_PROPOSED_VALUES[idx]}"
+        joined="" first=1
+        if [ -n "$val" ]; then
+          local -a items=()
+          # process substitution (a pipe), not a here-string: bash < 5.1 backs
+          # here-strings with a temp file.
+          IFS=$'\x1f' read -r -a items < <(printf '%s\n' "$val")
+          local ii
+          for ((ii = 0; ii < ${#items[@]}; ii++)); do
+            item="${items[ii]}"
+            if [ "$first" -eq 1 ]; then
+              joined="$item"
+              first=0
+            else
+              joined="${joined}"$'\n'"${item}"
+            fi
+          done
+        fi
+        _km_emit_field "$nm" "$joined" || exit 1
+      else
+        _km_emit_field "$nm" "${KM_CAP_PROPOSED_VALUES[idx]}" || exit 1
       fi
-      _km_emit_field "$tmp" "$nm" "$joined"
-    else
-      _km_emit_field "$tmp" "$nm" "${KM_CAP_PROPOSED_VALUES[idx]}"
-    fi
-  done < <(LC_ALL=C sort -t "$(printf '\t')" -k1,1 "$sortfile")
+    done
+    # a sort that silently dropped rows must not yield a valid-looking hash
+    [ "$seen" -eq "${#KM_CAP_PROPOSED_NAMES[@]}" ] || exit 1
+  } || return 1
 
   local norm_body
-  norm_body=$(km_normalize_capture_body "$KM_CAP_BODY")
-  _km_emit_field "$tmp" "body" "$norm_body"
+  norm_body=$(km_normalize_capture_body "$KM_CAP_BODY") || return 1
+  # a normalizer that silently emitted nothing for a non-blank body is a failure
+  if [ -z "$norm_body" ] && [[ "$KM_CAP_BODY" =~ [^[:space:]] ]]; then
+    return 1
+  fi
+  _km_emit_field "body" "$norm_body"
+}
 
-  hash=$(km_sha256_file "$tmp")
-  rm -f "$tmp" "$sortfile"
+# Requires KM_CAP_* globals already populated by km_parse_capture.
+# Fails closed (non-zero, nothing printed) when any pipeline stage or the
+# sha256 tool fails or yields anything but 64 lowercase hex characters.
+km_capture_canonical_hash() {
+  local hash
+  hash=$(
+    set -o pipefail   # subshell-local: never leaks into the caller
+    _km_capture_canonical_stream | km_sha256_stdin
+  ) && [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || { km_error "capture hash computation failed"; return 1; }
   printf '%s\n' "$hash"
 }
 

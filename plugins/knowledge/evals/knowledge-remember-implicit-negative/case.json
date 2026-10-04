@@ -23,5 +23,11 @@
       }
     ]
   },
-  "notes": "Behavioral outcome UNMEASURED (no model run was made). Portable-schema limits: this runner has no multi-turn input, no before/after hash delta and no file-content assertion. The scaffold writes .eval-snapshot; after a run, `bash evals/check-outcome.sh unchanged|candidate <workspace>` supplies the zero-delta / candidate-content assertion (not wired into the portable grader). Zero-delta of memory files, MEMORY.md, .inbox (incl. .dismissed) and docs via check-outcome.sh unchanged; contexts live outside the workspace and are not snapshotted."
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh against the scaffold's .eval-snapshot. The snapshot covers memory files, MEMORY.md, .agents/memory/.inbox including .dismissed, docs/, and the context store recorded in the snapshot header. case.postcheck runs `check-outcome.sh unchanged` (zero delta across memory, MEMORY.md, .inbox incl. .dismissed, docs, context store).",
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  }
 }

@@ -1,0 +1,29 @@
+{
+  "id": "knowledge-recall-spontaneous",
+  "kind": "positive",
+  "prompt": "I'm adding a `purge-cache` subcommand to tools/cli.sh. What exit code should it return when someone passes a bad flag, and how should the error message start? Answer in one or two lines.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "\\b42\\b",
+      "E-USAGE"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "memory-search.sh",
+      "inject-recall.sh"
+    ],
+    "forbidden_skills": [
+      "consolidate",
+      "promote"
+    ],
+    "files": {}
+  },
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh against the scaffold's .eval-snapshot. The snapshot covers memory files, MEMORY.md, .agents/memory/.inbox including .dismissed, docs/, and the context store recorded in the snapshot header. The decisive convention (usage errors exit 42, stderr prefix E-USAGE) exists ONLY in the seeded memory project_cli_usage_errors, not in the code. The prompt never mentions memory or recall; the recall helper must be chosen spontaneously (the UserPromptSubmit hook is opt-in/off, so the recall skill's memory-search.sh --recall is the expected path). 'No direct read of memory files' is graded natively (Read/Bash/Grep path anchors) but is NOT expressible in the portable schema and cannot see a path-less Grep or a Glob+Read of a store resolved elsewhere."
+}

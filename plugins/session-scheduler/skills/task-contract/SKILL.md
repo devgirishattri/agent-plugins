@@ -14,9 +14,9 @@ task's existing `$SESSION_SCHEDULER_HOME/handoffs/<id>/` directory.
 
 Resolve `<PLUGIN_ROOT>` from this skill's installed path: the directory two
 levels above this `SKILL.md`. Substitute that absolute path literally into the
-commands below; it is not a shell variable to export. Run every helper as exactly one literal Bash segment
-using the inherited `SESSION_SCHEDULER_HOME`; never export, derive, or prefix
-store variables. The engine needs `python3`, `jq`, and `git`. When any of them
+commands below. It is not a shell variable to export. Run every helper as
+exactly one literal Bash segment using the inherited `SESSION_SCHEDULER_HOME`.
+Never export, derive, or prefix store variables. The engine needs `python3`, `jq`, and `git`. When any of them
 is missing, contracted operations fail closed with exit 2 and legacy tasks are
 unaffected.
 
@@ -33,11 +33,13 @@ unaffected.
    `{"schema_version": 1, "repository": "<absolute git root>", "checks": [{"id":
    "unit", "script": "<repo-relative .sh or .py>", "args": ["literal", ...],
    "timeout_seconds": 1-600}], "ttl_seconds": 1-86400, "max_attempts": 1-10}`.
-   Check scripts must already be tracked and unchanged from `HEAD`. Their bytes
-   are pinned at attach time, so an executor cannot alter a pinned check script and
-   an orchestrator cannot introduce new code through a spec. Files a check
-   sources or imports (helpers, fixtures, config) are not pinned; changing them
-   changes the bound source digest, which the reviewer must inspect.
+   Check scripts must already be tracked and unchanged from `HEAD`. Attach
+   pins their bytes. An executor therefore cannot alter a pinned check script.
+   An orchestrator cannot introduce new code through a spec.
+
+   Attach does not pin files that a check sources or imports (helpers,
+   fixtures, config). Changing them changes the bound source digest. The
+   reviewer must inspect that change.
 2. **Assign (assigner).** Use the normal `/task-assign <pane> <id> <prompt>`.
    For a contracted task the scheduler hands the command to the engine. It takes
    only `pane id prompt`: context, stage, and reviewer options must already be
@@ -63,16 +65,20 @@ unaffected.
    index, spec), each check's real exit code, and log digests. A source change
    during the run makes the result `stale`, a timeout makes it `inconclusive`,
    and a nonzero exit makes it `failed`. Only `passed` can be reviewed.
-4. **Review, done, block.** Use the normal commands with the generation and one
-   note argument: `/task-review <id> --generation <N> "<note>"` (assignee),
-   `/task-done <id> --generation <N> "<note>"` (bound reviewer only, after an
-   independent review), and `/task-block <id> --generation <N> "<reason>"`
-   (assignee while assigned, reviewer while in review). A report carrying an
-   obsolete generation is rejected. `--force` and `SESSION_SCHEDULER_FORCE`
-   never bypass a contract. Contracted done and block are ledger-only: unlike
-   the legacy commands they send no acknowledgement to the assigner, so the
-   orchestrator reads the outcome with `inspect` or `/task-status`. Review
-   still dispatches the review packet to the bound reviewer.
+4. **Review, done, block.** Use the normal commands. Give each one the
+   generation and one note argument:
+   - `/task-review <id> --generation <N> "<note>"` (assignee)
+   - `/task-done <id> --generation <N> "<note>"` (bound reviewer only, after an
+     independent review)
+   - `/task-block <id> --generation <N> "<reason>"` (assignee while assigned,
+     reviewer while in review)
+
+   A report with an obsolete generation is rejected. `--force` and
+   `SESSION_SCHEDULER_FORCE` never bypass a contract. Contracted done and block
+   are ledger-only. Unlike the legacy commands, they send no acknowledgement to
+   the assigner. The orchestrator reads the outcome with `inspect` or
+   `/task-status`. Review still dispatches the review packet to the bound
+   reviewer.
 5. **Reconcile (assigner).** After an ambiguous delivery, an interrupted
    operation, or a block, the owner records what actually happened before any
    reassignment:
@@ -87,26 +93,34 @@ unaffected.
 
 ## Reading the state
 
-`inspect <id>` prints one JSON object. Exit 0 means `admitted`: the task is done
-with a reviewer admission matching the current generation, whose receipt was
-fresh when it was admitted. The admission stays valid as the repository moves
-on, so dependent tasks are not invalidated by later work. A consumer that is
-about to act on the source adds a freshness mode. `inspect <id> --fresh` also
-requires the current source and time to still match the receipt, which is the
-gate before a commit preflight. `inspect <id> --committed` requires a clean tree
-holding exactly the reviewed bytes, an unchanged check specification, and the
-verified base as an ancestor of `HEAD`, which is the gate before push or
-deployment. A failed freshness check reports `closed-unadmitted` for that use.
-A done task cannot be reopened: when its evidence is stale or expired, create a
-new task for fresh verification and review, and never rewrite an admission.
-Exit 1 means
-`active` (not done yet) or `closed-unadmitted` (done without a valid admission,
-for example closed by an older scheduler or a hand edit). Exit 2 means
-`invalid` or unavailable. `/task-status` and `/task-board` show
-`CONTRACT:<state>` in the flags column, `/task-assign` refuses to start a task
-whose contracted dependency is not admitted (even with `--force`), and
-`/scheduler-doctor` reports contracted tasks, closed-unadmitted counts, and
-missing prerequisites. A `done` status alone is closure, not acceptance.
+`inspect <id>` prints one JSON object. Its exit code gives the state:
+
+| Exit | State | Meaning |
+|---|---|---|
+| 0 | `admitted` | The task is done with a reviewer admission matching the current generation. The receipt was fresh when it was admitted. |
+| 1 | `active` | The task is not done yet. |
+| 1 | `closed-unadmitted` | The task is done without a valid admission, for example closed by an older scheduler or a hand edit. |
+| 2 | `invalid` | The contract is invalid or unavailable. |
+
+The admission stays valid as the repository moves on. Later work does not
+invalidate dependent tasks. A consumer that is about to act on the source adds
+a freshness mode:
+
+| Command | It also requires | Use as the gate before |
+|---|---|---|
+| `inspect <id> --fresh` | The current source and time still match the receipt. | A commit preflight. |
+| `inspect <id> --committed` | A clean tree holds exactly the reviewed bytes. The check specification is unchanged. The verified base is an ancestor of `HEAD`. | Push or deployment. |
+
+A failed freshness check reports `closed-unadmitted` for that use.
+
+A done task cannot be reopened. When its evidence is stale or expired, create
+a new task for fresh verification and review. Never rewrite an admission.
+
+`/task-status` and `/task-board` show `CONTRACT:<state>` in the flags column.
+`/task-assign` refuses to start a task whose contracted dependency is not
+admitted (even with `--force`). `/scheduler-doctor` reports contracted tasks,
+closed-unadmitted counts, and missing prerequisites. A `done` status alone is
+closure, not acceptance.
 
 ## Under the strict-v1 harness
 
@@ -119,8 +133,8 @@ the pinned script. A denial, an unresolvable policy, or a stale identity stops
 the verification before that check runs, so no denied check is ever executed.
 Earlier checks in the same run may already have executed, and the run then
 yields no passing receipt. An interrupted run leaves its reservation in place
-until the owner reconciles it. Calling `task-contract.sh` directly for a transition is not allowed;
-use the normal task commands.
+until the owner reconciles it. Direct calls to `task-contract.sh` for a
+transition are not allowed. Use the normal task commands.
 
 ## Limits
 

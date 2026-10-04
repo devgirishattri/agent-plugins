@@ -188,6 +188,42 @@ _kac_has_secret() {
                     -e 'AKIA[0-9A-Z]{16}' "$1" 2>/dev/null
 }
 
+# Map a failed delegated write to a FIXED, allowlisted category label. The
+# writer's stderr is used ONLY to classify (matched against known diagnostic
+# prefixes) and is never echoed: the output is one of the labels below, so no
+# candidate text (name, description, body, evidence, secret-like tokens) can
+# reach the wrapper's output through a writer message.
+# Usage: _kac_classify <rc> <writer-last-stderr-line>
+_kac_classify() {
+  local rc="$1" line
+  line="$(printf '%s' "${2:-}" | LC_ALL=C tr -d '[:cntrl:]')"
+  case "$line" in
+    "ERROR: capture hash computation failed"* | "ERROR: cannot compute a valid capture idempotency key"*)
+      echo "hash computation failed"; return 0 ;;
+  esac
+  case "$rc" in
+    5) echo "store locked"; return 0 ;;
+    3) echo "store resolution failed"; return 0 ;;
+    4)
+      case "$line" in
+        "store locked:"* | "ERROR: cannot acquire store lock"*) echo "store locked" ;;
+        *) echo "store integrity error" ;;
+      esac
+      return 0 ;;
+    2)
+      case "$line" in
+        "ERROR: blank lines are not permitted"* | "ERROR: duplicate "* | "ERROR: evidence "* \
+        | "ERROR: invalid "* | "ERROR: malformed "* | "ERROR: nested mappings"* \
+        | "ERROR: proposed: must"* | "ERROR: sensitivity must"* | "ERROR: source must"* \
+        | "ERROR: staged file"* | "ERROR: stored candidate"* | "ERROR: tab characters"* \
+        | "ERROR: unexpected "* | "ERROR: unknown "* | "ERROR: unsupported "* \
+        | "ERROR: unterminated "*)
+          echo "capture grammar rejected"; return 0 ;;
+      esac ;;
+  esac
+  echo "unknown writer error (rc=$rc)"
+}
+
 # Build the set of already-known normalized names + descriptions, from the
 # authoritative store files (top-level name:/description:) and the pending inbox
 # candidates (proposed.name/description). One newline-delimited blob each.
@@ -296,7 +332,19 @@ for cand in "${candidates[@]}"; do
   fi
 
   # Delegate the actual write to the sole writer path.
-  out="$(bash "$REMEMBER" --store "$store" --staged "$cand" 2>/dev/null)"; rc=$?
+  # Writer stdout is captured as `out`; its stderr is captured (not discarded) so
+  # a failure can be diagnosed. Single $() with an fd swap, no temp files: stdout
+  # flows through fd 3, then a trailer carries the rc and the writer's LAST
+  # stderr line (newlines stripped; parsed off the trailer's @@KAC_ERR= line).
+  raw="$( { werr="$(bash "$REMEMBER" --store "$store" --staged "$cand" 2>&1 1>&3 3>&-)"; wrc=$?
+            printf '\n@@KAC_RC=%s\n@@KAC_ERR=' "$wrc"
+            printf '%s\n' "$werr" | LC_ALL=C grep -v '^[[:space:]]*$' | tail -n 1 | LC_ALL=C tr -d '\r\n'
+          } 3>&1 )"
+  werrline="${raw##*$'\n'@@KAC_ERR=}"
+  raw="${raw%$'\n'@@KAC_ERR=*}"
+  rc="${raw##*@@KAC_RC=}"
+  out="${raw%@@KAC_RC=*}"
+  case "$rc" in ''|*[!0-9]*) rc=1 ;; esac
   if [ "$rc" -eq 6 ]; then
     echo "auto-capture: reviewer-role refusal from the writer; aborting the pass (nothing further captured)." >&2
     exit 6
@@ -307,9 +355,12 @@ for cand in "${candidates[@]}"; do
   fi
   if [ "$rc" -ne 0 ]; then
     echo "auto-capture: writer rejected candidate (rc=$rc): $cand" >&2
+    echo "auto-capture:   reason: $(_kac_classify "$rc" "$werrline")" >&2
+    werrline=""
     rejected=$((rejected + 1)); continue
   fi
 
+  werrline=""
   cid="$(printf '%s\n' "$out" | grep -m1 '^capture_id: ' | sed 's/^capture_id: //')"
   noop="$(printf '%s\n' "$out" | grep -m1 '^status: no-op' | sed 's/^status: //')"
   if [ -n "$noop" ]; then

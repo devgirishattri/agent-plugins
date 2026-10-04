@@ -9,7 +9,9 @@ When this skill is invoked, run the helper directly and return its grouped findi
 
 Resolve `PLUGIN_ROOT` from this selected skill's installed absolute source path: it is the directory two levels above this `SKILL.md`. Substitute that absolute path literally in the helper invocation below; never infer it from the project working directory or hardcode a marketplace cache version.
 
-`doctor.sh` is STRICTLY read-only: it never writes to docs, the memory store, MEMORY.md, any memory file, the capture inbox, the context store, or `AGENTS.md` — every check reads, stats, or invokes another read-only helper (never `memory-write.sh`, not even its `unlock` subcommand, which itself removes a dead lock). Run exactly **one** literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection):
+`doctor.sh` is STRICTLY read-only. It never writes to docs, the memory store, MEMORY.md, any memory file, the capture inbox, the context store, or `AGENTS.md`. Every check reads, stats, or invokes another read-only helper. It never invokes `memory-write.sh`, not even its `unlock` subcommand, because `unlock` removes a dead lock.
+
+Run exactly **one** literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection):
 
 ```
 bash "<PLUGIN_ROOT>/scripts/doctor.sh" [--store <path>]
@@ -25,7 +27,12 @@ capability checks inspect repository/home configuration and also consult the
 resolved memory store. That is the whole argv grammar; other arguments are
 usage errors.
 
-Exit codes: `0` clean (no `WARN`/`ERROR` finding — `INFO` findings may still be present and worth relaying, e.g. the review queue or capability-matrix rows); `1` at least one `WARN` or `ERROR` finding is present (doctor is a reporter, not a mutating helper — a non-zero exit here means "there is something to look at," not "the command failed"); `2` usage error; `3` hard failure — the current directory is not inside a git repository, so no section had anywhere to look.
+| Code | Meaning | Required action |
+|---|---|---|
+| `0` | Clean: no `WARN` or `ERROR` finding. `INFO` findings can still be present. | Report the store as clean. Relay worthwhile `INFO` findings, such as the review queue or capability-matrix rows. |
+| `1` | At least one `WARN` or `ERROR` finding is present. Doctor is a reporter, not a mutating helper. This code means "there is something to look at", not "the command failed". | Report the findings by section. |
+| `2` | Usage error. | Relay the usage message. |
+| `3` | Hard failure: the current directory is not inside a git repository, so no section had anywhere to look. | Tell the user to run it from inside a repository. |
 
 ## Output
 
@@ -61,10 +68,24 @@ recorded evidence. For local path and commit checks, use
 `$knowledge:context-verify <name> --repository-id <id>` against an explicitly
 bound repository.
 
-Each finding is one tab-separated line: `<LEVEL>\t<section>\t<message>` with `LEVEL` in `INFO` (informational — review-queue entries, capability-matrix rows, confirmations), `WARN` (an actionable defect: stale snapshot, dangling/convention-drift link, index drift, misconfiguration, orphaned lock/claim/journal/staged file, stale doc, provider capability mismatch), or `ERROR` (a store-integrity violation: slug collision, unsafe permissions, a store that isn't gitignored, unparseable frontmatter). `section` is a short identifier, e.g. `docs-taxonomy`, `docs-todos`, `docs-links`, `docs-freshness`, `memory-resolve`, `memory-lint`, `memory-index`, `memory-backlinks`, `memory-inbox`, `memory-review-queue`, `memory-hardening`, `memory-lock`, `context`, `context-handoff`, `agents-md`, `capability-matrix`, `capability-claude`, `capability-codex`, `capability-recall`.
+Each finding is one tab-separated line: `<LEVEL>\t<section>\t<message>`.
+
+| `LEVEL` | Meaning |
+|---|---|
+| `INFO` | Informational: review-queue entries, capability-matrix rows, confirmations. |
+| `WARN` | An actionable defect: stale snapshot, dangling/convention-drift link, index drift, misconfiguration, orphaned lock/claim/journal/staged file, stale doc, provider capability mismatch. |
+| `ERROR` | A store-integrity violation: slug collision, unsafe permissions, a store that isn't gitignored, unparseable frontmatter. |
+
+`section` is a short identifier, for example `docs-taxonomy`, `docs-todos`, `docs-links`, `docs-freshness`, `memory-resolve`, `memory-lint`, `memory-index`, `memory-backlinks`, `memory-inbox`, `memory-review-queue`, `memory-hardening`, `memory-lock`, `context`, `context-handoff`, `agents-md`, `capability-matrix`, `capability-claude`, `capability-codex`, `capability-recall`.
 
 The `memory-backlinks` check ignores links inside fenced code blocks and single-backtick inline code spans.
 
-Group the findings by section when reporting to the user, lead with any `ERROR` rows, then `WARN`, then summarize `INFO` rows briefly rather than repeating every line verbatim. When `agents-md` reports a missing, duplicated, or divergent recall snippet, it also prints the exact bytes to paste as a run of `INFO\tagents-md\tsnippet> <line>` rows — relay those verbatim as a fenced block for the user to paste into `AGENTS.md` themselves; this skill never edits `AGENTS.md`, or anything else. If the store is clean, say so plainly, and still mention any `INFO`-level review-queue or capability-matrix items worth the user's attention.
+Group findings by section. Lead with `ERROR` rows, then `WARN` rows.
+Summarize `INFO` rows briefly.
+
+For a missing, duplicated, or divergent recall snippet, `agents-md` prints
+`INFO\tagents-md\tsnippet> <line>` rows. Relay those exact bytes in a fenced block.
+The user can paste them into `AGENTS.md`. This skill never edits any file.
+If the store is clean, say so. Still mention useful review-queue or capability-matrix information.
 
 Do not attempt to fix anything based on these findings yourself — this skill is report-only. `$knowledge:lint`, `$knowledge:consolidate`, and `$knowledge:promote` are the write paths for the issues it surfaces in the memory store; docs findings are fixed by editing the doc directly; lock/journal/staged findings name the exact recovery command to run.

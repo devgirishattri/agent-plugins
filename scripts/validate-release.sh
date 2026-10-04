@@ -1123,6 +1123,8 @@ python3 -B scripts/test-message-drafts.py
 python3 -B scripts/test-skill-reads.py
 python3 -B scripts/test-argv-scope.py
 python3 -B scripts/test-plugin-evals.py
+bash plugins/knowledge/scripts/test-runner-guard.sh
+bash codex/plugins/knowledge/scripts/test-runner-guard.sh
 python3 -B scripts/test-verification-evidence.py
 python3 -B scripts/test-pr-status.py
 python3 -B scripts/test-task-contract.py

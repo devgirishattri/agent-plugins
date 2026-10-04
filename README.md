@@ -11,11 +11,11 @@ Every plugin below ships for both providers at the same version number.
 
 | Plugin | Version | Purpose |
 |--------|---------|---------|
-| `session-manager` | 1.7.10 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.13 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.0 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.5.1 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.11.1 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-manager` | 1.7.11 | List, search, and delete local agent session data |
+| `session-chat` | 0.17.14 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.1 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `knowledge` | 0.5.2 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-workspace` | 0.11.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -685,7 +685,7 @@ These variables keep the `SESSION_CONTEXT_*` names they had under the retired
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
-| `SESSION_CONTEXT_HOME` | Yes | Yes | Required (inherited) | Snapshot store root. Must already be present in the environment a pane/agent inherits at startup; context commands and skills never export or derive it, and most scripts fail closed when it is unset. Claude's `context-search` uses it only as an override for the current project's store (its cross-project scan runs regardless), while Codex's requires it. The SessionStart detection hook derives a git-root default for its own banner only. |
+| `SESSION_CONTEXT_HOME` | Yes | Yes | Required by the skill workflow (inherited) | Snapshot store root. Context skills never export or derive it; most helpers fail closed when it is unset. Both providers' cross-project `search-contexts.sh` helpers can discover project stores without it; when set, it overrides the current project's search store. This helper behavior does not relax the inherited-store skill contract. The SessionStart detection hook can use a git-root fallback to detect snapshots; its resolver can also initialize, lock, and harden that store. |
 | `SESSION_CONTEXT_STALE_DAYS` | Yes | Yes | `7` | Age at which `context-load` warns that a snapshot is stale. Doctor also uses it for file age and newest evidence age on in-progress/blocked handoff items; doctor accepts 0-999999 and warns/falls back to 7 for invalid values. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the `session-chat` dependency used by `context-share`. |
 | `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for the `session-chat` dependency. |
@@ -987,16 +987,38 @@ These checks do not themselves enable repository merge protection.
   scenarios without model calls. The root runner's `expectations.executions`
   grades completed command events, exit codes, counts, optional argument constraints,
   trusted helper paths and pre/post whole-plugin content digests;
-  `json_contains` checks resulting JSON fields. Claude-native `case.yaml` graders
-  do not enforce these extra fields. Opt into bounded Codex probes with
-  `--plugin knowledge --run --max-cases 3 --timeout 90 --output <local-report.json>`.
+  `json_contains` checks resulting JSON fields. Optional `postcheck` scripts
+  inspect actual artifacts and pinned scaffold baselines. Claude-native
+  `case.yaml` graders do not enforce these extra fields. Opt into native Claude
+  probes with `--provider claude --plugin knowledge --run --max-cases 3
+  --max-cost-usd 1 --timeout 180 --output <local-report.json>`.
+  The runner splits this ceiling between cases and supplies each native process
+  with `--max-budget-usd`. Codex model runs are unavailable until its native
+  execution interface provides an enforceable cost ceiling; static validation
+  and deterministic Codex tests remain available.
+  Cases can specify genuine `followups` with later prompts or manifest-bound
+  approval replies. The runner rejects approval fixtures unless the preceding
+  model turn displayed the current manifest hash. It retains native events,
+  eligible artifact hashes and decoded-text snapshots, per-turn checks, and
+  reported cumulative cost. Reports include conversation content; use a private
+  output location. An output within this repository must be git-ignored.
+  Event retention is capped at 8 MiB. Artifact retention is capped at 100 files,
+  100,000 bytes per file and 2 MiB total, with at most 1,000 entries inspected.
+  Reports identify skipped artifacts and truncated scans.
   Probes use disposable stores, disable external integrations, and retain the
   child workspace sandbox. On macOS, run from a normal terminal if an enclosing
   sandbox prevents the child sandbox from starting. Model grades are report-only;
   deterministic script suites remain the blocking checks. Event observations cannot
   detect modify/run/restore or shell startup/function shadowing, and do not
-  authenticate execution. Native hook injection
-  requires separately established hook trust; the runner does not bypass it.
+  authenticate execution. Claude probes disable all hooks, so spontaneous-recall
+  cases measure skill selection, not prompt-hook injection. The isolated Claude
+  environment supports native login, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN`.
+  Custom config directories, proxy/CA settings, and Bedrock/Vertex credentials
+  are not passed through. Unsupported authentication produces an execution or infrastructure error.
+  Native hook injection requires a separate trusted-hook test.
+- Follow [the plugin writing guide](shared/PLUGIN_WRITING.md) for new or changed
+  procedural prose. This selectively applies ASD-STE100 clarity principles;
+  it does not require dictionary compliance or certify the plugins.
 - Claude's matching scenarios include native prompts, graders, and scaffolds.
   Run from the plugin directory with `claude plugin eval . --scaffold --no-publish
   --runs 1 --ablation none --max-cost-usd 3`; use the native trust/tool options

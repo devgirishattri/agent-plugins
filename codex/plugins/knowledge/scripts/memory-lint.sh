@@ -369,6 +369,16 @@ _km_fix_report_writer_failure() {
   return 0
 }
 
+# Private temp file under an inherited TMPDIR (never a bare mktemp, which on
+# macOS ignores TMPDIR). Allocation failure is reported by the caller as an
+# ERROR finding, never skipped silently.
+_km_lint_mktemp() {
+  mktemp "${TMPDIR:-/tmp}/knowledge-lint.XXXXXX" 2>/dev/null
+}
+_km_lint_tmp_fail() {
+  emit ERROR "$1" "$2 not applied: cannot allocate a temp file (set TMPDIR to a writable directory)"
+}
+
 _km_fix_apply_status() {
   # Canonicalize the `status` field on canonical (schema_version) files.
   # Retrieval reads TOP-LEVEL `status` (nested `metadata.status` is ignored),
@@ -397,7 +407,7 @@ _km_fix_apply_status() {
     )"
     case "$end_line" in ''|*[!0-9]*) continue ;; esac
     body_start=$((end_line + 1))
-    staged="$(mktemp 2>/dev/null)" || continue
+    staged="$(_km_lint_mktemp)" || { _km_lint_tmp_fail "$f" "status fix"; continue; }
     # Drop any indented (nested) status line; emit top-level `status:` right
     # after the top-level `updated:` line, preserving the resolved value. The
     # transform is strictly scoped to the first frontmatter document; the body is
@@ -418,11 +428,11 @@ _km_fix_apply_status() {
     if [ "$KML_UNPARSEABLE" -eq 1 ] || ! _km_lint_has status; then
       rm -f "$staged"; continue          # no top-level updated: to anchor after → leave for human
     fi
-    newmem="$(mktemp 2>/dev/null)" || { rm -f "$staged"; continue; }
+    newmem="$(_km_lint_mktemp)" || { rm -f "$staged"; _km_lint_tmp_fail "$f" "status fix"; continue; }
     cp "$store/MEMORY.md" "$newmem" 2>/dev/null || { rm -f "$staged" "$newmem"; continue; }
     et="$(km_sha256_file "$store/$f")"
     ei="$(km_sha256_file "$store/MEMORY.md")"
-    err="$(mktemp 2>/dev/null)" || { rm -f "$staged" "$newmem"; continue; }
+    err="$(_km_lint_mktemp)" || { rm -f "$staged" "$newmem"; _km_lint_tmp_fail "$f" "status fix"; continue; }
     if bash "$HERE/memory-write.sh" apply --store "$store" --target "$f" \
          --staged-target "$staged" --staged-index "$newmem" \
          --expect-target "$et" --expect-index "$ei" >/dev/null 2>"$err"; then
@@ -451,7 +461,7 @@ _km_fix_apply_index() {
     [ -n "$file" ] && missing+=("$file")
   done < <(bash "$HERE/memory-index.sh" --store "$store" 2>/dev/null)
   [ "${#missing[@]}" -gt 0 ] || return 0
-  newidx="$(mktemp 2>/dev/null)" || return 0
+  newidx="$(_km_lint_mktemp)" || { _km_lint_tmp_fail "MEMORY.md" "index reconciliation"; return 0; }
   awk 1 "$store/MEMORY.md" > "$newidx" 2>/dev/null || { rm -f "$newidx"; return 0; }
   for f in "${missing[@]}"; do
     _km_lint_parse "$store/$f"
@@ -463,7 +473,7 @@ _km_fix_apply_index() {
     printf -- '- [%s](%s) — %s\n' "$nm" "$f" "$hook" >> "$newidx"
   done
   ei="$(km_sha256_file "$store/MEMORY.md")"
-  err="$(mktemp 2>/dev/null)" || { rm -f "$newidx"; return 0; }
+  err="$(_km_lint_mktemp)" || { rm -f "$newidx"; _km_lint_tmp_fail "MEMORY.md" "index reconciliation"; return 0; }
   if bash "$HERE/memory-write.sh" index --store "$store" \
        --staged-index "$newidx" --expect-index "$ei" >/dev/null 2>"$err"; then
     for f in "${missing[@]}"; do

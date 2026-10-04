@@ -1,7 +1,7 @@
 {
   "id": "knowledge-remember-implicit-positive",
   "kind": "positive",
-  "prompt": "I just confirmed that tests/run.sh only passes when TZ=UTC is set (it fails at tests/run.sh:12 otherwise). What command should I use to run the tests? Answer in one line.",
+  "prompt": "I think tests/run.sh only passes when TZ=UTC is set, and fails at tests/run.sh:12 otherwise. Check the script and run it both with and without TZ=UTC before you answer. What command should I use to run the tests? Answer in one line.",
   "scaffold": "scaffold.sh",
   "expectations": {
     "regex": [
@@ -22,5 +22,11 @@
       }
     ]
   },
-  "notes": "Behavioral outcome UNMEASURED (no model run was made). Portable-schema limits: this runner has no multi-turn input, no before/after hash delta and no file-content assertion. The scaffold writes .eval-snapshot; after a run, `bash evals/check-outcome.sh unchanged|candidate <workspace>` supplies the zero-delta / candidate-content assertion (not wired into the portable grader). Exit 0 of the wrapper is not sufficient (all candidates could be rejected); check-outcome.sh candidate asserts a real .inbox/<id>.md with source auto_capture, non-empty evidence, origin_session and origin_pane."
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh against the scaffold's .eval-snapshot. The snapshot covers memory files, MEMORY.md, .agents/memory/.inbox including .dismissed, docs/, and the context store recorded in the snapshot header. case.postcheck runs `check-outcome.sh candidate`: exit 0 of the wrapper is not sufficient; it requires EXACTLY ONE new .inbox/<64-hex>.md with source auto_capture, non-empty evidence, origin_session and origin_pane, and nothing else changed (any .dismissed entry, .lock, memory, MEMORY.md, docs or context change fails).",
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "candidate"
+    ]
+  }
 }

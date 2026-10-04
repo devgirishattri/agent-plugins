@@ -10,10 +10,15 @@ guidance, not a benchmark framework, and it grants no new execution authority.
 
 ## Define the claim first
 
-State the claim, the metric (latency, throughput, memory, cost), the baseline
-and candidate subjects (exact revisions plus dirty-state identity), the input
-set, and the smallest difference that would matter. Fix the decision threshold
-before running, not after seeing results.
+State these items:
+
+- the claim
+- the metric (latency, throughput, memory, cost)
+- the baseline and candidate subjects (exact revisions plus dirty-state identity)
+- the input set
+- the smallest difference that would matter
+
+Fix the decision threshold before running, not after seeing results.
 
 ## Make samples comparable
 
@@ -50,8 +55,11 @@ omissions. Changed source or configuration invalidates the result.
 
 ## Boundaries
 
-Run only within the caller's existing role and authorization, with isolated data
-and a bounded duration. Do not use live stores or production services, do not
-load shared machines or external services without permission, and do not change
-product behavior to improve a measurement. Keep raw results local and inspect
-them before sharing.
+Run only within the caller's existing role and authorization. Use isolated data
+and a bounded duration.
+
+- Do not use live stores or production services.
+- Do not load shared machines or external services without permission.
+- Do not change product behavior to improve a measurement.
+
+Keep raw results local. Inspect them before sharing.

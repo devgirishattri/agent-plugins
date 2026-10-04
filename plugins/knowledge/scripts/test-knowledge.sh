@@ -152,6 +152,17 @@ run_module() {
   rc=$?
   t1="$(date +%s)"
   dur=$((t1 - t0))
+  # False-green guard: bash reports an undefined helper inside the suite file as
+  # "<suite path>: line N: <name>: command not found" and keeps going, so the
+  # suite can still print "N passed, 0 failed" and exit 0. Treat any such
+  # diagnostic from the suite file itself as a failure.
+  # No grep -q here: under pipefail an early-exiting grep can SIGPIPE the
+  # producer on large output and turn a real match into a false negative.
+  if printf '%s\n' "$out" | grep -F "$path: line " | grep ': command not found$' >/dev/null; then
+    out="${out}
+ERROR: $script reported 'command not found' for a call in the suite file; its pass/fail summary is not trustworthy"
+    if [ "$rc" -eq 0 ]; then rc=1; fi
+  fi
   summary="$(printf '%s\n' "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed' | tail -n 1)"
   if [ -z "$summary" ]; then
     summary="(no pass/fail summary line found)"

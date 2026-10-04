@@ -5,57 +5,55 @@ description: Review captured learnings and memory inbox items, propose durable c
 
 # Consolidate
 
-`consolidate` is the memory module's core value: it turns an inbox of low-friction
-captures plus whatever came up this session into reviewed, deterministic
-plain-markdown diffs against the memory store, and applies them **only** through
-`memory-write.sh apply` after the user has approved every single diff. The one
-judgment call that matters most — propose an **UPDATE** to an existing file
-rather than a new one whenever a plausible match exists — is yours to make; no
-script makes it for you. Everything else (locking, CAS, reviewer refusal,
-candidate consumption) is the writer's job, not this skill's: this skill never
-writes a store file directly. It stages content at a scratch location and
-drives `memory-write.sh`.
+`consolidate` turns inbox captures and session learnings into reviewed markdown diffs.
+Apply them only through `memory-write.sh apply`, after the user approves every diff.
+Propose an **UPDATE** whenever an existing file plausibly covers the learning.
+This judgment is yours; no script makes it for you.
+The writer handles locking, CAS, reviewer refusal, and candidate consumption.
+This skill stages scratch content and drives the writer. Never write store files directly.
 
 Resolve `PLUGIN_ROOT` from this selected skill's installed absolute source path: it is the directory two levels above this `SKILL.md`. Substitute that absolute path literally in every helper invocation below; never infer it from the project working directory or hardcode a marketplace cache version.
 
-Read this whole document before starting. Do not skip steps or reorder them —
-in particular, never apply anything before the user has seen and approved the
-complete diff set (step 7), and never propose a fix for anything outside
-`.agents/memory/` (docs, TODO/ISSUES trackers, and context snapshots are other
-surfaces' jobs — see "Non-goals" at the end).
+Read this whole document before starting. Do not skip steps or reorder them.
+Before applying anything, show the complete diff set and obtain user approval (step 7).
+Never propose fixes outside `.agents/memory/`.
+Docs, TODO/ISSUES trackers, and context snapshots have separate workflows (see "Non-goals").
 
-`distill` may compose this workflow for a user-directed session wrap-up: the
-user approves the same complete target/index diffs and candidate dispositions
-within Distill's batch. That approval is sufficient; no second invocation or
-duplicate approval is needed. All baseline, role, CAS and exit gates still apply.
+`distill` can compose this workflow for a user-directed session wrap-up.
+The user approves the same complete target/index diffs and candidate dispositions
+within Distill's batch. That approval is sufficient.
+No second invocation or duplicate approval is needed.
+All baseline, role, CAS and exit gates still apply.
 When selecting candidates for Distill, match writer-assigned `origin_session`
 against the inherited runtime session ID. Missing/unknown or foreign origins
 stay pending by default. Ordinary explicit consolidation retains its full-inbox
 scope. Show evidence and origin when reviewing candidates; attribution is not
 authorization and does not establish truth.
 
+**Compatibility:** pre-0.5.0 readers reject candidate `origin_session`,
+`origin_pane`, and `evidence` fields. Before downgrading, consolidate, dismiss,
+or back up pending candidates. New-format candidates do not support transparent rollback.
+
 ## 0. Invocation discipline (read this first)
 
 Every call into a plugin helper script below is **exactly one literal Bash
 segment**: the literal word `bash`, then the plugin-relative script path
-(`"<PLUGIN_ROOT>/scripts/<name>.sh"`), then flags — nothing else. No
+(`"<PLUGIN_ROOT>/scripts/<name>.sh"`), then flags. Add nothing else. No
 `export`/`env`/inline-assignment prefix. No `&&`, `;`, `|`, `>`, `<`, backticks,
-or `$(...)` inside that segment. Never combine two scripts on one line, and
-never wrap a call as `bash -c "..."` — that is not a recognized helper
-invocation and defeats the whole point of the single-literal-segment rule.
+or `$(...)` inside that segment. Never combine two scripts on one line.
+Never wrap a call as `bash -c "..."`. It is not a recognized helper invocation.
 
-Anything that has to be **computed** first — a resolved store path, a sha256
-hash, the repo root, the current contents of a file — is its own **separate**
-prior step (a plain read-only Bash command like `git rev-parse --show-toplevel`
-or `shasum -a 256 <file>`, or the file-reading, file-editing, and search tools), never composed
-into the same segment as a helper-script call. Substitute the literal value you
-got back into the next single-segment call yourself.
+Compute each prerequisite in a separate step: resolved path, sha256 hash,
+repository root, or current file content. Use read-only commands such as
+`git rev-parse --show-toplevel`, `shasum -a 256 <file>`, or native file tools.
+Substitute the returned literal value in the next helper call.
+Never combine computation with the helper invocation.
 
 Never construct a staged file with a Bash heredoc. Use the **file-editing tool** to
 create every staged-target / staged-index file at a scratch location outside
-the store (e.g. a directory you create once with a separate `mktemp -d` call,
-under the OS temp directory) — this keeps every helper invocation a single
-literal segment and keeps the store itself untouched by anything but the
+the store. For example, create a directory once with a separate `mktemp -d`
+call, under the OS temp directory. This keeps every helper invocation a single
+literal segment. It also keeps the store itself untouched by anything but the
 writer.
 
 ## 1. Resolve the store
@@ -101,38 +99,30 @@ bash "<PLUGIN_ROOT>/scripts/memory-index.sh" [--store <path>]
 bash "<PLUGIN_ROOT>/scripts/memory-backlinks.sh" [--store <path>] report
 ```
 
-- Any of the three exiting `3`: store resolution failed (not found, or
-  ambiguous — the message lists every candidate). **Stop.** Relay the message
-  verbatim and ask the user for an explicit `--store <path>` (or point at
-  `$knowledge:init` if no store exists at all). Do not guess.
-- `memory-lint.sh` exiting `4` (at least one `ERROR`-level finding — a schema
-  violation, unparseable frontmatter, or a slug collision): **stop the whole
-  run.** Report every `ERROR` row. Do not propose any diffs against a store
-  that already fails its own integrity checks — the user (or `$knowledge:lint`
-  directly) needs to fix these first. `ADVISORY`/`WARN` rows do not block —
-  carry them forward for the final report.
-- `memory-index.sh` exiting `4` (slug collision, or an ambiguous mixed index
-  style memory-index.sh cannot reconcile safely): **stop**, same as above.
-  Exit `0` with `DRIFT` lines is informational, not blocking — note them.
-- `memory-backlinks.sh report` exits `0` always when it runs at all; `4` means
-  a slug collision or a filename stem outside the safe grammar — **stop**,
-  same as above. Its stderr lines (`convention drift: [[x]] -> y` /
-  `dangling: [[x]]`) are informational — keep the list of existing danglers so
-  your own new diffs don't get blamed for pre-existing ones later.
+Gate results:
 
-If nothing stopped the run, you now know the store is healthy enough to
-propose against, and you have `STORE_PATH` confirmed.
+| Command and exit code | Meaning | Required action |
+|---|---|---|
+| Any of the three exits `3` | Store resolution failed (not found, or ambiguous; the message lists every candidate). | **Stop.** Relay the message verbatim. Ask the user for an explicit `--store <path>`, or point at `$knowledge:init` if no store exists at all. Do not guess. |
+| `memory-lint.sh` exits `4` | At least one `ERROR`-level finding: a schema violation, unparseable frontmatter, or a slug collision. | **Stop the whole run.** Report every `ERROR` row. Do not propose any diffs against a store that already fails its own integrity checks. The user (or `$knowledge:lint` directly) must fix these first. |
+| `memory-lint.sh` reports `ADVISORY` or `WARN` rows | Informational. | Carry them forward for the final report. |
+| `memory-index.sh` exits `4` | Slug collision, or an ambiguous mixed index style that `memory-index.sh` cannot reconcile safely. | **Stop**, same as for `memory-lint.sh`. |
+| `memory-index.sh` exits `0` with `DRIFT` lines | Informational. | Note the lines. |
+| `memory-backlinks.sh report` exits `4` | Slug collision, or a filename stem outside the safe grammar. | **Stop**, same as above. |
+| `memory-backlinks.sh report` exits `0` | It always exits `0` when it runs at all. Its stderr lines (`convention drift: [[x]] -> y` / `dangling: [[x]]`) are informational. | Keep the list of existing danglers. Then your own new diffs are not blamed for pre-existing ones later. |
+
+If nothing stopped the run, the store is healthy enough to propose against.
+Verify that you now have `STORE_PATH`.
 
 ## 3. Read MEMORY.md — index first
 
-Before looking at anything else, **Read** `<STORE_PATH>/MEMORY.md` in full.
-This is the human-curated overview of what already exists and is your first
-and best dedup signal — a name or topic you recognize here before you even run
-a search is exactly the kind of thing that should become an UPDATE, not a new
-file.
+Before you look at anything else, **Read** `<STORE_PATH>/MEMORY.md` in full.
+This human-curated overview of what already exists is your first and best dedup
+signal. A name or topic that you recognize here, before you run a search, should
+become an UPDATE, not a new file.
 
-While reading, note the **detected index style**, because you must preserve it
-when you add rows later:
+While you read, note the **detected index style**. You must preserve it when you
+add rows later:
 
 - **flat** — a plain list of membership rows: bullet, display name linked to
   the memory file basename, then hook text; no headings.
@@ -233,15 +223,18 @@ For each item, gather three converging signals before judging:
    phrasing `memory-search.sh`'s tokenizer might rank low.
 
 **Favor UPDATE over CREATE.** Treat these three signals as converging evidence,
-then decide: if any existing file plausibly covers the same fact, decision, or
-how-to-work guidance — even worded differently, scoped slightly differently, or
-only partially overlapping — propose an **UPDATE** to that file (extend its
-body, bump `updated:`, adjust `tags`/`description` as needed) rather than a new
-file. Only propose **CREATE** when no existing file is a plausible match. This
-judgment call is the core value of this skill — no script can make it, and a
+then decide.
+
+- If an existing file plausibly covers the same fact, decision, or how-to-work
+  guidance, propose an **UPDATE** to that file. This applies even when the
+  wording or scope differs, or the overlap is only partial. Extend its body, bump
+  `updated:`, and adjust `tags`/`description` as needed.
+- Propose **CREATE** only when no existing file is a plausible match.
+
+This judgment call is the core value of this skill. No script can make it. A
 `memory-search.sh` hit alone is never proof of duplication *or* proof of
-non-duplication. **Read the candidate file's actual body** before deciding
-either way; never decide from the search row alone.
+non-duplication. **Read the candidate file's actual body** before you decide
+either way. Never decide from the search row alone.
 
 ## 6. Build the full proposed diff set (before showing anything to the user)
 
@@ -260,7 +253,7 @@ For **every** item, before presenting anything, work out:
   Derive `metadata.type` from its existing top-level `type:` if unambiguous;
   derive `created` from a date in the filename if one exists; otherwise stamp
   `created: unknown` **together with** `migrated: <today's ISO date>` (a
-  canonical file may never carry `created: unknown` without a `migrated:`
+  canonical file can never carry `created: unknown` without a `migrated:`
   date — that combination is a lint ERROR). Fill `name`/`description` from the
   legacy values where present, or ask the user for a value where there is no
   deterministic source. Never upgrade a file you are not otherwise touching
@@ -334,7 +327,7 @@ applies against the same pre-computed hashes, because MEMORY.md's content (and
 hash) changes after every successful apply. For each item:
 
 1. **Re-Read** `<STORE_PATH>/MEMORY.md` right now (fresh — not the copy from
-   step 3, which may be stale after a prior item in this same loop) and build
+   step 3, which can be stale after a prior item in this same loop) and build
    this item's final MEMORY.md content from the *current* bytes.
 2. **Write with the file-editing tool** (not a heredoc) the final target content to a scratch
    file — the "staged target" — and the final MEMORY.md content to another
@@ -360,29 +353,17 @@ hash) changes after every successful apply. For each item:
    Include `--candidate`/`--expect-candidate` **only** for inbox-candidate
    items; omit both for session-learning items (there is no stored candidate
    to consume).
-5. Handle the exit code — **every** mutation goes through this one call, and
-   every exit is surfaced, never worked around:
-   - `0`: success. Report the created/updated file and, for a candidate item,
-     that it was consumed from the inbox. Continue to the next item (back to
-     sub-step 1).
-   - `2`: usage error in how this skill built the call (a bug in this
-     workflow, not the user's data) — stop and report; do not guess at a
-     different argv.
-   - `3`: store resolution failed — should not happen once step 2 succeeded;
-     stop and report.
-   - `4`: CAS mismatch or store-integrity failure — something changed the
-     store concurrently since your last read, or a candidate was tampered
-     with. **Do not retry blindly.** Re-read the current state, re-run the
-     step-6 diff for this item against the fresh content, and re-present it to
-     the user for a fresh approval before trying again.
-   - `5`: the store is locked by a concurrent writer. **Report the message
-     (it names the exact `unlock` recovery command) and stop.** Never retry in
-     a loop, never run `unlock` yourself — that is a human decision.
-   - `6`: reviewer-role refusal, or an unresolved fleet identity inside tmux.
-     **Relay the single stderr line verbatim and stop.** This is expected,
-     correct behavior in a `*-reviewer` pane or an unnamed fleet pane — never
-     retry, never attempt to work around it (e.g. by unsetting
-     `KNOWLEDGE_PANE_NAME` yourself).
+5. Handle the exit code. **Every** mutation goes through this one call. Report
+   every exit. Never work around one.
+
+   | Code | Meaning | Required action |
+   |---|---|---|
+   | `0` | Success. | Report the created or updated file. For a candidate item, report that it was consumed from the inbox. Continue to the next item (back to sub-step 1). |
+   | `2` | Usage error in how this skill built the call. This is a bug in this workflow, not the user's data. | Stop and report. Do not guess at a different argv. |
+   | `3` | Store resolution failed. This should not happen once step 2 succeeded. | Stop and report. |
+   | `4` | CAS mismatch or store-integrity failure. Something changed the store concurrently since your last read, or a candidate was tampered with. | **Do not retry blindly.** Re-read the current state. Re-run the step-6 diff for this item against the fresh content. Re-present it to the user for a fresh approval before you try again. |
+   | `5` | The store is locked by a concurrent writer. | **Report the message (it names the exact `unlock` recovery command) and stop.** Never retry in a loop. Never run `unlock` yourself. That is a human decision. |
+   | `6` | Reviewer-role refusal, or an unresolved fleet identity inside tmux. This is expected, correct behavior in a `*-reviewer` pane or an unnamed fleet pane. | **Relay the single stderr line verbatim and stop.** Never retry. Never work around it (for example by unsetting `KNOWLEDGE_PANE_NAME` yourself). |
 
 **Approved dismissals** — one candidate at a time, after the approved
 CREATE/UPDATE items:
@@ -404,8 +385,9 @@ CREATE/UPDATE items:
 
 If the user later wants a dismissed candidate back, the reverse is
 `memory-write.sh restore` with the same `--store --candidate
---expect-candidate` arguments (hash of `.inbox/.dismissed/<id>.md`); it only
-runs on an explicit user request.
+--expect-candidate` arguments. It only runs on an explicit user request that
+names the candidate: show its id and the raw sha256 of
+`.inbox/.dismissed/<id>.md`, and pass exactly that displayed hash.
 
 If the batch is empty (nothing was approved), skip straight to step 9 having
 made zero writes.
@@ -420,11 +402,15 @@ bash "<PLUGIN_ROOT>/scripts/memory-index.sh" --store <STORE_PATH>
 bash "<PLUGIN_ROOT>/scripts/memory-backlinks.sh" --store <STORE_PATH> report
 ```
 
-Report the results to the user: confirm no new `ERROR`/drift/collision
-findings were introduced, restate any dangling links (pre-existing or newly
-flagged in step 6), and summarize what was created, what was updated, which
-inbox candidates were promoted, which were dismissed, which were left pending,
-and anything the user declined.
+Report the results to the user:
+
+1. Verify that no new `ERROR`, drift, or collision findings were introduced.
+   Report the result.
+2. Restate any dangling links (pre-existing or newly flagged in step 6).
+3. Summarize what was created and what was updated.
+4. Summarize which inbox candidates were promoted, which were dismissed, and
+   which were left pending.
+5. Report anything the user declined.
 
 ## Non-goals (always, every run)
 

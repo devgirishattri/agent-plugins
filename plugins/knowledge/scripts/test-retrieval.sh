@@ -977,6 +977,50 @@ if bash -n "$SEARCH" 2>/dev/null; then pass bash_n_search; else fail bash_n_sear
 if bash -n "$BACKLINKS" 2>/dev/null; then pass bash_n_backlinks; else fail bash_n_backlinks "syntax error"; fi
 
 # ===========================================================================
+# temp-file hazard: memory-backlinks.sh work dir (bare mktemp -d denied)
+# ===========================================================================
+echo "--- backlinks temp dir ---"
+PROVIDER_REL="$(git -C "$HERE" rev-parse --show-prefix 2>/dev/null)"
+BSHIM="$TMP/shim_mktemp_bl"; mkdir -p "$BSHIM"
+cat > "$BSHIM/mktemp" <<SHEOF
+#!/bin/sh
+[ \$# -eq 0 ] && exit 1
+[ "\$1" = "-d" ] && [ \$# -eq 1 ] && exit 1
+exec "$(command -v mktemp)" "\$@"
+SHEOF
+chmod +x "$BSHIM/mktemp"
+BGOOD="$TMP/bl_scratch"; mkdir -p "$BGOOD"
+BS="$(new_store "$TMP/bl_store")"
+mk_canonical "$BS" bl_a "A" "a desc" user <<'BLEOF'
+see [[bl_b]]
+BLEOF
+mk_canonical "$BS" bl_b "B" "b desc" user <<'BLEOF'
+plain
+BLEOF
+bl_run() {  # <script> <tmpdir> [shim]
+  local pathv="$PATH"; [ -z "${3:-}" ] || pathv="$BSHIM:$PATH"
+  BL_OUT="$(PATH="$pathv" TMPDIR="$2" bash "$1" --store "$BS" neighbors bl_a 2>"$TMP/.bl_err")"; BL_RC=$?
+  BL_ERR="$(cat "$TMP/.bl_err")"
+}
+bl_run "$BACKLINKS" "$BGOOD"
+BL_BASE_OUT="$BL_OUT"; assert_rc tmp_backlinks_unshimmed_control_rc0 0 "$BL_RC"
+assert_contains tmp_backlinks_unshimmed_control_output "$BL_OUT" "bl_b"
+bl_run "$BACKLINKS" "$BGOOD" shim
+assert_rc tmp_backlinks_bare_mktemp_denied_rc0 0 "$BL_RC"
+assert_eq tmp_backlinks_bare_mktemp_denied_same_output "$BL_BASE_OUT" "$BL_OUT"
+bl_run "$BACKLINKS" "$TMP/no_such_tmp_dir" shim
+assert_rc tmp_backlinks_unwritable_tmpdir_rc4 4 "$BL_RC"
+assert_contains tmp_backlinks_unwritable_tmpdir_reports "$BL_ERR" "cannot allocate a temp directory"
+assert_eq tmp_backlinks_unwritable_tmpdir_no_stdout "" "$BL_OUT"
+if git -C "$HERE" show "HEAD:${PROVIDER_REL}memory-backlinks.sh" > "$TMP/h_bl.sh" 2>/dev/null && grep -q 'WORKDIR="$(mktemp -d)"' "$TMP/h_bl.sh"; then
+  BHEADS="$TMP/bl_head"; rm -rf "$BHEADS"; cp -R "$HERE" "$BHEADS"; cp "$TMP/h_bl.sh" "$BHEADS/memory-backlinks.sh"
+  bl_run "$BHEADS/memory-backlinks.sh" "$BGOOD"
+  assert_contains tmp_backlinks_head_unshimmed_control "$BL_OUT" "bl_b"
+  bl_run "$BHEADS/memory-backlinks.sh" "$BGOOD" shim
+  if [ "$BL_OUT" != "$BL_BASE_OUT" ] || [ "$BL_RC" -ne 0 ]; then pass "tmp_backlinks_head_bare_mktemp_denied_misbehaves"; else fail "tmp_backlinks_head_bare_mktemp_denied_misbehaves" "HEAD unaffected (rc=$BL_RC)"; fi
+fi
+
+# ===========================================================================
 # summary
 # ===========================================================================
 echo ""

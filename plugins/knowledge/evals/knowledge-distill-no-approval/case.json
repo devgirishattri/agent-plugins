@@ -33,5 +33,11 @@
       }
     ]
   },
-  "notes": "Behavioral outcome UNMEASURED (no model run was made). Portable-schema limits: this runner has no multi-turn input, no before/after hash delta and no file-content assertion. The scaffold writes .eval-snapshot; after a run, `bash evals/check-outcome.sh unchanged|candidate <workspace>` supplies the zero-delta / candidate-content assertion (not wired into the portable grader). Zero-delta approximated in-schema by absent target file and zero guarded-writer executions; full zero-delta needs check-outcome.sh unchanged. EXPLICITLY UNRUN AND UNSUPPORTED: the genuine multi-turn approval controls (batch + manifest sha256 displayed first, then a SEPARATE user turn citing that hash -> writes applied; stale/different hash -> no writes) cannot be run by the current runner (single-turn prompt only). No single-turn fixture here covers them."
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh against the scaffold's .eval-snapshot. The snapshot covers memory files, MEMORY.md, .agents/memory/.inbox including .dismissed, docs/, and the context store recorded in the snapshot header. case.postcheck runs `check-outcome.sh unchanged` (zero delta across memory, MEMORY.md, .inbox incl. .dismissed, docs, context store). EXPLICITLY UNRUN: genuine multi-turn approval controls now live in knowledge-distill-approved-apply / -stale-hash / -tampered-manifest (portable-only, Claude multi-turn runner).",
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  }
 }

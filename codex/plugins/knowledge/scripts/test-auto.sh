@@ -581,6 +581,142 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# temp-file hazards: bare mktemp denied (sandbox), TMPDIR honoured, failures visible
+# ---------------------------------------------------------------------------
+echo "--- temp-file hazards (recall / lint --fix) ---"
+SHIM="$TMP/shim_mktemp"; mkdir -p "$SHIM"
+REAL_MKTEMP="$(command -v mktemp)"
+cat > "$SHIM/mktemp" <<SHEOF
+#!/bin/sh
+[ \$# -eq 0 ] && { echo "mktemp: Operation not permitted" >&2; exit 1; }
+[ "\$1" = "-d" ] && [ \$# -eq 1 ] && { echo "mktemp: Operation not permitted" >&2; exit 1; }
+exec "$REAL_MKTEMP" "\$@"
+SHEOF
+chmod +x "$SHIM/mktemp"
+GOODTMP="$TMP/scratch_tmp"; mkdir -p "$GOODTMP"
+BADTMP="$TMP/no_such_tmp_dir"
+# Repo-relative scripts dir (plugins/... or codex/plugins/...), derived from this
+# script's own location so the Codex twin resolves its own tree.
+PROVIDER_REL="$(git -C "$HERE" rev-parse --show-prefix 2>/dev/null)"
+# HEAD copies of the scripts (only while HEAD still has the bare-mktemp originals)
+HEADS="$TMP/head_scripts"; rm -rf "$HEADS"; have_head=0
+if git -C "$HERE" show "HEAD:${PROVIDER_REL}inject-recall.sh" > "$TMP/h_inject.sh" 2>/dev/null \
+   && grep -q 'output_rows="$(mktemp 2>/dev/null)"' "$TMP/h_inject.sh"; then
+  have_head=1; cp -R "$HERE" "$HEADS"
+  for s in inject-recall memory-lint memory-backlinks; do git -C "$HERE" show "HEAD:${PROVIDER_REL}$s.sh" > "$HEADS/$s.sh"; done
+fi
+rprompt="$(mkprompt "how do I run the zephyr calibration on the widget")"
+run_recall() {  # <script> <tmpdir> [shim]
+  local pathv="$PATH"; [ -z "${3:-}" ] || pathv="$SHIM:$PATH"
+  RR_OUT="$(printf '%s' "$rprompt" | PATH="$pathv" TMPDIR="$2" KNOWLEDGE_MEMORY_HOME="$store" KNOWLEDGE_AUTO_RECALL=1 bash "$1" --prompt 2>"$TMP/.rr_err")"; RR_RC=$?
+  RR_ERR="$(cat "$TMP/.rr_err")"
+}
+run_recall "$INJECT" "$GOODTMP"
+assert_contains tmp_recall_unshimmed_control "$RR_OUT" "alpha_zephyr"
+run_recall "$INJECT" "$GOODTMP" shim
+assert_contains tmp_recall_bare_mktemp_denied_works "$RR_OUT" "alpha_zephyr"
+assert_rc tmp_recall_bare_mktemp_denied_rc0 0 "$RR_RC"
+assert_empty tmp_recall_bare_mktemp_denied_quiet_stderr "$RR_ERR"
+run_recall "$INJECT" "$BADTMP" shim
+assert_rc tmp_recall_unwritable_tmpdir_rc0 0 "$RR_RC"
+assert_empty tmp_recall_unwritable_tmpdir_no_stdout "$RR_OUT"
+assert_contains tmp_recall_unwritable_tmpdir_note "$RR_ERR" "cannot allocate a temp file"
+assert_eq tmp_recall_unwritable_tmpdir_one_line "1" "$(printf '%s\n' "$RR_ERR" | wc -l | tr -d ' ')"
+if [ "$have_head" = 1 ]; then
+  run_recall "$HEADS/inject-recall.sh" "$GOODTMP"
+  assert_contains tmp_recall_head_unshimmed_control "$RR_OUT" "alpha_zephyr"
+  run_recall "$HEADS/inject-recall.sh" "$GOODTMP" shim
+  assert_empty tmp_recall_head_bare_mktemp_denied_silently_empty "$RR_OUT"
+  assert_empty tmp_recall_head_bare_mktemp_denied_no_note "$RR_ERR"
+else
+  echo "  NOTE  HEAD no longer has the bare-mktemp originals; HEAD-failure cases skipped"
+fi
+
+lint_fixture() {
+  local d="$1" s
+  s="$(bootstrap_store "$d")"
+  cat > "$s/aa_nostatus.md" <<'FXEOF'
+---
+schema_version: 1
+name: AA
+description: canonical no status
+metadata:
+  type: reference
+created: 2026-01-01
+updated: 2026-01-02
+---
+Body.
+FXEOF
+  printf -- '- [AA](aa_nostatus.md) — canonical no status\n' > "$s/MEMORY.md"
+  printf '%s' "$s"
+}
+run_lint_fix() {  # <script> <store> <tmpdir> [shim]
+  local pathv="$PATH"; [ -z "${4:-}" ] || pathv="$SHIM:$PATH"
+  RL_OUT="$(PATH="$pathv" TMPDIR="$3" bash "$1" --fix --store "$2" 2>&1)"; RL_RC=$?
+}
+ls1="$(lint_fixture "$TMP/tl1")"; ls2="$(lint_fixture "$TMP/tl2")"; ls3="$(lint_fixture "$TMP/tl3")"; ls4="$(lint_fixture "$TMP/tl4")"
+run_lint_fix "$LINT" "$ls1" "$GOODTMP"
+assert_contains tmp_lint_unshimmed_control_fixed "$RL_OUT" "FIXED"
+run_lint_fix "$LINT" "$ls2" "$GOODTMP" shim
+assert_contains tmp_lint_bare_mktemp_denied_fixes "$RL_OUT" "FIXED"
+assert_contains tmp_lint_bare_mktemp_denied_status_written "$(grep -E '^status:' "$ls2/aa_nostatus.md" || true)" "status: active"
+assert_rc tmp_lint_bare_mktemp_denied_rc0 0 "$RL_RC"
+h_before="$(sha "$ls3/aa_nostatus.md")"
+run_lint_fix "$LINT" "$ls3" "$BADTMP" shim
+assert_contains tmp_lint_unwritable_tmpdir_reports "$RL_OUT" "cannot allocate a temp file"
+assert_contains tmp_lint_unwritable_tmpdir_is_error "$RL_OUT" "ERROR"
+assert_rc tmp_lint_unwritable_tmpdir_nonzero 4 "$RL_RC"
+assert_eq tmp_lint_unwritable_tmpdir_file_untouched "$h_before" "$(sha "$ls3/aa_nostatus.md")"
+# index path: file already has status, only the MEMORY.md row is missing
+ls5="$(lint_fixture "$TMP/tl5")"; sed -i.bak 's/^created:/status: active\ncreated:/' "$ls5/aa_nostatus.md"; rm -f "$ls5/aa_nostatus.md.bak"; : > "$ls5/MEMORY.md"
+ls6="$(lint_fixture "$TMP/tl6")"; sed -i.bak 's/^created:/status: active\ncreated:/' "$ls6/aa_nostatus.md"; rm -f "$ls6/aa_nostatus.md.bak"; : > "$ls6/MEMORY.md"
+run_lint_fix "$LINT" "$ls6" "$GOODTMP" shim
+assert_contains tmp_lint_index_bare_mktemp_denied_fixes "$RL_OUT" "added missing MEMORY.md index row"
+assert_rc tmp_lint_index_bare_mktemp_denied_rc0 0 "$RL_RC"
+assert_contains tmp_lint_index_bare_mktemp_denied_row_written "$(cat "$ls6/MEMORY.md")" "aa_nostatus.md"
+run_lint_fix "$LINT" "$ls5" "$BADTMP" shim
+assert_contains tmp_lint_index_unwritable_tmpdir_reports "$RL_OUT" "index reconciliation not applied: cannot allocate a temp file"
+assert_rc tmp_lint_index_unwritable_tmpdir_nonzero 4 "$RL_RC"
+# Fail only the Nth knowledge-lint temp allocation (counter shim): each must be a visible ERROR.
+NSHIM="$TMP/shim_nth"; mkdir -p "$NSHIM"
+cat > "$NSHIM/mktemp" <<SHEOF
+#!/bin/sh
+case "\$1" in
+  *knowledge-lint*)
+    n=\$(cat "$TMP/.nth_count" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\$n" > "$TMP/.nth_count"
+    [ "\$n" = "\$(cat "$TMP/.nth_fail")" ] && { echo "mktemp: denied" >&2; exit 1; } ;;
+esac
+exec "$REAL_MKTEMP" "\$@"
+SHEOF
+chmod +x "$NSHIM/mktemp"
+nth_lint() {  # <label> <kind: status|index> <n>
+  local d="$TMP/tn_$1" st h
+  st="$(lint_fixture "$d")"
+  if [ "$2" = index ]; then sed -i.bak 's/^created:/status: active\ncreated:/' "$st/aa_nostatus.md"; rm -f "$st/aa_nostatus.md.bak"; : > "$st/MEMORY.md"; fi
+  h="$(sha "$st/aa_nostatus.md")$(sha "$st/MEMORY.md")"
+  echo 0 > "$TMP/.nth_count"; echo "$3" > "$TMP/.nth_fail"
+  RL_OUT="$(PATH="$NSHIM:$PATH" TMPDIR="$GOODTMP" bash "$LINT" --fix --store "$st" 2>&1)"; RL_RC=$?
+  assert_contains "tmp_lint_${2}_alloc${3}_fail_visible" "$RL_OUT" "cannot allocate a temp file"
+  assert_rc "tmp_lint_${2}_alloc${3}_fail_nonzero" 4 "$RL_RC"
+  assert_not_contains "tmp_lint_${2}_alloc${3}_fail_no_fixed" "$RL_OUT" "FIXED"
+  assert_eq "tmp_lint_${2}_alloc${3}_fail_store_untouched" "$h" "$(sha "$st/aa_nostatus.md")$(sha "$st/MEMORY.md")"
+}
+for n in 1 2 3; do nth_lint "s$n" status "$n"; done
+for n in 1 2; do nth_lint "i$n" index "$n"; done
+# control: failing allocation #9 (never reached) leaves the fix working
+st="$(lint_fixture "$TMP/tn_ctl")"; echo 0 > "$TMP/.nth_count"; echo 9 > "$TMP/.nth_fail"
+RL_OUT="$(PATH="$NSHIM:$PATH" TMPDIR="$GOODTMP" bash "$LINT" --fix --store "$st" 2>&1)"; RL_RC=$?
+assert_contains tmp_lint_nth_shim_unreached_control_fixed "$RL_OUT" "FIXED"
+assert_rc tmp_lint_nth_shim_unreached_control_rc0 0 "$RL_RC"
+if [ "$have_head" = 1 ]; then
+  run_lint_fix "$HEADS/memory-lint.sh" "$ls4" "$GOODTMP" shim
+  assert_not_contains tmp_lint_head_bare_mktemp_denied_no_fix "$RL_OUT" "FIXED"
+  assert_not_contains tmp_lint_head_bare_mktemp_denied_silent "$RL_OUT" "cannot allocate"
+  assert_not_contains tmp_lint_head_bare_mktemp_denied_no_error "$RL_OUT" "ERROR"
+  assert_rc tmp_lint_head_bare_mktemp_denied_silent_rc0 0 "$RL_RC"
+fi
+
+# ---------------------------------------------------------------------------
 # summary
 # ---------------------------------------------------------------------------
 echo ""

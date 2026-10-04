@@ -33,14 +33,18 @@ Real flags:
   `behavior.attach`.
 - `--adopt --confirmed`: allow occupied unmanaged panes to be claimed.
 
-Safety gates: start validates config, requires `jq` and `tmux`, and takes a
-project lock. If the session-chat helper cannot resolve and
-`behavior.session_chat_helper.on_missing` is `fail`, start aborts non-zero
-before taking the lock or touching tmux; with `warn`, it continues with a
-warning and panes start without inter-pane messaging. It creates only missing
-managed topology and keeps healthy managed panes without respawning them. It
-refuses to repurpose an occupied unmanaged pane unless `--adopt --confirmed`
-is present.
+Safety gates:
+
+- Start validates config, requires `jq` and `tmux`, and takes a project lock.
+- Condition: the session-chat helper cannot resolve. The result depends on
+  `behavior.session_chat_helper.on_missing`:
+  - `fail`: start aborts non-zero before taking the lock or touching tmux.
+  - `warn`: start continues with a warning. Panes start without inter-pane
+    messaging.
+- Start creates only missing managed topology. It keeps healthy managed panes
+  without respawning them.
+- Start refuses to repurpose an occupied unmanaged pane unless
+  `--adopt --confirmed` is present.
 
 A same-named tmux session with no managed marker is also refused without
 `--adopt --confirmed`. Preview session-level adoption with
@@ -55,7 +59,7 @@ attaches. `--no-attach` forces attach off. The command prints one
 `attach: ...` line for the decision.
 
 Authorized panes get secrets through a private 0600 single-use file path in
-the launch script; the secret values are not placed in argv, tmux history, or
+the launch script. The secret values are not placed in argv, tmux history, or
 session environment.
 
 For schema-v5 `--environment ID` selection, invoke the installed dispatcher as

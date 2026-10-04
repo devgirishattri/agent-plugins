@@ -1,0 +1,29 @@
+{
+  "id": "knowledge-recall-negative-doc-edit",
+  "kind": "negative",
+  "prompt": "Fix the typo in README.md line 3.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "(?i)receive"
+    ],
+    "tool_used": [],
+    "forbidden_skills": [
+      "recall",
+      "search",
+      "find",
+      "consolidate",
+      "promote",
+      "remember",
+      "distill"
+    ],
+    "files": {}
+  },
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "typo-fix"
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh against the scaffold's .eval-snapshot. The snapshot covers memory files, MEMORY.md, .agents/memory/.inbox including .dismissed, docs/, and the context store recorded in the snapshot header. An ordinary edit must not invoke recall/search/find. README.md line 3 holds 'recieve'; check-outcome.sh typo-fix requires README.md to differ from the scaffold's pristine .eval-readme-original on line 3 ONLY and the memory/docs/inbox/context baseline to be unchanged."
+}

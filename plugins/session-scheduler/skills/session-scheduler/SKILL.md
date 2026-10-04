@@ -7,7 +7,13 @@ description: When and how to track multi-pane orchestrator → executor work wit
 
 A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `$SESSION_SCHEDULER_HOME/tasks/<id>.json`; prompts and lifecycle packets go to `$SESSION_SCHEDULER_HOME/prompts/`; auto handoffs go to `$SESSION_SCHEDULER_HOME/handoffs/<task-id>/<nonce>.md`; per-task mutation locks live in `$SESSION_SCHEDULER_HOME/locks/<id>.lock/`.
 
-Storage is keyed on `SESSION_SCHEDULER_HOME`, which must already be present in each pane's environment, **inherited when the agent process started** — the launcher/parent shell establishes it before the agent starts, and every participating pane must be launched with the same absolute value. The `/task-*` commands and the scripts never export or derive it (there is no git-root/cwd fallback); they **fail closed** when it is unset, and the fix is to relaunch the pane/session with the correct environment. Direct human script use may set `SESSION_SCHEDULER_HOME=<dir>` in the parent shell beforehand, but agent-facing instructions never combine environment setup with helper execution — an already-running agent invokes each helper as exactly one literal Bash segment using the inherited value. `/task-assign --context NAME` (an explicit knowledge snapshot) requires `SESSION_CONTEXT_HOME` under the same inherited-at-startup contract; `--context auto` does not.
+Storage is keyed on `SESSION_SCHEDULER_HOME`. It must already be present in each pane's environment, **inherited when the agent process started**. The launcher or parent shell sets it before the agent starts. Launch every participating pane with the same absolute value.
+
+The `/task-*` commands and the scripts never export or derive it. There is no git-root/cwd fallback. They **fail closed** when it is unset. To fix this, relaunch the pane or session with the correct environment.
+
+Direct human script use may set `SESSION_SCHEDULER_HOME=<dir>` in the parent shell beforehand. Agent-facing instructions never combine environment setup with helper execution. An already-running agent invokes each helper as exactly one literal Bash segment using the inherited value.
+
+`/task-assign --context NAME` (an explicit knowledge snapshot) requires `SESSION_CONTEXT_HOME` under the same inherited-at-startup contract. `--context auto` does not.
 
 Launching every pane with the same shared home means **claude and codex panes working in the same project share the same ledger** — orchestrator and reviewer can both read/write the same task list.
 
@@ -36,7 +42,11 @@ Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executo
 Legal status transitions (enforced by every command):
 `created→assigned`, `created→blocked`, `assigned→review`, `assigned→done`, `assigned→blocked`, `assigned→assigned` (reassignment), `review→done` (approve), `review→blocked` (reject), `blocked→assigned`. Anything else is rejected with the current status and legal next steps; override with `--force` (or `SESSION_SCHEDULER_FORCE=1`), which records "forced" in history.
 
-`/tasks-clean` removes tasks past `--older-than DAYS` (default 7; a bare integer is days on both providers) — **any status** by default; narrow with `--status done|blocked`. Dry-run by default. It deletes every artifact the task owns by exact name (base prompt, review packet, ack packets, `handoffs/<id>/`, leftover lock), keeps a task that a surviving task still lists in `depends_on` (reported as `kept … (referenced by …)`), and sweeps aged **orphans** (handoff dirs / known-suffix prompt files with no task JSON).
+`/tasks-clean` removes tasks past `--older-than DAYS` (default 7; a bare integer is days on both providers). It removes **any status** by default; narrow with `--status done|blocked`. It is a dry run by default.
+
+- It deletes every artifact the task owns, by exact name: base prompt, review packet, ack packets, `handoffs/<id>/`, and any leftover lock.
+- It keeps a task that a surviving task still lists in `depends_on`. It reports this as `kept … (referenced by …)`.
+- It sweeps aged **orphans**: handoff dirs and known-suffix prompt files with no task JSON.
 
 ## Stages, ETAs, and dependencies
 
@@ -44,11 +54,13 @@ Legal status transitions (enforced by every command):
 - **ETAs**: `/task-assign --eta MINUTES` stores `eta_at`; tasks past it are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
 - **Dependencies**: `/task-new --depends-on id1,id2` stores `depends_on`. `/task-assign` refuses to dispatch until every dependency is `done` (the error names the unmet deps) unless `--force`.
 - **Context attach (explicit)**: `/task-assign --context NAME` resolves the knowledge context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`, records `meta.context` + `meta.context_home`, and tells the executor to `/knowledge:context-load NAME` before starting. Snapshot names follow the knowledge context store's contract — canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`); a non-canonical `NAME` is rejected before any side effect.
-- **Auto handoff**: `/task-assign --context auto` writes a **scheduler-owned** handoff at `handoffs/<task-id>/<nonce>.md` under the shared scheduler home (the nonce is 32 lowercase hex digits from OS randomness — never the task id or a timestamp), mode 0600, derived from the approved prompt + ledger state. It is never overwritten: each assignment adds a new file; the current one is recorded as `meta.handoff_file` (with `meta.handoff_home`). The packet carries the absolute path under `## Handoff` ("read it first"). The knowledge context store is never written and `SESSION_CONTEXT_HOME` is not needed. Handoffs are swept with the task by `/tasks-clean`. A reassignment with no `--context` clears all four attachment keys.
+- **Auto handoff**: `/task-assign --context auto` writes a **scheduler-owned** handoff at `handoffs/<task-id>/<nonce>.md` under the shared scheduler home. The handoff derives from the approved prompt and ledger state, and its mode is 0600. The nonce is 32 lowercase hex digits from OS randomness — never the task id or a timestamp. The file is never overwritten: each assignment adds a new file. The current file is recorded as `meta.handoff_file` (with `meta.handoff_home`). The packet carries the absolute path under `## Handoff` ("read it first"). The knowledge context store is never written, and `SESSION_CONTEXT_HOME` is not needed. `/tasks-clean` sweeps handoffs with the task. A reassignment with no `--context` clears all four attachment keys.
 
 ## Concurrency
 
-Every ledger write is atomic (tmp + mv), and every read-modify-write (status transitions, history, metadata, acks, durations) runs under the per-task lock `locks/<id>.lock/` (mkdir-atomic; `pid` inside; `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS`, default 10; a lock whose holder pid is dead is reclaimed). Both providers use the identical lock path, so Claude and Codex panes sharing one ledger exclude each other. The lock is never held across session-chat transport. Known limitation: two simultaneous *reassignments of the same task* still race on the prompt file; coordinate those serially.
+Every ledger write is atomic (tmp + mv). Every read-modify-write (status transitions, history, metadata, acks, durations) runs under the per-task lock `locks/<id>.lock/`. The lock is mkdir-atomic, with a `pid` inside. `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS` sets the wait (default 10). A lock whose holder pid is dead is reclaimed. Both providers use the identical lock path, so Claude and Codex panes sharing one ledger exclude each other. The lock is never held across session-chat transport.
+
+Known limitation: two simultaneous *reassignments of the same task* still race on the prompt file. Coordinate those serially.
 
 ## Nested transport and escalation
 
@@ -58,7 +70,12 @@ Every ledger write is atomic (tmp + mv), and every read-modify-write (status tra
 2. In a sandboxed runtime (e.g. Codex), request scoped escalation/approval for that exact installed helper on the first attempt whenever it may dispatch or notify through session-chat/tmux.
 3. Never work around the sandbox with `bash -c`, wrappers, `env`, assignment prefixes, exports, pipelines, chaining, redirection, substitution, or broad provider-home access.
 4. Escalation is transport access, not authority: role, recipient, argument, confirmation, and lifecycle policies remain authoritative.
-5. If transport fails **after** a state transition, inspect `/task-status <id>` before acting: never rerun `task-done`/`task-block` once the task is done/blocked; never use --force to repair a notification; report the partial success and, only when authorized, send a separate exact session-chat message. `/task-review` retries dispatch only while the task is in `review` with no successful reviewer-dispatch timestamp (never duplicate a delivered packet); `/task-assign` keeps its rollback on hard dispatch failure.
+5. If transport fails **after** a state transition, inspect `/task-status <id>` before acting. Then follow these rules:
+   - Never rerun `task-done`/`task-block` once the task is done/blocked.
+   - Never use --force to repair a notification.
+   - Report the partial success. Send a separate exact session-chat message only when authorized.
+   - `/task-review` retries dispatch only while the task is in `review` with no successful reviewer-dispatch timestamp. It never duplicates a delivered packet.
+   - `/task-assign` keeps its rollback on hard dispatch failure.
 
 ## Hard prerequisites
 
@@ -143,7 +160,14 @@ harness behavior, and limits.
 
 ## Failure modes
 
-- **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — only happens on a hard failure (no name, unknown/ambiguous target). A *busy* executor is not a failure: the dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. For a hard failure, fix it (run `/session-chat:panes`, ensure the executor has a name), then retry `/task-assign`.
-- **Lifecycle acks are durable, not best-effort transport** — `/task-done`, `/task-block`, and `/task-review`'s assigner ack always update the ledger first, then ack via a delivery ladder: file-backed dispatch (queued to the assigner's durable inbox when busy, recovered on their next turn), falling back to inline `/send` only if dispatch fails, falling back to a recorded failure only if both fail. `meta.last_ack` records `status` (`dispatched`/`inline-fallback`/`failed`) and `file` for every attempt. A `failed` ack is a **partial success**: the transition already happened, so never rerun the helper and never use --force to repair the notification — follow the transport contract above.
+- **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — this happens only on a hard failure (no name, unknown/ambiguous target). A *busy* executor is not a failure. The dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. After a hard failure, run `/session-chat:panes` and ensure the executor has a name. Then retry `/task-assign`.
+- **Lifecycle acks are durable, not best-effort transport.** `/task-done`, `/task-block`, and `/task-review` always update the ledger first. Then each acks the assigner through a delivery ladder:
+  1. File-backed dispatch. A busy assigner recovers it from the durable inbox on the next turn.
+  2. Inline `/send`, only if dispatch fails.
+  3. A recorded failure, only if both fail.
+
+  `meta.last_ack` records `status` (`dispatched`/`inline-fallback`/`failed`) and `file` for every attempt.
+
+  A `failed` ack is a **partial success**: the transition already happened. Never rerun the helper. Never use --force to repair the notification. Follow the transport contract above.
 - **Tasks are `assigned` but executor never acts** — almost always `INCOMING_MODE=notify` on the executor side. Run `/session-chat:incoming-mode auto` in the executor's shell.
 - **`jq` missing** — `brew install jq`. The ledger is JSON; jq is a hard dependency.

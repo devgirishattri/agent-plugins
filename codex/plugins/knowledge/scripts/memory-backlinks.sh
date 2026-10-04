@@ -110,7 +110,11 @@ if [ "${#auth_files[@]}" -gt 0 ]; then
 fi
 n=${#all_stems[@]}
 
-WORKDIR="$(mktemp -d)"
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/knowledge-backlinks.XXXXXX" 2>/dev/null)" || WORKDIR=""
+if [ -z "$WORKDIR" ] || [ ! -d "$WORKDIR" ]; then
+  echo "ERROR: cannot allocate a temp directory (set TMPDIR to a writable directory)" >&2
+  exit 4
+fi
 cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT
 

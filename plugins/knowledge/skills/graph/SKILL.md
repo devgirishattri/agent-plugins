@@ -1,6 +1,6 @@
 ---
 name: graph
-description: Explicit-link knowledge graph over memory backlinks: neighbors, reverse links, orphans, components, or the whole graph as JSON/DOT/Mermaid. Read-only.
+description: "Explicit-link knowledge graph over memory backlinks: neighbors, reverse links, orphans, components, or the whole graph as JSON/DOT/Mermaid. Read-only."
 when_to_use: User asks what links to or from a memory, which memories are orphaned or clustered, or wants a graph/diagram of the memory links.
 argument-hint: "[--store <path>] [neighbors <slug> | reverse <slug> | orphans | components | --format json|dot|mermaid]"
 allowed-tools: Bash(bash:*)

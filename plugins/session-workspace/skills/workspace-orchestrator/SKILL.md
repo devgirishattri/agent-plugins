@@ -29,8 +29,8 @@ Never infer missing coordinates or fall back to a project-local command.
 
 ## Immutable boundary
 
-- The order is status → plan → independent plan approval → explicit user
-  confirmation → scheduler assignment → independent audit → separately
+- Follow this order: status → plan → independent plan approval → explicit
+  user confirmation → scheduler assignment → independent audit → separately
   authorized commit → push → deploy.
 - Plan approval is a correlated reviewer reply containing an explicit
   `APPROVE` token. Audit approval is a reviewer-authored scheduler closing note
@@ -56,10 +56,11 @@ pinned scheduler ledger and session-chat archive are canonical.
 
 Natural-language requests map to: status, plan review, executor dispatch,
 post-execution review, commit authorization, push authorization, deploy
-authorization, selftest, or prompt preview. Historical project-local names
-such as `status`, `plan`, `dispatch`, `review`, `commit`, `push`, `deploy`,
-`selftest`, and `prompt` map to these workflows; do not require the retired
-aliases to exist.
+authorization, selftest, or prompt preview.
+
+Historical project-local names such as `status`, `plan`, `dispatch`, `review`,
+`commit`, `push`, `deploy`, `selftest`, and `prompt` map to these workflows.
+Do not require the retired aliases to exist.
 
 ## References
 

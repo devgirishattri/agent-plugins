@@ -28,7 +28,8 @@
 #
 # OFF BY DEFAULT (spec: "off by default until latency/context-budget/
 # prompt-injection/false-positive evaluations pass"). Fails SILENTLY
-# (exit 0, no output, no stderr) on ANY error, or on an absent/unsafe store —
+# (exit 0, no stdout; the one exception is a single stderr note when the
+# scratch temp file cannot be allocated) on ANY error, or on an absent/unsafe store —
 # a hook must never break a session, stall it, or leak an error banner.
 #
 # KNOWLEDGE_AUTO_RECALL selects WHICH of the two injections run (values are
@@ -250,8 +251,13 @@ fi
 # Emit direct results first, then at most two deduplicated related nodes. A
 # stale/superseded/archived graph node is demoted below active nodes and never
 # displaces a direct result. Metadata is read from the canonical file only.
-output_rows="$(mktemp 2>/dev/null)" || exit 0
-[ -n "$output_rows" ] || exit 0
+output_rows="$(mktemp "${TMPDIR:-/tmp}/knowledge-recall.XXXXXX" 2>/dev/null)" || output_rows=""
+if [ -z "$output_rows" ] || [ ! -f "$output_rows" ]; then
+  # Still non-blocking exit 0 with no stdout (JSON/context contract intact), but
+  # leave one bounded debug note instead of silently injecting nothing.
+  echo "knowledge recall: cannot allocate a temp file (set TMPDIR to a writable directory); nothing injected" >&2
+  exit 0
+fi
 trap 'rm -f "$output_rows" 2>/dev/null || true' EXIT
 printf '%s\n' "$ranked" | awk -F'\t' '{print "0\t" $0}' > "$output_rows"
 if [ "$GRAPH" -eq 1 ] && [ -n "$related" ]; then

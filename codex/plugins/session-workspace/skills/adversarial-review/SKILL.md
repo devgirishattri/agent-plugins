@@ -17,23 +17,32 @@ authorize commit, push, merge, or deployment.
    stale; re-bind or label them.
 2. Set the budget before starting: number of reviewers or passes, wall time, and
    any model spend. Use only runtimes and models already configured for this
-   project or available to the caller; do not add a model dependency, acquire
-   credentials, or run paid evaluations without an explicit request and ceiling.
+   project or available to the caller. Do not add a model dependency, acquire
+   credentials, or run paid evaluations unless the user gives an explicit
+   request and ceiling.
    When the budget runs out, stop and list what was not reviewed.
 3. Keep reviewers independent: give each the subject and acceptance criteria,
    not the author's conclusions or earlier findings. A reviewer never reviews
-   its own authored change. Respect role restrictions; a read-only reviewer
-   routes execution it may not perform to the configured executor.
+   its own authored change. Respect role restrictions. A read-only reviewer
+   routes any execution it is not permitted to perform to the configured executor.
 
 ## Attack the change
 
 For each claim the change makes (correctness, safety, compatibility, cleanup),
-look for a concrete counterexample: hostile or malformed input, concurrent
-actors, partial failure and retry, stale or mixed versions, other providers,
-persisted data, and privilege or path boundaries. Prefer the cheapest check that
-can discriminate: read the code path, run an existing test, or add a focused
-isolated check within existing authorization. A negative check needs a positive
-control. Never use live stores or loosen a harness to complete a review.
+look for a concrete counterexample. Check these cases:
+
+- hostile or malformed input
+- concurrent actors
+- partial failure and retry
+- stale or mixed versions
+- other providers
+- persisted data
+- privilege or path boundaries
+
+Prefer the cheapest check that can discriminate. Read the code path, run an
+existing test, or add a focused isolated check within existing authorization.
+A negative check needs a positive control. Never use live stores. Never loosen
+a harness to complete a review.
 
 Each finding states severity, location, failure mechanism, a concrete scenario,
 and evidence type: source inspection, executed isolated test, or observed

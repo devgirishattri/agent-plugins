@@ -4,9 +4,24 @@
   "prompt": "Rename the variable `count` to `total` in this snippet and show me the result:\n\n```python\ncount = 0\nfor item in items:\n    count += item.size\nprint(count)\n```",
   "scaffold": "scaffold.sh",
   "expectations": {
-    "regex": ["total \\+= item\\.size"],
+    "regex": [
+      "total \\+= item\\.size"
+    ],
     "tool_used": [],
-    "forbidden_skills": ["consolidate", "promote", "remember", "docs-create", "init"],
+    "forbidden_skills": [
+      "consolidate",
+      "promote",
+      "remember",
+      "docs-create",
+      "init"
+    ],
     "files": {}
-  }
+  },
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh against the scaffold's .eval-snapshot. The snapshot covers memory files, MEMORY.md, .agents/memory/.inbox including .dismissed, docs/, and the context store recorded in the snapshot header. case.postcheck runs `check-outcome.sh unchanged` (zero delta across memory, MEMORY.md, .inbox incl. .dismissed, docs, context store)."
 }

@@ -1070,6 +1070,316 @@ else
 fi
 
 # ===========================================================================
+# temp-file-free capture hash: equivalence, sandboxed-mktemp, fail-closed,
+# and bounded wrapper diagnostics
+# ===========================================================================
+echo "--- tempfile-free canonical hash / wrapper diagnostics ---"
+
+# Frozen reference: the pre-change (HEAD at 0.5.1) file-based implementation,
+# verbatim apart from the function names. Independent of git state so the
+# equivalence check keeps its meaning after this change is committed.
+REFLIB="$TMP/ref_hash_lib.sh"
+cat > "$REFLIB" <<'REFEOF'
+_ref_emit_field() {
+  local out="$1" name="$2" value="$3" len
+  printf '%s\n' "$name" >> "$out"
+  len=$(printf '%s' "$value" | wc -c | tr -d ' ')
+  printf '%s\n' "$len" >> "$out"
+  printf '%s' "$value" >> "$out"
+  printf '\n' >> "$out"
+}
+ref_capture_canonical_hash() {
+  local tmp sortfile hash
+  tmp=$(mktemp) || return 1
+  sortfile=$(mktemp) || { rm -f "$tmp"; return 1; }
+  _ref_emit_field "$tmp" "source" "$KM_CAP_SOURCE"
+  _ref_emit_field "$tmp" "sensitivity" "$KM_CAP_SENSITIVITY"
+  if [ -n "${KM_CAP_EVIDENCE:-}" ]; then
+    _ref_emit_field "$tmp" "evidence" "$KM_CAP_EVIDENCE"
+  fi
+  local i
+  : > "$sortfile"
+  for ((i = 0; i < ${#KM_CAP_PROPOSED_NAMES[@]}; i++)); do
+    printf '%s\t%d\n' "${KM_CAP_PROPOSED_NAMES[i]}" "$i" >> "$sortfile"
+  done
+  local nm idx val joined first item
+  while IFS=$'\t' read -r nm idx; do
+    [ -n "$nm" ] || continue
+    if [ "${KM_CAP_PROPOSED_TYPES[idx]}" = "list" ]; then
+      val="${KM_CAP_PROPOSED_VALUES[idx]}"
+      joined="" first=1
+      if [ -n "$val" ]; then
+        local -a items=()
+        IFS=$'\x1f' read -r -a items <<< "$val"
+        local ii
+        for ((ii = 0; ii < ${#items[@]}; ii++)); do
+          item="${items[ii]}"
+          if [ "$first" -eq 1 ]; then
+            joined="$item"
+            first=0
+          else
+            joined="${joined}"$'\n'"${item}"
+          fi
+        done
+      fi
+      _ref_emit_field "$tmp" "$nm" "$joined"
+    else
+      _ref_emit_field "$tmp" "$nm" "${KM_CAP_PROPOSED_VALUES[idx]}"
+    fi
+  done < <(LC_ALL=C sort -t "$(printf '\t')" -k1,1 "$sortfile")
+  local norm_body
+  norm_body=$(km_normalize_capture_body "$KM_CAP_BODY")
+  _ref_emit_field "$tmp" "body" "$norm_body"
+  hash=$(km_sha256_file "$tmp")
+  rm -f "$tmp" "$sortfile"
+  printf '%s\n' "$hash"
+}
+REFEOF
+
+HX="$TMP/hx"; mkdir -p "$HX"
+hx_head() {  # <name> <source> <evidence-or-empty> <tags-block-or-empty> <body-printf-arg>
+  {
+    echo "---"; echo "source: $2"; echo "sensitivity: normal"
+    [ -z "$3" ] || printf '%s\n' "$3"
+    echo "proposed:"; echo '  schema_version: "1"'
+    printf '%s\n' "  name: $1"; echo "  description: hash fixture $1"
+    [ -z "$4" ] || printf '%s\n' "$4"
+    echo "  metadata:"; echo "    type: project"; echo "---"
+  }
+}
+{ hx_head "Hx Legacy" sess-x "" ""; echo "**Why:** body."; } > "$HX/legacy.md"
+{ hx_head "Hx Evidence" auto_capture "evidence: src/app.sh:42" ""; echo "**Why:** body."; } > "$HX/evidence.md"
+{ hx_head "Hx Tags" sess-x "" $'  tags:\n    - alpha\n    - "beta gamma"\n    - delta'; echo "**Why:** body."; } > "$HX/tags.md"
+{ hx_head "Hx Body" sess-x "" ""; printf '\n\nline one   \r\nline two\n\n  indented\n\n\n\n'; } > "$HX/body.md"
+{ hx_head "Hx Café ☃ 日本語" sess-x 'evidence: "user said: café ☃"' $'  tags:\n    - naïve\n    - 日本'; echo "**Why:** emoji 🎉."; } > "$HX/unicode.md"
+{ hx_head "Hx 'Quoted'" sess-q "" ""; echo "body"; } > "$HX/quoted.md"
+{ hx_head "Hx Empty Opt" sess-x "" $'  tags:'; } > "$HX/empty.md"
+
+hx_new() { mw_call "km_parse_capture '$1' staged && km_capture_canonical_hash"; }
+hx_ref() { mw_call "source '$REFLIB'; km_parse_capture '$1' staged && ref_capture_canonical_hash"; }
+distinct_seen=""
+for fx in legacy evidence tags body unicode quoted empty; do
+  mw_call "km_parse_capture '$HX/$fx.md' staged" >/dev/null 2>&1; assert_rc "hash_fixture_${fx}_parses_control" 0 $?
+  new_h=$(hx_new "$HX/$fx.md"); ref_h=$(hx_ref "$HX/$fx.md")
+  [[ "$new_h" =~ ^[0-9a-f]{64}$ ]] && pass "hash_fixture_${fx}_is_sha256" || fail "hash_fixture_${fx}_is_sha256" "got [$new_h]"
+  assert_eq "hash_equivalence_${fx}_matches_reference" "$ref_h" "$new_h"
+  distinct_seen="$distinct_seen $new_h"
+done
+# negative control: the comparison can fail (different fixtures hash differently)
+[ "$(hx_new "$HX/legacy.md")" != "$(hx_new "$HX/evidence.md")" ] && pass "hash_equivalence_detects_difference_control" || fail "hash_equivalence_detects_difference_control" "legacy == evidence"
+assert_eq "hash_fixtures_all_distinct" "7" "$(printf '%s\n' $distinct_seen | sort -u | wc -l | tr -d ' ')"
+
+# existing stored candidates still verify: capture each fixture, then re-hash the STORED file
+hxs=$(bootstrap_store "$TMP/hx_store")
+for fx in legacy evidence tags body unicode quoted empty; do
+  out=$(bash "$REMEMBER" --store "$hxs" --staged "$HX/$fx.md" 2>&1); rc=$?
+  assert_rc "stored_verify_${fx}_capture_ok" 0 "$rc"
+  cid=$(printf '%s\n' "$out" | sed -n 's/^capture_id: //p')
+  assert_eq "stored_verify_${fx}_id_is_reference_hash" "$(hx_ref "$HX/$fx.md")" "$cid"
+  got=$(mw_call "km_parse_capture '$hxs/.inbox/$cid.md' stored && km_capture_canonical_hash")
+  assert_eq "stored_verify_${fx}_rehash_equals_id" "$cid" "$got"
+done
+
+# pipefail must not leak out of km_capture_canonical_hash
+leak=$(mw_call "set +o pipefail; km_parse_capture '$HX/legacy.md' staged && km_capture_canonical_hash >/dev/null; set -o | grep '^pipefail' | awk '{print \$2}'")
+assert_eq "hash_does_not_leak_pipefail" "off" "$leak"
+
+# --- sandbox that denies bare mktemp (macOS ignores TMPDIR for it) ---------
+SHIM="$TMP/shim_mktemp"; mkdir -p "$SHIM"
+REAL_MKTEMP=$(command -v mktemp)
+cat > "$SHIM/mktemp" <<SHEOF
+#!/bin/sh
+[ \$# -eq 0 ] && { echo "mktemp: Operation not permitted" >&2; exit 1; }
+exec "$REAL_MKTEMP" "\$@"
+SHEOF
+chmod +x "$SHIM/mktemp"
+ms_ok=$(bootstrap_store "$TMP/mk_ok"); ms_shim=$(bootstrap_store "$TMP/mk_shim"); ms_head=$(bootstrap_store "$TMP/mk_head")
+out_ok=$(bash "$REMEMBER" --store "$ms_ok" --staged "$HX/evidence.md" 2>&1); rc_ok=$?
+out_shim=$(PATH="$SHIM:$PATH" bash "$REMEMBER" --store "$ms_shim" --staged "$HX/evidence.md" 2>&1); rc_shim=$?
+assert_rc "bare_mktemp_denied_capture_succeeds_without_shim_control" 0 "$rc_ok"
+assert_rc "bare_mktemp_denied_capture_succeeds" 0 "$rc_shim"
+cid_ok=$(printf '%s\n' "$out_ok" | sed -n 's/^capture_id: //p'); cid_shim=$(printf '%s\n' "$out_shim" | sed -n 's/^capture_id: //p')
+assert_eq "bare_mktemp_denied_same_id_as_unshimmed" "$cid_ok" "$cid_shim"
+assert_file_present "bare_mktemp_denied_inbox_file_written" "$ms_shim/.inbox/$cid_shim.md"
+# shim sanity: it really does deny the bare call but passes templated calls (control for the above)
+PATH="$SHIM:$PATH" mktemp >/dev/null 2>&1; assert_rc "mktemp_shim_denies_bare_call_control" 1 $?
+t=$(PATH="$SHIM:$PATH" mktemp "$TMP/shimctl.XXXXXX" 2>/dev/null); assert_rc "mktemp_shim_allows_templated_call_control" 0 $?; rm -f "$t"
+# original-failure evidence: the frozen file-based reference fails under the shim
+ref_shim=$(PATH="$SHIM:$PATH" mw_call "source '$REFLIB'; km_parse_capture '$HX/evidence.md' staged && ref_capture_canonical_hash" 2>/dev/null); rc=$?
+[ "$rc" -ne 0 ] && pass "original_implementation_fails_under_bare_mktemp_denial" || fail "original_implementation_fails_under_bare_mktemp_denial" "reference unexpectedly succeeded: [$ref_shim]"
+# end-to-end original-code failure (rc 2), when HEAD still carries the old writer
+HEADW="$TMP/head_scripts"; rm -rf "$HEADW"
+if git -C "$HERE" show HEAD:codex/plugins/knowledge/scripts/memory-write.sh > "$TMP/head_writer.sh" 2>/dev/null \
+   && grep -q 'tmp=\$(mktemp) || return 1' "$TMP/head_writer.sh"; then
+  cp -R "$HERE" "$HEADW"; cp "$TMP/head_writer.sh" "$HEADW/memory-write.sh"
+  PATH="$SHIM:$PATH" bash "$HEADW/memory-remember.sh" --store "$ms_head" --staged "$HX/evidence.md" >/dev/null 2>&1
+  assert_rc "head_writer_under_bare_mktemp_denial_exits_2" 2 $?
+  bash "$HEADW/memory-remember.sh" --store "$ms_head" --staged "$HX/evidence.md" >/dev/null 2>&1
+  assert_rc "head_writer_without_shim_succeeds_control" 0 $?
+else
+  echo "  NOTE  HEAD no longer carries the file-based hash; end-to-end HEAD failure case skipped (function-level reference above still applies)"
+fi
+
+# --- hash-tool failure fails closed -----------------------------------------
+mk_sha_shim() {  # <dir> <mode: fail|empty|garbage>
+  mkdir -p "$1"
+  for t in shasum sha256sum; do
+    case "$2" in
+      fail)    printf '#!/bin/sh\ncat >/dev/null 2>&1\nexit 1\n' > "$1/$t" ;;
+      empty)   printf '#!/bin/sh\ncat >/dev/null 2>&1\nexit 0\n' > "$1/$t" ;;
+      garbage) printf '#!/bin/sh\ncat >/dev/null 2>&1\necho abc123 -\nexit 0\n' > "$1/$t" ;;
+    esac
+    chmod +x "$1/$t"
+  done
+}
+for mode in fail empty garbage; do
+  mk_sha_shim "$TMP/shim_sha_$mode" "$mode"
+  hs=$(bootstrap_store "$TMP/hf_$mode")
+  h=$(PATH="$TMP/shim_sha_$mode:$PATH" mw_call "km_parse_capture '$HX/evidence.md' staged && km_capture_canonical_hash" 2>/dev/null); rc=$?
+  [ "$rc" -ne 0 ] && pass "hash_tool_${mode}_function_nonzero" || fail "hash_tool_${mode}_function_nonzero" "rc=0"
+  assert_eq "hash_tool_${mode}_function_prints_no_hash" "" "$h"
+  PATH="$TMP/shim_sha_$mode:$PATH" bash "$WRITER" capture --store "$hs" --staged "$HX/evidence.md" --idempotency-key "$(printf 'a%.0s' $(seq 1 64))" >/dev/null 2>&1
+  [ "$?" -ne 0 ] && pass "hash_tool_${mode}_writer_nonzero" || fail "hash_tool_${mode}_writer_nonzero" "rc=0"
+  PATH="$TMP/shim_sha_$mode:$PATH" bash "$REMEMBER" --store "$hs" --staged "$HX/evidence.md" >/dev/null 2>&1
+  [ "$?" -ne 0 ] && pass "hash_tool_${mode}_remember_nonzero" || fail "hash_tool_${mode}_remember_nonzero" "rc=0"
+  assert_eq "hash_tool_${mode}_no_inbox_file" "0" "$(pending_count "$hs")"
+done
+h=$(hx_new "$HX/evidence.md"); rc=$?
+assert_rc "hash_tool_real_works_control" 0 "$rc"
+[[ "$h" =~ ^[0-9a-f]{64}$ ]] && pass "hash_tool_real_prints_hash_control" || fail "hash_tool_real_prints_hash_control" "[$h]"
+
+# --- per-stage fail-closed: wc / sort / awk (normalizer + sha post-filter) ---
+# Each shim either exits 1 or exits 0 silently with no output; every stage
+# failure must yield no hash, a non-zero writer rc and no inbox file.
+for tool in wc sort awk; do
+  for mode in fail silent; do
+    sd="$TMP/shim_${tool}_$mode"; mkdir -p "$sd"
+    if [ "$mode" = fail ]; then printf '#!/bin/sh\ncat >/dev/null 2>&1\nexit 1\n' > "$sd/$tool"
+    else printf '#!/bin/sh\ncat >/dev/null 2>&1\nexit 0\n' > "$sd/$tool"; fi
+    chmod +x "$sd/$tool"
+    for fx in tags legacy; do
+      h=$(PATH="$sd:$PATH" mw_call "km_parse_capture '$HX/$fx.md' staged && km_capture_canonical_hash" 2>/dev/null); rc=$?
+      [ "$rc" -ne 0 ] && pass "stage_${tool}_${mode}_${fx}_function_nonzero" || fail "stage_${tool}_${mode}_${fx}_function_nonzero" "rc=0 hash=[$h]"
+      assert_eq "stage_${tool}_${mode}_${fx}_function_prints_no_hash" "" "$h"
+    done
+    ss=$(bootstrap_store "$TMP/st_${tool}_$mode")
+    PATH="$sd:$PATH" bash "$REMEMBER" --store "$ss" --staged "$HX/tags.md" >/dev/null 2>&1; rc=$?
+    [ "$rc" -ne 0 ] && pass "stage_${tool}_${mode}_remember_nonzero" || fail "stage_${tool}_${mode}_remember_nonzero" "rc=0"
+    assert_eq "stage_${tool}_${mode}_no_inbox_file" "0" "$(pending_count "$ss" 2>/dev/null)"
+  done
+done
+# controls: no shim gives the correct hash (== frozen reference) and a real capture
+for fx in tags legacy body; do
+  assert_eq "stage_control_${fx}_equals_reference" "$(hx_ref "$HX/$fx.md")" "$(hx_new "$HX/$fx.md")"
+done
+ssc=$(bootstrap_store "$TMP/st_control")
+bash "$REMEMBER" --store "$ssc" --staged "$HX/tags.md" >/dev/null 2>&1; assert_rc "stage_control_unshimmed_capture_ok" 0 $?
+assert_eq "stage_control_unshimmed_inbox_file" "1" "$(pending_count "$ssc")"
+# the writer's own hash-failure message is the classifier hook
+msg=$(PATH="$TMP/shim_sha_fail:$PATH" bash "$REMEMBER" --store "$ssc" --staged "$HX/evidence.md" 2>&1 >/dev/null | tail -n 1)
+assert_contains "hash_failure_writer_message" "$msg" "capture hash computation failed"
+
+# --- wrapper: fixed-category writer diagnostics (stderr never echoed) -------
+DSTUB="$TMP/diag_scripts"; rm -rf "$DSTUB"; cp -R "$HERE" "$DSTUB"
+dstore=$(bootstrap_store "$TMP/diag_store")
+mkdiag() {  # <stub-body>
+  printf '#!/usr/bin/env bash\n%s\n' "$1" > "$DSTUB/memory-remember.sh"
+}
+diag_cand="$TMP/diag_cand.md"
+cat > "$diag_cand" <<'DEOF'
+---
+source: auto_capture
+sensitivity: normal
+evidence: src/diag.sh:7
+proposed:
+  schema_version: "1"
+  name: Diag Candidate Name
+  description: Diag distinctive description text
+  metadata:
+    type: project
+---
+**Why:** Diag distinctive body sentence about turnips.
+DEOF
+run_diag() { CLAUDE_CODE_SESSION_ID=sessDiag bash "$DSTUB/memory-auto-capture.sh" --store "$dstore" --staged "$diag_cand" 2>&1; }
+diag_case() {  # <label> <rc> <stderr-line> <expected-category>
+  mkdiag "printf '%s\\n' '$3' >&2; exit $2"
+  out=$(run_diag); local wrc=$?
+  assert_rc "diag_${1}_wrapper_exit0" 0 "$wrc"
+  assert_contains "diag_${1}_category" "$out" "reason: $4"
+  assert_contains "diag_${1}_keeps_rc_line" "$out" "writer rejected candidate (rc=$2)"
+  assert_contains "diag_${1}_counts_rejected" "$out" "1 rejected"
+}
+diag_case hash 2 'ERROR: capture hash computation failed' "hash computation failed"
+diag_case hash_remember 4 'ERROR: cannot compute a valid capture idempotency key (sha256 tool unavailable?)' "hash computation failed"
+diag_case locked5 5 'store locked: /x/.lock' "store locked"
+diag_case locked4 4 'ERROR: cannot acquire store lock (unexpected failure): /x/.lock' "store locked"
+diag_case resolution 3 'ERROR: no store' "store resolution failed"
+diag_case integrity 4 'ERROR: .inbox exists but is not a safe directory: /x' "store integrity error"
+diag_case grammar 2 'ERROR: malformed line under proposed.tags: something' "capture grammar rejected"
+diag_case grammar_unknown 2 'ERROR: unknown top-level field: foo' "capture grammar rejected"
+diag_case unknown_rc2 2 'ERROR: something never seen' "unknown writer error (rc=2)"
+diag_case unknown_rc9 9 'weird' "unknown writer error (rc=9)"
+diag_case silent 3 '' "store resolution failed"
+# negative: the categories are mutually exclusive (a hash failure is not labelled locked/grammar)
+mkdiag "printf '%s\\n' 'ERROR: capture hash computation failed' >&2; exit 2"
+out=$(run_diag)
+assert_not_contains "diag_hash_not_grammar_label" "$out" "capture grammar rejected"
+assert_not_contains "diag_hash_not_locked_label" "$out" "store locked"
+# raw stderr, candidate text and secret-like tokens are NEVER echoed
+for leak in "Diag Candidate Name" "Diag distinctive description text" "Diag distinctive body sentence about turnips." "src/diag.sh:7" "sk-abcdefghijklmnopqrstuvwx" "AKIAABCDEFGHIJKLMNOP" "verbatim-stderr-marker"; do
+  mkdiag "printf '%s\\n' 'ERROR: malformed line: $leak' >&2; exit 2"
+  out=$(run_diag)
+  assert_not_contains "diag_no_echo[${leak:0:24}]" "$out" "$leak"
+  assert_not_contains "diag_no_raw_prefix[${leak:0:24}]" "$out" "malformed line"
+  assert_contains "diag_labelled[${leak:0:24}]" "$out" "reason: capture grammar rejected"
+done
+mkdiag 'printf "ERROR: weird thing sk-abcdefghijklmnopqrstuvwx\033[31m\n" >&2; exit 2'
+out=$(run_diag)
+assert_not_contains "diag_no_echo_unclassified_secret" "$out" "sk-abcdefghijklmnop"
+assert_contains "diag_unclassified_generic" "$out" "unknown writer error (rc=2)"
+# rc 6 / rc 7 semantics unchanged
+mkdiag 'echo "ERROR: reviewer" >&2; exit 6'
+out=$(run_diag); rc=$?
+assert_rc "diag_rc6_still_aborts_exit6" 6 "$rc"
+assert_not_contains "diag_rc6_no_reason" "$out" "reason:"
+mkdiag 'echo "ERROR: policy" >&2; exit 7'
+out=$(run_diag); rc=$?
+assert_rc "diag_rc7_wrapper_exit0" 0 "$rc"
+assert_contains "diag_rc7_policy_message_unchanged" "$out" "writer refused candidate by capture policy (evidence missing, MAX_PENDING or SESSION_LIMIT reached; rc=7)"
+assert_not_contains "diag_rc7_no_reason" "$out" "reason:"
+# control: success path output unchanged
+mkdiag 'echo "capture_id: '"$(printf 'c%.0s' $(seq 1 64))"'"; echo "noise on stderr" >&2; exit 0'
+out=$(run_diag); rc=$?
+assert_rc "diag_success_exit0_control" 0 "$rc"
+assert_contains "diag_success_captured_line_control" "$out" "captured: $(printf 'c%.0s' $(seq 1 64))"
+assert_not_contains "diag_success_no_reason_control" "$out" "reason:"
+assert_not_contains "diag_success_no_rejection_control" "$out" "writer rejected"
+assert_not_contains "diag_success_stderr_not_echoed_control" "$out" "noise on stderr"
+out=$(CLAUDE_CODE_SESSION_ID=sessDiag bash "$AUTOCAP" --store "$(bootstrap_store "$TMP/diag_real")" --staged "$diag_cand" 2>&1)
+assert_contains "diag_real_writer_success_control" "$out" "captured: "
+# end-to-end with the real writer: sha tool failure is categorised, nothing leaks
+rstore=$(bootstrap_store "$TMP/diag_e2e")
+out=$(PATH="$TMP/shim_sha_fail:$PATH" CLAUDE_CODE_SESSION_ID=sessDiag bash "$AUTOCAP" --store "$rstore" --staged "$diag_cand" 2>&1); rc=$?
+assert_rc "diag_e2e_hash_failure_wrapper_exit0" 0 "$rc"
+assert_eq "diag_e2e_hash_failure_no_inbox_file" "0" "$(pending_count "$rstore" 2>/dev/null)"
+assert_not_contains "diag_e2e_no_body_echo" "$out" "turnips"
+assert_contains "diag_e2e_sha_failure_hash_label" "$out" "reason: hash computation failed"
+assert_not_contains "diag_e2e_sha_failure_not_grammar_label" "$out" "capture grammar rejected"
+for tool in wc sort awk; do
+  rstore=$(bootstrap_store "$TMP/diag_e2e_$tool")
+  out=$(PATH="$TMP/shim_${tool}_fail:$PATH" CLAUDE_CODE_SESSION_ID=sessDiag bash "$AUTOCAP" --store "$rstore" --staged "$diag_cand" 2>&1)
+  assert_eq "diag_e2e_${tool}_failure_no_inbox_file" "0" "$(pending_count "$rstore" 2>/dev/null)"
+  assert_not_contains "diag_e2e_${tool}_failure_no_candidate_echo" "$out" "turnips"
+  assert_not_contains "diag_e2e_${tool}_failure_not_captured" "$out" "captured: "
+  assert_not_contains "diag_e2e_${tool}_failure_not_grammar_label" "$out" "reason: capture grammar rejected"
+done
+# grammar-failure control still maps to the grammar label (stub writer message)
+mkdiag "printf '%s\\n' 'ERROR: malformed frontmatter line (expected key:): x' >&2; exit 2"
+out=$(run_diag)
+assert_contains "diag_grammar_control_label" "$out" "reason: capture grammar rejected"
+assert_not_contains "diag_grammar_control_not_hash_label" "$out" "hash computation failed"
+
+# ===========================================================================
 # summary
 # ===========================================================================
 echo ""
