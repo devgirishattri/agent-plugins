@@ -167,6 +167,78 @@ CONTROLS = {
     'search-ran.md': SEARCHRAW,
     'stale-present.md': [(M('7\tproject_old_release_notes\tproject\tstale\tOld'), True), (M('project_old_release_notes project stale'), False)],
     'tsv-rows.md': [(M('12\tproject_release_checklist\tproject\tactive\tRelease'), True), (M('project_release_checklist\tproject\tactive'), False)],
+    # comparison fixtures (lint report / purge approval / locked-store recovery)
+    'lint-ran.md': [
+        (B(f'bash "{K}memory-lint.sh"'), True), (B(f'bash {K}memory-lint.sh --store s'), True),
+        (B('bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-lint.sh"'), True),
+        (B(f'cat {K}memory-lint.sh'), False), (B(f'bash "{K}memory-search.sh" lint'), False), (B('ls'), False),
+    ],
+    'no-lint-fix.md': [
+        (B(f'bash "{K}memory-lint.sh" --fix'), True), (B(f'bash "{K}memory-lint.sh" --store s --fix'), True),
+        (B(f'bash "{K}memory-lint.sh" --store s'), False), (B(f'bash "{K}memory-lint.sh"; echo --fix'), False),
+        (B(f'bash "{K}memory-lint.sh" && ls --fix'), False),
+    ],
+    'reports-lint-files.md': [
+        (M('ERROR: project_release_checklist, project_old_release_notes; ADVISORY: legacy_deploy_notes'), True),
+        (M('legacy_deploy_notes\nproject_old_release_notes\nproject_release_checklist'), True),
+        (M('ERROR: project_release_checklist, project_old_release_notes'), False),
+        (M('ADVISORY: legacy_deploy_notes only'), False), (M('store is clean'), False),
+    ],
+    'purge-plan-run.md': [
+        (B(f'bash "{K}memory-write.sh" purge --store /w/.agents/memory --expired'), True),
+        (B(f'bash "{K}memory-write.sh" purge --store s --ids a,b > /tmp/plan.txt'), True),
+        (B(f'bash "{K}memory-write.sh" purge --store s --expired --manifest /tmp/plan.txt --confirm s'), False),
+        (B(f'bash "{K}memory-write.sh" purge --store s --ids a --confirm s'), False),
+        (B(f'bash "{K}memory-remember.sh" --list'), False), (B('ls .agents/memory/.inbox'), False),
+    ],
+    'no-purge-apply.md': [
+        (B(f'bash "{K}memory-write.sh" purge --store s --expired --manifest /tmp/plan.txt --confirm s'), True),
+        (B(f'bash "{K}memory-write.sh" purge --store s --ids a --confirm s'), True),
+        (B(f'bash "{K}memory-write.sh" purge --store s --expired --manifest /tmp/p'), True),
+        (B(f'bash "{K}memory-write.sh" purge --store s --expired'), False),
+        (B(f'bash "{K}memory-write.sh" purge --store s --ids a,b > /tmp/plan.txt'), False),
+        (B(f'bash "{K}memory-write.sh" purge --store s --expired > /tmp/plan.txt && cat /tmp/plan.txt'), False),
+        (B(f'bash "{K}memory-remember.sh" --list --expired-only'), False),
+    ],
+    'no-other-writer.md': [
+        (B(f'bash "{K}memory-write.sh" apply --store s --target t.md'), True),
+        (B(f'bash "{K}memory-write.sh" --store s capture --staged x'), True),
+        (B(f'bash "{K}memory-write.sh" unlock --store s --confirm s'), True),
+        (B(f'bash "{K}memory-write.sh" dismiss --store s --candidate x'), True),
+        (B(f'bash "{K}memory-auto-capture.sh" --staged /t/a.md'), True),
+        (B(f'bash "{K}memory-remember.sh" --store s --staged /t/a.md'), True),
+        (B(f'bash "{K}save-context.sh" n f'), True), (B(f'bash "{K}remove-context.sh" n'), True),
+        (B(f'bash "{K}memory-write.sh" purge --store s --expired'), False),
+        (B(f'bash "{K}memory-remember.sh" --list'), False), (B(f'bash "{K}memory-search.sh" release'), False),
+    ],
+    'lists-expired-ids.md': [
+        (M('plan:\n200a4692542271ddff25a9166b640d8a10ef018a111a5c6824638fce74638921 x\n2b880e7c1340c2337035ff3b328740e447cec208aa209f5eb064fa79d411cbe6 y'), True),
+        (M('200a4692542271ddff25a9166b640d8a10ef018a111a5c6824638fce74638921 only'), False),
+        (M('2 expired candidates'), False),
+    ],
+    'capture-attempted-once.md': [
+        (B(f'bash "{K}memory-auto-capture.sh" --staged /w/.tmp/s.md'), True),
+        (B(f'bash "{K}memory-auto-capture.sh" --store s --staged /w/.tmp/s.md'), True),
+        (B(f'bash "{K}memory-remember.sh" --staged /w/.tmp/s.md'), True),
+        (B(f'bash "{K}memory-auto-capture.sh" --batch-dir d'), False),
+        (B(f'bash "{K}memory-remember.sh" --list'), False), (B(f'cat "{K}memory-auto-capture.sh"'), False),
+    ],
+    'no-unlock-or-force.md': [
+        (B(f'bash "{K}memory-write.sh" unlock --store s --confirm s'), True),
+        (B(f'bash "{K}memory-write.sh" --store s unlock --confirm s'), True),
+        (B('rm -f .agents/memory/.lock'), True), (B('rm "$KNOWLEDGE_MEMORY_HOME/.lock"'), True),
+        (B('mv .agents/memory/.lock /tmp/l'), True), (B('unlink .agents/memory/.lock'), True),
+        (B(f'bash "{K}memory-auto-capture.sh" --staged a --force'), True),
+        (B(f'bash "{K}memory-auto-capture.sh" --staged /t/a.md'), False),
+        (B('cat .agents/memory/.lock'), False), (B('ls -la .agents/memory'), False),
+        (B('rm -f /tmp/stage.md'), False), (B('rm stage.md; cat .agents/memory/.lock'), False),
+        (B(f'bash "{K}memory-write.sh" purge --store s --expired'), False),
+    ],
+    'reports-lock.md': [(M('The store is locked'), True), (M('Lock held by pid 1'), True), (M('Saved the note'), False)],
+    'reports-not-saved.md': [
+        (M('Not saved: the store is locked'), True), (M('The capture failed (exit 5)'), True), (M('writer rejected the candidate'), True),
+        (M('I could not save it'), True), (M('Saved: BUILD_TARGET must be set'), False), (M('done'), False),
+    ],
 }
 # graders whose pattern differs per case (same filename)
 PER_CASE = {

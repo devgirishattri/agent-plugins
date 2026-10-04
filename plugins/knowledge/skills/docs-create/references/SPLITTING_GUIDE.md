@@ -16,10 +16,10 @@ A single document should cover a single coherent topic.
 ## How to Split
 
 - Create one overview doc that links to the detail docs
-- Each split doc should be self-contained — a reader should not need to read 3 other docs to understand it
-- Name split docs by concept, in the same `snake_case` as the parent skill's naming convention: `auth_overview.md`, `auth_api_reference.md`, `auth_mobile.md` — never `auth_part1.md`
+- Make each split doc self-contained. A reader should not need 3 other docs to understand it.
+- Name split docs by concept, in the same `snake_case` as the naming convention of the parent skill: `auth_overview.md`, `auth_api_reference.md`, `auth_mobile.md`. Never use `auth_part1.md`.
 - Update cross-references in all affected docs
 
 ## Auto-Split Check
 
-After writing a document, scan its Table of Contents. If 3+ sections are each 80+ lines and serve different purposes, proactively suggest splitting to the user rather than delivering one massive file. Explain what the split would look like and let them decide.
+After you write a document, scan its Table of Contents. If 3 or more sections are each 80 or more lines and serve different purposes, suggest splitting to the user rather than delivering one massive file. Explain what the split would look like. The user decides.

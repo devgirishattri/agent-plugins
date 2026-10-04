@@ -45,7 +45,13 @@ the helper. Never use --force to repair an acknowledgement. Only when
 authorized, send a separate exact session-chat message to the recorded
 recipient.
 
-Legal from `created`, `assigned`, or `review` (review rejection); other transitions are rejected unless `--force`. Unblock by re-running task-assign (blocked → assigned is legal). Report that the task was marked blocked.
+The transition is legal from `created`, `assigned`, or `review` (review rejection).
+Other transitions are rejected unless `--force`.
+Unblock by re-running task-assign; blocked → assigned is legal.
+Report the task ID, the observed `blocked` state, and the reason.
+Report acknowledgement delivery (sent, queued, or failed) separately.
+Delivery does not prove that the assigner acted.
+Without evidence from the assigner, report that action as unverified.
 
 For a task with a verification contract, read `../task-contract/SKILL.md`.
 Contract assignment accepts only pane, id and one prompt. Review, done and block

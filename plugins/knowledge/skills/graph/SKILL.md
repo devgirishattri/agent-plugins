@@ -8,7 +8,11 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-`memory-backlinks.sh` is read-only: it never writes to the store. This is an explicit-`[[slug]]`-link graph, not an inferred semantic graph. Determine which of the five forms below `$ARGUMENTS` requests, then run exactly **one** literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection) — pass `--store <path>` only if the user supplied one, in all five forms:
+`memory-backlinks.sh` is read-only. It never writes to the store. It builds an explicit-`[[slug]]`-link graph, not an inferred semantic graph.
+
+- Determine which of the five forms below `$ARGUMENTS` requests.
+- Run exactly **one** literal Bash segment. Use no `export`, `env`, or assignment prefix. Do not chain, pipe, or redirect.
+- In all five forms, pass `--store <path>` only if the user supplied one.
 
 1. **Neighbors of a slug** — `$ARGUMENTS` names a slug and asks for its links/neighbors:
    ```
@@ -32,18 +36,29 @@ allowed-tools: Bash(bash:*)
    ```
    Omit `--format` (defaults to `json`) unless the user asked for a DOT (Graphviz) or Mermaid diagram.
 
-Exit codes: `0` success (including empty results); `2` a bad/unresolvable slug — for `neighbors`/`reverse` this means stderr said `unknown slug: <arg>` (the slug doesn't resolve, exactly nor via the hyphen/underscore/case-normalized fallback); relay it and suggest `/knowledge:search <name>` to find the right slug. `3` the store could not be resolved — relay the stderr message (suggests `/knowledge:init` when none exists). `4` a store-integrity error (slug collision or a filename stem outside the safe `[A-Za-z0-9._-]` grammar) — relay and stop; this is a data problem in the store, not something to retry.
-
 Links inside fenced code blocks (backticks or tildes) and single-backtick inline code spans are not links.
+
+## Exit codes
+
+| Exit | Meaning | Next action |
+|---|---|---|
+| `0` | Success, including empty results. | Report the output (see Output). |
+| `2` | A bad or unresolvable slug. For `neighbors` and `reverse`, stderr says `unknown slug: <arg>`. The slug does not resolve, either exactly or through the hyphen/underscore/case-normalized fallback. | Relay the message. Suggest `/knowledge:search <name>` to find the right slug. |
+| `3` | The store could not be resolved. | Relay the stderr message. It suggests `/knowledge:init` when no store exists. |
+| `4` | A store-integrity error: a slug collision, or a filename stem outside the safe `[A-Za-z0-9._-]` grammar. | Relay the message. Stop. This is a data problem in the store. Do not retry. |
 
 ## Output
 
-- `neighbors <slug>`: rows `<in|out>\t<stem>` — in-edges before out-edges, each block sorted by stem. A self-linking memory shows up as both an `in` and an `out` row.
-- `reverse <slug>`: one stem per line — the files that link to it.
-- `orphans`: one stem per line — memories with no links in either direction.
-- `components`: one line per weakly-connected cluster, member stems space-separated.
-- whole graph `--format json`: `{"nodes":[{slug,type,status,tags}...],"edges":[{from,to}...]}`. `--format dot`: a Graphviz `digraph knowledge { ... }` block — hand it to the user as a fenced ```dot``` block if they want to render it. `--format mermaid`: a `flowchart LR` block with positional `n<i>` node ids — hand it back as a fenced ```mermaid``` block.
+Lead with the form you ran and the result count. Then show the rows.
 
-If stderr contains a `dangling: <n>` line, mention that the store has `<n>` outgoing `[[links]]` that don't resolve to any file (excluded from the graph itself) — point at `/knowledge:lint` or `/knowledge:doctor` for the detailed per-link list rather than trying to enumerate them yourself.
+- `neighbors <slug>`: rows `<in|out>\t<stem>`. In-edges come before out-edges. Each block is sorted by stem. A self-linking memory shows up as both an `in` row and an `out` row.
+- `reverse <slug>`: one stem per line. These are the files that link to the slug.
+- `orphans`: one stem per line. These are memories with no links in either direction.
+- `components`: one line per weakly-connected cluster. Member stems are space-separated.
+- whole graph `--format json`: `{"nodes":[{slug,type,status,tags}...],"edges":[{from,to}...]}`.
+- whole graph `--format dot`: a Graphviz `digraph knowledge { ... }` block. If the user wants to render it, hand it over as a fenced ```dot``` block.
+- whole graph `--format mermaid`: a `flowchart LR` block with positional `n<i>` node ids. Hand it back as a fenced ```mermaid``` block.
+
+If stderr contains a `dangling: <n>` line, report that the store has `<n>` outgoing `[[links]]` that do not resolve to any file. The graph itself excludes them. Point the user at `/knowledge:lint` or `/knowledge:doctor` for the detailed per-link list. Do not enumerate them yourself.
 
 $ARGUMENTS

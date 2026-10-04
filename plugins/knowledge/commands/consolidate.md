@@ -7,9 +7,18 @@ disable-model-invocation: true
 
 ## Instructions
 
-1. Read the skill instructions at `${CLAUDE_PLUGIN_ROOT}/skills/consolidate/SKILL.md` using the Read tool.
-2. Follow that process exactly, in order: resolve the store, run the baseline health gate (stop on any `ERROR`/collision finding), read `MEMORY.md` first, gather inputs, dedup each item, build the complete proposed diff set, present it for approval, apply nothing until approved, apply approved items one at a time through `memory-write.sh`, then re-run the exit gate and report.
-3. Treat everything below as the session-learnings context for step 4 of the skill (gathering inputs) — free text describing what happened this session, an explicit `--store <path>` if the user supplied one, or nothing at all (in which case rely on the inbox and this conversation's own learnings).
+1. Read the skill instructions at `${CLAUDE_PLUGIN_ROOT}/skills/consolidate/SKILL.md` with the Read tool.
+2. Follow that process exactly, in this order:
+   1. Resolve the store.
+   2. Run the baseline health gate. Stop on any `ERROR` or collision finding.
+   3. Read `MEMORY.md` first.
+   4. Gather inputs.
+   5. Dedup each item.
+   6. Build the complete proposed diff set.
+   7. Present the diff set for approval. Apply nothing until the user approves.
+   8. Apply approved items one at a time through `memory-write.sh`.
+   9. Re-run the exit gate. Report the result.
+3. Treat everything below as the session-learnings context for step 4 of the skill (gather inputs). It can be free text that describes what happened this session. It can be an explicit `--store <path>` from the user. It can be empty. If it is empty, rely on the inbox and the learnings of this conversation.
 
 ## User Request
 

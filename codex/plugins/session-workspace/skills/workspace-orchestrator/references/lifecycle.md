@@ -70,9 +70,9 @@ Report exact changed paths and verification results.
 
 4. The executor calls task-review; the configured reviewer audits independently
    and closes with `task-done "APPROVE: ..."` or rejects with `task-block`.
-5. Before commit authorization, verify reviewer authorship, task identity,
-   reviewed diff/SHA, timestamp freshness within `audit_ttl_minutes`, and an
-   explicit `APPROVE` token in the closing note or correlated reply. A `done`
+5. Before commit authorization, verify these items: reviewer authorship, task
+   identity, reviewed diff/SHA, and timestamp freshness within `audit_ttl_minutes`.
+   Also verify an explicit `APPROVE` token in the closing note or correlated reply. A `done`
    status alone proves closure, not a clean verdict.
 
 ## Commit
@@ -82,9 +82,9 @@ For a task with a verification contract, require a fresh successful
 the actual current source, generation, receipt and independent reviewer
 admission. A ledger `done` value or old helper's closing note cannot substitute.
 After committing, use `task-contract inspect <id> --committed` before push or
-deployment preflight. That mode requires a clean tree with exactly the reviewed
-file bytes, an unchanged check specification, and the verified base as an
-ancestor of the resulting commit. If files differ, evidence expires, or a check
+deployment preflight. That mode requires three things. The tree is clean and holds exactly the
+reviewed file bytes. The check specification is unchanged. The verified base is
+an ancestor of the resulting commit. If files differ, evidence expires, or a check
 is unavailable, stop and obtain fresh verification/review. Never rewrite an
 admission to make it fit a new revision.
 
@@ -102,9 +102,9 @@ SHA, final status, and recent log. Commit authorization never implies push.
 
 Requires a separate user-explicit push request after commit.
 
-1. Dispatch a read-only executor preflight that refreshes the configured remote
-   and proves: current branch is the work branch, tree is clean, local work is
-   ahead of `<remote>/<work>`, and local work is not behind it.
+1. Dispatch a read-only executor preflight that refreshes the configured remote.
+   The preflight proves four facts. The current branch is the work branch. The tree
+   is clean. Local work is ahead of `<remote>/<work>`. Local work is not behind it.
 2. Show the exact outgoing commits and obtain final user confirmation.
 3. Dispatch only a normal `git push <remote> <work_branch>`. Require the pushed
    SHA and empty post-push ahead/behind output.
@@ -128,19 +128,19 @@ six gates:
 6. the working tree is clean.
 
 Show the exact commits and obtain final user confirmation. The executor may
-then push the work ref normally, check out release without `-B`, update it only
-by fast-forward, merge work into release with `--no-ff`, and push release
-normally. It returns to work afterwards.
+then take these steps. Push the work ref normally. Check out release without `-B`.
+Update release only by fast-forward. Merge work into release with `--no-ff`.
+Push release normally. The executor returns to work afterwards.
 
 When `align_work_after_release` is true, the executor may fast-forward work to
 the exact newly-created release merge commit and push work normally. It must use
 `--ff-only`; if that is impossible, stop and report without merge, rebase,
 reset, or force. When false, report the expected release-ahead-of-work state.
 
-The fixed Git floor permits only fetch/status/read checks, commit on work,
-normal pushes of the configured work/release refs, the reviewed `--no-ff`
-work-to-release merge, and optional `--ff-only` alignment. Never force, delete a
-ref, rewrite history, use `checkout -B` on release, or bypass verification.
+The fixed Git floor permits only these operations: fetch/status/read checks,
+commit on work, normal pushes of the configured work/release refs, the reviewed
+`--no-ff` work-to-release merge, and optional `--ff-only` alignment. Never force,
+delete a ref, rewrite history, use `checkout -B` on release, or bypass verification.
 
 ## Selftest and prompt preview
 
@@ -148,9 +148,10 @@ Selftest is read-only: assert schema/normalized plan, workspace doctor,
 harness-status identity, harness doctor, configured pane health, and ledger
 readability. It does not run live denial canaries or repair state.
 
-Prompt preview formats the selected workflow packet with target, required
-evidence, acceptance criteria, verification, reply contract, and prohibitions,
-labels it `UNSENT`, and performs no dispatch or ledger write.
+Prompt preview formats the selected workflow packet. The packet holds the target,
+required evidence, acceptance criteria, verification, reply contract, and
+prohibitions. Prompt preview labels the packet `UNSENT`. It performs no dispatch
+and no ledger write.
 
 ## Evidence taxonomy
 

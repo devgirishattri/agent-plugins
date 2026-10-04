@@ -71,7 +71,10 @@ Pass `--store <path>` to every Bash call below only if the user supplied one in 
 
 ### Capturing a candidate
 
-1. Compose the staged candidate file yourself (do not ask the user to hand-write YAML). It is a strict envelope: YAML frontmatter with source, sensitivity, proposed, and optional evidence, then a markdown body. Use the file-editing tool to create it at a scratch path — never construct it via a Bash heredoc. Grammar (closed — nothing outside this shape is accepted, and the script exits `2` on any violation):
+1. Compose the staged candidate file yourself. Do not ask the user to hand-write YAML.
+   Use a strict envelope: YAML frontmatter with source, sensitivity, proposed, and optional evidence, then a markdown body.
+   Use the file-editing tool to create it at a scratch path. Never construct it via a Bash heredoc.
+   The grammar is closed. The script accepts only this shape and exits `2` on any violation:
    ```
    ---
    source: <this session/context id — any short non-empty label, e.g. the session name>
@@ -90,10 +93,14 @@ Pass `--store <path>` to every Bash call below only if the user supplied one in 
 
    **How to apply:** <for feedback/project types>
    ```
-   - `source` is required and non-empty; it is the envelope's own provenance field (distinct from the optional `proposed.source`, which is the memory schema's own field — do not conflate them).
+   - `source` is required and non-empty. It records provenance for the candidate envelope.
+     The optional `proposed.source` belongs to the proposed memory. Do not conflate them.
    - `sensitivity` is `normal` or `sensitive` — use `sensitive` for anything containing credentials, tokens, or other data the user would not want surfaced casually in recall output.
    - Under `proposed:`, only the v1 memory schema's own fields are accepted as scalars (`schema_version`, `name`, `description`, `created`, `updated`, `last_verified`, `review_after`, `status`, `confidence`, `source`, `supersedes`, `migrated`), the list field `tags`, and the one-level mapping `metadata:` (with its own scalar `type`). Omit any field you are not proposing a value for — in particular, do not include `created`/`updated` unless you have a real reason to backdate them; consolidation stamps these at promotion time.
-   - Never include `capture_id`, `created`, `origin_session`, or `origin_pane` at the top level — those are writer-assigned; the script rejects them in staged input. Optional `evidence` is a non-empty single-line scalar, at most 300 bytes; it is required for `source: auto_capture`.
+   - Never include `capture_id`, `created`, `origin_session`, or `origin_pane` at the top level.
+     The writer assigns these fields. The script rejects them in staged input.
+   - Optional `evidence` is a non-empty single-line scalar, at most 300 bytes.
+     It is required for `source: auto_capture`.
    - The body (after the closing `---`) becomes the candidate's proposed memory body; include `**Why:**` / `**How to apply:**` when `metadata.type` is `feedback` or `project`.
 
 2. Run exactly one literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection):

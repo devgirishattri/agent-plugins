@@ -29,9 +29,9 @@ Never infer missing coordinates or fall back to a project-local command.
 
 ## Immutable boundary
 
-- Follow this order: status → plan → independent plan approval → explicit
-  user confirmation → scheduler assignment → independent audit → separately
-  authorized commit → push → deploy.
+- Follow this order: status → plan → independent plan
+  approval → explicit user confirmation → scheduler assignment → independent
+  audit → separately authorized commit → push → deploy.
 - Plan approval is a correlated reviewer reply containing an explicit
   `APPROVE` token. Audit approval is a reviewer-authored scheduler closing note
   (or correlated reply) containing explicit `APPROVE`. A dispatch, a pane

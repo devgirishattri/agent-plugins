@@ -124,8 +124,8 @@ closure, not acceptance.
 
 ## Under the strict-v1 harness
 
-Attach, assign, and reconcile are orchestrator operations; verify and review
-belong to the executor; done belongs to the bound reviewer; inspect is open to
+Attach, assign, and reconcile are orchestrator operations. Verify and review
+belong to the executor. Done belongs to the bound reviewer. Inspect is open to
 every role. The harness also checks that the acting pane is the task's bound
 actor. Immediately before each check runs, verify asks the selected harness
 policy whether this pane could run that exact command directly, and re-checks
@@ -139,9 +139,9 @@ transition are not allowed. Use the normal task commands.
 ## Limits
 
 Receipts, digests, and admissions establish local consistency on this host.
-They are not signatures, do not resist tampering by the same user, do not
-authenticate an external CI runner, and do not authorize commit, push, merge,
-or release. Pane identity outside the harness is self-asserted. A repository
+They are not signatures. They do not resist tampering by the same user. They
+do not authenticate an external CI runner. They do not authorize commit, push,
+merge, or release. Pane identity outside the harness is self-asserted. A repository
 containing tracked symlinks or hard-linked files cannot be bound in v1. The
 assignment prompt is stored in the task JSON, where every pane that can read
 the ledger can see it.

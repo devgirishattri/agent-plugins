@@ -108,8 +108,9 @@ Codex TUI redraws, wrapping, approval prompts, and active command output can sti
 | Durable `Queued ...` success | The fallback is recorded. Do not retry the message. |
 | Hard failure without a queued success | Fix the reported cause before retrying. |
 
-A delivery receipt does not prove that the recipient completed the task.
-Use correlated replies to check that separately.
+A delivery receipt confirms transport, not task completion.
+Check the recipient's correlated reply or task evidence before reporting completion.
+If that evidence is unavailable, report task completion as unverified.
 
 For durable fallback, the sender writes the queue row and dispatch file into the recipient runtime's message directory. Codex recipients use `${CODEX_HOME:-~/.codex}/messages`; Claude recipients use `${CLAUDE_HOME:-~/.claude}/messages`. When `SESSION_CHAT_TARGET_MESSAGES_DIR` is exported in every participating pane, it becomes the shared sender and receiver mailbox root instead. Queue operations lock under that message directory so mixed Codex/Claude fallback does not depend on both runtimes sharing the same `TMPDIR`.
 
@@ -159,7 +160,7 @@ Use `$session-chat:messages-list` to inspect trusted dispatch message files in `
 ## Fleet Helpers
 
 - `$session-chat:broadcast [--all] [--match GLOB] <text>`: fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `$session-chat:send` per pane.
-- `$session-chat:message-search <pattern> [--days N] [--peer NAME]`: search the message archive (every sent + surfaced incoming message, 200-char excerpts, 30-day retention) plus full dispatch bodies.
+- `$session-chat:message-search <pattern> [--days N] [--peer NAME]`: search the message archive plus full dispatch bodies. The archive holds every sent and surfaced incoming message as a 200-character excerpt, with 30-day retention.
 - `$session-chat:check-replies [--pending] [--since MIN]`: which sent messages have confirmed correlated replies. Use `$session-chat:reply <pane> <id> <message>` for responses; it generates `[re:<id>]` automatically. An unconfirmed row is not evidence that the peer still has an active task.
 - `$session-chat:pane-health [name] [--all]`: liveness, cwd/location, inbox backlog, and lock state per named pane; catches dead, duplicate, or repo-drifted workers before dispatch.
 

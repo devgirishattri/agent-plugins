@@ -41,9 +41,7 @@ transparent for new-format candidates.
 
 ## 0. Invocation discipline (read this first)
 
-Every call into a plugin helper script below is **exactly one literal Bash
-segment**: the literal word `bash`, then the plugin-relative script path
-(`"${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh"`), then flags. Add nothing else. No
+Make every call into a plugin helper script below **exactly one literal Bash segment**. The segment has three parts: the literal word `bash`, the plugin-relative script path (`"${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh"`), and flags. Add nothing else. No
 `export`/`env`/inline-assignment prefix. No `&&`, `;`, `|`, `>`, `<`, backticks,
 or `$(...)` inside that segment. Never combine two scripts on one line. Never
 wrap a call as `bash -c "..."`. That is not a recognized helper invocation. It
@@ -73,9 +71,7 @@ Otherwise, derive a candidate path yourself, mirroring (not replacing) the
 spec's canonical discovery algorithm, using only plain read-only commands, each
 its own step:
 
-1. `git rev-parse --show-toplevel` → `REPO_ROOT` (if this fails, you are not
-   inside a git repository; stop and tell the user so — there is nothing to
-   resolve).
+1. Run `git rev-parse --show-toplevel`. The result is `REPO_ROOT`. If the command fails, you are not inside a git repository. Stop and tell the user. There is nothing to resolve.
 2. Check `KNOWLEDGE_MEMORY_HOME` in the current environment (a plain
    `echo "${KNOWLEDGE_MEMORY_HOME:-}"`). If set and non-empty, that is your
    candidate `STORE_PATH`.
@@ -86,20 +82,13 @@ its own step:
    `<REPO_ROOT>/.agents/memory` (a plain `find <dir> -mindepth 1 -maxdepth 1
    -type d`) and check each for a `MEMORY.md`. If **exactly one** has one, that
    subdirectory is your candidate `STORE_PATH`. If zero or more than one do,
-   you do not have a candidate — proceed to step 2 below anyway (omit
-   `--store`) and let the real resolver's error message be authoritative.
+   you have no candidate. Go to step 2 anyway and omit `--store`. The error message of the real resolver is authoritative.
 
-This is a convenience derivation only, never the authority. The very next step
-(baseline health) runs the real, single implementation of this algorithm
-(`lib.sh`'s `km_resolve_store`, shared by every helper script) and its exit
-code is what actually decides whether you have a usable store. If your
-candidate and the real resolver ever disagree, the real resolver wins — stop
-and ask, never guess further.
+This derivation is a convenience only. It is never the authority. The next step (baseline health) runs the real, single implementation of this algorithm: `km_resolve_store` in `lib.sh`, shared by every helper script. Its exit code decides whether you have a usable store. If your candidate and the real resolver disagree, the real resolver wins. Stop and ask. Do not guess further.
 
 ## 2. Baseline health gate
 
-Run all three, each as its own single literal Bash segment, passing
-`--store "<STORE_PATH>"` if you derived one in step 1 (omit it if you did not):
+Run all three commands. Run each as its own single literal Bash segment. Pass `--store "<STORE_PATH>"` if you derived one in step 1. Omit it if you did not:
 
 ```
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-lint.sh" [--store <path>]
@@ -136,15 +125,8 @@ add rows later:
   the memory file basename, then hook text; no headings.
 - **sectioned** — the same rows grouped under `#`/`##` headings (commonly by
   `metadata.type` or topic).
-- **multi-link** — some rows carry more than one `](...)` link on the same
-  line (the first is membership; any further links are cross-references) —
-  this can coexist with either flat or sectioned.
-- **degenerate** — free prose with no index rows at all, or index rows mixed
-  with inline knowledge prose. `memory-lint.sh`/`memory-index.sh` already
-  flagged this as ADVISORY in step 2; if so, propose a minimal index skeleton
-  (or an extraction of the inline prose into its own file) as part of the same
-  diff batch in step 6, using flat style unless the surrounding content
-  clearly implies sections.
+- **multi-link** — some rows carry more than one `](...)` link on the same line. The first link is membership. Any further links are cross-references. This style can coexist with either flat or sectioned.
+- **degenerate** — free prose with no index rows at all, or index rows mixed with inline knowledge prose. `memory-lint.sh` and `memory-index.sh` already flagged this as ADVISORY in step 2. If they did, propose a minimal index skeleton, or an extraction of the inline prose into its own file. Put the proposal in the same diff batch in step 6. Use flat style unless the surrounding content clearly implies sections.
 
 ## 4. Gather inputs
 
@@ -154,10 +136,7 @@ Two sources, both in scope for this run:
    this conversation that reads as a durable learning, decision, or
    how-to-work feedback worth persisting. Use judgment: don't invent a
    learning that didn't happen, and don't propose a diff for ephemeral
-   chatter that isn't durable knowledge. A learning that traces back to a
-   closed TODO/ISSUES/ticket item is treated exactly like any other learning
-   — see "Non-goals" below for the hard rule about never touching the
-   tracker file itself.
+   chatter that isn't durable knowledge. Treat a learning that traces back to a closed TODO/ISSUES/ticket item like any other learning. See "Non-goals" below for the hard rule: never touch the tracker file itself.
 2. **Inbox candidates** — run:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-remember.sh" --store <STORE_PATH> --list
@@ -166,41 +145,26 @@ Two sources, both in scope for this run:
    exact rows this store holds). Zero rows, exit `0`: no pending candidates —
    that's fine, not an error. Each row is
    `<id>\t<created>\t<age-days>\t<expired|active>\t<sensitivity>`. Both
-   `active` and `expired` rows are in scope for consolidation — expiry only
-   ever governs `purge` eligibility, never whether a candidate can still be
-   promoted. Mention any `expired` rows you did *not* end up promoting in your
-   final report so the user can decide separately whether to purge them (see
-   `/knowledge:remember`'s purge workflow — that is a distinct, explicit,
-   destructive action this skill never performs on its own).
+   `active` and `expired` rows are in scope for consolidation. Expiry governs only `purge` eligibility. It never decides whether a candidate can still be promoted. In your final report, list each `expired` row that you did *not* promote. The user then decides separately whether to purge it. See the purge workflow of `/knowledge:remember`. Purge is a distinct, explicit, destructive action. This skill never performs it on its own.
 
    `--list` shows only pending candidates; candidates a user already
    dismissed live in `<STORE_PATH>/.inbox/.dismissed/` and are out of scope
    (audit them read-only with `--list --dismissed`).
 
-   For each candidate you intend to consider, **Read**
-   `<STORE_PATH>/.inbox/<id>.md` to see its full proposed frontmatter and body
-   (the `--list` row alone is not enough to judge duplication).
+   For each candidate you intend to consider, **Read** `<STORE_PATH>/.inbox/<id>.md`. This shows its full proposed frontmatter and body. The `--list` row alone is not enough to judge duplication.
 
-   **Evidence and origin.** In the review step, display each candidate's
-   `evidence:` (absent on older or manual candidates — say so) and its
-   `origin_session` / `origin_pane` (absent on pre-0.5.0 candidates: treat as
-   unattributed). Ordinary explicit consolidation keeps its full-inbox scope.
-   Only when `distill` composes this workflow are candidates selected by
-   matching `origin_session` against the inherited session ID, read with the
-   single read-only Bash segment `printenv CLAUDE_CODE_SESSION_ID` (never set
-   or export it); missing, `unknown`, or foreign origins then stay pending
-   unless the user explicitly selects them. Selection only narrows what is
-   proposed; the approval contract in step 7 is unchanged, and `origin_*` is
-   attribution, not authorization.
+   **Evidence and origin.** In the review step, display the `evidence:` of each candidate. Older and manual candidates have none. Say so when it is absent. Also display `origin_session` and `origin_pane`. Pre-0.5.0 candidates have none. Treat those candidates as unattributed.
 
-You now have one flat worklist of **items**, each either a *session learning*
-(no stored candidate backing it) or an *inbox candidate* (backed by
-`<STORE_PATH>/.inbox/<id>.md`) — this distinction only matters at apply time
-(step 8): candidates get `--candidate`/`--expect-candidate`, session learnings
-do not.
+   Ordinary explicit consolidation keeps its full-inbox scope. Selection by origin applies only when `distill` composes this workflow:
+   - Select candidates whose `origin_session` matches the inherited session ID.
+   - Read the session ID with the single read-only Bash segment `printenv CLAUDE_CODE_SESSION_ID`. Never set or export it.
+   - Candidates with a missing, `unknown`, or foreign origin stay pending, unless the user explicitly selects them.
 
-If the worklist is empty, say so plainly and stop — there is nothing to
-consolidate this run.
+   Selection only narrows what you propose. The approval contract in step 7 is unchanged. `origin_*` is attribution, not authorization.
+
+You now have one flat worklist of **items**. Each item is either a *session learning* (no stored candidate backs it) or an *inbox candidate* (`<STORE_PATH>/.inbox/<id>.md` backs it). The difference matters only at apply time (step 8). Candidates get `--candidate` and `--expect-candidate`. Session learnings do not.
+
+If the worklist is empty, say so plainly and stop. There is nothing to consolidate this run.
 
 ## 4.5. Forward-looking retention gate, per item
 
@@ -232,9 +196,7 @@ For each item, gather three converging signals before judging:
    `<score>\t<slug>\t<type>\t<status>\t<description>`, ranked `score desc, slug
    asc`. Zero hits is a normal, valid result (exit `0`, empty stdout) — not an
    error.
-3. **The `name:`/`description:` grep backstop** — a plain, read-only grep over
-   the store's authoritative files (never `.inbox/`, which a bare `*.md` glob
-   in the store root never reaches anyway):
+3. **The `name:`/`description:` grep backstop** — a plain, read-only grep over the authoritative files of the store. Never grep `.inbox/`. A bare `*.md` glob in the store root never reaches it anyway:
    ```
    grep -n -i -E -- "name:.*<term>|description:.*<term>" "<STORE_PATH>"/*.md
    ```
@@ -260,65 +222,43 @@ either way. Never decide from the search row alone.
 
 For **every** item, before presenting anything, work out:
 
-- **Target diff.** For CREATE: the full new file content (canonical v1
-  frontmatter — `schema_version: 1`, `name`, `description`, `metadata.type`,
-  `created`/`updated` as today's date, plus `tags`/`status`/etc. as
-  applicable; body with `**Why:**`/`**How to apply:**` for `feedback`/
-  `project` types). For UPDATE: the file's current content (its "before") and
-  your proposed new content (its "after") — a plain-markdown before/after,
-  never a fabricated summary.
+- **Target diff.**
+  - For CREATE: the full new file content. Use canonical v1 frontmatter: `schema_version: 1`, `name`, `description`, `metadata.type`, and `created`/`updated` as today's date. Add `tags`, `status`, and similar fields as applicable. For the `feedback` and `project` types, the body needs `**Why:**` and `**How to apply:**`.
+  - For UPDATE: the file's current content (its "before") and your proposed new content (its "after"). Use a plain-markdown before/after. Never write a fabricated summary.
 - **Legacy upgrade, only when already updating that file.** If the UPDATE
-  target is a legacy file (no `schema_version`), upgrade it to canonical v1
-  **in the same diff** — never as a separate, otherwise-unmotivated edit.
-  Derive `metadata.type` from its existing top-level `type:` if unambiguous;
-  derive `created` from a date in the filename if one exists; otherwise stamp
-  `created: unknown` **together with** `migrated: <today's ISO date>` (a
-  canonical file can never carry `created: unknown` without a `migrated:`
-  date — that combination is a lint ERROR). Fill `name`/`description` from the
-  legacy values where present, or ask the user for a value where there is no
-  deterministic source. Never upgrade a file you are not otherwise touching
-  this run.
+  target is a legacy file (no `schema_version`), upgrade it to canonical v1 **in the same diff**. Never make the upgrade a separate, otherwise-unmotivated edit.
+  - Derive `metadata.type` from its existing top-level `type:` if that is unambiguous.
+  - Derive `created` from a date in the filename if one exists.
+  - Otherwise stamp `created: unknown` **together with** `migrated: <today's ISO date>`. A canonical file can never carry `created: unknown` without a `migrated:` date. That combination is a lint ERROR.
+  - Fill `name` and `description` from the legacy values where present. Where no deterministic source exists, ask the user for a value.
+  - Never upgrade a file you are not otherwise touching this run.
 - **MEMORY.md index diff**, preserving the detected style from step 3:
-  - *flat*: append the new row (or insert alphabetically if the existing rows
-    are clearly alphabetically ordered; append at the end otherwise — never
-    guess a fancier order).
+  - *flat*: append the new row. If the existing rows are clearly in alphabetical order, insert the row alphabetically. Otherwise append at the end. Never guess a fancier order.
   - *sectioned*: place the new row under the section matching the item's
     `metadata.type` or clear topical fit. If no section is an obvious fit,
     **stop and ask the user which section to use** — never invent a new
     section silently.
-  - *multi-link*: when updating a row that carries cross-reference links after
-    the first, only touch the first link/hook text; leave every subsequent
-    `](...)` on that row untouched. A brand-new file always gets its **own**
-    new row — never append it as a second link on an unrelated row.
-  - Every authoritative file (old and new) must end up with **exactly one**
-    first-link membership row across the whole file — never zero, never more
-    than one.
-- **`[[backlink]]` validation.** For every `[[slug]]` reference inside a
-  proposed body (new or updated), check it against the existing authoritative
-  stems plus every other slug in this same batch, using the shared resolution
-  order (exact stem, then normalized fallback only when it resolves to exactly
-  one real stem). An unresolved link is legal (forward-pointing links are
-  allowed) but must be flagged to the user as a dangling link in the diff
-  summary — never silently dropped, never silently "fixed" by guessing a
-  target.
-- **Sequencing rule for any proposed move/relocation/supersession.** If a diff
-  would make an existing file obsolete (e.g. two items are being merged into
-  one), propose the CREATE/UPDATE of the destination — including a
-  `supersedes: <old-slug>` field where applicable — and stop there. **Never**
-  stub, empty, or delete the old source file as part of this same run: that
-  is a separate, separately-approved `retire` step (the `/knowledge:promote`
-  surface, or a manual `memory-write.sh retire`, both out of this skill's
-  scope) that must only run **after** the destination's `apply` has verified
-  installed. Copy/write the destination before any source is ever touched —
-  never a transient "original vanished" state.
+  - *multi-link*: when you update a row that carries cross-reference links after the first, touch only the first link and hook text. Leave every subsequent `](...)` on that row untouched. A brand-new file always gets its **own** new row. Never append it as a second link on an unrelated row.
+  - Every authoritative file (old and new) must end up with **exactly one** first-link membership row across the whole index. Never zero. Never more than one.
+- **`[[backlink]]` validation.** For every `[[slug]]` reference inside a proposed body (new or updated), check it against the existing authoritative stems plus every other slug in this same batch. Use the shared resolution order: exact stem first. Use the normalized fallback only when it resolves to exactly one real stem.
+  - An unresolved link is legal, because forward-pointing links are allowed.
+  - Flag it to the user as a dangling link in the diff summary.
+  - Never drop it silently. Never "fix" it by guessing a target.
+- **Sequencing rule for any proposed move, relocation, or supersession.** Use this rule when a diff would make an existing file obsolete (for example, when two items merge into one).
+  - Propose the CREATE or UPDATE of the destination. Include a `supersedes: <old-slug>` field where applicable. Stop there.
+  - **Never** stub, empty, or delete the old source file in this same run. That is a separate, separately-approved `retire` step. The `/knowledge:promote` surface or a manual `memory-write.sh retire` performs it. Both are out of scope for this skill. The `retire` step runs only **after** the `apply` of the destination has verified as installed.
+  - Write the destination before you touch any source. This avoids a transient "original vanished" state.
 
 ## 7. Present for approval — apply nothing yet
 
-Show the user the **complete** diff set built in step 6: every target file's
-before/after (or full new content), the MEMORY.md index diff, every flagged
-dangling link, every legacy upgrade you're folding in, and which items are
-inbox candidates vs. session learnings. State plainly which items you judged
-as UPDATE-over-CREATE and why.
+Show the user the **complete** diff set built in step 6. Include:
+- every target file's before/after (or full new content)
+- the MEMORY.md index diff
+- every flagged dangling link
+- every legacy upgrade you are folding in
+- which items are inbox candidates and which are session learnings
+
+State plainly which items you judged as UPDATE-over-CREATE, and why.
 
 Give **every inbox candidate exactly one disposition** in this same
 presentation — no separate follow-up question:
@@ -326,43 +266,28 @@ presentation — no separate follow-up question:
 - **CREATE/UPDATE** — promoted through the diff above (consumed on apply).
 - **DISMISS** — reviewed and judged obsolete, duplicate, or session residue;
   it moves to `.inbox/.dismissed/` (content preserved, reversible with
-  `restore`) and stops counting as pending. For each proposed dismissal show
-  the candidate id, the reviewed content (or a faithful summary of it), the
-  reason, and its **raw sha256** (`shasum -a 256
-  "<STORE_PATH>/.inbox/<id>.md"`, taken when you read it for review). That
-  displayed hash is what the user approves.
+  `restore`) and stops counting as pending. For each proposed dismissal, show the candidate id, the reviewed content (or a faithful summary), the reason, and its **raw sha256**. Take the hash with `shasum -a 256 "<STORE_PATH>/.inbox/<id>.md"` when you read the candidate for review. The user approves that displayed hash.
 - **LEAVE PENDING** — not decided this round; stays in the inbox.
 
-**Apply nothing until the user has approved.** Approval covers the diffs and
-the dispositions together. If the user declines some or all items, drop
-exactly those from the batch — apply or dismiss only what was approved (or
-nothing, if everything was declined) in step 8. A candidate that isn't
-approved this round stays in the inbox untouched; mention it in the final
-report as "not promoted this round," not as an error. Never dismiss a
-candidate the user did not review and approve for dismissal.
+**Apply nothing until the user has approved.** Approval covers the diffs and the dispositions together.
+
+If the user declines some or all items, drop exactly those items from the batch. In step 8, apply or dismiss only what the user approved. If the user declined everything, apply nothing.
+
+A candidate that the user did not approve this round stays in the inbox untouched. In the final report, list it as "not promoted this round". Do not report it as an error. Never dismiss a candidate that the user did not review and approve for dismissal.
 
 ## 8. Apply — one item at a time, only after approval
 
-Process the approved items **one at a time, in sequence** — never batch two
-applies against the same pre-computed hashes, because MEMORY.md's content (and
-hash) changes after every successful apply. For each item:
+Process the approved items **one at a time, in sequence**. Never batch two applies against the same pre-computed hashes. MEMORY.md's content (and hash) changes after every successful apply. For each item:
 
-1. **Re-Read** `<STORE_PATH>/MEMORY.md` right now (fresh — not the copy from
-   step 3, which can be stale after a prior item in this same loop) and build
-   this item's final MEMORY.md content from the *current* bytes.
-2. **Write** (the tool, not a heredoc) the final target content to a scratch
-   file — the "staged target" — and the final MEMORY.md content to another
-   scratch file — the "staged index." For a CREATE, still write the staged
-   target file (it's the whole new file's content).
+1. **Re-Read** `<STORE_PATH>/MEMORY.md` now. Do not use the copy from step 3. It can be stale after a prior item in this same loop. Build this item's final MEMORY.md content from the *current* bytes.
+2. **Write** the final target content to a scratch file, the "staged target". Write the final MEMORY.md content to another scratch file, the "staged index". Use the Write tool, not a heredoc. For a CREATE, still write the staged target file. It holds the new file's whole content.
 3. Compute the CAS hashes, each its own plain, separate Bash step:
    - `--expect-index`: `shasum -a 256 "<STORE_PATH>/MEMORY.md"` (the file you
      just re-read, taken **immediately** before this apply call — not an
      earlier snapshot).
    - `--expect-target`: literal `absent` for a CREATE; otherwise
      `shasum -a 256 "<STORE_PATH>/<target>.md"` on the current file.
-   - If this item is an inbox candidate: `--expect-candidate` is the **raw**
-     sha256 of the whole current `<STORE_PATH>/.inbox/<id>.md` file (not the
-     semantic capture key) — `shasum -a 256 "<STORE_PATH>/.inbox/<id>.md"`.
+   - If this item is an inbox candidate, compute `--expect-candidate`. It is the **raw** sha256 of the whole current `<STORE_PATH>/.inbox/<id>.md` file, not the semantic capture key: `shasum -a 256 "<STORE_PATH>/.inbox/<id>.md"`.
 4. Invoke exactly one literal Bash segment:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-write.sh" apply \
@@ -389,27 +314,17 @@ hash) changes after every successful apply. For each item:
 **Approved dismissals** — one candidate at a time, after the approved
 CREATE/UPDATE items:
 
-1. Use the **approved** raw sha256 shown in step 7 as `--expect-candidate`.
-   Re-hash the file immediately before the call; if the current hash differs
-   from the approved one, the candidate changed after review — stop and
-   re-present it for a fresh approval. Never substitute a freshly computed
-   hash for the approved one.
+1. Use the **approved** raw sha256 shown in step 7 as `--expect-candidate`. Re-hash the file immediately before the call. If the current hash differs from the approved one, the candidate changed after review. Stop. Re-present it for a fresh approval. Never substitute a freshly computed hash for the approved one.
 2. Invoke exactly one literal Bash segment:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-write.sh" dismiss \
      --store <STORE_PATH> --candidate <capture-id> --expect-candidate <raw-sha256>
    ```
-3. Exit codes mean the same as for `apply`. `4` covers a changed candidate
-   (re-read and re-present it) and the case where both a pending and a
-   dismissed copy of the same id exist — relay it and stop; never delete
-   either copy yourself. A re-run for an already-dismissed candidate with the
-   same bytes is a no-op success.
+3. Exit codes mean the same as for `apply`.
+   - `4` covers two cases. In the first, the candidate changed: re-read it and re-present it. In the second, both a pending copy and a dismissed copy of the same id exist: relay the message and stop. Never delete either copy yourself.
+   - A re-run for an already-dismissed candidate with the same bytes is a no-op success.
 
-If the user later wants a dismissed candidate back, the reverse is
-`memory-write.sh restore` with the same `--store --candidate
---expect-candidate` arguments. It only runs on an explicit user request that
-names the candidate: show its id and the raw sha256 of
-`.inbox/.dismissed/<id>.md`, and pass exactly that displayed hash.
+If the user later wants a dismissed candidate back, the reverse is `memory-write.sh restore` with the same `--store --candidate --expect-candidate` arguments. Run it only on an explicit user request that names the candidate. Show its id and the raw sha256 of `.inbox/.dismissed/<id>.md`. Pass exactly that displayed hash.
 
 If the batch is empty (nothing was approved), skip straight to step 9 having
 made zero writes.
@@ -424,7 +339,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-index.sh" --store <STORE_PATH>
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-backlinks.sh" --store <STORE_PATH> report
 ```
 
-Report the results to the user:
+Report the results to the user. Lead with the overall state. Use these outcome words for each item: `applied`, `dismissed`, `left pending`, `declined`, `failed`. If any diff is still unapplied, the state is not done. Name the exit code and the exact next action.
 
 1. Verify that no new `ERROR`, drift, or collision findings were introduced.
    Report the result.
@@ -436,20 +351,13 @@ Report the results to the user:
 
 ## Non-goals (always, every run)
 
-- Never touch `TODO.md`/`ISSUES.md`/any tracker file, in any store or
-  location. A learning that came from a closed tracked item is promoted like
-  any other learning through the normal capture/consolidate path — the tracker
-  entry itself is never read, edited, or referenced as anything more than a
-  citation inside the memory file's own body if the user wants that.
+- Never touch `TODO.md`, `ISSUES.md`, or any tracker file, in any store or location. Promote a learning that came from a closed tracked item like any other learning, through the normal capture and consolidate path. Never read or edit the tracker entry itself. Reference it only as a citation inside the body of the memory file, and only if the user wants that.
 - Never write to `docs/`, `docs/decisions/`, `AGENTS.md`, or `CLAUDE.md` — that
   is the docs surface's job (`/knowledge:docs-create`), not this skill's.
-- Never dismiss or restore a candidate without the user's explicit approval
-  of that disposition, and never delete a dismissed candidate — dismissal is
-  an archive, not a purge.
+- Never dismiss or restore a candidate without the explicit user approval of that disposition. Never delete a dismissed candidate. Dismissal is an archive, not a purge.
 - Never retire, purge, or bootstrap a store as a side effect of consolidation
   — those are separate, explicitly user-invoked actions (`/knowledge:promote`,
   `/knowledge:remember`'s purge workflow, `/knowledge:init`).
 - Never call an external service, vector DB, or embeddings API — every dedup
   signal above is local and lexical.
-- Never mark this run "done" while any diff is still unapplied because of a
-  `4`/`5`/`6` you haven't resolved with the user — say so explicitly instead.
+- Never mark this run "done" while a diff is still unapplied because of an exit `4`, `5`, or `6`. Resolve the exit with the user first. Otherwise say so explicitly.

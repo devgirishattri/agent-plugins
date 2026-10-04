@@ -1234,5 +1234,8 @@ else
   echo "SKIP: plugins/knowledge/scripts/test-knowledge.sh not present"
 fi
 
+echo "-- advisory prose checker controls (style findings are not a gate) --"
+python3 -B scripts/test-plugin-prose.py
+
 echo "DONE: validation passed with provider structural parity intact"
 exit 0

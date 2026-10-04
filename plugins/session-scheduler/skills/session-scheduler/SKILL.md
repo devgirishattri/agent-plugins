@@ -5,7 +5,7 @@ description: When and how to track multi-pane orchestrator → executor work wit
 
 # session-scheduler: file-backed task ledger
 
-A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `$SESSION_SCHEDULER_HOME/tasks/<id>.json`; prompts and lifecycle packets go to `$SESSION_SCHEDULER_HOME/prompts/`; auto handoffs go to `$SESSION_SCHEDULER_HOME/handoffs/<task-id>/<nonce>.md`; per-task mutation locks live in `$SESSION_SCHEDULER_HOME/locks/<id>.lock/`.
+A thin layer on top of session-chat for orchestrator workflows. Each task gets a JSON file under `$SESSION_SCHEDULER_HOME/tasks/<id>.json`. Prompts and lifecycle packets go to `$SESSION_SCHEDULER_HOME/prompts/`. Auto handoffs go to `$SESSION_SCHEDULER_HOME/handoffs/<task-id>/<nonce>.md`. Per-task mutation locks live in `$SESSION_SCHEDULER_HOME/locks/<id>.lock/`.
 
 Storage is keyed on `SESSION_SCHEDULER_HOME`. It must already be present in each pane's environment, **inherited when the agent process started**. The launcher or parent shell sets it before the agent starts. Launch every participating pane with the same absolute value.
 
@@ -15,13 +15,13 @@ Direct human script use may set `SESSION_SCHEDULER_HOME=<dir>` in the parent she
 
 `/task-assign --context NAME` (an explicit knowledge snapshot) requires `SESSION_CONTEXT_HOME` under the same inherited-at-startup contract. `--context auto` does not.
 
-Launching every pane with the same shared home means **claude and codex panes working in the same project share the same ledger** — orchestrator and reviewer can both read/write the same task list.
+Launch every pane with the same shared home. Then **claude and codex panes working in the same project share the same ledger**. The orchestrator and the reviewer can both read and write the same task list.
 
 No daemon, no priority queue, no automatic reassignment — just a ledger you can read with `/task-status`.
 
 ## When to use this plugin
 
-Use it when **you, the orchestrator pane, are coordinating ≥3 panes** (executors / reviewers) and need to answer "what's still in flight, who has it, when did they pick it up?" without manually scrolling each pane.
+Use it when **you, the orchestrator pane, coordinate ≥3 panes** (executors and reviewers). It answers three questions without scrolling each pane: what is still in flight, who has it, and when they picked it up.
 
 **Don't use it for** simple peer chat between two panes — `/send` and `/dispatch` from session-chat are enough.
 
@@ -53,7 +53,7 @@ Legal status transitions (enforced by every command):
 - **Stages** are optional free-form labels (`--stage` on `/task-new` or `/task-assign`). Suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`. View grouped output with `/task-status --by-stage` or `/task-board`.
 - **ETAs**: `/task-assign --eta MINUTES` stores `eta_at`; tasks past it are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
 - **Dependencies**: `/task-new --depends-on id1,id2` stores `depends_on`. `/task-assign` refuses to dispatch until every dependency is `done` (the error names the unmet deps) unless `--force`.
-- **Context attach (explicit)**: `/task-assign --context NAME` resolves the knowledge context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`, records `meta.context` + `meta.context_home`, and tells the executor to `/knowledge:context-load NAME` before starting. Snapshot names follow the knowledge context store's contract — canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`); a non-canonical `NAME` is rejected before any side effect.
+- **Context attach (explicit)**: `/task-assign --context NAME` resolves the knowledge context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`. It records `meta.context` + `meta.context_home`. It tells the executor to `/knowledge:context-load NAME` before starting. Snapshot names follow the knowledge context store's contract — canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`); a non-canonical `NAME` is rejected before any side effect.
 - **Auto handoff**: `/task-assign --context auto` writes a **scheduler-owned** handoff at `handoffs/<task-id>/<nonce>.md` under the shared scheduler home. The handoff derives from the approved prompt and ledger state, and its mode is 0600. The nonce is 32 lowercase hex digits from OS randomness — never the task id or a timestamp. The file is never overwritten: each assignment adds a new file. The current file is recorded as `meta.handoff_file` (with `meta.handoff_home`). The packet carries the absolute path under `## Handoff` ("read it first"). The knowledge context store is never written, and `SESSION_CONTEXT_HOME` is not needed. `/tasks-clean` sweeps handoffs with the task. A reassignment with no `--context` clears all four attachment keys.
 
 ## Concurrency
@@ -79,7 +79,7 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
 
 ## Hard prerequisites
 
-1. **session-chat ≥ 0.13.0** installed. Its send lock and retries prevent corrupted dispatches, and its durable inbox means a dispatch or ack to a busy pane is recovered on its next turn rather than lost.
+1. **session-chat ≥ 0.13.0** installed. Its send lock and retries prevent corrupted dispatches. Its durable inbox recovers a dispatch or ack to a busy pane on its next turn, so the message is not lost.
 2. **Executor pane has `SESSION_CHAT_INCOMING_MODE=auto`** (or `assist`). Default `notify` tells the executor *not* to read dispatched files — your tasks will be assigned in the ledger but never acted on. Run `/session-chat:incoming-mode auto` in the executor's shell.
 3. **All participating panes have unique registered names** (via `/whoami <name>` or SessionStart auto-naming). Pane names are the addressing scheme.
 
@@ -143,7 +143,7 @@ Atomic writes (tmp + mv) plus the per-task lock — concurrent actors updating t
 
 A task carrying a root `contract` object is owned by `scripts/task-contract.sh`.
 `/task-assign`, `/task-review`, `/task-done`, and `/task-block` hand such a task
-to the engine before writing anything, and every legacy writer re-checks for a
+to the engine before writing anything. Every legacy writer re-checks for a
 contract under the task lock and refuses, even with `--force`. Contracted
 transitions take `<id> --generation <N> "<note>"`. A contracted task counts as
 complete only when `task-contract.sh inspect` reports `admitted`; a bare `done`
@@ -156,7 +156,7 @@ harness behavior, and limits.
 
 - **Status updates flow executor → ledger → durable ack to assigner**. The orchestrator never polls executor panes; it polls the ledger via `/task-status`.
 - **Assigner is recorded at `/task-new` time**, derived from the current pane's `@name`. If you create tasks from an unnamed pane, assigner = `?` and the ack will be skipped.
-- **Reassign isn't automatic**. If an executor goes silent, run `/task-status <id>` to inspect, then `/task-assign <new-pane> <id> <prompt>` — the prompt file will be regenerated and history will record the reassignment.
+- **Reassign isn't automatic**. If an executor goes silent, run `/task-status <id>` to inspect. Then run `/task-assign <new-pane> <id> <prompt>`. The script regenerates the prompt file and history records the reassignment.
 
 ## Failure modes
 
@@ -169,5 +169,6 @@ harness behavior, and limits.
   `meta.last_ack` records `status` (`dispatched`/`inline-fallback`/`failed`) and `file` for every attempt.
 
   A `failed` ack is a **partial success**: the transition already happened. Never rerun the helper. Never use --force to repair the notification. Follow the transport contract above.
+- **Keep four facts apart in every result.** (a) The task state in the ledger. (b) Message delivery to the assigner or reviewer: Sent, Queued, or failed. (c) The ack outcome in `meta.last_ack`. (d) Whether the recipient has acted. Delivery alone does not show that. Only evidence from that same actor counts: a correlated reply from its pane, a receipt it authored, or a ledger transition it made. An executor transition proves only that the executor acted, not the reviewer. Otherwise report the action as unverified. Example: "Task t12 is in review. The ack to the reviewer was queued; the reviewer's action is unverified."
 - **Tasks are `assigned` but executor never acts** — almost always `INCOMING_MODE=notify` on the executor side. Run `/session-chat:incoming-mode auto` in the executor's shell.
 - **`jq` missing** — `brew install jq`. The ledger is JSON; jq is a hard dependency.

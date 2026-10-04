@@ -1,9 +1,6 @@
 # Knowledge command reference
 
-Full per-command contracts and the search/recall ranking rules, moved out of
-the umbrella skill so discovery stays short. The umbrella `SKILL.md` keeps the
-routing table, the write boundaries, and the role rules; read this file when
-you need argument shapes or ranking details.
+This file holds the full per-command contracts and the search and recall ranking rules. They are outside the umbrella skill so that discovery stays short. The umbrella `SKILL.md` keeps the routing table, the write boundaries, and the role rules. Read this file when you need argument shapes or ranking details.
 
 ## Which command, when
 
@@ -27,18 +24,13 @@ you need argument shapes or ranking details.
 | `/knowledge:context-share <session> [name]` | Notify another named pane that a shared snapshot is available (does not copy the file). |
 | `/knowledge:context-remove <name>` | Preview, explicitly confirm, and delete one snapshot (and its history). |
 
-Context snapshot and handoff names are canonical knowledge item names:
-lowercase `snake_case` slugs matching `^[a-z0-9]+(_[a-z0-9]+)*$`. Pane
-names are transport labels and may still use hyphens. The context store
-hardening scanner enforces the same rule for existing snapshot files and
-history stems; legacy hyphenated or uppercase context filenames fail closed
-until explicitly migrated.
+Context snapshot and handoff names are canonical knowledge item names. They are lowercase `snake_case` slugs that match `^[a-z0-9]+(_[a-z0-9]+)*$`. Pane names are transport labels and can still use hyphens. The context store hardening scanner applies the same rule to existing snapshot files and history stems. Legacy hyphenated or uppercase context filenames fail closed until someone migrates them explicitly.
 
-**Memory — the durable, agent-maintained store. `doctor`/`lint`/`search`/
-`recall`/`graph` are read-only; `remember` is a low-friction inbox write;
-`consolidate`/`promote` are the durable-store write paths (`user-run`,
-`disable-model-invocation` — never invoked programmatically); `init`
-bootstraps a new store:**
+**Memory — the durable, agent-maintained store.**
+- `doctor`, `lint`, `search`, `recall`, and `graph` are read-only.
+- `remember` is a low-friction inbox write.
+- `consolidate` and `promote` are the durable-store write paths (`user-run`, `disable-model-invocation`). Never invoke them programmatically.
+- `init` bootstraps a new store.
 
 | Command | Purpose |
 |---|---|
@@ -56,16 +48,10 @@ bootstraps a new store:**
 
 ## Search/recall ranking
 
-`search`/`recall` rank by field weight — slug 8, name 6, tags 5, description
-4, type 3, headings 2, backlink slugs 2, body 1, summed per matching field;
-`stale`/`superseded`/`archived` entries are halved; ordering is score desc
-then slug asc. These weights are published for writers, not just readers:
-put an entry's load-bearing words in `tags`/`name` rather than only in prose
-if you want it to surface reliably. `recall`'s third block line is a
-query-anchored snippet of the body (windowed around wherever the query first
-anchors, falling back to the first paragraph when no atom anchors in the
-body at all), not always the first paragraph. A `search`/`recall` query of
-2+ atoms that gets zero full-query hits automatically degrades to the
-best-matching atom subset instead of returning an envelope indistinguishable
-from "nothing is stored" — reported explicitly via a `degraded:` stderr/
-envelope line or a JSON `degraded` object, never silently swapped in.
+`search` and `recall` rank by field weight. The weights are slug 8, name 6, tags 5, description 4, type 3, headings 2, backlink slugs 2, and body 1. The scorer sums the weights per matching field. It halves the score of `stale`, `superseded`, and `archived` entries. It orders results by score descending, then slug ascending.
+
+These weights are published for writers as well as readers. To make an entry surface reliably, put its load-bearing words in `tags` or `name`, not only in prose.
+
+The third block line of `recall` is a query-anchored snippet of the body. The snippet is windowed around the place where the query first anchors. It falls back to the first paragraph when no atom anchors in the body at all. It is not always the first paragraph.
+
+A `search` or `recall` query of 2 or more atoms can get zero full-query hits. The query then degrades automatically to the best-matching atom subset. Without this, the result would look the same as "nothing is stored". The command always reports the change explicitly, with a `degraded:` stderr or envelope line or a JSON `degraded` object. It never swaps in the subset silently.

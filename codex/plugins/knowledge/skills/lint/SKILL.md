@@ -26,6 +26,7 @@ although ADVISORY/WARN rows may exist; `2` is usage; `3` is resolution; `4` is
 integrity or schema ERROR. Relay non-zero stderr verbatim.
 
 Each stdout row is `<LEVEL>\t<file>\t<message>`, with LEVEL in
-`ERROR|ADVISORY|WARN`. Group findings by file, lead with ERROR rows, summarize
-legacy migration advice, and report a clean store plainly. This skill is
-report-only: never edit files based on its findings.
+`ERROR|ADVISORY|WARN`.
+Lead with the finding counts per level, or report a clean store plainly.
+Group findings by file and put ERROR rows first. Summarize legacy migration advice.
+This skill is report-only. Never edit files based on its findings.

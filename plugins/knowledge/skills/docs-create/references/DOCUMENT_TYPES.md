@@ -4,7 +4,7 @@ Pick the sections that fit the document. Most real docs blend these categories.
 
 ## API Reference
 
-For endpoint-by-endpoint documentation. Each endpoint should include enough detail for a developer to integrate without reading the source code.
+Use this type for endpoint-by-endpoint documentation. Give each endpoint enough detail for a developer to integrate without reading the source code.
 
 **Per-endpoint structure:**
 - **Endpoint** — `METHOD /path`
@@ -17,7 +17,7 @@ For endpoint-by-endpoint documentation. Each endpoint should include enough deta
 - **Errors** — Status codes and when they occur
 - **Notes** — Edge cases, gotchas, related behavior
 
-For docs with many endpoints, start with a summary table (`Method | Endpoint | Description`), then detail each one. Add a **Table of Contents** for docs with 10+ endpoints.
+If the doc has many endpoints, start with a summary table (`Method | Endpoint | Description`). Then detail each endpoint. If the doc has 10 or more endpoints, add a **Table of Contents**.
 
 ## System / Architecture
 
@@ -54,7 +54,7 @@ For docs with many endpoints, start with a summary table (`Method | Endpoint | D
 
 ## Code Patterns
 
-For documenting recurring patterns and conventions that developers need to follow. See `references/CODE_PATTERNS.md` for detailed guidance.
+Use this type to document recurring patterns and conventions that developers need to follow. See `references/CODE_PATTERNS.md` for detailed guidance.
 
 | Section | Purpose |
 |---------|---------|
@@ -66,7 +66,7 @@ For documenting recurring patterns and conventions that developers need to follo
 
 ## Architecture Decision Record (ADR)
 
-For capturing *why* decisions were made — not just what exists. ADRs prevent re-litigating settled decisions and give new team members context.
+Use this type to capture *why* people made decisions, not just what exists. ADRs prevent re-litigation of settled decisions. They give new team members context.
 
 | Section | Purpose |
 |---------|---------|
@@ -101,4 +101,4 @@ Include these when they add value:
 - **Cron Jobs / Background Tasks** — Schedule, purpose, what they do
 - **Email / Notification Templates** — Template name, recipient, trigger
 
-Do NOT add TODO or issue sections to documentation files — use the dedicated tracker files instead.
+Do NOT add TODO or issue sections to documentation files. Use the dedicated tracker files instead.

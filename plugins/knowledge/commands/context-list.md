@@ -9,17 +9,24 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-- `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports it is not set, stop and request that this pane/session be relaunched with the correct environment — do not export the variable or derive another context store.
+`SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports that it is not set, stop. Ask the user to relaunch this pane or session with the correct environment. Do not export the variable. Do not derive another context store.
+
 Present the tab-separated data above as a markdown table:
 
 | Snapshot | Lines | Last Updated | Versions |
 
-- The Versions column counts archived history entries (created each time a snapshot is overwritten, max 10 kept)
-- **Handoff rows**: a row for a structured handoff (created via `/knowledge:context-generate ... --handoff`) carries exactly two extra tab-separated fields after Versions: `handoff` and its `expires` timestamp (UTC ISO `YYYY-MM-DDTHH:MM:SSZ`). Render these as two additional table columns, **Kind** and **Expires**, only if at least one row in this run's output has them — plain-only output keeps the original four-column table unchanged. A blank/missing Kind for a row means it's a plain snapshot.
-- An `expires` date in the past means the handoff is **stale and eligible for confirmed cleanup** via `/knowledge:promote` (promote-then-delete) — it is never auto-deleted by anything. Point this out for any row whose Expires date has passed.
-- If no snapshots found, suggest `/context-generate` to create one
-- Suggest `/context-load <snapshot>` to load a snapshot
-- Suggest `/context-diff <snapshot>` to compare a snapshot with its previous version
-- Suggest `/context-share <session> <snapshot>` to share with another session
-- Suggest `/context-remove <snapshot>` to delete a snapshot
-- Suggest `/knowledge:promote <snapshot>` for a handoff row ready to be promoted (and its source separately deleted)
+- The Versions column counts archived history entries. The script creates one each time a snapshot is overwritten and keeps at most 10.
+- **Handoff rows:** a structured handoff is a snapshot created with `/knowledge:context-generate ... --handoff`. Its row carries exactly two extra tab-separated fields after Versions: `handoff` and its `expires` timestamp (UTC ISO `YYYY-MM-DDTHH:MM:SSZ`).
+  - Render them as two additional table columns, **Kind** and **Expires**.
+  - Add these columns only if at least one row in this run's output has them.
+  - Plain-only output keeps the original four-column table unchanged.
+  - A blank or missing Kind means the row is a plain snapshot.
+- An `expires` date in the past means the handoff is **stale and eligible for confirmed cleanup** through `/knowledge:promote` (promote, then delete). Nothing deletes it automatically. Point this out for every row whose Expires date has passed.
+
+Then suggest the next action:
+- No snapshots found: suggest `/context-generate` to create one.
+- Load a snapshot: `/context-load <snapshot>`.
+- Compare a snapshot with its previous version: `/context-diff <snapshot>`.
+- Share with another session: `/context-share <session> <snapshot>`.
+- Delete a snapshot: `/context-remove <snapshot>`.
+- A handoff row that is ready to promote (its source is deleted separately): `/knowledge:promote <snapshot>`.

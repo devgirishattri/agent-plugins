@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: knowledge-lint-report-readonly
+tags: [knowledge, contract, contract]
+context:
+  scaffold_script: scaffold.sh

@@ -26,7 +26,7 @@ may remain at workspace root. Without one, every environment with workers must
 declare an orchestrator; otherwise workers without a local coordinator route to root.
 Command-bearing service panes stay inside their environment checkout. Command-less
 service shells and selected browser panes may live anywhere inside the project
-root: they carry no harness policy, so checkout containment protects no role boundary.
+root. They carry no harness policy, so checkout containment protects no role boundary.
 Unbound shell sessions can host shared services; group selection leaves them alone.
 
 ## Lifecycle and boundaries
@@ -220,8 +220,8 @@ Never migrate in-flight approvals to a different repository. Roll back by stoppi
 only introduced sessions, restoring old config and restarting affected identities.
 Removing Jev requires no workspace-plugin downgrade or task-store migration.
 
-To merge two v4 configs sharing one root, merge sessions while keeping pane names,
-choose one project id and `stores.base`, add environments and pane runtimes, then
-restart all sessions to establish the new identity. Stop the retired second project
+To merge two v4 configs that share one root, follow these steps. Merge the sessions
+and keep the pane names. Choose one project id and `stores.base`. Add the environments
+and pane runtimes. Then restart all sessions to establish the new identity. Stop the retired second project
 with its old config first to release port-registry entries owned by its project id.
 Keep both old configs for rollback; stop the merged sessions before restoring them.

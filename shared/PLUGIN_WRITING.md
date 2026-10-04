@@ -56,10 +56,85 @@ This example does not replace a skill's stricter approval or role requirements.
 1. Compare changed prose with the original contract and both provider versions.
 2. Verify referenced commands and paths against current source.
 3. Run relevant existing checks. For changed selection or approval behavior, use observable behavioral fixtures with positive and negative controls.
-4. Record coverage and exceptions. Do not claim full STE conformity or measured model improvement from an editorial review.
+4. Record coverage and exceptions. Do not claim any STE conformity or measured model improvement from an editorial review.
 
 Keep this authoring guide in the repository. Shipped skills must remain usable
 without reading it. Avoid repeating this entire guide in each skill.
+
+## User-facing reports
+
+Apply these conventions where the skill permits an authored response. Keep
+literal helper output, JSON envelopes, table schemas, and transport messages
+unchanged when the skill requires exact output. Do not add a second summary to
+a command that requires only the transport result.
+
+Lead with the observed outcome. Include only the details needed for the next
+decision: the affected artifact, checks completed, unresolved work, and the
+next action. Omit empty sections. A short successful operation needs only a
+short result; a partial operation needs per-item outcomes.
+
+- For approval, state what will change and what the reply authorizes. Show the
+  required exact payload, diff, and hash. A shorter explanation must not hide
+  the review material or weaken the timing of approval.
+- For failure, identify the failed operation, the observed reason, any effects
+  already verified, and the permitted recovery action. Preserve required raw
+  diagnostics. Do not invent a cause, imply zero effects from an error alone,
+  or recommend retrying an operation with an unknown outcome.
+- For a handoff, separate completed work from proposed work. Name the next
+  action and its prerequisite. Retain stable item IDs and evidence links.
+- For verification, identify the checked subject and the scope of the check.
+  Report omitted checks. A test pass does not establish a production outcome.
+
+Examples of authored explanations (not replacements for exact helper output):
+
+| Situation | Clear report |
+|---|---|
+| Transport accepted a queued message | The message is queued. Recipient execution is not confirmed. |
+| A write succeeded but notification failed | The task was updated. Notification failed. Retry only the notification through its authorized workflow. |
+| A plugin cache matches the release | The installed files match the release. Restart the session to load them; activation is not yet verified. |
+| Approval applies to one item | Approve item D1 to apply the displayed document diff. Items D2 and M1 remain pending. |
+| Remote create timed out | The create outcome is unknown. Check for the existing item before sending another create request. |
+
+## Shared technical terms
+
+Use the exact domain term instead of a loose synonym. This vocabulary extends
+the table above; it does not change any script's enums or output schema.
+
+| Term | Use when |
+|---|---|
+| Capture | A candidate is written to the inbox; it is not yet authoritative memory. |
+| Promote | The relevant writer installs reviewed knowledge at its destination. Source retirement is a separate operation when required by that workflow. |
+| Dismiss | A candidate is archived with its content retained. Do not describe dismissal as deletion. |
+| Delete or purge | The specified workflow removes data. Keep its explicit authorization requirement. |
+| Queued, sent, replied | Report the state that the transport actually confirms. None alone proves that the recipient completed the task. |
+| Installed | The package files are present in the installed location. |
+| Active | The running session has loaded the intended version, with the required trust/configuration. Installation alone is insufficient evidence. |
+| Verified | A named check passed for a named subject. State the check's limits. |
+| Failed | The observed operation failed; report known partial effects separately. |
+| Unknown | Available evidence does not establish the operation's outcome. |
+
+## Advisory checks and comparisons
+
+Run `python3 -B scripts/lint-plugin-prose.py --changed-from <commit>` to inspect
+tracked Markdown changed since a known commit. Explicit file arguments also
+include new files. With no arguments, it checks tracked skill, command, agent,
+reference and asset Markdown plus this guide and README.
+
+The checker flags sentence-length targets and a small list of avoidable word
+choices. It is a heuristic, not an STE validator. It skips frontmatter, fenced
+and inline code, headings, tables, quoted examples, and HTML comments. Technical
+abbreviations and unusual Markdown can still produce false positives or missed
+findings. Setext headings, multiline code spans, and lazy blockquote continuations are not fully
+parsed. Frontmatter is recognized only with a closing marker in the first 101
+lines and a field; malformed or longer frontmatter can be linted as prose.
+Explicit paths can be outside the repository; parent-directory symlinks are
+followed, but a symlink file itself is rejected. Review each advisory; do not auto-replace technical terms or split a
+condition away from its action. Style findings return success; unreadable or
+invalid inputs return a nonzero status. No file is modified.
+
+Use the [comparison procedure](PROSE_EVALUATION.md) before claiming that wording
+improves model behavior. Deterministic fixture checks can run without model
+spend; paid comparisons require a separately authorized ceiling.
 
 ## Sources
 

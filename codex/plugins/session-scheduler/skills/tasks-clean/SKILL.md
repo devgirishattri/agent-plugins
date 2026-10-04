@@ -38,7 +38,9 @@ Only after an explicit Yes, run:
 bash "<PLUGIN_ROOT>/scripts/tasks-clean.sh" <confirmed args including --apply>
 ```
 
-Never honor `--apply` without confirmation. Report cancellation or the deleted count.
+Never honor `--apply` without confirmation.
+Report cancellation or the deleted count. A preview reports candidates, not deletions.
+Include retained tasks and orphan cleanup outcomes when the helper reports them.
 
 `--older-than N` means days for a bare integer; `d`, `h`, `m`, and `s` suffixes specify units explicitly. All value-taking flags require a value. Selection includes all statuses unless narrowed by `--status`.
 

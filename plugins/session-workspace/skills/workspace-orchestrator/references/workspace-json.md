@@ -44,10 +44,10 @@ normalized plan and policy decision unchanged.
 The omitted project/runtimes/roles/stores/sessions fields remain required. In
 particular, `stores.pin` must include `messages` and `scheduler`.
 
-Each target id is unique. Its safe relative `cwd` must exactly equal one
-configured executor pane cwd and its one matching reviewer cwd, resolve to an
-existing distinct child inside the project root, and be unique after physical
-path resolution. Remote names cannot be URLs. Work/release refs are distinct,
+Each target id is unique. Its safe relative `cwd` must meet four conditions.
+It must exactly equal one configured executor pane cwd and its one matching
+reviewer cwd. It must resolve to an existing distinct child inside the project
+root. It must be unique after physical path resolution. Remote names cannot be URLs. Work/release refs are distinct,
 safe literal Git refs.
 
 The profile and deployment strategy are fixed enums. The alignment flag

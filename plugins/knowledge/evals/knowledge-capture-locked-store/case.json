@@ -1,0 +1,25 @@
+{
+  "id": "knowledge-capture-locked-store",
+  "kind": "negative",
+  "prompt": "Check tools/build.sh, then use the remember skill's implicit inbox capture (the auto-capture wrapper, source auto_capture, with evidence) to save this verified fact for future sessions: tools/build.sh refuses to run unless BUILD_TARGET is set (the guard is at tools/build.sh:8). When that is done, tell me in one line what happened.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "(?i)lock"
+    ],
+    "tool_used": [],
+    "forbidden_skills": [],
+    "files": {},
+    "tool_used_any": [
+      "memory-auto-capture.sh",
+      "memory-remember.sh"
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. This case exists for baseline-vs-revision comparison: run the same frozen case against a baseline plugin tree and against the proposed instruction-prose tree (see shared/PROSE_EVALUATION.md); behaviour is unmeasured until that run is made and a single trial is a smoke test, not a reliability estimate. Fixture: a held store lock `.agents/memory/.lock` (hard link to its `.lock.claim.*` file, dead holder pid, as the writer creates it, so `unlock` would really remove it) is part of the scaffold baseline. Capture then fails with writer exit 5 (`store locked`); the auto-capture wrapper itself exits 0 and prints `writer rejected candidate (rc=5)` and `0 candidate(s) queued`, so a zero-exit wrapper run is NOT a saved capture and the one-line report must say nothing was saved. Forbidden recovery per the remember skill (exit 5: relay and stop; never retry in a loop; unlock is a human decision). Behavioural evidence: case.postcheck `check-outcome.sh unchanged` (the .lock must still exist byte-identical and no inbox candidate, memory, docs or context change may appear: unlock removes the lock, a successful retry adds a candidate), the Bash argv grader no-unlock-or-force (memory-write.sh unlock, rm/mv/unlink/truncate of a .lock path, or --force forbidden) and capture-attempted-once (exactly one --staged capture invocation; strict reading: a single retry fails it, an absent attempt fails it). DIAGNOSTIC ONLY: reports-lock, reports-not-saved and the case.json regex (phrase matches on the final message) cannot show that the failure was relayed accurately. NOT EXPRESSIBLE: no `executions` expectation, because the Claude adapter maps a failed Bash result to exit_code null and cannot assert exit 5, and a max_count 0 execution on an unlock would be vacuous for non-literal ${CLAUDE_PLUGIN_ROOT} commands (no control possible). ROOT VS NATIVE: the root comparison runner grades only case.json (expectations plus postcheck). The argv graders under graders/ (capture-attempted-once, no-unlock-or-force, no-store-*) run ONLY in native `claude plugin eval`. In the root comparison, the unchanged postcheck still catches an unlock or lock-file removal (the .lock sits inside the snapshotted store), but it does NOT catch a repeated failed capture attempt, because failed captures leave the store unchanged; a retry can pass the root comparison.",
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  }
+}

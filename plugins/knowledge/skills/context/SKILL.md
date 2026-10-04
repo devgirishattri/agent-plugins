@@ -5,42 +5,37 @@ description: When and how to capture, restore, and hand off Claude context snaps
 
 # Context snapshots: knowledge shared store
 
-A snapshot is a markdown summary of a working session — **what you worked on, the
-decisions you made, and where you left off** — written so a *future* session (or a
-peer session) can resume without re-deriving everything from scratch.
+A snapshot is a markdown summary of a working session. It records what you worked on, the decisions you made, and where you left off. A future session or a peer session can resume from it without re-deriving the state.
 
-Snapshots are stored under `SESSION_CONTEXT_HOME`, which must already be present in each pane's environment, **inherited when the agent process started** — the launcher/parent shell establishes it before the agent starts, and every pane that shares snapshots must be launched with the same absolute value. The `/context-*` commands never export or derive it, and most scripts **fail closed** when it is unset rather than guessing a location; the fix is to relaunch the pane/session with the correct environment (`/context-search`, which scans across projects, is the exception — it uses `SESSION_CONTEXT_HOME` only as an override for the current repo's store). Direct human script use may export `SESSION_CONTEXT_HOME=<dir>` in the parent shell beforehand, but agent-facing instructions never combine environment setup with helper execution — each helper is invoked as exactly one literal Bash segment using the inherited value.
+## Store location
 
-Snapshots live at `$SESSION_CONTEXT_HOME/<name>.md`, where `<name>` must be
-canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`). The store hardening
-scanner enforces the same rule for existing snapshot files and
-`.history/<name>.<timestamp>.md` archives; legacy hyphenated or uppercase
-context filenames fail closed until explicitly migrated. Launching every pane
-with the same shared store means every Claude/Codex pane working in the same
-project sees the same set of snapshots.
+Snapshots live in `SESSION_CONTEXT_HOME`. This variable must already be present in each pane's environment, **inherited when the agent process started**.
 
-A SessionStart hook surfaces existing snapshots automatically (using the inherited
-store, with a git-root default only for its own detection banner), so a resuming
-session is told it can `/context-load` instead of starting cold.
+- The launcher or parent shell sets it before the agent starts.
+- Every pane that shares snapshots must start with the same absolute value.
+- The `/context-*` commands never export or derive it.
+- Most scripts **fail closed** when it is unset. They do not guess a location. To fix this, relaunch the pane or session with the correct environment.
+- `/context-search` scans across projects. It uses `SESSION_CONTEXT_HOME` only as an override for the current repo's store.
+- A human may export `SESSION_CONTEXT_HOME=<dir>` in the parent shell before running a script directly.
+- Agent-facing instructions never combine environment setup with helper execution. Invoke each helper as exactly one literal Bash segment that uses the inherited value.
+
+Each snapshot is the file `$SESSION_CONTEXT_HOME/<name>.md`. `<name>` must be canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`). The store hardening scanner applies the same rule to existing snapshot files and to `.history/<name>.<timestamp>.md` archives. Legacy hyphenated or uppercase context filenames fail closed until someone migrates them explicitly.
+
+When every pane launches with the same shared store, every Claude or Codex pane in the same project sees the same snapshots.
+
+A SessionStart hook lists existing snapshots automatically. It uses the inherited store. It uses a git-root default only for its own detection banner. A resuming session therefore learns that it can run `/context-load` instead of starting cold.
 
 ## When to use this plugin
 
-- **Before ending or compacting a long session** — run `/context-generate` to
-  preserve the state you'd otherwise lose.
-- **When resuming work** in a new session — `/context-list` then `/context-load` to
-  pick up where the previous session stopped.
-- **When handing work to a peer pane** — `/context-share` notifies another pane
-  that a shared snapshot is available (it does not copy the file; the peer loads
-  it from the same store).
+- **Before you end or compact a long session:** run `/context-generate` to preserve the state you would otherwise lose.
+- **When you resume work in a new session:** run `/context-list`, then `/context-load`, to continue where the previous session stopped.
+- **When you hand work to a peer pane:** run `/context-share`. It notifies the other pane that a shared snapshot is available. It does not copy the file. The peer loads it from the same store.
 
-**Don't use it for** a quick one-line status to another pane — that's
-`/send`. Snapshots are for substantial, reusable state.
+Do not use a snapshot for a quick one-line status to another pane. Use `/send` for that. Snapshots are for substantial, reusable state.
 
-## Generate runs in the working session — it cannot be delegated
+## Generate runs in the working session
 
-`/context-generate` summarizes *the current conversation*, so it must run in the
-session that did the work. A fresh subagent has none of that context and cannot
-produce the summary — never try to offload generation to a separate agent.
+`/context-generate` summarizes the current conversation. It must run in the session that did the work. A fresh subagent has none of that context and cannot produce the summary. Never delegate generation to a separate agent.
 
 ## Lifecycle
 
@@ -73,60 +68,32 @@ produce the summary — never try to offload generation to a separate agent.
 | `/context-share <session> [name]` | Notify another pane that a shared snapshot is available (same store; not a file copy). |
 | `/context-remove <name>` | Delete a snapshot. |
 
-Snapshot and handoff names are canonical knowledge item names: lowercase
-`snake_case` slugs matching `^[a-z0-9]+(_[a-z0-9]+)*$`. If deriving a default
-from a session or directory name, normalize it to that form; do not put dates
-or datetimes in the name.
+Snapshot and handoff names are canonical knowledge item names: lowercase `snake_case` slugs that match `^[a-z0-9]+(_[a-z0-9]+)*$`. When you derive a default from a session or directory name, normalize it to that form. Do not put dates or datetimes in the name.
 
 ## Sharing prerequisites
 
-`/context-share` notifies another pane over tmux, so:
+`/context-share` notifies another pane over tmux. Check these three conditions first.
 
-1. **You must be inside tmux** — sharing is a tmux-only operation.
-2. **The recipient pane must be named** (via `/whoami <name>` or SessionStart
-   auto-naming when session-chat is installed); names are how panes
-   are addressed, and the search spans all tmux sessions. The sender also needs
-   a name for fallback transport.
-3. **The recipient must inherit the same context store.** Sharing does *not*
-   copy the snapshot file — it relies on the launcher-selected
-   `$SESSION_CONTEXT_HOME` directory being shared, then sends the peer a one-line message
-   (carrying the canonical store path) telling them to run `/context-load
-   <name>`, which resolves against the *peer's own* store. A peer in a different
-   repo/store won't have the snapshot to load.
+1. **You are inside tmux.** Sharing works only in tmux.
+2. **The recipient pane has a name.** Name it via `/whoami <name>` or SessionStart auto-naming when session-chat is installed. Panes are addressed by name, and the search spans all tmux sessions. The sender also needs a name for fallback transport.
+3. **The recipient inherits the same context store.** Sharing is not a file copy. It relies on the launcher-selected `$SESSION_CONTEXT_HOME` directory being shared. It then sends the peer a one-line message that carries the canonical store path. The message tells the peer to run `/context-load <name>`, which resolves against the peer's own store. A peer in a different repo or store does not have the snapshot to load.
 
-Sharing prefers session-chat's hardened transport when it's installed (durable
-inbox — a busy recipient still gets the notice on its next turn); if session-chat
-is absent it falls back to this plugin's basic tmux send. Either way the
-same-store prerequisite above is unchanged.
+Sharing uses the hardened transport of session-chat when it is installed. That transport is a durable inbox, so a busy recipient still gets the notice on its next turn. If session-chat is absent, sharing falls back to the basic tmux send of this plugin. The same-store prerequisite does not change.
 
-Listing, generating, loading, and removing snapshots work outside tmux — only
-sharing requires it.
+Listing, generating, loading, and removing snapshots work outside tmux. Only sharing requires tmux.
 
 ## Conventions
 
-- **Snapshots are store-local, not global.** The launcher-selected
-  `SESSION_CONTEXT_HOME` determines the snapshot set; a snapshot is visible to
-  every pane that inherits that same absolute store, regardless of cwd.
-- **Context is temporary working state, not durable memory.** Keep snapshots
-  focused on what a future session needs next. When the information stabilizes,
-  promote it to memory/docs; when it no longer matters, remove it explicitly
-  with `/context-remove`.
-- **Regenerate, don't append.** `/context-generate` with an existing name overwrites
-  that snapshot with the current state — keep one authoritative snapshot per name
-  rather than many stale ones. Overwriting is safe: the previous version is archived
-  to `$SESSION_CONTEXT_HOME/.history/<name>.<timestamp>.md` (`YYYYMMDD-HHMMSS+HHMM` in `AGENT_PLUGINS_TIME_ZONE`, default `Asia/Kolkata`; 10 most recent kept), and
-  `/context-diff <name>` shows what changed since the last version.
-- **Watch for staleness.** `/context-load` appends a WARNING when a snapshot's file
-  is 7+ days old (threshold configurable via `SESSION_CONTEXT_STALE_DAYS`) — regenerate
-  rather than trusting old state.
-- **Clean up stale snapshots** with `/context-remove` so `/context-list` and the
-  SessionStart hint stay meaningful.
+- **Snapshots are store-local, not global.** The launcher-selected `SESSION_CONTEXT_HOME` determines the snapshot set. Every pane that inherits the same absolute store sees the snapshot, regardless of cwd.
+- **Context is temporary working state, not durable memory.** Keep each snapshot focused on what a future session needs next. When the information stabilizes, promote it to memory or docs. When it no longer matters, remove it with `/context-remove`.
+- **Regenerate, do not append.** `/context-generate` with an existing name overwrites that snapshot with the current state. Keep one authoritative snapshot per name. Overwriting is safe. The previous version is archived to `$SESSION_CONTEXT_HOME/.history/<name>.<timestamp>.md`. The timestamp format is `YYYYMMDD-HHMMSS+HHMM` in `AGENT_PLUGINS_TIME_ZONE` (default `Asia/Kolkata`). The 10 most recent versions are kept. `/context-diff <name>` shows what changed since the last version.
+- **Watch for staleness.** `/context-load` appends a WARNING when the snapshot file is 7 or more days old. Set the threshold with `SESSION_CONTEXT_STALE_DAYS`. Regenerate the snapshot instead of trusting old state.
+- **Clean up stale snapshots** with `/context-remove`. This keeps `/context-list` and the SessionStart hint meaningful.
 
 ## Failure modes
 
-- **"No snapshots found"** — none exist for this project yet; run
-  `/context-generate` first.
-- **"No pane named X" on share** — the recipient hasn't run `/whoami`, or you typed
-  the wrong name. Run `/panes all` to see named panes.
-- **Sharing errors about tmux** — you're not inside a tmux session; sharing needs
-  tmux. Generate/list/load/remove still work.
+| Message or symptom | Cause | Next action |
+|---|---|---|
+| "No snapshots found" | No snapshot exists for this project. | Run `/context-generate`. |
+| "No pane named X" on share | The recipient has not run `/whoami`, or the name is wrong. | Run `/panes all` to see named panes. Then share again with the correct name. |
+| Sharing error about tmux | You are not inside a tmux session. | Share from inside tmux. Generate, list, load, and remove still work. |

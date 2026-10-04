@@ -67,11 +67,17 @@ Distill. Separately requested work keeps its own workflow.
 ## One concrete approval
 
 Present the complete batch before any destination write, including inbox capture
-or dismissal. For each item record a stable ID, destination, writer/helper or
-connector tool, exact before/after
-or new payload, source evidence, current content hash (or remote revision where
-available), and dependencies. Include MEMORY.md changes and the raw hashes of
-candidates selected for dismissal. Show skipped/unavailable items too.
+or dismissal. For each item, record:
+
+- A stable ID and destination.
+- The writer, helper, or connector tool.
+- The exact before/after or new payload.
+- Source evidence.
+- The current content hash, or remote revision where available.
+- Dependencies.
+
+Include MEMORY.md changes and the raw hashes of candidates selected for dismissal.
+Show skipped and unavailable items too.
 
 Inbox dismissal is a separate itemized, hash-bound disposition using the
 existing retained-dismissal writer; it is not source deletion or purge.
@@ -79,9 +85,9 @@ In strict-v1, memory apply is orchestrator-only. An executor prepares memory
 drafts and reports them skipped; it must not bypass its role. Without that
 harness, the existing writer's role checks still apply.
 
-Keep each review batch at most 10 mutations and 30,000 UTF-8 bytes of proposed
-diffs/payloads; if larger, split into labeled batches and require approval of each
-before applying it. No hidden continuation batch is authorized. A no-op is valid.
+Keep each review batch at most 10 mutations and 30,000 UTF-8 bytes of proposed diffs/payloads.
+If larger, split it into labeled batches. Require approval of each batch before applying it.
+No hidden continuation batch is authorized. A no-op is valid.
 Use `mktemp -d` for private scratch outside stores; under strict-v1 choose a
 scratch directory inside the permitted checkout to satisfy operand containment.
 Do not invent a new persistent knowledge store.
@@ -93,9 +99,10 @@ another path.
 
 Serialize the complete review batch to a UTF-8 manifest containing the
 item IDs, exact payloads/diffs, baselines, dependencies, and allowed outcome-only
-context substitutions. Compute and display its SHA-256. Bind the user's reply
-to this displayed manifest hash (an unambiguous reply to the single presented
-batch is sufficient); retain the reply and hash together in the working record.
+context substitutions. Compute and display its SHA-256.
+Bind the user's reply to this displayed manifest hash.
+An unambiguous reply to the single presented batch is sufficient.
+Retain the reply and hash together in the working record.
 Recompute the hash before applying. Changed bytes invalidate approval; present
 the changed batch again. For a subset approval, retain the original manifest
 hash and the explicitly selected item IDs. A hash identifies reviewed bytes;

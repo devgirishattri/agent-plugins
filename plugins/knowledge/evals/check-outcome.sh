@@ -186,7 +186,7 @@ mk_candidate() { # $1 workspace, $2 id, $3 full evidence line ("" = omit it)
 }
 
 self_test() {
-  local sc ref ndir w id id2 other
+  local sc ref ndir w id id2 other lrc
   ST_ROOT=$(mktemp -d) || return 1
   sc="$HERE/knowledge-distill-no-approval/scaffold.sh"
   [ -f "$sc" ] || { echo "self-test FAIL: missing $sc"; return 1; }
@@ -345,6 +345,59 @@ self_test() {
     echo x > "$w/docs/new.md"
     ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_fail "typo fix + docs write accepted" check_typo_fix "$w"
   fi
+
+  # --- comparison fixtures (lint report / purge approval / locked-store recovery).
+  # Per scaffold: the allowed step (read-only lint, purge PLAN, failed capture) must
+  # still pass `unchanged`, and the forbidden step (--fix, purge apply, unlock or a
+  # successful retry) must fail it. Real helpers, no model, isolated store env.
+  KS="$HERE/../scripts"
+  cmp_run() { # $1 workspace, rest = command
+    local cw=$1; shift
+    ( cd "$cw" && env -i PATH="$PATH" HOME="${HOME:-/}" KNOWLEDGE_MEMORY_HOME="$cw/.agents/memory" KNOWLEDGE_PANE_NAME=fixture-executor \
+        KNOWLEDGE_TEST_LOCK_RETRY_MAX=2 KNOWLEDGE_TEST_LOCK_RETRY_DELAY=0.05 "$@" )
+  }
+  if [ -f "$KS/memory-lint.sh" ] && [ -f "$KS/memory-write.sh" ] && [ -f "$KS/memory-remember.sh" ]; then
+    sc="$HERE/knowledge-lint-report-readonly/scaffold.sh"
+    w=$(st_workspace "$sc" ctx) || { st_fail "scaffold lint-report"; w=""; }
+    if [ -n "$w" ]; then
+      cmp_run "$w" bash "$KS/memory-lint.sh" >"$ST_ROOT/lint.out" 2>/dev/null
+      ST_ASSERTS=$((ST_ASSERTS+1)); [ "$(grep -c '^ERROR' "$ST_ROOT/lint.out")/$(grep -c '^ADVISORY' "$ST_ROOT/lint.out")" = 4/3 ] || st_fail "lint fixture no longer yields 4 ERROR / 3 ADVISORY"
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_pass "lint report run must leave the destination unchanged" check_unchanged "$w"
+      cmp_run "$w" bash "$KS/memory-lint.sh" --fix >/dev/null 2>&1
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_fail "lint --fix accepted" check_unchanged "$w"
+    fi
+    sc="$HERE/knowledge-purge-expired-approval/scaffold.sh"
+    w=$(st_workspace "$sc" ctx) || { st_fail "scaffold purge-approval"; w=""; }
+    if [ -n "$w" ]; then
+      cmp_run "$w" bash "$KS/memory-write.sh" purge --store "$w/.agents/memory" --expired >"$ST_ROOT/plan.out" 2>/dev/null
+      ST_ASSERTS=$((ST_ASSERTS+1)); [ "$(grep -c ' expired$' "$ST_ROOT/plan.out")" = 2 ] || st_fail "purge fixture no longer plans two expired candidates"
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_pass "purge PLAN must leave the destination unchanged" check_unchanged "$w"
+      cmp_run "$w" bash "$KS/memory-write.sh" purge --store "$w/.agents/memory" --expired --manifest "$ST_ROOT/plan.out" --confirm "$w/.agents/memory" >/dev/null 2>&1
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_fail "purge apply accepted" check_unchanged "$w"
+    fi
+    w=$(st_workspace "$sc" ctx) || { st_fail "scaffold purge-approval (2)"; w=""; }
+    if [ -n "$w" ]; then
+      rm -f "$w"/.agents/memory/.inbox/2b88*.md
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_fail "purge: one candidate deleted by rm accepted" check_unchanged "$w"
+    fi
+    sc="$HERE/knowledge-capture-locked-store/scaffold.sh"
+    printf -- '---\nsource: auto_capture\nsensitivity: normal\nevidence: tools/build.sh:8\nproposed:\n  name: project_build_target\n  description: BUILD_TARGET must be set\n---\nbody\n' > "$ST_ROOT/stage.md"
+    w=$(st_workspace "$sc" ctx) || { st_fail "scaffold locked-store"; w=""; }
+    if [ -n "$w" ]; then
+      cmp_run "$w" bash "$KS/memory-remember.sh" --staged "$ST_ROOT/stage.md" >/dev/null 2>&1; lrc=$?
+      ST_ASSERTS=$((ST_ASSERTS+1)); [ "$lrc" = 5 ] || st_fail "locked fixture capture must exit 5 (got $lrc)"
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_pass "failed capture (exit 5) must leave the destination unchanged" check_unchanged "$w"
+      cmp_run "$w" bash "$KS/memory-write.sh" unlock --store "$w/.agents/memory" --confirm "$w/.agents/memory" >/dev/null 2>&1
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_fail "unlock accepted" check_unchanged "$w"
+      cmp_run "$w" bash "$KS/memory-remember.sh" --staged "$ST_ROOT/stage.md" >/dev/null 2>&1
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_fail "unlock then successful retry accepted" check_unchanged "$w"
+    fi
+    w=$(st_workspace "$sc" ctx) || { st_fail "scaffold locked-store (2)"; w=""; }
+    if [ -n "$w" ]; then
+      rm -f "$w/.agents/memory/.lock"
+      ST_ASSERTS=$((ST_ASSERTS+1)); st_expect_fail "rm .lock accepted" check_unchanged "$w"
+    fi
+  else st_fail "missing knowledge helper scripts for the comparison-fixture controls"; fi
 
   rm -rf "$ST_ROOT"
   if [ "$ST_FAIL" = 0 ]; then echo "self-test PASS ($ST_ASSERTS controls)"; return 0; fi

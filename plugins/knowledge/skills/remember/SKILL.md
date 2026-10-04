@@ -66,11 +66,15 @@ Determine which mode `$ARGUMENTS` calls for:
 - A request to delete/clean up old candidates: see "Purging candidates" (advanced, rare; do this only when the user explicitly asks).
 - Anything else: **capture** the content described in `$ARGUMENTS` (minus any `--store <path>` prefix) as a new candidate. See "Capturing a candidate" below.
 
-Pass `--store <path>` to every Bash call below only if the user supplied one in `$ARGUMENTS`; otherwise omit it and let the script resolve the store itself (explicit target > `KNOWLEDGE_MEMORY_HOME` > canonical discovery under `.agents/memory/`, the same resolver used by `/knowledge:lint`).
+Pass `--store <path>` to every Bash call below only if the user supplied one in `$ARGUMENTS`. Otherwise omit it. The script then resolves the store itself (explicit target > `KNOWLEDGE_MEMORY_HOME` > canonical discovery under `.agents/memory/`). This is the same resolver that `/knowledge:lint` uses.
 
 ### Capturing a candidate
 
-1. Compose the staged candidate file yourself (do not ask the user to hand-write YAML). It is a strict envelope: YAML frontmatter with source, sensitivity, proposed, and optional evidence, then a markdown body. Use the **Write** tool to create it at a scratch path (e.g. under the OS temp directory; under the strict-v1 session-workspace harness use a permitted scratch file inside this pane's checkout instead, because an arbitrary OS temp path can fail its literal-file containment check) — never construct it via a Bash heredoc, so the single literal Bash segment rule below stays intact. Grammar (closed — nothing outside this shape is accepted, and the script exits `2` on any violation):
+1. Compose the staged candidate file yourself. Do not ask the user to hand-write YAML.
+   - The file is a strict envelope: YAML frontmatter with source, sensitivity, proposed, and optional evidence, then a markdown body.
+   - Use the **Write** tool to create it at a scratch path, for example under the OS temp directory. Under the strict-v1 session-workspace harness, use a permitted scratch file inside this pane's checkout instead. An arbitrary OS temp path can fail the literal-file containment check of the harness.
+   - Never construct the file with a Bash heredoc. This keeps the single literal Bash segment rule below intact.
+   - The grammar is closed. The script accepts nothing outside this shape. It exits `2` on any violation:
    ```
    ---
    source: <this session/context id — any short non-empty label, e.g. the session name>
@@ -89,18 +93,23 @@ Pass `--store <path>` to every Bash call below only if the user supplied one in 
 
    **How to apply:** <for feedback/project types>
    ```
-   - `source` is required and non-empty; it is the envelope's own provenance field (distinct from the optional `proposed.source`, which is the memory schema's own field — do not conflate them).
-   - `sensitivity` is `normal` or `sensitive` — use `sensitive` for anything containing credentials, tokens, or other data the user would not want surfaced casually in recall output.
-   - Under `proposed:`, only the v1 memory schema's own fields are accepted as scalars (`schema_version`, `name`, `description`, `created`, `updated`, `last_verified`, `review_after`, `status`, `confidence`, `source`, `supersedes`, `migrated`), the list field `tags`, and the one-level mapping `metadata:` (with its own scalar `type`). Omit any field you are not proposing a value for — in particular, do not include `created`/`updated` unless you have a real reason to backdate them; consolidation stamps these at promotion time.
-   - Quoting: an **unquoted** scalar must not contain a `"` character, or the file is rejected with `unexpected quote in unquoted scalar`. If a value contains a double quote, wrap the **whole** value in double quotes — inner quotes then pass through as-is (escaping them also works). Colons and apostrophes are safe unquoted. This bites most often when the memory is about JSON, hook shapes, or config syntax.
-   - Never include `capture_id`, `created`, `origin_session`, or `origin_pane` at the top level — those are writer-assigned; the script rejects a staged file containing any of them. Optional `evidence` is a non-empty single-line scalar, at most 300 bytes; it is required for `source: auto_capture`.
-   - The body (after the closing `---`) becomes the candidate's proposed memory body; include `**Why:**` / `**How to apply:**` when `metadata.type` is `feedback` or `project`.
+   - `source` is required and non-empty. It identifies the candidate envelope. `proposed.source` is a different, optional field that belongs to the proposed memory. Do not confuse them.
+   - `sensitivity` is `normal` or `sensitive`. Use `sensitive` for anything that contains credentials, tokens, or other data that the user would not want surfaced casually in recall output.
+   - Under `proposed:`, the script accepts only these fields:
+     - scalars from the v1 memory schema: `schema_version`, `name`, `description`, `created`, `updated`, `last_verified`, `review_after`, `status`, `confidence`, `source`, `supersedes`, `migrated`
+     - the list field `tags`
+     - the one-level mapping `metadata:` (with its own scalar `type`)
+   - Omit any field that you do not propose a value for. In particular, do not include `created` or `updated` unless you have a real reason to backdate them. Consolidation stamps these at promotion time.
+   - Quoting: an **unquoted** scalar must not contain a `"` character. Otherwise the script rejects the file with `unexpected quote in unquoted scalar`. If a value contains a double quote, wrap the **whole** value in double quotes. The inner quotes then pass through as-is. Escaping them also works. Colons and apostrophes are safe unquoted. This problem occurs most often when the memory is about JSON, hook shapes, or config syntax.
+   - Never include `capture_id`, `created`, `origin_session`, or `origin_pane` at the top level. The writer assigns them. The script rejects a staged file that contains any of them.
+   - Optional `evidence` is a non-empty single-line scalar, at most 300 bytes. It is required for `source: auto_capture`.
+   - The body (after the closing `---`) becomes the proposed memory body of the candidate. When `metadata.type` is `feedback` or `project`, include `**Why:**` and `**How to apply:**`.
 
-2. Run exactly one literal Bash segment (no `export`/`env`/assignment prefix, no chaining/piping/redirection):
+2. Run exactly one literal Bash segment. Use no `export`, `env`, or assignment prefix. Do not chain, pipe, or redirect:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-remember.sh" [--store <path>] --staged <staged-file>
    ```
-   Never invoke `memory-write.sh capture` directly — always go through `memory-remember.sh`, which derives the idempotency key the writer requires.
+   Never invoke `memory-write.sh capture` directly. Always go through `memory-remember.sh`. It derives the idempotency key that the writer requires.
 
    Exit codes:
 
@@ -121,16 +130,11 @@ Run exactly one literal Bash segment:
 ```
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-remember.sh" [--store <path>] --list [--expired-only]
 ```
-Output is zero or more tab-separated rows, `<id>\t<created>\t<age-days>\t<expired|active>\t<sensitivity>`, in id order. No rows (exit `0`, empty output) means no pending candidates. Report that plainly. It is not an error. Exit `3` and `4` mean the same store-resolution and integrity conditions as above. Present the candidates as a readable table. Never fabricate a row that the script did not print.
+Output is zero or more tab-separated rows in id order: `<id>\t<created>\t<age-days>\t<expired|active>\t<sensitivity>`. No rows (exit `0`, empty output) means no pending candidates. Report that plainly. It is not an error. Exit `3` and `4` mean the same store-resolution and integrity conditions as above. Present the candidates as a readable table. Never fabricate a row that the script did not print.
 
 ### Dismissed candidates
 
-`/knowledge:consolidate` can **dismiss** a reviewed candidate (obsolete,
-duplicate, or session residue) after the user approves that disposition: the
-file moves to `.inbox/.dismissed/<id>.md`, keeps its content, and no longer
-counts as pending, so the consolidation nudge stops reporting it. Recapturing
-identical content is a no-op; different content gets a new id and is pending
-again. List dismissed candidates read-only with:
+`/knowledge:consolidate` can **dismiss** a reviewed candidate (obsolete, duplicate, or session residue) after the user approves that disposition. The file moves to `.inbox/.dismissed/<id>.md` and keeps its content. It no longer counts as pending, so the consolidation nudge stops reporting it. Recapturing identical content is a no-op. Different content gets a new id and is pending again. List dismissed candidates read-only with:
 
 ```
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-remember.sh" [--store <path>] --list --dismissed [--expired-only]
@@ -164,13 +168,20 @@ before 0.5.0 stay valid under 0.5.0 with unchanged ids.
 
 **Note:** purge is destructive. It is separate from `/knowledge:consolidate`, which is the normal way candidates leave the inbox. Purge is a two-call PLAN/APPLY protocol on `memory-write.sh` directly. There is no purge planner script.
 
-1. **Plan** — run exactly one literal Bash segment, choosing either `--expired` or a specific `--ids <id,...>` (comma-separated ids from the `--list` output above):
+1. **Plan.** Run exactly one literal Bash segment. Choose either `--expired` or a specific `--ids <id,...>` (comma-separated ids from the `--list` output above):
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-write.sh" purge --store <resolved-store-path> (--expired | --ids <id,...>)
    ```
-   `--store` here must be the actual resolved absolute store path — `memory-write.sh` itself never falls back to a default. Use the explicit path the user gave, `$KNOWLEDGE_MEMORY_HOME` if set, or otherwise the canonical `<repo-root>/.agents/memory` (matching `/knowledge:init`'s reported target and whatever store the preceding `--list` step resolved). Save the plan's stdout (one `<id> <sha256> <created> <expired|active>` line per candidate) to a file. Show it to the user verbatim. If the plan is empty, stop here: there is nothing to purge.
+   `--store` here must be the actual resolved absolute store path. `memory-write.sh` itself never falls back to a default. Use the first of these that applies:
+   1. the explicit path the user gave
+   2. `$KNOWLEDGE_MEMORY_HOME`, if set
+   3. the canonical `<repo-root>/.agents/memory`
+
+   This path matches the target that `/knowledge:init` reported and the store that the preceding `--list` step resolved.
+
+   Save the stdout of the plan to a file. It has one `<id> <sha256> <created> <expired|active>` line per candidate. Show it to the user verbatim. If the plan is empty, stop here. There is nothing to purge.
 2. **Get user approval** for exactly which candidates to delete. Never apply without an explicit go-ahead.
-3. **Apply** — run exactly one literal Bash segment with the SAME selector and the saved plan file as the manifest:
+3. **Apply.** Run exactly one literal Bash segment. Use the SAME selector. Use the saved plan file as the manifest:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-write.sh" purge --store <same-resolved-path> (--expired | --ids <id,...>) --manifest <saved-plan-file> --confirm <same-resolved-path>
    ```

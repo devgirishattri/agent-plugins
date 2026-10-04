@@ -1,25 +1,20 @@
 # Structured handoff evidence
 
-A version 2 handoff records the scope of resumable work, stable work-item
-identifiers, the session's reported status, and supporting evidence references.
-These are fallible recorded claims. Schema validation does not prove a file
-exists, a commit belongs to this repository, a test passed, or a ticket is
-complete. Evidence references are never fetched or executed.
+A version 2 handoff records four things: the scope of resumable work, stable work-item identifiers, the reported status of the session, and supporting evidence references.
+
+These are fallible recorded claims. Schema validation does not prove that a file exists, a commit belongs to this repository, a test passed, or a ticket is complete. Handoff handling never fetches or executes evidence references.
 
 ## Creating and updating a handoff
 
-Stage the Markdown body as usual. Its optional leading frontmatter still
-accepts only the existing `tickets:` list. Stage the structured data separately
-as a JSON file and pass it to the save helper:
+Stage the Markdown body as usual. Its optional leading frontmatter accepts only the existing `tickets:` list. Stage the structured data separately as a JSON file. Pass it to the save helper:
 
 ```text
 bash <plugin-root>/scripts/save-context.sh example_arc /tmp/body.md --handoff --handoff-data /tmp/data.json
 ```
 
-`SESSION_CONTEXT_HOME` must already be inherited from the launcher. The new
-flag requires `--handoff`; it does not change how the context store is chosen.
-Python 3 is required for v2 writes and validation. Plain snapshots and legacy
-v1 writes without structured data retain their existing dependency behavior.
+`SESSION_CONTEXT_HOME` must already be inherited from the launcher. The new flag requires `--handoff`. It does not change how the helper chooses the context store.
+
+V2 writes and validation require Python 3. Plain snapshots and legacy v1 writes without structured data keep their existing dependency behavior.
 
 The JSON file contains exactly `scope` and `items`:
 
@@ -40,9 +35,7 @@ The JSON file contains exactly `scope` and `items`:
 }
 ```
 
-Use the file-editing tool to stage both files. The helper takes a file path,
-not an inline JSON argument. It rejects duplicate JSON keys, unknown fields,
-and malformed values before replacing the destination or adding history.
+Use the file-editing tool to stage both files. The helper takes a file path. It does not take an inline JSON argument. The helper rejects duplicate JSON keys, unknown fields, and malformed values. It rejects them before it replaces the destination or adds history.
 
 ## Field contract
 
@@ -60,59 +53,40 @@ and malformed values before replacing the destination or adding history.
 | `evidence.observed_at` | Required valid UTC calendar timestamp, exactly `YYYY-MM-DDTHH:MM:SSZ`, recording when the supporting observation was made. |
 | `evidence.note` | Optional nonempty single-line observation, such as the recorded test result. |
 
-Text fields must be YAML-printable; control characters, unpaired surrogates,
-and Unicode line separators are rejected. Record only
-observations actually available to the session; leave evidence empty for
-unfinished work rather than manufacturing a result or timestamp.
+Text fields must be YAML-printable. The helper rejects control characters, unpaired surrogates, and Unicode line separators.
+
+Record only observations that the session actually has. For unfinished work, leave evidence empty. Do not manufacture a result or timestamp.
 
 ## Compatibility and stable updates
 
 - New `--handoff --handoff-data` writes produce `handoff_version: 2`.
-- An existing v1 handoff can be upgraded by supplying data; its original
-  `created` and existing `expires` are preserved, unless `--expires` replaces
-  the latter. `updated` advances as before.
-- An existing v2 handoff updated without `--handoff-data` keeps its scope and
-  item values. Their JSON formatting is canonicalized.
-- With replacement data, all previous item IDs must still be present. Mark an
-  abandoned item `cancelled` instead of omitting it. Summary, status, evidence,
-  and scoped paths can change; repository identity cannot. Use another handoff
-  name for a different repository.
-- Legacy direct helper calls without data still create v1 handoffs. Existing
-  plain snapshots and v1 handoffs remain readable; there is no bulk migration.
-- A plain save against an existing handoff still refuses. Unknown existing
-  handoff versions and malformed v2 data also refuse before archival or overwrite.
-- The existing history limit, timestamp handling, expiry policy, and top-level
-  ticket-citation scheme continue to apply. Expiry never deletes anything.
+- Supplying data upgrades an existing v1 handoff. The upgrade preserves its original `created` and its existing `expires`, unless `--expires` replaces the latter. `updated` advances as before.
+- An existing v2 handoff that you update without `--handoff-data` keeps its scope and item values. The helper canonicalizes their JSON formatting.
+- With replacement data, all previous item IDs must still be present. Mark an abandoned item `cancelled` instead of omitting it. Summary, status, evidence, and scoped paths can change. Repository identity cannot change. Use another handoff name for a different repository.
+- Legacy direct helper calls without data still create v1 handoffs. Existing plain snapshots and v1 handoffs remain readable. There is no bulk migration.
+- A plain save against an existing handoff still refuses. Unknown existing handoff versions and malformed v2 data also refuse, before archival or overwrite.
+- The existing history limit, timestamp handling, expiry policy, and top-level ticket-citation scheme continue to apply. Expiry never deletes anything.
 
-The work-item IDs belong to a handoff; they do not create or update tracker
-entries. Top-level `tickets:` continues to hold tracker pointers separately.
-When regenerating a handoff, retain the ticket references still needed by the
-next session.
+Work-item IDs belong to a handoff. They do not create or update tracker entries. Top-level `tickets:` continues to hold tracker pointers separately. When you regenerate a handoff, retain the ticket references that the next session still needs.
 
 ## Stored representation and diagnosis
 
-`save-context.sh` remains the writer of the complete handoff. It emits its
-timestamps and optional tickets first, then `scope: {JSON object}`, then
-`items:` with one `  - {JSON object}` line per item, before the closing
-frontmatter fence and Markdown body. This is a restricted, valid YAML format;
-it does not require a general YAML parser. Object keys are sorted, Unicode is
-preserved, and each structured value stays on one physical line.
+`save-context.sh` remains the writer of the complete handoff. It emits these parts in order, before the closing frontmatter fence and the Markdown body:
+1. its timestamps and optional tickets
+2. `scope: {JSON object}`
+3. `items:` with one `  - {JSON object}` line per item
 
-`handoff-data.py` supplies shared structural validation and rendering.
-`doctor.sh` accepts both handoff versions, reports malformed v2 data as a WARN,
-and labels recorded item evidence as not verified. Its existing timestamp,
-expiry, and ticket checks still run. It does not compare IDs against history
-or assess evidence truth; freshness and consistency cues are described in
-the next section.
+This is a restricted, valid YAML format. It does not require a general YAML parser. Object keys are sorted. Unicode is preserved. Each structured value stays on one physical line.
+
+`handoff-data.py` supplies the shared structural validation and rendering.
+
+`doctor.sh` accepts both handoff versions. It reports malformed v2 data as a WARN. It labels recorded item evidence as not verified. Its existing timestamp, expiry, and ticket checks still run. It does not compare IDs against history. It does not assess evidence truth. The next section describes the freshness and consistency cues.
 
 ## Freshness and consistency
 
-`doctor` assesses every valid v2 handoff with `handoff-data.py validate
---assess --now <UTC> --stale-days <N>` (N is `SESSION_CONTEXT_STALE_DAYS`,
-default 7, the same knob as the file-age tier; a value outside 0–999999 is
-reported as a `WARN` and both tiers fall back to 7). The assessment is a pure
-function of the file and the supplied clock, so it is deterministic and
-testable; it reads nothing else and makes no truth claim.
+`doctor` assesses every valid v2 handoff with `handoff-data.py validate --assess --now <UTC> --stale-days <N>`. N is `SESSION_CONTEXT_STALE_DAYS` (default 7). This is the same knob as the file-age tier. A value outside 0–999999 is reported as a `WARN`, and both tiers fall back to 7.
+
+The assessment is a pure function of the file and the supplied clock. It is deterministic and testable. It reads nothing else. It makes no truth claim.
 
 | Level | Finding | Rule |
 |---|---|---|
@@ -124,19 +98,13 @@ testable; it reads nothing else and makes no truth claim.
 | INFO | done, unverifiable only | a `done` item whose evidence is entirely `test`/`reference`; expected for work that has no local artefact, not an integrity defect |
 | INFO | all items closed | every item is `done` or `cancelled`; the handoff is a candidate for promotion |
 
-Findings keep the existing per-item summary lines and are reported under
-doctor's `context-handoff` section, separately from the mtime and expiry
-tiers.
+Findings keep the existing per-item summary lines. `doctor` reports them under its `context-handoff` section, separately from the mtime and expiry tiers.
 
-**Explicit memory links.** The metadata assessment above reads only the
-handoff. One further check touches the filesystem: a `reference` evidence
-whose `ref` is `memory:<slug>` names a memory entry explicitly — for example
-`{"kind": "reference", "ref": "memory:project_widget_firmware", "observed_at": "2026-09-16T10:00:00Z"}`,
-written only when the session actually consulted that entry — and doctor
-reads that entry's top-level `status:` scalar from the memory store it has
-already resolved (the store `--store` selects, or the discovered one). It
-never follows a symlink, never reads a candidate in `.inbox/`, and never
-looks anywhere else when the store is unavailable.
+**Explicit memory links.** The metadata assessment above reads only the handoff. One further check touches the filesystem.
+
+A `reference` evidence whose `ref` is `memory:<slug>` names a memory entry explicitly. Write this link only when the session actually consulted that entry. Example: `{"kind": "reference", "ref": "memory:project_widget_firmware", "observed_at": "2026-09-16T10:00:00Z"}`.
+
+`doctor` reads the top-level `status:` scalar of that entry from the memory store it has already resolved (the store `--store` selects, or the discovered one). It never follows a symlink. It never reads a candidate in `.inbox/`. It never looks anywhere else when the store is unavailable.
 
 | Level | Finding | Rule |
 |---|---|---|
@@ -147,60 +115,40 @@ looks anywhere else when the store is unavailable.
 | WARN | cannot assess lifecycle | the path exists but is a symlink, a special file, or not owned by the user, or the file has no complete frontmatter, a duplicate `status`, or an unrecognised value; or the store fails its safety validation |
 | WARN | malformed memory link | `memory:` followed by anything other than a canonical slug |
 
-A memory link is still `reference` evidence: it counts toward the
-"done, unverifiable only" cue and `context-verify` reports it `unverified`.
+A memory link is still `reference` evidence. It counts toward the "done, unverifiable only" cue, and `context-verify` reports it `unverified`.
 
-Deliberately absent: any link inferred from names (item IDs are
-handoff-local; only an explicit `memory:` reference is followed), any
-comparison between two handoffs, any tracker-line matching, and any
-verification of `file` or `commit` evidence against a repository (that is
-`context-verify`, which needs an explicit repository binding doctor does not
-have; doctor's own store resolution still uses Git to find the repository
-root).
+Deliberately absent:
+- Any link inferred from names. Item IDs are handoff-local. Only an explicit `memory:` reference is followed.
+- Any comparison between two handoffs.
+- Any tracker-line matching.
+- Any verification of `file` or `commit` evidence against a repository. That is the job of `context-verify`, which needs an explicit repository binding that doctor does not have. The store resolution of doctor still uses Git to find the repository root.
 
 ## Verifying recorded evidence
 
-`context-verify <name> --repository-id <snake_case> [--repo <path>] [--json]`
-(`verify-context.sh` → `context-verify.py`, which imports the shared parser)
-performs local checks of the structured evidence, and it is deliberately
-narrow, local, and read-only. It runs fixed Git queries (object type, `HEAD`,
-ancestry, shallow state) and never a recorded command; it never fetches:
+`context-verify <name> --repository-id <snake_case> [--repo <path>] [--json]` runs `verify-context.sh`, which runs `context-verify.py` (it imports the shared parser). It performs local checks of the structured evidence. It is deliberately narrow, local, and read-only. It runs fixed Git queries (object type, `HEAD`, ancestry, shallow state). It never runs a recorded command. It never fetches.
 
-- The caller binds the repository explicitly. `--repository-id` is compared to
-  the saved `scope.repository` and a mismatch is an input error (exit 2); it
-  is never derived from a directory name or remote URL. `--repo` (default:
-  the current git toplevel) is resolved to its toplevel, which the report
-  names.
-- `scope.paths` and `file` evidence: exists under the toplevel and is a
-  regular file (a directory is acceptable for scope paths). A symlink on the
-  path is reported `unverified` and is never followed; contents are never
-  read.
-- `commit` evidence: the object exists locally, is a commit, and is an
-  ancestor of `HEAD`. Present-but-not-ancestor and wrong-object-type are
-  mismatches. In a shallow clone a present, reachable commit is still
-  `verified`; only what the truncated history cannot establish is
-  `unverified`. An unborn `HEAD` prevents the ancestry check only; path and
-  object-type checks still run.
-- `test` and `reference` evidence, and items with no evidence, are reported
-  `unverified`; nothing is executed, fetched, or resolved.
-- Ticket citations are doctor's concern. This verifier does not assess
-  completion; freshness and internal timestamp consistency are doctor's
-  assessment (see "Freshness and consistency").
+- The caller binds the repository explicitly. The command compares `--repository-id` to the saved `scope.repository`. A mismatch is an input error (exit 2). The command never derives the ID from a directory name or remote URL. The command resolves `--repo` (default: the current git toplevel) to its toplevel, and the report names that toplevel.
+- `scope.paths` and `file` evidence: the path exists under the toplevel and is a regular file. A directory is acceptable for scope paths. The command reports a symlink on the path as `unverified` and never follows it. It never reads contents.
+- `commit` evidence: the object exists locally, is a commit, and is an ancestor of `HEAD`. A present commit that is not an ancestor is a mismatch. A wrong object type is a mismatch. In a shallow clone, a present, reachable commit is still `verified`. Only what the truncated history cannot establish is `unverified`. An unborn `HEAD` prevents the ancestry check only. The path and object-type checks still run.
+- `test` and `reference` evidence, and items with no evidence, are reported `unverified`. For these evidence kinds, it does not execute, fetch, or resolve the references.
+- Ticket citations are the concern of doctor. This verifier does not assess completion. Doctor assesses freshness and internal timestamp consistency (see "Freshness and consistency").
 
-Exit `0` means every local check passed and nothing was left unverified;
-`1` means at least one check is missing, mismatched, or unverified; `2` is an
-input, schema, or environment error (including a plain snapshot or a v1
-handoff, which carry no structured evidence — regenerate with `--handoff` to
-get a v2). The JSON report (`report_version: 1`) lists every check with its
-category, reference, status (`verified|missing|mismatch|unverified`), detail,
-and owning item, plus `head`, `shallow`, summary counts, and a notice
-restating these limits. The human report prints the notice, the resolved
-repository and `HEAD`, one `STATUS <item-id>/<category> "<ref>": <detail>`
-line per check (the repository-binding and `scope` checks carry no item id),
-and a summary line. The store is opened through the same read-only gate
-doctor uses, never through the hardening resolver.
+Exit codes:
 
-Load, list, share, diff, and remove continue using the existing context
-mechanics. Promotion should consider the recorded scope, item statuses, and
-evidence as background and preserve relevant provenance in its proposal;
-these fields do not authorize a durable write or source deletion.
+| Exit | Meaning |
+|---|---|
+| `0` | Every local check passed. Nothing was left unverified. |
+| `1` | At least one check is missing, mismatched, or unverified. |
+| `2` | Input, schema, or environment error. This includes a plain snapshot or a v1 handoff, which carry no structured evidence. Regenerate with `--handoff` to get a v2. |
+
+The JSON report (`report_version: 1`) lists every check with its category, reference, status (`verified|missing|mismatch|unverified`), detail, and owning item. It also holds `head`, `shallow`, summary counts, and a notice that restates these limits.
+
+The human report prints these parts:
+- the notice
+- the resolved repository and `HEAD`
+- one `STATUS <item-id>/<category> "<ref>": <detail>` line per check (the repository-binding and `scope` checks carry no item id)
+- a summary line
+
+The command opens the store through the same read-only gate that doctor uses. It never opens the store through the hardening resolver.
+
+Load, list, share, diff, and remove continue to use the existing context mechanics. When you promote a handoff, treat the recorded scope, item statuses, and evidence as background. Preserve the relevant provenance in the proposal. These fields do not authorize a durable write or a source deletion.

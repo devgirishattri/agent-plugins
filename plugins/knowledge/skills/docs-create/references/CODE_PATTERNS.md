@@ -1,6 +1,6 @@
 # Code Patterns Documentation
 
-Guide for documenting recurring code patterns, conventions, and architectural decisions. Pattern docs capture *how things should be done* — the knowledge that lives in senior developers' heads and gets lost when they leave.
+This guide explains how to document recurring code patterns, conventions, and architectural decisions. Pattern docs capture *how things should be done*. This knowledge lives in the heads of senior developers, and it is lost when they leave.
 
 ## When to Create Pattern Docs
 
@@ -11,7 +11,7 @@ Guide for documenting recurring code patterns, conventions, and architectural de
 
 ## Pattern Document Structure
 
-Each pattern doc should follow this structure:
+Give each pattern doc this structure:
 
 ```
 # pattern_name.md
@@ -240,4 +240,4 @@ Place pattern docs where they make sense:
 - `docs/decisions/` — Architecture decision records
 - `src/module/patterns.md` — Module-specific patterns (alongside the code)
 
-For projects with 10+ patterns, create a `docs/patterns/index.md` that lists all patterns grouped by category.
+If the project has 10 or more patterns, create a `docs/patterns/index.md` that lists all patterns grouped by category.

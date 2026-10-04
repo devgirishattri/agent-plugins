@@ -22,16 +22,13 @@ leg. It stages content at a scratch location and drives `memory-write.sh`. Unlik
 `consolidate`, it also handles a **docs** destination. Docs are proposal-only:
 this skill can *show* a complete patch and can *never* write it. See "Non-goals."
 
-Read this whole document before you start. Do not skip steps or reorder them.
-Never delete anything before both conditions are true: you verified that the
-destination write is installed, AND the user gave a second, separate approval
-for source deletion.
+Read this whole document before you start. Do not skip steps or reorder them. Delete nothing until both conditions are true:
+1. You verified that the destination write is installed.
+2. The user gave a second, separate approval for source deletion.
 
 ## 0. Invocation discipline (read this first)
 
-Every call into a plugin helper script below is **exactly one literal Bash
-segment**: the literal word `bash`, then the plugin-relative script path
-(`"${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh"`), then flags. Add nothing else. No
+Make every call into a plugin helper script below **exactly one literal Bash segment**. The segment has three parts: the literal word `bash`, the plugin-relative script path (`"${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh"`), and flags. Add nothing else. No
 `export`/`env`/inline-assignment prefix. No `&&`, `;`, `|`, `>`, `<`, backticks,
 or `$(...)` inside that segment. Never combine two scripts on one line. Never
 wrap a call as `bash -c "..."`.
@@ -54,10 +51,7 @@ same rule every `/context-*` command follows). If a step below needs it and it
 is unset, stop and request that the pane/session be relaunched with the correct
 environment.
 
-**Docs destinations are never written by this skill, in any step, under any
-circumstance.** Every docs "write" below means: compose the complete proposed
-file content (or a unified diff against an existing file) and show it to the
-user as text.
+**This skill never writes a docs destination, in any step, under any circumstance.** Every docs "write" below means one thing. Compose the complete proposed file content, or a unified diff against an existing file. Show it to the user as text.
 
 - Do not use the Write tool for a docs destination.
 - Do not invoke `docs-write.sh`. That gate exists for the separate, explicitly
@@ -111,12 +105,7 @@ and stop. Otherwise, **Read** `"$SESSION_CONTEXT_HOME/<name>.md"` directly (a
 plain read — no helper needed for a single known file, same convention
 `/context-remove` uses).
 
-**Memory-store destination (and, for a memory-source case, the source too)**:
-resolve `STORE_PATH` exactly as `skills/consolidate/SKILL.md` step 1 documents
-(explicit `--store`, else derive candidate via `git rev-parse --show-toplevel`
-→ `KNOWLEDGE_MEMORY_HOME` → `.agents/memory/MEMORY.md` → single nested
-subdirectory — a convenience derivation only). Then run the same baseline
-health gate as consolidate step 2, each its own single literal Bash segment:
+**Memory-store destination (and, for a memory-source case, the source too)**: resolve `STORE_PATH` exactly as step 1 of `skills/consolidate/SKILL.md` documents. Use an explicit `--store`. Otherwise derive a candidate in this order: `git rev-parse --show-toplevel` → `KNOWLEDGE_MEMORY_HOME` → `.agents/memory/MEMORY.md` → single nested subdirectory. This derivation is a convenience only. Then run the same baseline health gate as step 2 of consolidate. Run each command as its own single literal Bash segment:
 ```
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-lint.sh" [--store <path>]
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-index.sh" [--store <path>]
@@ -130,28 +119,17 @@ Gate results:
 | `memory-lint.sh` or `memory-index.sh` exits `4` | ERROR-level finding or slug collision. | **Stop the whole run.** Never propose a write against a store that already fails its own integrity checks. |
 | `ADVISORY`, `WARN`, or `DRIFT` rows | Informational. | Carry them into your final report. |
 
-If the destination is docs, there is no store to resolve for the destination
-leg — just the repo root (`git rev-parse --show-toplevel`), read-only, to know
-where `docs/decisions/` lives.
+If the destination is docs, the destination leg has no store to resolve. Resolve only the repo root, read-only (`git rev-parse --show-toplevel`). The repo root tells you where `docs/decisions/` lives.
 
 ## 3. Read the source in full
 
-- **Context item**: you already Read it in step 2. Note whether it carries
-  `kind: handoff` frontmatter. If it does, note `created`/`updated`/`expires`
-  and any `tickets:` list. These feed step 5. An `expires` date in the past
-  is informational only ("stale, eligible for cleanup"). It never blocks or
-  forces this promotion. This skill never auto-deletes anything on expiry.
-  For `handoff_version: 2`, also read `scope` and `items` under the
-  [handoff evidence contract](../knowledge/references/handoffs.md). Use the
-  recorded repository scope, stable item IDs, statuses, and evidence to judge
-  what is ready to promote and preserve relevant provenance in the proposal.
-  Treat these as fallible claims, not verified facts or authoritative ticket
-  status. Never execute or fetch a recorded evidence reference. These fields
-  do not replace the destination-write gate or the source-deletion gate.
-- **Memory-file source**: **Read** the existing file in full (its current
-  frontmatter and body) — this is what the destination's `supersedes:` will
-  point at, and you need its exact current bytes for the retire step's CAS
-  later.
+- **Context item**: you already Read it in step 2.
+  - Note whether it carries `kind: handoff` frontmatter. If it does, note `created`, `updated`, `expires`, and any `tickets:` list. These feed step 5.
+  - An `expires` date in the past is informational only ("stale, eligible for cleanup"). It never blocks or forces this promotion. This skill never auto-deletes anything on expiry.
+  - For `handoff_version: 2`, also read `scope` and `items` under the [handoff evidence contract](../knowledge/references/handoffs.md). Use the recorded repository scope, stable item IDs, statuses, and evidence to judge what is ready to promote. Preserve relevant provenance in the proposal.
+  - Treat these fields as fallible claims. They are not verified facts or authoritative ticket status. Never execute or fetch a recorded evidence reference.
+  - These fields do not replace the destination-write gate or the source-deletion gate.
+- **Memory-file source**: **Read** the existing file in full (its current frontmatter and body). The destination's `supersedes:` field will point at this file. You also need its exact current bytes for the retire step's CAS later.
 
 ## 4. Propose the destination
 
@@ -159,33 +137,20 @@ Work out the complete destination content before showing anything to the
 user — same discipline as `consolidate` step 6.
 
 **Memory destination** (CREATE or UPDATE, exactly like `consolidate` steps 3–6):
-- Read `<STORE_PATH>/MEMORY.md` first (index-first, same dedup discipline as
-  consolidate) and use `memory-search.sh` / the `name:`/`description:` grep
-  backstop to check whether an UPDATE to an existing file is the better fit
-  than a CREATE — favor UPDATE over CREATE exactly as consolidate step 5
-  documents.
-- Canonical v1 frontmatter for a CREATE (`schema_version: 1`, `name`,
-  `description`, `metadata.type`, `created`/`updated`, plus `tags`/`status` as
-  applicable); for an UPDATE, a plain-markdown before/after of the real file.
+- Read `<STORE_PATH>/MEMORY.md` first (index-first, same dedup discipline as consolidate). Use `memory-search.sh` and the `name:`/`description:` grep backstop to check whether an UPDATE to an existing file fits better than a CREATE. Favor UPDATE over CREATE, exactly as step 5 of consolidate documents.
+- For a CREATE, write canonical v1 frontmatter: `schema_version: 1`, `name`, `description`, `metadata.type`, `created`/`updated`, plus `tags` and `status` as applicable. For an UPDATE, write a plain-markdown before/after of the real file.
 - If this run's source is a memory-file supersession (step 1), the
   destination's frontmatter carries `supersedes: <old-slug>` — the old file's
   stem, exact.
-- Build the MEMORY.md index diff preserving the detected style (flat /
-  sectioned / multi-link), exactly as consolidate step 6 documents — ask the
-  user rather than guess a section when ambiguous.
+- Build the MEMORY.md index diff. Preserve the detected style (flat / sectioned / multi-link), exactly as step 6 of consolidate documents. If the section is ambiguous, ask the user. Do not guess.
 - Validate every `[[backlink]]` in the proposed body against existing stems
   plus this batch, flagging dangling links honestly (legal, but disclosed).
 - Fold in ticket citations from step 5 into the proposed body (a short "Cited
   tracking items" note), never into MEMORY.md's index row.
 
-**Docs destination** (decision record: `docs/decisions/<snake_case>.md`,
-matching the naming doctor checks for, with decision dates in frontmatter
-`decided: YYYY-MM-DD`; or another `docs/` reference file when that fits better):
-compose the **complete** proposed file content (new file) or a **complete unified
-diff** (existing file) as a fenced code block in your response. This is the
-entire destination write. Docs have no `apply` step. Step 6 below shows this to
-the user as the final artifact. For this leg, step 7 (write + revalidate) only
-restates that nothing was written.
+**Docs destination.** The destination is a decision record at `docs/decisions/<snake_case>.md`, or another `docs/` reference file when that fits better. The name matches the naming that doctor checks for. Decision dates go in the frontmatter as `decided: YYYY-MM-DD`.
+
+Compose the **complete** proposed file content (new file) or a **complete unified diff** (existing file). Put it in a fenced code block in your response. This is the entire destination write. Docs have no `apply` step. Step 6 below shows this block to the user as the final artifact. For this leg, step 7 (write + revalidate) only restates that nothing was written.
 
 ## 5. Ticket citations — carry through, surface honestly
 
@@ -200,12 +165,8 @@ each entry:
 - `local:<tracker-path>:<prefix>` (split on exactly the *second* colon —
   everything after it, verbatim, is the prefix): validate, as plain read-only
   Bash steps (no helper needed):
-  1. `<tracker-path>` must not contain `..`, must not be absolute, and must
-     normalize to inside the repo (`git rev-parse --show-toplevel` first,
-     then check the resolved path is a descendant).
-  2. `<tracker-path>`'s basename must be exactly `TODO.md` or `ISSUES.md`,
-     located at the repo root or under `docs/` — any other path is a
-     malformed citation, report as an error, do not check it further.
+  1. `<tracker-path>` must not contain `..`. It must not be absolute. It must normalize to a path inside the repo. Run `git rev-parse --show-toplevel` first. Then check that the resolved path is a descendant.
+  2. The basename of `<tracker-path>` must be exactly `TODO.md` or `ISSUES.md`. The file must be at the repo root or under `docs/`. Any other path is a malformed citation. Report it as an error. Do not check it further.
   3. The file must exist, be a regular non-symlink file (`test -f` and
      `[ ! -L ... ]`).
   4. `<prefix>` must be non-empty and single-line — an empty prefix is
@@ -220,12 +181,13 @@ and stale ones — never omit a citation because it didn't check out.
 
 ## 6. Present for approval — write nothing yet
 
-Show the user the complete proposal from step 4: the destination's full
-before/after (memory) or full content/diff (docs), the MEMORY.md index diff
-(memory only), every ticket citation from step 5 with its verification
-outcome, and which source this promotes. **This is destination-write approval
-only — it is not source-deletion approval; do not conflate the two, and do
-not mention deleting the source as though it were already decided.**
+Show the user the complete proposal from step 4:
+- the full before/after of the destination (memory) or the full content or diff (docs)
+- the MEMORY.md index diff (memory only)
+- every ticket citation from step 5, with its verification outcome
+- which source this run promotes
+
+**This approval covers the destination write only. It is not source-deletion approval. Do not conflate the two. Do not mention deleting the source as though the user already decided it.**
 
 If the user declines, stop here — nothing was written, nothing was deleted.
 
@@ -262,10 +224,9 @@ ever one destination per promote run):
    from step 2). Verify that no new `ERROR`, drift, or collision findings
    appear. "Revalidate destination + backlinks" is not optional.
 
-**Docs destination**: nothing to write. State plainly: "This patch has not
-been written — apply it yourself, then come back and tell me, so I can offer
-source deletion." Do not proceed to step 8 until the user has told you they
-applied it (or declined to).
+**Docs destination**: nothing to write. State plainly: "This patch has not been written — apply it yourself, then come back and tell me, so I can offer source deletion."
+
+Do not go to step 8 until the user tells you that they applied the patch or declined to.
 
 ## 8. Approve source deletion — a SEPARATE gate
 
@@ -288,34 +249,25 @@ and stands.
 **Context source** (handoff or plain snapshot): follow `/knowledge:context-remove`'s
 own preview-then-delete shape. It is the existing surface, with its own approval,
 for this deletion. Do not reinvent it:
-1. Preview exactly what will be deleted with the script's `--dry-run` preview
-   (it leaves snapshot/history files and their permissions unchanged — store
-   bootstrap and lock bookkeeping can still occur; the `<name>` must already
-   match `^[a-z0-9]+(_[a-z0-9]+)*$`; the preview is allowed before
-   approval; only the removal with `--confirmed` is gated):
+1. Preview exactly what the removal will delete. Use the `--dry-run` preview of the script. Four facts apply:
+   - It leaves snapshot and history files and their permissions unchanged. Store bootstrap and lock bookkeeping can still occur.
+   - `<name>` must already match `^[a-z0-9]+(_[a-z0-9]+)*$`.
+   - You can run the preview before approval.
+   - Only the removal with `--confirmed` is gated.
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/remove-context.sh" "<name>" --dry-run
    ```
-   Relay the listed paths, the orphan notice when one is printed, and the
-   "Would delete N file(s)" count. If it exits 1, relay the helper's actual
-   error output; only when that output says no current or archived snapshot
-   was found, also relay the available list and stop — for any other failure,
-   relay it and stop. The `--confirmed` run below rechecks under the writer lock,
-   so its final count is authoritative.
+   Relay the listed paths, the orphan notice when one is printed, and the "Would delete N file(s)" count. The `--confirmed` run below rechecks under the writer lock, so its final count is authoritative. If the dry run exits 1, relay the helper's actual error output. If that output says no current or archived snapshot was found, also relay the available list and stop. For any other failure, relay it and stop.
 2. Run the removal with the capability flag:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/remove-context.sh" "<name>" --confirmed
    ```
-   Relay the helper's actual result line and final count (including the
-   orphan-only "Removed N orphaned history file(s)" line). (Context-store writes are
-   reviewer-ALLOWED per the baseline's coordination-state exception —
-   `remove-context.sh` carries no reviewer gate, by design.)
+   Relay the helper's actual result line and final count. This includes the orphan-only "Removed N orphaned history file(s)" line. Context-store writes are reviewer-ALLOWED, per the coordination-state exception of the baseline. `remove-context.sh` carries no reviewer gate, by design.
 
 **Memory source** (supersession retire) — `memory-write.sh retire`:
-1. Compute fresh CAS hashes, each its own step: `--expect-target` = the
-   source file's current sha256 (re-read now, not step 3's copy);
-   `--expect-index` = the CURRENT `MEMORY.md`'s sha256 (it changed after
-   step 7's apply — re-read it now).
+1. Compute fresh CAS hashes. Compute each in its own step.
+   - `--expect-target` = the current sha256 of the source file. Re-read it now. Do not use the copy from step 3.
+   - `--expect-index` = the sha256 of the CURRENT `MEMORY.md`. It changed after the apply in step 7. Re-read it now.
 2. **Write** the staged post-removal MEMORY.md content (the index with the
    source's membership row removed) to a scratch file.
 3. Invoke exactly one literal Bash segment:
@@ -335,20 +287,17 @@ for this deletion. Do not reinvent it:
 
 ## 10. Final report
 
-State: what was promoted (source → destination), whether it was memory or
-docs, every ticket citation and its outcome, whether the destination write
-succeeded and revalidated clean, and whether the source was deleted, left in
-place, or the whole run stopped partway (and why — CAS mismatch, lock,
-reviewer refusal, or user decline). Never report "promoted" if the source
-deletion step was declined or not reached — say "destination written, source
-retained" instead.
+Lead with the state of the run. Use one of these words: `promoted`, `destination written, source retained`, `stopped`. Then state:
+- what the run promoted (source → destination), and whether it was memory or docs
+- every ticket citation and its outcome
+- whether the destination write succeeded and revalidated clean
+- whether the source was deleted, left in place, or the run stopped partway. If it stopped, give the cause: CAS mismatch, lock, reviewer refusal, or user decline. Give the exact next action.
+
+Never report `promoted` if the user declined the source deletion step or you did not reach it. Report `destination written, source retained` instead.
 
 ## Non-goals (always, every run)
 
-- **Never write a docs file.** Every docs destination is a proposed patch the
-  user applies — no exceptions, no "just this once," no invoking
-  `docs-write.sh` (that preflight belongs to the separate, explicitly
-  user-invoked docs-authoring workflow, not to promotion).
+- **Never write a docs file.** Every docs destination is a proposed patch that the user applies. There are no exceptions and no "just this once". Never invoke `docs-write.sh`. That preflight belongs to the separate, explicitly user-invoked docs-authoring workflow, not to promotion.
 - Never delete the source before the destination write is verified installed
   (memory) or the user has said they applied the patch (docs). The sequencing
   rule is: copy/write the destination BEFORE any source is moved or stubbed.

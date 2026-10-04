@@ -10,15 +10,19 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-- `SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports it is not set, stop and request that this pane/session be relaunched with the correct environment — do not export the variable or derive another context store.
-Usage modes (all handled by the script above):
+`SESSION_CONTEXT_HOME` must already be present in this session's environment, inherited when the agent process started. If the output above reports that it is not set, stop. Ask the user to relaunch this pane or session with the correct environment. Do not export the variable. Do not derive another context store.
+
+Usage modes (the script above handles all of them):
 - `/context-diff <name>` — unified diff of the newest archived version against the current snapshot
 - `/context-diff <name> --versions` — list available history timestamps (`YYYYMMDD-HHMMSS+HHMM` in `AGENT_PLUGINS_TIME_ZONE`; legacy UTC timestamps remain accepted)
 - `/context-diff <name> <timestamp>` — diff that archived version against the current snapshot
 
-Presenting the output:
-- Show the unified diff in a fenced ```diff code block; briefly summarize what changed between versions.
-- If the output says "(no differences)", state that the snapshot is unchanged since that version.
-- If `--versions` was used, present the timestamps as a list and suggest `/context-diff <name> <timestamp>` to compare one.
-- If no history versions exist yet, explain that history is only created when `/context-generate` overwrites an existing snapshot — saving the same name again will start the history.
-- If the snapshot itself doesn't exist, suggest `/context-list` to see what's available.
+Present the output by case. Lead with the result.
+
+| Output | What to tell the user |
+|---|---|
+| A diff | Show the unified diff in a fenced ```diff code block. Summarize briefly what changed between versions. |
+| "(no differences)" | The snapshot is unchanged since that version. |
+| `--versions` list | Present the timestamps as a list. Suggest `/context-diff <name> <timestamp>` to compare one. |
+| No history versions | History exists only after `/context-generate` overwrites an existing snapshot. Saving the same name again starts the history. |
+| The snapshot does not exist | Suggest `/context-list` to see what is available. |

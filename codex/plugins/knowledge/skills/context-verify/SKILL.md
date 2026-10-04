@@ -53,10 +53,13 @@ categories), and summary counts. JSON has `report_version: 1`, repository and
 handoff details, `items` with reported statuses, ordered `checks`, `summary`,
 and a notice describing the limits. Preserve that notice in your interpretation.
 
-Exit `0`: all narrow checks verified with none unresolved. Exit `1`: at least
-one `missing`, `mismatch`, or `unverified` finding. Exit `2`: input, schema,
-store, dependency, repository-binding, or environment error; relay stderr and
-stop. For plain/v1 handoffs, suggest regenerating with
+| Exit | Meaning and action |
+|---|---|
+| `0` | All narrow checks verified; none unresolved. |
+| `1` | At least one `missing`, `mismatch`, or `unverified` finding. Report the findings. |
+| `2` | Input, schema, store, dependency, repository-binding, or environment error. Relay stderr and stop. |
+
+For plain/v1 handoffs, suggest regenerating with
 `$knowledge:context-generate <name> --handoff` to supply structured evidence.
 
 Present discrepancies first, then unverified evidence, then the verified count.

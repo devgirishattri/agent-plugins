@@ -48,15 +48,21 @@ Each finding is one tab-separated line: `<LEVEL>\t<section>\t<message>`.
 | `WARN` | An actionable defect: stale snapshot, dangling/convention-drift link, index drift, misconfiguration, orphaned lock/claim/journal/staged file, stale doc, provider capability mismatch. |
 | `ERROR` | A store-integrity violation: slug collision, unsafe permissions, a store that isn't gitignored, unparseable frontmatter. |
 
-`section` is a short identifier, for example `docs-taxonomy`, `docs-todos`, `docs-links`, `docs-freshness`, `memory-resolve`, `memory-lint`, `memory-index`, `memory-backlinks`, `memory-inbox`, `memory-review-queue`, `memory-hardening`, `memory-lock`, `context`, `context-handoff`, `agents-md`, `capability-matrix`, `capability-claude`, `capability-codex`, `capability-recall`.
+`section` is a short identifier. Examples:
+- docs: `docs-taxonomy`, `docs-todos`, `docs-links`, `docs-freshness`
+- memory: `memory-resolve`, `memory-lint`, `memory-index`, `memory-backlinks`, `memory-inbox`, `memory-review-queue`, `memory-hardening`, `memory-lock`
+- context: `context`, `context-handoff`
+- recall bridge: `agents-md`
+- capability: `capability-matrix`, `capability-claude`, `capability-codex`, `capability-recall`
 
 The `memory-backlinks` check ignores links inside fenced code blocks and single-backtick inline code spans.
 
 Report the findings in this order:
 
-1. Group the findings by section.
-2. Lead with any `ERROR` rows, then `WARN` rows.
-3. Summarize `INFO` rows briefly. Do not repeat every line verbatim.
+1. Lead with the state: `clean`, or the count of `ERROR` and `WARN` findings. Use only the words `ERROR`, `WARN`, and `INFO` for severity.
+2. Group the findings by section.
+3. List any `ERROR` rows first, then `WARN` rows.
+4. Summarize `INFO` rows briefly. Do not repeat every line verbatim.
 
 When `agents-md` reports a missing, duplicated, or divergent recall snippet, it also prints the exact bytes to paste. These are a run of `INFO\tagents-md\tsnippet> <line>` rows. Relay those rows verbatim as a fenced block. The user pastes them into `AGENTS.md` themselves. This command never edits `AGENTS.md`, or anything else.
 
@@ -84,8 +90,11 @@ These checks are pure functions of the file and the clock. Doctor does not match
 
 The one filesystem check is explicit. A `reference` evidence written as `memory:<slug>` names a memory entry. Doctor reads that entry's top-level `status` from the memory store it resolved for this run. Therefore `--store` redirects the memory-link checks. The context store is still `SESSION_CONTEXT_HOME`.
 
-- `INFO`: the entry is active, the entry has no explicit status, or no store was resolved at all (one line per handoff, never a fallback store).
-- `WARN`: the entry is missing, stale, superseded, or archived. Also `WARN` when its frontmatter cannot be assessed (symlink, unreadable, duplicate or unrecognised status), when the link is malformed, or when a resolved store fails its own safety validation.
+- `INFO`: the entry is active, or the entry has no explicit status. Also `INFO` when doctor resolved no store at all. In that case it reports one line per handoff and never uses a fallback store.
+- `WARN`: the entry is missing, stale, superseded, or archived. Also `WARN` in these cases:
+  - doctor cannot assess the frontmatter (symlink, unreadable, duplicate or unrecognised status)
+  - the link is malformed
+  - a resolved store fails its own safety validation
 
 Doctor does not check file existence, commit membership, test results, or evidence truth. It never executes or fetches evidence references. The narrow local checks (path existence and type, commit presence and `HEAD` ancestry) belong to `/knowledge:context-verify`. That skill runs them per handoff against an explicitly bound repository.
 

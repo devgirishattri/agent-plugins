@@ -10,14 +10,14 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Lead with the result; add text only for errors or the follow-ups below. Render the result directly.
+Lead with the result. Add text only for errors or the follow-ups below. Render the result directly.
 
 Present the tab-separated data above as a markdown table:
 
 | ID | To | Type | Delivery | Age | Reply | Excerpt |
 
 Rules:
-- `unconfirmed` rows are messages with no correlated `[re:<id>]` reply token yet — list them first if the user asked what is pending. This tracks reply **correlation only**, NOT whether the recipient is alive or working the task — never present `unconfirmed` as "the pane is stuck/dead"
-- Replies are matched by `[re:<id>]` tokens in incoming messages; when asking a pane to respond, tell it to answer with `/reply <your-pane> <this message's id> <text>` (which adds the `[re:<id>]` token automatically) rather than hand-typing the token
-- Use `--pending` to show only unconfirmed messages, `--since <minutes>` to widen or narrow the look-back window (default 24h)
-- If a message has been `unconfirmed` for a long time, suggest `/pane-health <name>` to check whether the recipient is actually alive/reachable (a live pane may simply not have replied yet)
+- `unconfirmed` rows are messages with no correlated `[re:<id>]` reply token yet. List them first if the user asked what is pending. `unconfirmed` tracks reply **correlation only**. It does NOT show whether the recipient is alive or working the task. Never present `unconfirmed` as "the pane is stuck/dead".
+- The script matches replies by `[re:<id>]` tokens in incoming messages. When you ask a pane to respond, tell it to answer with `/reply <your-pane> <this message's id> <text>`. That command adds the `[re:<id>]` token automatically. The pane must not type the token by hand.
+- Use `--pending` to show only unconfirmed messages. Use `--since <minutes>` to widen or narrow the look-back window (default 24h).
+- If a message has been `unconfirmed` for a long time, suggest `/pane-health <name>` to check whether the recipient is alive and reachable. A live pane may simply not have replied yet.

@@ -6,9 +6,9 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Lead with the result; add text only for errors or the follow-ups below. Run the script directly and report only the result.
+Lead with the result. Add text only for errors or the follow-ups below. Run the script directly and report only the result.
 
-`SESSION_CHAT_INCOMING_MODE` controls how this pane reacts to incoming `/send` and `/dispatch` messages. Default is `notify`, which forbids reading dispatch files — orchestration requires `auto` or `assist`.
+`SESSION_CHAT_INCOMING_MODE` controls how this pane reacts to incoming `/send` and `/dispatch` messages. The default is `notify`, which forbids reading dispatch files. Orchestration requires `auto` or `assist`.
 
 1. Run:
    ```
@@ -17,6 +17,6 @@ Lead with the result; add text only for errors or the follow-ups below. Run the 
 
 2. If `$ARGUMENTS` is empty, the script reports the current mode and explains the four modes. Relay that output verbatim.
 
-3. If `$ARGUMENTS` is one of `auto`/`assist`/`notify`/`off`, the script prints an `export ...` line. Tell the user to `eval` it in their shell (or paste it into their shell rc to persist), since a child script cannot mutate the parent shell's environment.
+3. If `$ARGUMENTS` is one of `auto`/`assist`/`notify`/`off`, the script prints an `export ...` line. Tell the user to `eval` it in their shell, or to paste it into their shell rc to persist it. A child script cannot change the parent shell's environment.
 
-4. If the script errors on an invalid mode, surface its message; suggest the four valid modes.
+4. If the script errors on an invalid mode, surface its message. Then list the four valid modes.

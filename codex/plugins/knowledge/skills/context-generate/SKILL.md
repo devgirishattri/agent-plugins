@@ -46,7 +46,7 @@ the current state, and expect stabilized knowledge to be promoted later through
    Project: <current directory>
 
    ## What Was Done
-   [Bullet list of completed work — features added, bugs fixed, refactors made]
+   [Completed work and its evidence; keep proposals and unverified outcomes separate]
 
    ## Files Changed
    [List of files modified/created/deleted with brief description]
@@ -55,10 +55,10 @@ the current state, and expect stabilized knowledge to be promoted later through
    [Decisions made during the session and WHY — these are the hardest to reconstruct]
 
    ## Open Issues
-   [Problems discovered, unresolved bugs, things that need attention]
+   [Unresolved problems, omitted checks, and unknown outcomes]
 
    ## Where I Left Off
-   [Current state — what's in progress, what the next step should be]
+   [Current state, the next action, and any prerequisite or required approval]
 
    ## Notes for Next Session
    [Gotchas, context that isn't obvious from the code, warnings]
@@ -102,6 +102,10 @@ the current state, and expect stabilized knowledge to be promoted later through
    - Exit `2` with stderr `handoff exists: re-run with --handoff`: you omitted `--handoff` against a snapshot that already is one. Relay this to the user and re-run step 4 with `--handoff` added — never retry by adding `--handoff` silently without saying so, since that changes what gets written.
    - Any other non-zero exit (bad `--expires` format, unknown flag, or a genuine store error): relay the script's stderr verbatim and stop; do not guess at a different invocation.
 
-5. **Report**: "Session context saved as '<snapshot-name>'. Share with `$knowledge:context-share <session> <snapshot-name>` or load later with `$knowledge:context-load <snapshot-name>`." If a previous version was archived, mention `$knowledge:context-diff <snapshot-name>` to see what changed. If this was a handoff, also state its `expires` date and that `$knowledge:promote` is how it eventually gets promoted and its source deleted — expiry only ever marks it stale/eligible for confirmed cleanup, it is never silently deleted.
+5. **Report**: "Session context saved as '<snapshot-name>'. Share with `$knowledge:context-share <session> <snapshot-name>` or load later with `$knowledge:context-load <snapshot-name>`."
+   If a previous version was archived, mention `$knowledge:context-diff <snapshot-name>` to see what changed.
+   For a handoff, also state its `expires` date and the `$knowledge:promote` workflow for promotion and source deletion.
+   Expiry only marks it stale/eligible for confirmed cleanup; it is never silently deleted.
+   Saving a handoff does not verify that its recorded work is complete.
 
 Keep the summary to what another session needs to continue the work, not a transcript of everything that happened.

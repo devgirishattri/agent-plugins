@@ -24,18 +24,18 @@ Interface:
 - `--target PATH` — install location (default `~/.local/bin/workspace`).
 - `--dry-run` — report what would happen; write nothing.
 
-What it does, and why it exists: the dispatcher must live on PATH rather than
-inside a versioned plugin cache, because it is the thing that FINDS the plugin.
-That makes it a copy, and a copy goes stale silently. This verb creates it and
-is also its refresh — it is idempotent, so an identical target reports
-`already current` and writes nothing, letting `upgrade.sh` call it after every
-plugin update so the copy cannot drift from the installed release.
+The dispatcher lives on PATH and locates the installed plugin.
+Install it outside any versioned plugin cache. A stale dispatcher copy can fail silently.
+This command installs or refreshes that copy.
+If the target is identical, it reports `already current` and writes nothing.
+`upgrade.sh` calls it after each plugin update to keep the copy current.
 
-It requires no config and touches no tmux, so it works on a fresh machine with
-no `.agent-workspace/` anywhere. An existing target is backed up to
-`<target>.bak` before being overwritten. After copying it verifies the installed
-file answers `--contract`, reports whether the target directory is on PATH, and
-prints an optional `alias ws=workspace` line.
+It requires no config and does not touch tmux.
+It works on a fresh machine without `.agent-workspace/`.
+Before overwriting an existing target, it backs up the file to `<target>.bak`.
+After copying, it verifies that the installed file answers `--contract`.
+It reports whether the target directory is on PATH and prints an optional
+`alias ws=workspace` line.
 
 It NEVER edits a shell rc file. Relay the alias line verbatim so the user adds
 it themselves; do not offer to write it for them.

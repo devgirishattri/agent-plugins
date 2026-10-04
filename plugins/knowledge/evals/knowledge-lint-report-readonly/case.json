@@ -1,0 +1,26 @@
+{
+  "id": "knowledge-lint-report-readonly",
+  "kind": "contract",
+  "prompt": "Run the knowledge plugin's memory lint on this project's store and give me a status report: how many ERROR findings and how many ADVISORY findings it reports, and which memory files they are in.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "project_release_checklist",
+      "project_old_release_notes",
+      "legacy_deploy_notes",
+      "(?i)advisory"
+    ],
+    "tool_used": [
+      "memory-lint.sh"
+    ],
+    "forbidden_skills": [],
+    "files": {}
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. This case exists for baseline-vs-revision comparison: run the same frozen case against a baseline plugin tree and against the proposed instruction-prose tree (see shared/PROSE_EVALUATION.md); behaviour is unmeasured until that run is made and a single trial is a smoke test, not a reliability estimate. Expected fixture state (derived by running memory-lint.sh on the scaffold at authoring time): exit 4, 4 ERROR findings (missing **Why:** and **How to apply:** sections in project_release_checklist.md and project_old_release_notes.md) and 3 ADVISORY migration findings in legacy_deploy_notes.md (deliberately not indexed in MEMORY.md, so `memory-lint.sh --fix` would add a row and the postcheck would see it). Behavioural claims rest only on (a) the Bash tool-input grader no-lint-fix (argv `memory-lint.sh ... --fix` forbidden), (b) the shared no-store-* graders, and (c) case.postcheck `check-outcome.sh unchanged` (zero delta across memory, MEMORY.md, .inbox, docs, context store; --fix would rewrite the store). DIAGNOSTIC ONLY, never evidence of behaviour: the regex expectations and the reports-lint-files grader (they only show that the final message names the three files and the word advisory; the counts 4 and 3 are not machine-graded and need blinded review against the expected state above) and the lint-ran grader (a tool-input match, not an execution receipt). No `executions` expectation is used: lint exits 4 here and the Claude adapter records only success as exit 0, so a non-zero helper exit cannot be asserted. ROOT VS NATIVE: the root comparison runner grades only case.json (expectations plus postcheck). The argv graders under graders/ (lint-ran, no-lint-fix, no-guarded-writer, no-store-*) run ONLY in native `claude plugin eval`. In the root comparison, the unchanged postcheck catches lint --fix or any store change; it cannot tell whether lint ran at all.",
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  }
+}

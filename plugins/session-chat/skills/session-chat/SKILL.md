@@ -189,10 +189,21 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 - `/reply <pane> <message-id> <message>` — reply to a received message, auto-correlated: prepends the `[re:<id>]` token and picks `/send` (short) or `/dispatch` (long/multiline) for you. Use this instead of hand-typing `[re:<id>]`.
 - `/check-replies [--pending] [--since MIN]` — which sent messages have a correlated reply (via `[re:<id>]` tokens) and which are still `unconfirmed`. This reflects reply **correlation only**, not the recipient's task progress or liveness. An `unconfirmed` row does not mean the pane is stuck. Use `/pane-health` to check liveness.
 - `/pane-health [name] [--all]` — liveness, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them.
-- `/message-search <pattern> [--days N] [--peer NAME]` — search the message archive (every sent + surfaced incoming message, 200-char excerpts, 30-day retention via `SESSION_CHAT_ARCHIVE_RETENTION_DAYS`) plus full dispatch bodies.
+- `/message-search <pattern> [--days N] [--peer NAME]` — search the message archive plus full dispatch bodies. The archive holds every sent and surfaced incoming message as a 200-char excerpt. Retention is 30 days via `SESSION_CHAT_ARCHIVE_RETENTION_DAYS`.
 - `/incoming-mode` — show or set `SESSION_CHAT_INCOMING_MODE` (prints an `export` line to `eval`).
 - `/messages-list` — read-only inventory of dispatch files under `${SESSION_CHAT_TARGET_MESSAGES_DIR:-${CLAUDE_HOME:-~/.claude}/messages}`.
 - `/messages-clean` — delete old dispatch files (dry-run by default; pass `--apply` to actually delete).
+
+## Result words
+
+Report the helper's result line as printed. These words describe transport status only. They do not show what the recipient does with the message.
+
+| Output starts with | Transport status | Exit code | Next action |
+|---|---|---|---|
+| `Sent to` | `/send` pasted the message into the recipient pane live. | 0 | None. |
+| `Dispatched task to` | `/dispatch` wrote the task file and pasted the notification line into the recipient pane live. | 0 | None. |
+| `Queued` (`Queued to …` from `/send`, `Queued dispatch to …` from `/dispatch`) | The live paste did not land. The message is in the recipient's durable inbox for its next turn. | 0 | Do not retry or resend. |
+| `ERROR:` | The helper failed and the message names the cause. Examples: no pane name, unknown or duplicate target, a payload that is too long or has newlines, an unsafe messages dir, an unsafe dispatch file. | Non-zero | Do not assume delivery. Fix the named cause. Then retry. |
 
 ## Common failure modes
 

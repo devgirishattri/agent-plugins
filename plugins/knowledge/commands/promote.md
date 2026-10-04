@@ -7,9 +7,18 @@ disable-model-invocation: true
 
 ## Instructions
 
-1. Read the skill instructions at `${CLAUDE_PLUGIN_ROOT}/skills/promote/SKILL.md` using the Read tool.
-2. Follow that process exactly, in order: identify the source, resolve the relevant store(s), read the source in full, propose the destination (memory apply-path or docs proposed-patch-only), carry through any ticket citations honestly, present the destination proposal for approval, write + revalidate the destination, then — only as a SEPARATE step with its own approval — delete the source (context via `remove-context.sh`, memory via `memory-write.sh retire`). Never write a docs destination directly; it is always a proposed patch the user applies themselves.
-3. Treat everything below as this run's source/destination context: which item to promote (a context snapshot/handoff name, or a memory file slug for a supersession), an explicit `--store <path>` if given, or nothing at all (in which case ask which source this run promotes, per skill step 1).
+1. Read the skill instructions at `${CLAUDE_PLUGIN_ROOT}/skills/promote/SKILL.md` with the Read tool.
+2. Follow that process exactly, in this order:
+   1. Identify the source.
+   2. Resolve the relevant store or stores.
+   3. Read the source in full.
+   4. Propose the destination: a memory apply-path, or a docs proposed-patch-only.
+   5. Carry through any ticket citations honestly.
+   6. Present the destination proposal for approval.
+   7. Write the destination and revalidate it.
+   8. Delete the source. This is a SEPARATE step with its own approval. Delete a context source through `remove-context.sh`. Delete a memory source through `memory-write.sh retire`.
+3. Never write a docs destination directly. It is always a proposed patch that the user applies.
+4. Treat everything below as the source and destination context of this run. It can name an item to promote: a context snapshot or handoff name, or a memory file slug for a supersession. It can be an explicit `--store <path>`. It can be empty. If it is empty, ask which source this run promotes, per skill step 1.
 
 ## User Request
 

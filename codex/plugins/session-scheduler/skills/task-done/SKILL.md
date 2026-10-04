@@ -45,7 +45,13 @@ the helper. Never use --force to repair an acknowledgement. Only when
 authorized, send a separate exact session-chat message to the recorded
 recipient.
 
-Legal from `assigned` or `review` (review approval); other transitions are rejected unless `--force` (which records "forced" in history). Records `duration_seconds` since first assignment. Report that the task was marked done.
+The transition is legal from `assigned` or `review` (review approval).
+Other transitions are rejected unless `--force`, which records "forced" in history.
+The script records `duration_seconds` since first assignment.
+Report the task ID and the observed `done` state.
+Report acknowledgement delivery (sent, queued, or failed) separately.
+Delivery does not prove that the assigner acted.
+Without evidence from the assigner, report that action as unverified.
 
 For a task with a verification contract, read `../task-contract/SKILL.md`.
 Contract assignment accepts only pane, id and one prompt. Review, done and block

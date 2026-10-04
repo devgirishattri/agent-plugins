@@ -10,25 +10,28 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Lead with the result; add text only for errors or the follow-ups below. Report the result above.
+Lead with the result. Add text only for errors or the follow-ups below. Report the result above.
 
-`status` is **read-only** — it never mutates tmux or any state file. For
-every planned pane it reports session existence/managed state, role,
-runtime, configured model, resolved cwd, the tmux process actually running
-there, and a health verdict. It locates a slot ONLY by its pane marker: a
-pane in the session whose `@session_workspace_pane` marker equals the
-planned pane name. Verdicts: `healthy` (marker found, full project/pane
-ownership check passes, process alive), `dead` (marked and owned but the
-process died), `unmanaged-occupant` (a pane carries the planned name's
-marker but fails the full project/pane ownership check — e.g. another
-project's or an orphaned session's leftover marker), or `missing` (no pane
-carries the planned marker — which is also what an ordinary unmarked pane
-sitting in the planned positional slot reports as). Positional gap and
-adoption-candidate analysis belongs to `start`/`reconcile`, not to
-`status`. `TARGET` restricts the
-report to one `sessions[].id`; an unknown target fails fast with a clear
-error rather than silently returning an empty report. `--json` emits the
-machine-readable rows.
+`status` is **read-only**. It never mutates tmux or any state file. For every planned pane it reports:
+
+- session existence and managed state
+- role, runtime, and configured model
+- resolved cwd
+- the tmux process actually running there
+- a health verdict
+
+It locates a slot ONLY by its pane marker: a pane in the session whose `@session_workspace_pane` marker equals the planned pane name.
+
+| Verdict | Meaning |
+|---|---|
+| `healthy` | Marker found, full project/pane ownership check passes, process alive. |
+| `dead` | Marked and owned, but the process died. |
+| `unmanaged-occupant` | A pane carries the planned name's marker but fails the full project/pane ownership check. Example: another project's or an orphaned session's leftover marker. |
+| `missing` | No pane carries the planned marker. An ordinary unmarked pane in the planned positional slot also reports `missing`. |
+
+Positional gap and adoption-candidate analysis belongs to `start`/`reconcile`, not to `status`.
+
+`TARGET` restricts the report to one `sessions[].id`. An unknown target fails fast with a clear error. It does not silently return an empty report. `--json` emits the machine-readable rows.
 
 Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
 Group selection cannot be combined with a positional session or `--all`; it never

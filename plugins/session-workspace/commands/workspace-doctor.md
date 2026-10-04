@@ -10,13 +10,10 @@ allowed-tools: Bash(bash:*)
 
 ## Instructions
 
-Lead with the result; add text only for errors or the follow-ups below. Report the result above.
+Lead with the result. Add text only for errors or the follow-ups below. Report the result above.
 
-`workspace-doctor` is **strictly read-only** — it diagnoses and never repairs,
-creates, or kills anything. Each check reports `OK`, `INFO`, `WARN`, or
-`ERROR` with remediation text; the command exits non-zero only when at least
-one check is `ERROR` (a `WARN` alone still exits 0).
+`workspace-doctor` is **strictly read-only**. It diagnoses and never repairs, creates, or kills anything.
 
-Relay the per-check statuses and their remediation lines. Do not run the
-suggested fixes yourself unless the user asks — several of them (`chmod`,
-`.gitignore` edits, plugin reinstalls) are the user's call.
+Each check reports `OK`, `INFO`, `WARN`, or `ERROR` with remediation text. The command exits non-zero only when at least one check is `ERROR`. A `WARN` alone still exits 0.
+
+Relay the per-check statuses and their remediation lines. Do not run the suggested fixes yourself unless the user asks. Several fixes (`chmod`, `.gitignore` edits, plugin reinstalls) are the user's decision.

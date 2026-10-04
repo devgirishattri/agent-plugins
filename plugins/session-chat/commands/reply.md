@@ -6,36 +6,36 @@ allowed-tools: Bash(bash:*), Write
 
 ## Instructions
 
-Lead with the result; add text only for errors or the follow-ups below. Run the action directly and report only the result.
+Lead with the result. Add text only for errors or the follow-ups below. Run the action directly and report only the result.
 
-`/reply` responds to a message you received and **automatically correlates** the reply: the transport prepends the `[re:<id>]` token for you, so the original sender's `/check-replies` matches it. Never type `[re:<id>]` yourself — pass the id and let `--reply-to` add it exactly once. See the `session-chat` skill for the delivery contract.
+`/reply` responds to a message you received and **automatically correlates** the reply. The transport prepends the `[re:<id>]` token for you, so the original sender's `/check-replies` matches it. Never type `[re:<id>]` yourself. Pass the id and let `--reply-to` add it exactly once. See the `session-chat` skill for the delivery contract.
 
-`/reply` is a command, not a shell executable: there is no `reply.sh` or `session-chat reply` binary. Always run the installed `send-message.sh` or `dispatch-to-session.sh` helper with `--reply-to` as shown below.
+`/reply` is a command, not a shell executable. There is no `reply.sh` or `session-chat reply` binary. Always run the installed `send-message.sh` or `dispatch-to-session.sh` helper with `--reply-to` as shown below.
 
 1. Parse $ARGUMENTS as `<pane> <message-id> <message>`:
    - `<pane>` — the sender's pane name (the `[from:<name> …]` in the message you received)
    - `<message-id>` — the `id:<hex>` from that same received message (8–16 lowercase hex)
    - everything after — your reply text
-   If the message id is missing or is not 8–16 lowercase hex characters, stop and tell the user: "`/reply <pane> <message-id> <message>` — the message id is the `id:<hex>` shown in the message you're answering."
+   If the message id is missing or is not 8–16 lowercase hex characters, stop. Tell the user: "`/reply <pane> <message-id> <message>` — the message id is the `id:<hex>` shown in the message you're answering."
 
 2. Choose the transport by the reply's shape:
    - **Short and single-line** (no newlines, ≲1000 chars) → `/send` transport:
      ```
      bash ${CLAUDE_PLUGIN_ROOT}/scripts/send-message.sh --reply-to <message-id> "<pane>" "<message>"
      ```
-   - **Long or multiline** → `/dispatch` transport with **data-safe staging** (never embed the body in a shell heredoc/command — arbitrary content is unsafe as shell source):
-     1. Choose a fresh temp path (e.g. `$(mktemp)` via a separate Bash call, or a file under your scratchpad dir). **Under an active strict-v1 harness as a child pane**, use only your own drafts directory, `<messages-grant>/drafts/<your-pane-name>/reply-<message-id>-<nonce>.md`, following "Staging files under a strict-v1 harness" in the `session-chat` skill; with no `messages` grant, report that the grant is missing rather than shortening a long reply to fit a single-line send.
-     2. Use the **Write tool** to write the **verbatim reply body** to that path — never interpolate the body into a bash command.
-     3. Dispatch it (the script reads the file with `cat`; nothing in it is shell-evaluated):
+   - **Long or multiline** → `/dispatch` transport with **data-safe staging**. Never embed the body in a shell heredoc or command, because arbitrary content is unsafe as shell source:
+     1. Choose a fresh temp path (e.g. `$(mktemp)` via a separate Bash call, or a file under your scratchpad dir). **Under an active strict-v1 harness as a child pane**, use only your own drafts directory: `<messages-grant>/drafts/<your-pane-name>/reply-<message-id>-<nonce>.md`. Follow "Staging files under a strict-v1 harness" in the `session-chat` skill. With no `messages` grant, report that the grant is missing. Do not shorten a long reply to fit a single-line send.
+     2. Use the **Write tool** to write the **verbatim reply body** to that path. Never interpolate the body into a bash command.
+     3. Dispatch it. The script reads the file with `cat`, so nothing in it is shell-evaluated:
         ```
         bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-to-session.sh --reply-to <message-id> "<pane>" "<prompt-file-path>"
         ```
-     4. Optionally `rm -f "<prompt-file-path>"` afterward. Under strict-v1 leave the draft in place: Claude has no native delete tool, shell `rm` into the store is denied, and the draft is inert after delivery. After a hard failure keep it for the retry.
+     4. Optionally run `rm -f "<prompt-file-path>"` afterward. Under strict-v1, leave the draft in place. Claude has no native delete tool, shell `rm` into the store is denied, and the draft is inert after delivery. After a hard failure, keep the draft for the retry.
 
 3. Report the result:
-   - "Sent to …" / "Dispatched task to …" (delivered live) or "Queued …" (recipient busy — durable, surfaces on their next turn) → confirm success, and note the reply is correlated (the sender's `/check-replies` will mark id `<message-id>` answered).
+   - "Sent to …" or "Dispatched task to …" (delivered live), or "Queued …" (recipient busy; durable, surfaces on their next turn) → report success. Note that the reply is correlated: the sender's `/check-replies` will mark id `<message-id>` answered.
    - If `--reply-to` reports an invalid id, re-check the `id:<hex>` from the received message.
    - If the error is about no name, tell the user to run `/whoami <name>` first.
    - If the target is not found, run `/panes` to show available targets.
    - If it mentions duplicate names, ask the user to rename one pane via `/whoami`.
-   - A busy recipient yields a "Queued …" result — durable success, **do not resend** (it arrives on their next turn and resending duplicates it). Retry only a hard failure after fixing its named cause.
+   - A busy recipient yields a "Queued …" result. That result is durable success, so **do not resend**. It arrives on their next turn, and resending duplicates it. Retry only a hard failure, and only after fixing its named cause.

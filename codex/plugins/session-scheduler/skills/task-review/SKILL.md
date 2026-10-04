@@ -49,7 +49,21 @@ cannot distinguish that state on a later call: do not retry until recipient or
 outbox evidence proves no packet was delivered; never duplicate a delivered
 review packet.
 
-The executor (or orchestrator) runs this when work is ready for audit. Legal only from `assigned`. If the task has a `reviewer`, the script builds a private review packet containing the shared ledger homes and original assignment, then dispatches it automatically. Review state is retained if delivery fails so it can be retried. Independently, an eligible assigner receives a durable file-backed lifecycle acknowledgement that is queued when busy; the ledger remains authoritative and `meta.last_ack` records its outcome without replacing reviewer-dispatch metadata. An assigner-ack failure does not undo review or authorize rerunning the transition. The reviewer approves with `$session-scheduler:task-done` or rejects with `$session-scheduler:task-block`.
+The executor (or orchestrator) runs this when work is ready for audit.
+The transition is legal only from `assigned`.
+If the task has a `reviewer`, the script builds and dispatches a private review packet.
+The packet contains the shared ledger homes and original assignment.
+Review state is retained if delivery fails; only the dispatch-only retry rules
+above permit a retry.
+
+An eligible assigner separately receives a durable lifecycle acknowledgement,
+queued when busy. The ledger remains authoritative. `meta.last_ack` records
+this outcome without replacing reviewer-dispatch metadata.
+An assigner-ack failure does not undo review or authorize rerunning the transition.
+Report the task state, reviewer delivery, and assigner acknowledgement separately.
+Do not report work as approved merely because it entered `review`.
+The reviewer approves with `$session-scheduler:task-done` or rejects with
+`$session-scheduler:task-block`.
 
 For a task with a verification contract, read `../task-contract/SKILL.md`.
 Contract assignment accepts only pane, id and one prompt. Review, done and block

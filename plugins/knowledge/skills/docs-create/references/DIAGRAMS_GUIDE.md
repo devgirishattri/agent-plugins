@@ -1,6 +1,6 @@
 # Diagrams Guide
 
-Use Mermaid diagrams to visualize relationships that are hard to follow in prose. Mermaid renders in GitHub, VS Code, and most markdown viewers — no external tools needed.
+Use Mermaid diagrams to show relationships that prose cannot make clear. Mermaid renders in GitHub, VS Code, and most markdown viewers. No external tools are needed.
 
 ## When to Include Diagrams
 
@@ -36,7 +36,7 @@ stateDiagram-v2
 
 ## Best Practices
 
-- Keep diagrams focused — if a diagram needs more than ~15 nodes, split it into multiple diagrams by subsystem
-- A cluttered diagram is worse than no diagram
+- Keep diagrams focused. If a diagram needs more than about 15 nodes, split it into several diagrams by subsystem.
+- A cluttered diagram is worse than no diagram.
 - Use descriptive labels on transitions
 - Match terminology to the rest of the document

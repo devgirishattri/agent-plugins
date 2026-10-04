@@ -12,10 +12,10 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.7.11 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.14 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.1 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.5.2 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.11.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-chat` | 0.17.15 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.2 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `knowledge` | 0.5.3 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-workspace` | 0.11.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -1019,6 +1019,16 @@ These checks do not themselves enable repository merge protection.
 - Follow [the plugin writing guide](shared/PLUGIN_WRITING.md) for new or changed
   procedural prose. This selectively applies ASD-STE100 clarity principles;
   it does not require dictionary compliance or certify the plugins.
+  The guide covers authored result, approval, recovery, and handoff text plus
+  shared technical terms. Exact helper output and protocol fields stay unchanged.
+  Run `python3 -B scripts/lint-plugin-prose.py --changed-from <commit>` for
+  advisory checks on changed tracked prose, or pass Markdown files explicitly
+  to include new files. With no arguments it scans tracked authoring surfaces.
+  `--json` emits a structured report. Style findings return exit 0; input errors
+  return nonzero. The checker never edits files and is not an STE validator.
+  Its deterministic controls run with `python3 -B scripts/test-plugin-prose.py`.
+  Use the [comparison procedure](shared/PROSE_EVALUATION.md) to assess behavior;
+  fixture validation alone does not establish a benefit from wording changes.
 - Claude's matching scenarios include native prompts, graders, and scaffolds.
   Run from the plugin directory with `claude plugin eval . --scaffold --no-publish
   --runs 1 --ablation none --max-cost-usd 3`; use the native trust/tool options
