@@ -622,7 +622,7 @@ assert_contains ac_0_5_6_hook_removes_staged "$hook_shape" "has_cleanup"
 # On Claude the opt-in prompt hook runs the capture pass in the agent's
 # continuation; by the re-entrant Stop the inbox is populated and the (separate,
 # non-blocking) nudge surfaces it — modelled here by staging then nudging.
-nud="$(cd "$TMP/cap" && KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
+nud="$(cd "$TMP/cap" && printf '{"stop_hook_active":false}' | KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
 assert_contains ac_A17_nudge_sees_pending "$nud" "pending memory candidate"
 
 # ---------------------------------------------------------------------------

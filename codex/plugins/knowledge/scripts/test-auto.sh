@@ -565,7 +565,7 @@ assert_eq           ac_A20_reqcap_deleted   0   "$([ -e "$HERE/request-capture.s
 assert_eq ac_A15_no_codex_prompt_asset 0 "$([ -e "$HERE/../assets/capture-stop-hook.md" ] && echo 1 || echo 0)"
 
 # ---- A17: the consolidate nudge still surfaces pending inbox items ------------
-nud="$(cd "$TMP/cap" && KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
+nud="$(cd "$TMP/cap" && printf '{"stop_hook_active":false}' | KNOWLEDGE_CONSOLIDATE_NUDGE=1 KNOWLEDGE_MEMORY_HOME="$capstore" bash "$NUDGE" --stop-json 2>/dev/null)"
 assert_contains ac_A17_nudge_sees_pending "$nud" "pending memory candidate"
 
 # ---------------------------------------------------------------------------
