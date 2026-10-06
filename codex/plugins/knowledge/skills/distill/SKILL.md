@@ -90,6 +90,12 @@ If larger, split it into labeled batches. Require approval of each batch before 
 No hidden continuation batch is authorized. A no-op is valid.
 Use `mktemp -d` for private scratch outside stores; under strict-v1 choose a
 scratch directory inside the permitted checkout to satisfy operand containment.
+Create that scratch directory once. Record the literal path that was returned.
+Except for a manifest at a user- or task-named path, put every intermediate
+file of this workflow inside it: the manifest, staged targets and indexes,
+candidate staging files, context summaries, and handoff data. This includes
+the temporary files that the writer skills tell you to create.
+Do not write other intermediate files anywhere else in the checkout.
 Do not invent a new persistent knowledge store.
 
 If the user or the task names a manifest path, write the manifest at exactly that
@@ -152,6 +158,20 @@ destination failure; stop dependent items and explain why.
 On rerun, inspect the destinations and prior receipts before deciding an item
 needs writing. Skip an already-applied identical change; re-plan changed content.
 A changed approved payload needs new approval. Report partial completion plainly.
+
+Remove the scratch directory before the final report. Do this after the last
+approved item, and also when the user declines the batch or the batch is a no-op.
+Keep it while a displayed batch still waits for a reply.
+- Remove only the recorded literal path that this run created, in one Bash
+  segment (`rm -rf "<scratch-dir>"`). Never use a glob, a parent directory, a
+  store path, or a path that this run did not create.
+- Do not remove a manifest at a path that the user or the task named. Name that
+  path in the final report.
+- The retained record is the manifest hash, the approved item IDs, and each
+  item's outcome, in the final report and the context outcome section. The
+  scratch bytes are not a receipt.
+- If the removal fails, report the path that remains. Scratch removal is not a
+  destination write and needs no separate approval.
 
 Finish with links to updated artifacts, memory candidate dispositions, any
 failed/conflicted/unknown items, and the exact next action for blocked work.
