@@ -599,6 +599,7 @@ f.append("has_wrapper" if "memory-auto-capture.sh" in p else "no_wrapper")
 f.append("has_evidence_rule" if "evidence: REQUIRED" in p else "no_evidence_rule")
 f.append("uses_staged" if "--staged" in p else "no_staged")
 f.append("uses_batch_dir" if "--batch-dir" in p else "no_batch_dir")
+f.append("has_cleanup" if 'rm -f "<file>"' in p and "do not retry or bypass" in p else "no_cleanup")
 print(";".join(f))
 PY
 )"
@@ -615,6 +616,7 @@ assert_contains ac_A2_routes_wrapper "$hook_shape" "has_wrapper"
 assert_contains ac_0_5_hook_requires_evidence "$hook_shape" "has_evidence_rule"
 assert_contains ac_0_5_hook_uses_staged_form  "$hook_shape" "uses_staged"
 assert_contains ac_0_5_hook_avoids_batch_dir  "$hook_shape" "no_batch_dir"
+assert_contains ac_0_5_6_hook_removes_staged "$hook_shape" "has_cleanup"
 
 # ---- A17: after capture, the nudge sees pending inbox items (combined flow) ---
 # On Claude the opt-in prompt hook runs the capture pass in the agent's
