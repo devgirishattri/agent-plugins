@@ -98,6 +98,12 @@ Summarize what THIS session worked on, so that another session can continue the 
    | Exit `2`, an `ERROR: handoff data:` line | The helper rejected the staged JSON. The message names the field or the retained-ID or repository rule. | Fix the data file as the message describes. Re-run. Never drop an existing item ID to satisfy the check. |
    | Any other non-zero exit (bad `--expires` format, unknown flag, store error) | The helper failed. | Relay the stderr verbatim. Stop. Do not guess a different invocation. |
 
+   **Remove the staged files.** Do this when the save ends: after exit `0`, or when you stop without another attempt. Keep the files while a re-run from the table above is still planned.
+   - Remove only the files that you created in this run: the temp file and, for a handoff, the data file. Use one separate Bash segment for each literal path (`rm -f "<temp-file>"`). Never use a glob or a directory.
+   - Never remove a file that the user named or supplied. Never remove anything inside a store.
+   - If `distill` composes this workflow, leave the files. Distill removes its own scratch directory.
+   - If the harness or the role denies a removal, do not retry it and do not bypass the denial. If a removal fails for any reason, name the remaining path in the report.
+
 5. **Report.** Lead with the result. On success, use this form:
 
    "Session context saved as '<snapshot-name>'. Share with `/context-share <session> <snapshot-name>` or load later with `/context-load <snapshot-name>`."

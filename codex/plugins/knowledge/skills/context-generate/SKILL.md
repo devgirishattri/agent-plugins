@@ -102,6 +102,12 @@ the current state, and expect stabilized knowledge to be promoted later through
    - Exit `2` with stderr `handoff exists: re-run with --handoff`: you omitted `--handoff` against a snapshot that already is one. Relay this to the user and re-run step 4 with `--handoff` added — never retry by adding `--handoff` silently without saying so, since that changes what gets written.
    - Any other non-zero exit (bad `--expires` format, unknown flag, or a genuine store error): relay the script's stderr verbatim and stop; do not guess at a different invocation.
 
+   **Remove the staged files.** Do this when the save ends: after exit `0`, or when you stop without another attempt. Keep the files while a re-run described above is still planned.
+   - Remove only the files that you created in this run: the temp file and, for a handoff, the data file. Use one separate Bash segment for each literal path (`rm -f "<temp-file>"`). Never use a glob or a directory.
+   - Never remove a file that the user named or supplied. Never remove anything inside a store.
+   - If `distill` composes this workflow, leave the files. Distill removes its own scratch directory.
+   - If the harness or the role denies a removal, do not retry it and do not bypass the denial. If a removal fails for any reason, name the remaining path in the report.
+
 5. **Report**: "Session context saved as '<snapshot-name>'. Share with `$knowledge:context-share <session> <snapshot-name>` or load later with `$knowledge:context-load <snapshot-name>`."
    If a previous version was archived, mention `$knowledge:context-diff <snapshot-name>` to see what changed.
    For a handoff, also state its `expires` date and the `$knowledge:promote` workflow for promotion and source deletion.

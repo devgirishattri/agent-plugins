@@ -167,8 +167,10 @@ Keep it while a displayed batch still waits for a reply.
 - The retained record is the manifest hash, the approved item IDs, and each
   item's outcome, in the final report and the context outcome section. The
   scratch bytes are not a receipt.
-- If the removal fails, report the path that remains. Scratch removal is not a
-  destination write and needs no separate approval.
+- If the harness or the role denies the removal, do not retry it and do not
+  bypass the denial. If the removal fails for any reason, report the path that
+  remains.
+- Scratch removal is not a destination write and needs no separate approval.
 
 Finish with links to updated artifacts, memory candidate dispositions, any
 failed/conflicted/unknown items, and the exact next action for blocked work.

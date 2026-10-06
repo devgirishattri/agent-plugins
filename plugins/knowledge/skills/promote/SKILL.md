@@ -43,7 +43,10 @@ single-segment call yourself.
 Never construct a staged file with a Bash heredoc. Use the **Write** tool to
 create every staged-target / staged-index file at a scratch location outside
 both stores. Create that directory once with a separate `mktemp -d` call, under
-the OS temp directory.
+the OS temp directory. Under strict-v1, use a permitted scratch directory inside
+this pane's checkout instead. An arbitrary OS temp path can fail the harness's
+literal-file containment check. Record the literal path of the directory. Put
+every staged file of this run inside that directory. Step 10 removes it.
 
 `SESSION_CONTEXT_HOME` must already be present in this session's environment,
 inherited when the agent process started. Never export or derive it here (the
@@ -294,6 +297,19 @@ Lead with the state of the run. Use one of these words: `promoted`, `destination
 - whether the source was deleted, left in place, or the run stopped partway. If it stopped, give the cause: CAS mismatch, lock, reviewer refusal, or user decline. Give the exact next action.
 
 Never report `promoted` if the user declined the source deletion step or you did not reach it. Report `destination written, source retained` instead.
+
+Remove the scratch directory before this final report. Do this for every end
+state, including `stopped`. Keep it while an approval gate still waits for a
+reply.
+- Remove only the recorded literal path that this run created, in one separate
+  Bash segment (`rm -rf "<scratch-dir>"`). Never use a glob, a parent
+  directory, a store path, or a path that this run did not create.
+- Scratch removal is not source deletion. It never touches the promotion source,
+  and step 8's approval does not apply to it.
+- Never remove a file or directory that the user named or supplied.
+- If the harness or the role denies the removal, do not retry it and do not
+  bypass the denial. If the removal fails for any reason, name the remaining
+  path in the report.
 
 ## Non-goals (always, every run)
 

@@ -54,7 +54,11 @@ create every staged-target / staged-index file at a scratch location outside
 the store. For example, create a directory once with a separate `mktemp -d`
 call, under the OS temp directory. This keeps every helper invocation a single
 literal segment. It also keeps the store itself untouched by anything but the
-writer.
+writer. Under strict-v1, use a permitted scratch directory inside this pane's
+checkout instead. An arbitrary OS temp path can fail the harness's literal-file
+containment check. Record the literal path of the directory. Put every staged
+file of this run inside that directory. Step 9 removes it. If `distill`
+composes this workflow, use Distill's scratch directory. Do not create another.
 
 ## 1. Resolve the store
 
@@ -411,6 +415,20 @@ Report the results to the user:
 4. Summarize which inbox candidates were promoted, which were dismissed, and
    which were left pending.
 5. Report anything the user declined.
+
+Remove the scratch directory before this final report. Do this also when the
+user declines everything, or when you stop on an exit that you will not retry.
+Keep it while a re-presented diff still waits for approval.
+- Remove only the recorded literal path that this run created, in one separate
+  Bash segment (`rm -rf "<scratch-dir>"`). Never use a glob, a parent
+  directory, a store path, or a path that this run did not create.
+- Never remove a file or directory that the user named or supplied.
+- If `distill` composes this workflow, leave the directory. Distill removes its
+  own scratch directory.
+- If the harness or the role denies the removal, do not retry it and do not
+  bypass the denial. If the removal fails for any reason, name the remaining
+  path in the report.
+- Scratch removal is not a store write and needs no separate approval.
 
 ## Non-goals (always, every run)
 

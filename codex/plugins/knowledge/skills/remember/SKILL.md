@@ -39,6 +39,7 @@ bash "<PLUGIN_ROOT>/scripts/memory-auto-capture.sh" [--store <path>] --staged <s
 ```
 
 Use one `--staged` argument per candidate. Never use `--batch-dir` from this skill.
+After the wrapper returns, remove each staged file. Follow step 3 of "Capturing a candidate" below.
 
 The wrapper screens known secret patterns and duplicates. It caps candidate bytes
 (`KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES`, default 4096) and per-pass count
@@ -121,6 +122,12 @@ Pass `--store <path>` to every Bash call below only if the user supplied one in 
    | `5` | The store is locked by a concurrent writer. | Relay the message (it names the exact `unlock` recovery command) and stop. Do not retry in a loop. |
    | `6` | Reviewer-role refusal, or an unresolved fleet identity inside tmux. | Relay the single stderr line verbatim and stop. This is expected behavior in a `*-reviewer` pane, not a bug. |
    | `7` | Capture-policy refusal: an `auto_capture` candidate without `evidence:`, or the pending-inbox or per-session pending cap is reached. | Relay the message and write nothing else. Do not change source/identity or use a less restricted path. Do not retry in a loop. `$knowledge:consolidate` frees capacity. |
+
+3. Remove the staged file when the capture ends: after exit `0`, or when you stop without another attempt. Keep it while you fix it for a retry after exit `2`.
+   - Remove only the staged file that you created in this run. Use one separate Bash segment for its literal path (`rm -f "<staged-file>"`). Never use a glob or a directory.
+   - Never remove a file that the user named or supplied. Never remove anything inside the store. The captured candidate in `.inbox/` is the record, and it stays.
+   - If `distill` composes this workflow, leave the file. Distill removes its own scratch directory.
+   - If the harness or the role denies the removal, do not retry it and do not bypass the denial. If the removal fails for any reason, name the remaining path in the report.
 
 ### Listing candidates
 
