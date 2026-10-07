@@ -1038,9 +1038,19 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
     require_tokens(scheduler / "tasks-clean.sh", "handoffs", "referenced by")
     require_tokens(context / "lib.sh", "printf '600\\n'")
     reject_pattern(context / "lib.sh", r"printf '400", "knowledge must not preserve 0400 scheduler files")
-    require_tokens(scheduler / "task-assign.sh", "Shared scheduler home (provenance):", "inherited", "relaunch", "$session-scheduler:task-done", "/session-scheduler:task-done")
+    # Assignment and review packets expand the same block. Check its contract
+    # and both expansion sites; test-provider-parity also checks emitted packets.
+    require_tokens(scheduler / "lib.sh", "packet_contract_block() {", "Shared scheduler home (provenance):", "inherited", "relaunch")
+    if provider_root == root / "plugins":
+        for packet_script in ("task-assign.sh", "task-review.sh"):
+            require_tokens(scheduler / packet_script, '$(packet_contract_block "$SCHED_HOME_ABS")')
+    else:
+        require_tokens(scheduler / "task-assign.sh", '$(packet_contract_block "$SCHEDULER_HOME_ABS")')
+        require_tokens(scheduler / "task-review.sh", 'packet_contract_block "$SCHEDULER_HOME_RECORDED"')
+    require_tokens(scheduler / "task-assign.sh", "$session-scheduler:task-done", "/session-scheduler:task-done")
     require_tokens(scheduler / "task-assign.sh", ".meta.review_dispatched_at", ".meta.review_dispatch_error")
-    require_tokens(scheduler / "task-review.sh", "Shared scheduler home (provenance):", "reviewer", "dispatch", "RETRY_REVIEW_DISPATCH", ".meta.review_dispatched_at")
+    require_tokens(scheduler / "task-review.sh", "reviewer", "dispatch", "RETRY_REVIEW_DISPATCH", ".meta.review_dispatched_at")
+    reject_pattern(scheduler / "lib.sh", r"export SESSION_(SCHEDULER|CONTEXT)_HOME=", "shared packet blocks must not print executable export lines")
     reject_pattern(scheduler / "task-assign.sh", r"export SESSION_(SCHEDULER|CONTEXT)_HOME=", "assignment packets must not print executable export lines")
     reject_pattern(scheduler / "task-review.sh", r"export SESSION_(SCHEDULER|CONTEXT)_HOME=", "review packets must not print executable export lines")
     scheduler_plugin = provider_root / "session-scheduler"
@@ -1065,8 +1075,7 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
         )
     # 0.5.4 nested-transport contract: packets and helpers must carry the
     # first-attempt scoped-escalation and partial-success/non-retry guidance.
-    require_phrases(scheduler / "task-assign.sh", "Transport contract:", "on the first attempt", "never rerun task-done or task-block", "use --force to repair")
-    require_phrases(scheduler / "task-review.sh", "Transport contract:", "on the first attempt", "never duplicate a delivered packet")
+    require_phrases(scheduler / "lib.sh", "Transport contract:", "on the first attempt", "never rerun task-done or task-block", "use --force to repair", "never duplicate a delivered packet", "no recorded successful reviewer dispatch")
     require_phrases(scheduler / "task-done.sh", "Do NOT rerun task-done", "use --force to repair", "partial success")
     require_phrases(scheduler / "task-block.sh", "Do NOT rerun task-block", "use --force to repair", "partial success")
     sched_task_doc_names = ("task-assign", "task-review", "task-done", "task-block")

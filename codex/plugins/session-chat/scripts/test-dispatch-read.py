@@ -69,6 +69,8 @@ class DispatchRead(unittest.TestCase):
         result = subprocess.run(['bash', str(HERE / 'dispatch-to-session.sh'), name, str(self.draft)],
                                 env=env, capture_output=True, text=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.draft.exists(), result.stdout + result.stderr)
+        self.assertIn('Removed delivered draft:', result.stdout)
         files = list(self.messages.glob('*-to-' + name + '.md'))
         self.assertEqual(len(files), 1)
         delivered = files[0]

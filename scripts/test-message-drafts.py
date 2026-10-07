@@ -3,6 +3,8 @@
 
 MESSAGE_DRAFTS_TEST_CODEX_POLICY / _CLAUDE_POLICY select an original policy for
 failure evidence. No agents, paid calls, real stores, or live panes are used.
+MESSAGE_DRAFTS_TEST_CODEX_CHAT_SCRIPTS / _CLAUDE_CHAT_SCRIPTS overlay original
+transport scripts in the synthetic installation for consumption failure evidence.
 Native writes are emulated only after a policy allow; this is not an installed
 provider sandbox test. The hook/bootstrap check uses the current real adapter;
 the policy overrides affect the unit and transport checks only.
@@ -209,6 +211,9 @@ class DraftCases:
         version = json.loads((self.tree / "session-chat" / (".codex-plugin" if self.provider == "codex" else ".claude-plugin") / "plugin.json").read_text())["version"]
         cache = home / "plugins/cache/girishattri-plugins/session-chat" / version
         shutil.copytree(self.tree / "session-chat", cache)
+        original_chat = os.environ.get("MESSAGE_DRAFTS_TEST_" + self.provider.upper() + "_CHAT_SCRIPTS")
+        if original_chat:
+            shutil.copytree(original_chat, cache / "scripts", dirs_exist_ok=True)
         if self.provider == "codex":
             (home / "config.toml").write_text('[plugins."session-chat@girishattri-plugins"]\nenabled = true\n')
             manifest = home / ".tmp/marketplaces/girishattri-plugins/codex/plugins/session-chat/.codex-plugin/plugin.json"
@@ -227,7 +232,8 @@ class DraftCases:
             tmux("set-option", "-p", "-t", recipient, "@name", "recipient")
             env["TMUX"] = tmux("display-message", "-p", "-t", sender, "#{socket_path},#{pid},0")
             env["TMUX_PANE"] = sender
-            for ctx in self.roles():
+            for ctx, keep_drafts in ((ctx, keep) for ctx in self.roles() for keep in ("0", "1")):
+                env["SESSION_CHAT_KEEP_DRAFTS"] = keep_drafts
                 tmux("set-option", "-p", "-t", sender, "@name", ctx.pane_name)
                 path = self.draft(ctx)
                 body = "Read-only report\ngit commit --dry-run -m 'quoted data'\n$(literal data)\nEOF\n" + "details\n" * 160
@@ -253,8 +259,12 @@ class DraftCases:
                 self.assertEqual(received.returncode, 0, received.stderr)
                 self.assertIn("Read-only report", received.stdout)
                 self.assertIn("deadbeef", (self.store / "replies-log.tsv").read_text())
-                self.assertEqual(path.read_text(), body)
-                self.check("allow", ctx, self.native(path, "Delete")); path.unlink()
+                if keep_drafts == "1":
+                    self.assertEqual(path.read_text(), body)
+                    self.check("allow", ctx, self.native(path, "Delete")); path.unlink()
+                else:
+                    self.assertFalse(path.exists(), "default dispatch must consume its own draft")
+                    self.assertIn("Removed delivered draft:", result.stdout)
                 self.assertTrue(delivered.is_file(), "cleanup must leave durable dispatch intact")
         finally:
             subprocess.run(["tmux", "-S", socket, "kill-server"], env=env, capture_output=True)

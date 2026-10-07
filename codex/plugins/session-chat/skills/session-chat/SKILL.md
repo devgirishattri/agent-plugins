@@ -93,8 +93,30 @@ shell call and use a native tool to write the file there.
 Use file dispatch for multiline, long, or command-containing/quoting-sensitive
 messages. For replies, always pass the incoming id through `--reply-to`. The
 helper creates a separate durable transport copy. After delivered or durable
-queued success, delete only your own draft with a native tool; keep it after a
-hard failure. Cleanup is explicit, with no automatic draft retention sweep.
+queued success, it automatically removes an eligible own-pane draft and prints
+`Removed delivered draft: <path>`. Do not delete a retained draft or resend a
+successful message. Set `SESSION_CHAT_KEEP_DRAFTS=1` to keep eligible drafts.
+
+Consumption requires an owned regular single-link file with a valid draft name
+and no group/other write bits. The source store, drafts parent and own directory
+must be owned, non-symlink directories without group/other write permission.
+The source identity and SHA-256 must remain unchanged across the checks.
+These sequential checks do not isolate concurrent changes by the same user.
+A `NOTE: kept draft` or cleanup warning does not change successful delivery.
+Failed reads send nothing and preserve the source. After another hard failure,
+keep the draft and fix the reported cause before retrying.
+
+Temporary files outside the own-draft namespace are not consumed. Remove those
+with native tools after success. Older or retained drafts have no automatic
+sweep; their cleanup remains an explicit user request.
+
+### One complete packet per reply
+
+- Put each complete verdict, review packet, or multipart answer in one draft.
+  Do not send an inline fragment followed by messages that complete it.
+- Send a correction as one full replacement, naming the earlier message id.
+- Keep separate short sends for distinct events: STOP, scope changes, or later
+  state changes such as completed CI.
 
 ## Reliability Contract
 
@@ -122,6 +144,8 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
 - `SESSION_CHAT_SETTLE_MS`: delay after a successful Enter. Default: `300`.
 - `SESSION_CHAT_SEND_MAX_LEN`: maximum `$session-chat:send` payload length. Default: `1024`.
 - `SESSION_CHAT_SKIP_VERIFY`: set to `1` to skip marker verification.
+- `SESSION_CHAT_KEEP_DRAFTS`: set to `1` to retain eligible own-pane drafts after
+  durable dispatch. Default: `0`; read per invocation.
 - `SESSION_CHAT_INCOMING_MODE`: receiver behavior. Values: `notify`, `assist`, `auto`, `off`. Default: `notify`.
 - `SESSION_CHAT_LOCK_TIMEOUT_MS`: how long a sender waits for a per-pane send lock. Default: auto-derived from the send budget (~4× one send) and reset whenever the lock holder changes, so fan-in to one pane queues instead of failing. When set explicitly, it is a hard cap.
 - `SESSION_CHAT_SEND_RETRIES`: retry count after verify timeouts. Default: `2`.

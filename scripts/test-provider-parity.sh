@@ -698,4 +698,7 @@ for provider in claude codex; do
     || fail "$provider tasks-clean treated a bare --older-than integer as something shorter than days"
 done
 
-echo "cross-provider scheduler, context, and reply-correlation parity tests passed"
+python3 -B "$ROOT/scripts/test-chat-draft-consumption.py" \
+  || fail "cross-provider draft consumption regression failed"
+
+echo "cross-provider scheduler, context, reply-correlation, and draft consumption parity tests passed"

@@ -30,7 +30,8 @@ Lead with the result. Add text only for errors or the follow-ups below. Run the 
         ```
         bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-to-session.sh --reply-to <message-id> "<pane>" "<prompt-file-path>"
         ```
-     4. Optionally run `rm -f "<prompt-file-path>"` afterward. Under strict-v1, leave the draft in place. Claude has no native delete tool, shell `rm` into the store is denied, and the draft is inert after delivery. After a hard failure, keep the draft for the retry.
+     4. Under strict-v1, the transport removes your own draft after a delivered or queued result (`Removed delivered draft: …`); do not delete it yourself. Outside strict-v1, optionally run `rm -f "<prompt-file-path>"` for a temp file. After a hard failure, keep the draft for the retry.
+   - Put a complete verdict or packet in **one** reply. Do not send a short reply and then follow-ups that complete it. A correction is one full replacement packet that names the message id it replaces.
 
 3. Report the result:
    - "Sent to …" or "Dispatched task to …" (delivered live), or "Queued …" (recipient busy; durable, surfaces on their next turn) → report success. Note that the reply is correlated: the sender's `/check-replies` will mark id `<message-id>` answered.

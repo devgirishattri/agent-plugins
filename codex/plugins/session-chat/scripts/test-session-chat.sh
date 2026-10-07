@@ -833,6 +833,49 @@ ENTER_FAIL_OUT="$(TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" \
 assert_contains "RC=3" "$ENTER_FAIL_OUT"
 assert_file_contains "$TEST_HOME/messages/queue/recipient-test.tsv" "enter-fail-probe"
 
+# The own draft is consumed after a durable queue result, while its distinct
+# payload remains readable by recipient recovery. A live dispatch is the control.
+DRAFT_DIR="$TEST_HOME/messages/drafts/sender-test"
+mkdir -p "$DRAFT_DIR"
+chmod 700 "$TEST_HOME/messages" "$TEST_HOME/messages/drafts" "$DRAFT_DIR"
+LIVE_DRAFT="$DRAFT_DIR/live-control.md"
+printf 'draft live control\nsecond line\n' > "$LIVE_DRAFT"
+chmod 644 "$LIVE_DRAFT"
+LIVE_DRAFT_OUT=$(run_as_sender bash "$SCRIPT_DIR/dispatch-to-session.sh" recipient-test "$LIVE_DRAFT")
+[ ! -e "$LIVE_DRAFT" ] && ok || fail "live own draft was not consumed"
+assert_contains "Removed delivered draft:" "$LIVE_DRAFT_OUT"
+
+QUEUED_DRAFT="$DRAFT_DIR/queued.md"
+printf 'queued-own-draft-body\nqueued-second-line\n' > "$QUEUED_DRAFT"
+QUEUED_DRAFT_OUT=$(TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" CODEX_HOME="$TEST_HOME" \
+  SESSION_CHAT_ALLOW_SHELL_TARGET=1 SESSION_CHAT_VERIFY_TIMEOUT_MS=1000 \
+  SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_SEND_RETRIES=0 \
+  bash -c '
+    tmux() {
+      if [ "$1" = send-keys ]; then
+        local last="${@: -1}"
+        [ "$last" = Enter ] && return 1
+      fi
+      command tmux "$@"
+    }
+    export -f tmux
+    bash "$1" recipient-test "$2"
+  ' draft-queue "$SCRIPT_DIR/dispatch-to-session.sh" "$QUEUED_DRAFT")
+assert_contains "Queued dispatch" "$QUEUED_DRAFT_OUT"
+[ ! -e "$QUEUED_DRAFT" ] && ok || fail "queued own draft was not consumed"
+QUEUED_COPY=$(awk -F'\t' '{for(i=1;i<=NF;i++) if ($i ~ /\.md$/) print $i}' \
+  "$TEST_HOME/messages/queue/recipient-test.tsv" | tail -1)
+[ -n "$QUEUED_COPY" ] && [ "$QUEUED_COPY" != "$QUEUED_DRAFT" ] && ok \
+  || fail "queue must reference the separate payload"
+assert_file_contains "$QUEUED_COPY" "queued-own-draft-body"
+assert_file_contains "$QUEUED_COPY" "queued-second-line"
+RECOVERED_DRAFT=$(printf '%s' '{}' | \
+  TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" \
+  PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto \
+  SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0 bash "$SCRIPT_DIR/detect-incoming-message.sh")
+assert_contains "queued-own-draft-body" "$RECOVERED_DRAFT"
+assert_contains "queued-second-line" "$RECOVERED_DRAFT"
+
 python3 -B "$SCRIPT_DIR/test-dispatch-read.py" && ok || fail "20 KB dispatch read integration failed"
 
 echo "session-chat smoke tests: $ASSERTIONS passed, 0 failed"

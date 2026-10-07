@@ -20,7 +20,7 @@
     },
     {
       "name": "session-chat",
-      "version": "0.17.15",
+      "version": "0.17.16",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-chat"
@@ -34,7 +34,7 @@
     },
     {
       "name": "session-scheduler",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-scheduler"

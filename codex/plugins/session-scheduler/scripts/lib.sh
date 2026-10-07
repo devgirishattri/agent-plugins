@@ -441,6 +441,33 @@ session_chat_version() {
   jq -r '.version // "unknown"' "$root/.codex-plugin/plugin.json" 2>/dev/null || echo "unknown"
 }
 
+# Compact environment and transport rules for assignment and review packets.
+packet_contract_block() {
+  cat <<EOF
+Shared scheduler home (provenance): $1
+Environment contract (the path above is provenance, not a command):
+- Use only the values your process inherited at launch. If they are absent or
+  differ, stop and ask for a relaunch; never derive another ledger.
+- Run each scheduler helper as ONE literal Bash segment:
+  bash "<installed session-scheduler plugin root>/scripts/<helper>.sh" ...
+  No export, env or variable prefixes, chaining, pipes, redirection, or
+  command/process substitution.
+
+Transport contract:
+- Helpers update the ledger first, then notify through session-chat/tmux.
+- In a sandbox, request scoped approval for the exact helper
+  on the first attempt; never work around it (bash -c, wrappers, env,
+  exports, broad provider-home access). Approval grants transport only; role, recipient,
+  argument, confirmation and lifecycle rules still apply.
+- If notification fails after a transition, check task-status first:
+  never rerun task-done or task-block on a done/blocked task, and never
+  use --force to repair a notification. Report the partial success; send a
+  separate session-chat message only when authorized.
+- task-review may retry dispatch only while the task is in review with no
+  recorded successful reviewer dispatch; never duplicate a delivered packet.
+EOF
+}
+
 # Deliver a lifecycle acknowledgement to the task assigner. The durable
 # dispatch file is authoritative transport; the legacy one-line send is kept
 # only as a fallback when the file cannot be written or dispatched.
@@ -463,8 +490,7 @@ session_chat_ack() {
   ack_file="$PROMPTS_DIR/${id}-ack-${event}.md"
   if {
     printf '%s\n\n' "$first_line"
-    printf 'Lifecycle ack for task %s — status recorded in the shared ledger; no\n' "$id"
-    printf 'dispatch action required. Verify with the form for your runtime:\n'
+    printf 'Ack only: the ledger is updated; no dispatch action needed. Check status:\n'
     printf '  Claude: /session-scheduler:task-status %s\n' "$id"
     printf '  Codex:  $session-scheduler:task-status %s\n' "$id"
   } > "$ack_file"; then

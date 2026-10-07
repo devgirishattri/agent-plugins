@@ -1445,6 +1445,102 @@ dispatch_message() {
   return 3
 }
 
+# Own-draft consumption. A strict-v1 child pane stages a long reply as
+# <messages>/drafts/<own-name>/<file>.md|.txt and dispatches it by path;
+# dispatch_message copies the body into a NEW delivered file and the durable
+# queue references that copy, never the draft. After a durable outcome
+# (delivered or queued) the draft is therefore inert and the transport removes
+# it, so the sender needs no separate delete step. Anything that is not this
+# pane's own private draft, unchanged since it was read (same dev:inode and
+# SHA-256), is left untouched. The checks are sequential, not atomic: they do
+# not defend against a concurrent same-user change between check and unlink,
+# the same limit as the rest of the same-user guardrails.
+
+# _owner_private_dir <dir>: a real (non-symlink) directory owned by this user
+# with no group/other write bits.
+_owner_private_dir() {
+  local d="$1" mode
+  [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || return 1
+  mode=$(stat -c '%a' "$d" 2>/dev/null || stat -f '%Lp' "$d" 2>/dev/null)
+  case "$mode" in *[!0-7]*|'') return 1 ;; esac
+  [ $(( 8#$mode & 8#022 )) -eq 0 ]
+}
+
+# file_sha256 <file>: echo the SHA-256 of the file's exact bytes (empty on error).
+file_sha256() {
+  local out
+  if command -v shasum >/dev/null 2>&1; then
+    out=$(shasum -a 256 < "$1" 2>/dev/null) || return 1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    out=$(sha256sum < "$1" 2>/dev/null) || return 1
+  else
+    return 1
+  fi
+  printf '%s\n' "${out%% *}"
+}
+
+# own_draft_identity <file>: echo "<dev>:<inode>" and return 0 only when <file>
+# is a regular, owner-owned, single-link, non-symlink file with no group/other
+# write bits, named by the strict-v1 draft name rule (below), directly inside
+# this pane's own drafts directory. The source messages root, its drafts/
+# parent and the own-pane directory must each pass _owner_private_dir; the
+# source store is checked in its own right, never inferred from the target's.
+own_draft_identity() {
+  local f="$1" my_name drafts_dir canon_drafts canon_parent base stem links ident mode
+  my_name=$(get_my_name 2>/dev/null)
+  [ -n "$my_name" ] || return 1
+  validate_label "$my_name" 2>/dev/null || return 1
+  drafts_dir="$MESSAGES_DIR/drafts/$my_name"
+  _owner_private_dir "$MESSAGES_DIR" || return 1
+  _owner_private_dir "$MESSAGES_DIR/drafts" || return 1
+  _owner_private_dir "$drafts_dir" || return 1
+  canon_drafts=$(cd "$drafts_dir" 2>/dev/null && pwd -P) || return 1
+  canon_parent=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || return 1
+  [ -n "$canon_drafts" ] && [ "$canon_parent" = "$canon_drafts" ] || return 1
+  # Same name rule the strict-v1 draft contract documents: a leading ASCII
+  # letter or digit, then letters, digits, '.', '_' or '-', at most 128
+  # characters before the .md or .txt extension.
+  base=$(basename "$f")
+  case "$base" in
+    [A-Za-z0-9]*.md|[A-Za-z0-9]*.txt) ;;
+    *) return 1 ;;
+  esac
+  case "$base" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+  stem="${base%.*}"
+  [ "${#stem}" -le 128 ] || return 1
+  [ -L "$f" ] && return 1
+  [ -f "$f" ] && [ -O "$f" ] || return 1
+  links=$(stat -c '%h' "$f" 2>/dev/null || stat -f '%l' "$f" 2>/dev/null)
+  [ "$links" = "1" ] || return 1
+  mode=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)
+  case "$mode" in *[!0-7]*|'') return 1 ;; esac
+  [ $(( 8#$mode & 8#022 )) -eq 0 ] || return 1
+  ident=$(stat -c '%d:%i' "$f" 2>/dev/null || stat -f '%d:%i' "$f" 2>/dev/null)
+  [ -n "$ident" ] || return 1
+  printf '%s\n' "$ident"
+}
+
+# consume_own_draft <file> <identity> <sha256>: remove the draft only if it is
+# still the same eligible own draft (same dev:inode) AND its bytes still hash
+# to <sha256>, the digest taken before the body was read for delivery. A swap
+# or edit observed by these checks, including a whitespace-only edit, keeps the
+# draft. Prints one status line; never fails the caller (the message is
+# already durable).
+consume_own_draft() {
+  local f="$1" want="$2" want_sum="$3" now sum
+  [ -n "$want" ] && [ -n "$want_sum" ] || { echo "NOTE: kept draft (no identity recorded): $f"; return 0; }
+  now=$(own_draft_identity "$f") || { echo "NOTE: kept draft (no longer an eligible own draft): $f"; return 0; }
+  [ "$now" = "$want" ] || { echo "NOTE: kept draft (file was replaced during delivery): $f"; return 0; }
+  sum=$(file_sha256 "$f") || sum=""
+  [ -n "$sum" ] && [ "$sum" = "$want_sum" ] || { echo "NOTE: kept draft (changed during delivery): $f"; return 0; }
+  if rm -f "$f" 2>/dev/null && [ ! -e "$f" ]; then
+    echo "Removed delivered draft: $f"
+  else
+    echo "NOTE: could not remove draft: $f"
+  fi
+  return 0
+}
+
 read_pane() {
   local pane_id="$1"
   local lines="${2:-50}"

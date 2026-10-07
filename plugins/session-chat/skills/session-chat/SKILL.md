@@ -116,12 +116,19 @@ Condition: a session-workspace strict-v1 harness is active and you are a child p
    - These are denied: renames/moves; shell writes (redirection, `tee`, `cp`, `mktemp`); other panes' drafts; files at the store top level; delivered messages and queue/archive/ledger state.
 4. Dispatch it by absolute path: `bash <plugin-root>/scripts/dispatch-to-session.sh --reply-to <incoming-id> <pane> <messages-path>/drafts/<your-pane-name>/<name>.md` (omit `--reply-to` for a new task).
 5. Handle the result.
-   - **Durable success** (`Dispatched task to …` or `Queued dispatch …`): delete the draft with a native delete tool where one exists (Codex `apply_patch` Delete File).
-     - Claude has no native delete tool, and shell `rm` into the store is denied. A Claude pane leaves the draft in place.
-     - That draft is inert. The transport copies the content into a new delivered file and never reads `drafts/`.
-   - **Hard failure** (`ERROR:` and non-zero exit): keep the draft, fix the named cause, and retry with the same file.
+   - **Durable success** (`Dispatched task to …` or `Queued dispatch …`): the transport removes the draft for you and prints `Removed delivered draft: <path>`. Do not delete it yourself.
+     - It removes only your own private draft (regular, single-link, no group/other write bits, named as in step 3, in an owner-only messages store) that is unchanged since it was read for delivery: same file identity and SHA-256. The delivered copy is a new file; the queue never reads `drafts/`. The check is best-effort, not atomic against a concurrent change by the same user.
+     - `NOTE: kept draft (…)` means the file changed, was replaced, or was not an eligible own draft. The message was still delivered. Do not resend it.
+     - `SESSION_CHAT_KEEP_DRAFTS=1` in the launch environment keeps every draft.
+   - **Hard failure** (`ERROR:` and non-zero exit, including an unreadable draft): nothing is sent and the draft is kept. Fix the named cause, and retry with the same file.
 
-Nothing sweeps drafts automatically. Cleanup of leftovers is an explicit user request. The root orchestrator's existing authority over store files is unchanged.
+Drafts that predate this behavior, or that the transport kept, are not swept automatically. Cleanup of leftovers is an explicit user request. The root orchestrator's existing authority over store files is unchanged.
+
+### One complete packet per reply
+
+- Put a complete verdict, review packet, or multi-part answer in **one** draft and dispatch it once. Do not send a short inline reply and then follow-ups that complete it.
+- To correct a packet you already sent, dispatch the full corrected packet once and say on its first line which message id it replaces.
+- Separate short sends are still right for distinct events: an urgent STOP, a scope change, or a later state change such as "CI finished".
 
 ## Reading complete dispatches under a strict-v1 harness
 
@@ -179,6 +186,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 | `SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS` | derived (lock + send budget + 1000ms) | How long a freshly-queued durable row waits before the recipient hook may surface it, giving an in-flight live paste time to win. A known-failed live send marks its row ready immediately. |
 | `SESSION_CHAT_RECENT_ID_TTL_MS` | 600000 | How long a surfaced message `id` is remembered so a queued entry and its later live paste never both surface (cross-turn dedup). |
 | `SESSION_CHAT_ARCHIVE_RETENTION_DAYS` | 30 | How long daily message-archive files are kept for `/message-search`. |
+| `SESSION_CHAT_KEEP_DRAFTS` | 0 | Set `1` to keep your own strict-v1 draft after a durable dispatch instead of removing it. |
 | `SESSION_CHAT_SKIP_VERIFY` | 0 | Set `1` to skip receipt verification (not recommended). |
 | `SESSION_CHAT_INCOMING_MODE` | notify | Recipient-side: `auto` / `assist` / `notify` / `off`. Use `/incoming-mode` to inspect or generate the export line. |
 | `SESSION_CHAT_TARGET_MESSAGES_DIR` | unset (per-runtime default) | Overrides the local mailbox and every target mailbox; export the same absolute directory in all participating panes before starting their agents, otherwise senders and receivers can resolve different queues. |

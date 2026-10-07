@@ -12,8 +12,8 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.7.11 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.15 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.2 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `session-chat` | 0.17.16 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.11.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
@@ -631,6 +631,7 @@ or reload the session. Command-scoped exports affect only that invocation.
 | `SESSION_CHAT_RECENT_ID_TTL_MS` | `600000` | How long surfaced message IDs suppress duplicate live and queued arrivals. |
 | `SESSION_CHAT_DISPATCH_INLINE_MAX` | `6000` | Maximum trusted dispatch-body characters inlined in `auto` mode. |
 | `SESSION_CHAT_ARCHIVE_RETENTION_DAYS` | `30` | Retention for daily searchable message-archive files. |
+| `SESSION_CHAT_KEEP_DRAFTS` | `0` | Set to `1` to retain eligible own-pane drafts after durable dispatch. Otherwise, the transport checks source identity and SHA-256 before removing them. Other prompt files are retained. |
 | `SESSION_CHAT_SKIP_VERIFY` | Unset (`0`) | Set to `1` to skip live marker verification. This weakens delivery guarantees. |
 | `SESSION_CHAT_ALLOW_SHELL_TARGET` | `0` | Set to `1` to permit sending to panes at a shell prompt. Use only for deliberate shell targets because the message may execute as shell input. |
 | `SESSION_CHAT_PANE_NAME` | Unset | Explicitly supplies the sender pane name and bypasses self-name lookup, primarily for sandboxed tmux environments. |

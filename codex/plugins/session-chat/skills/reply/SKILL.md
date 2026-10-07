@@ -70,10 +70,21 @@ shell call and use a native tool to write the file there.
    bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" --reply-to "<message-id>" "<pane-name>" "<draft-path>"
    ```
 
-3. After `Dispatched ...` or durable `Queued ...` success, delete your own draft
-   with `apply_patch`. Keep it after a hard failure for retry after fixing the
-   cause. Never resend a queued success. Outside the harness, also remove the
-   empty temporary directory.
+3. After delivered or durable queued success, the transport removes eligible
+   own-pane drafts and reports `Removed delivered draft: <path>`.
+   Do not delete a retained draft yourself or resend a successful message.
+   `SESSION_CHAT_KEEP_DRAFTS=1` opts out of consumption.
+   Keep the draft after a hard failure, fix the cause, then retry.
+   Outside the own-draft namespace, remove your temporary file with `apply_patch`
+   only after success, then remove the empty temporary directory.
+
+Put a complete verdict or packet in one file reply. A correction is one full
+replacement that names the message id it replaces. Separate short sends remain
+appropriate for an urgent STOP, scope change, or later state change.
+
+Cleanup checks the source identity and SHA-256; a changed or ineligible draft
+is retained. A `NOTE: kept draft` or cleanup warning does not undo delivery.
+These sequential checks do not isolate concurrent same-user filesystem changes.
 
 If the reply id is invalid, relay the validation error and stop. If tmux is not
 active, explain that replies require tmux. For target, duplicate-name, busy, or

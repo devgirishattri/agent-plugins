@@ -18,9 +18,13 @@ argument-hint: <session-name> <prompt>
    `.txt` filename. Other sessions may use a separately created temporary
    directory. Preserve the verbatim body as data; never interpolate it into shell
    source. Dispatch using the installed `dispatch-to-session.sh` helper.
-   Delete your own draft with `apply_patch` only after delivered or durable queued
-   success; preserve it after hard failure. Shell staging/cleanup is blocked for
-   strict-v1 children. A missing grant or native writer is an actionable error.
+   After delivered or durable queued success, the transport consumes eligible
+   own-pane drafts unless `SESSION_CHAT_KEEP_DRAFTS=1`. Do not delete retained
+   drafts or resend successful messages. Preserve drafts after hard failure.
+   Outside that namespace, remove your temporary file with `apply_patch` after
+   success. Shell staging/cleanup stays blocked for strict-v1 children.
+   A missing grant or native writer is an actionable error.
+   Put complete verdicts in one file; corrections identify the replaced message.
 
 5. Relay the script's `Dispatched task ...` or `Queued dispatch ...` result accurately. For either successful result, mention that the recipient must use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to read and act on the task; default `notify` only reports that a dispatch arrived.
 6. If the target is not found, suggest `$session-chat:panes`.

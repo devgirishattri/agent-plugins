@@ -44,17 +44,48 @@ if [ ! -f "$PROMPT_FILE" ]; then
   exit 1
 fi
 
-# Read the body as data (never as shell), then prepend the reply-correlation
-# token to the in-memory text so it lands at the top of the dispatched file (and
-# is later scanned for correlation on the recipient). Do this BEFORE ensure_tmux
-# so a malformed --reply-to fails on the id rather than on a missing tmux —
-# matching send-message.sh's ordering. apply_reply_to fails closed on a bad id.
-PROMPT_TEXT=$(cat "$PROMPT_FILE")
-if [ -n "$REPLY_TO" ]; then
-  PROMPT_TEXT=$(apply_reply_to "$REPLY_TO" "$PROMPT_TEXT") || exit 1
+# Fail on a malformed --reply-to id BEFORE ensure_tmux, so a bad id is reported
+# as such rather than as a missing tmux (matching send-message.sh's ordering).
+# apply_reply_to below repeats the check and also refuses conflicting tokens.
+if [ -n "$REPLY_TO" ] && ! printf '%s' "$REPLY_TO" | grep -qE '^[a-f0-9]{8,16}$'; then
+  echo "ERROR: --reply-to expects an 8-16 char lowercase hex message id (got '$REPLY_TO')." >&2
+  exit 1
 fi
 
 ensure_tmux
+
+# A prompt file that is this pane's own strict-v1 draft is removed after a
+# durable outcome (see own_draft_identity). Its identity and SHA-256 are taken
+# BEFORE the body is read and re-checked right after the read and again before
+# removal, so cleanup only removes a source file that is unchanged since it was
+# read. This is a best-effort check, not atomic protection against a concurrent
+# same-user change between those checks. SESSION_CHAT_KEEP_DRAFTS=1 opts out.
+DRAFT_IDENT=""
+DRAFT_SUM=""
+if [ "${SESSION_CHAT_KEEP_DRAFTS:-0}" != "1" ] && DRAFT_IDENT=$(own_draft_identity "$PROMPT_FILE"); then
+  DRAFT_SUM=$(file_sha256 "$PROMPT_FILE") || DRAFT_SUM=""
+else
+  DRAFT_IDENT=""
+fi
+
+# Read the body as data (never as shell), then prepend the reply-correlation
+# token to the in-memory text so it lands at the top of the dispatched file (and
+# is later scanned for correlation on the recipient).
+# A failed or partial read must never be sent, and must never let cleanup
+# remove the only complete copy: fail closed before dispatch.
+if ! PROMPT_TEXT=$(cat "$PROMPT_FILE"); then
+  echo "ERROR: could not read prompt file: $PROMPT_FILE (nothing was sent; the file is kept)" >&2
+  exit 1
+fi
+if [ -n "$DRAFT_IDENT" ]; then
+  if [ "$(own_draft_identity "$PROMPT_FILE" 2>/dev/null)" != "$DRAFT_IDENT" ] \
+     || [ -z "$DRAFT_SUM" ] || [ "$(file_sha256 "$PROMPT_FILE")" != "$DRAFT_SUM" ]; then
+    DRAFT_IDENT=""  # changed while being read: deliver what was read, keep the file
+  fi
+fi
+if [ -n "$REPLY_TO" ]; then
+  PROMPT_TEXT=$(apply_reply_to "$REPLY_TO" "$PROMPT_TEXT") || exit 1
+fi
 
 dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"
 rc=$?
@@ -63,3 +94,8 @@ case "$rc" in
   3) echo "Queued dispatch to '$TARGET_NAME' — recipient was busy; it will arrive on their next turn." ;;
   *) exit 1 ;;
 esac
+# Only a durable outcome (0 delivered, 3 queued) reaches here; a hard failure
+# exited above and keeps the draft for a retry with the same file.
+if [ -n "$DRAFT_IDENT" ]; then
+  consume_own_draft "$PROMPT_FILE" "$DRAFT_IDENT" "$DRAFT_SUM"
+fi

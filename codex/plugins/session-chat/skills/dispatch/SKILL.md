@@ -56,10 +56,17 @@ shell call and use a native tool to write the file there.
    bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target>" "<draft-path>"
    ```
 
-3. After `Dispatched ...` or durable `Queued ...` success, delete your own draft
-   with `apply_patch`; outside the harness, also remove the empty temporary
-   directory. Keep the draft after a hard failure for retry after fixing its
-   cause. Never resend a queued success.
+3. After delivered or durable queued success, the transport removes eligible
+   own-pane drafts and reports `Removed delivered draft: <path>`.
+   Do not delete a retained draft yourself or resend a successful message.
+   `SESSION_CHAT_KEEP_DRAFTS=1` opts out of consumption.
+   Keep the draft after a hard failure, fix the cause, then retry.
+   Outside the own-draft namespace, remove your temporary file with `apply_patch`
+   only after success, then remove the empty temporary directory.
+
+Put a complete task or review packet in one draft. Send corrections as a full
+replacement that identifies the earlier message. A cleanup `NOTE` does not undo
+delivery: changed or ineligible source files remain for explicit later cleanup.
 
 If tmux is not active, explain that dispatch requires running Codex inside tmux.
 If the target is not found, suggest `$session-chat:panes`. If this pane has no name, suggest `$session-chat:whoami <name>`.

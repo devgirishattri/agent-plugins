@@ -228,6 +228,36 @@ session_chat_dispatch() {
   bash "$root/scripts/dispatch-to-session.sh" "$target" "$prompt_file"
 }
 
+# packet_contract_block <scheduler-home-abs>: the environment and transport
+# rules every assignment and review packet carries. Kept compact because it is
+# repeated in every packet; each rule here is load-bearing, so shorten wording,
+# never drop a rule.
+packet_contract_block() {
+  cat <<EOF
+Shared scheduler home (provenance): $1
+Environment contract (the path above is provenance, not a command):
+- Use only the values your process inherited at launch. If they are absent or
+  differ, stop and ask for a relaunch; never derive another ledger.
+- Run each scheduler helper as ONE literal Bash segment:
+  bash "<installed session-scheduler plugin root>/scripts/<helper>.sh" ...
+  No export, env or variable prefixes, chaining, pipes, redirection, or
+  command/process substitution.
+
+Transport contract:
+- Helpers update the ledger first, then notify through session-chat/tmux.
+- In a sandbox, request scoped approval for the exact helper
+  on the first attempt; never work around it (bash -c, wrappers, env,
+  exports, broad provider-home access). Approval grants transport only; role, recipient,
+  argument, confirmation and lifecycle rules still apply.
+- If notification fails after a transition, check task-status first:
+  never rerun task-done or task-block on a done/blocked task, and never
+  use --force to repair a notification. Report the partial success; send a
+  separate session-chat message only when authorized.
+- task-review may retry dispatch only while the task is in review with no
+  recorded successful reviewer dispatch; never duplicate a delivered packet.
+EOF
+}
+
 # session_chat_ack <target> <id> <event> <first-line>
 # Durable delivery ladder for a lifecycle ack (done/blocked/review
 # notification to the assigner): write an ack file -> durable dispatch (the
@@ -250,8 +280,7 @@ session_chat_ack() {
   if cat > "$ack_file" <<EOF
 ${first_line}
 
-Lifecycle ack for task ${id} — status recorded in the shared ledger; no
-dispatch action required. Verify with the form for your runtime:
+Ack only: the ledger is updated; no dispatch action needed. Check status:
   Claude: /session-scheduler:task-status ${id}
   Codex:  \$session-scheduler:task-status ${id}
 EOF

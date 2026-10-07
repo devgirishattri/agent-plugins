@@ -646,6 +646,250 @@ else
 fi
 rm -rf "$SAFE_TMP"
 
+# --- Test 26b: own-draft consumption after a durable dispatch ---
+# A prompt file that is exactly this pane's own draft (<messages>/drafts/sender/)
+# is removed after delivery; every other shape is kept. Each refusal case runs
+# beside a valid own draft in the same fixture as its positive control.
+OD_TMP=$(mktemp -d)
+OD_M="$OD_TMP/messages"
+mkdir -p "$OD_M/drafts/sender" "$OD_M/drafts/beta"
+chmod 700 "$OD_M" "$OD_M/drafts" "$OD_M/drafts/sender" "$OD_M/drafts/beta"
+od_dispatch() {  # od_dispatch <target> <file> [extra env assignments...]
+  local target="$1" file="$2"; shift 2
+  env TMUX_PANE="$SENDER_PANE" SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
+    SESSION_CHAT_VERIFY_TIMEOUT_MS=1000 SESSION_CHAT_SETTLE_MS=50 \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" \
+    TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" "$@" \
+    bash -c "
+      tmux() { command tmux -L '$SOCKET' \"\$@\"; }
+      export -f tmux
+      bash '$HERE/dispatch-to-session.sh' '$target' '$file'
+    " 2>&1
+}
+od_delivered_has() { grep -rlF "$1" "$OD_M"/*.md >/dev/null 2>&1; }
+od_control() {  # a valid own draft in the same fixture must be consumed
+  local f="$OD_M/drafts/sender/control-$1.md" o
+  printf 'OD-CONTROL-%s\nline two\n' "$1" > "$f"
+  o=$(od_dispatch alpha "$f")
+  [ ! -e "$f" ] && od_delivered_has "OD-CONTROL-$1" && echo "$o" | grep -qF "Removed delivered draft"
+}
+
+# (a) positive: own draft delivered then removed; delivered copy is intact.
+OD_A="$OD_M/drafts/sender/reply-a1.md"
+printf 'OD-OWN-BODY\n$(touch %s/PWNED)\nend\n' "$OD_TMP" > "$OD_A"
+chmod 644 "$OD_A"  # native Write mode: group/other read is fine in an owner-only store
+od_a_out=$(od_dispatch alpha "$OD_A")
+if [ ! -e "$OD_A" ] && od_delivered_has "OD-OWN-BODY" && [ ! -e "$OD_TMP/PWNED" ] \
+   && echo "$od_a_out" | grep -qF "Removed delivered draft"; then
+  pass "own_draft_consumed_after_delivery"
+else
+  fail "own_draft_consumed_after_delivery" "exists=$([ -e "$OD_A" ] && echo yes || echo no) out=$od_a_out"
+fi
+
+# (b) a plain prompt file outside drafts/ is never removed.
+OD_B="$OD_TMP/plain.md"; printf 'OD-PLAIN\n' > "$OD_B"
+od_dispatch alpha "$OD_B" >/dev/null
+if [ -f "$OD_B" ] && od_delivered_has "OD-PLAIN" && od_control b; then
+  pass "non_draft_prompt_kept"
+else
+  fail "non_draft_prompt_kept" "plain kept=$([ -f "$OD_B" ] && echo yes || echo no)"
+fi
+
+# (c) another pane's draft is delivered but kept.
+OD_C="$OD_M/drafts/beta/foreign.md"; printf 'OD-FOREIGN\n' > "$OD_C"
+od_dispatch alpha "$OD_C" >/dev/null
+if [ -f "$OD_C" ] && od_delivered_has "OD-FOREIGN" && od_control c; then
+  pass "foreign_draft_kept"
+else
+  fail "foreign_draft_kept" "foreign kept=$([ -f "$OD_C" ] && echo yes || echo no)"
+fi
+
+# (d) a symlink in the own drafts dir is kept, and so is its target.
+OD_DT="$OD_TMP/link-target.md"; printf 'OD-LINKED\n' > "$OD_DT"
+ln -s "$OD_DT" "$OD_M/drafts/sender/link.md"
+od_dispatch alpha "$OD_M/drafts/sender/link.md" >/dev/null
+if [ -L "$OD_M/drafts/sender/link.md" ] && [ -f "$OD_DT" ] && od_control d; then
+  pass "symlink_draft_kept"
+else
+  fail "symlink_draft_kept" "link or target removed"
+fi
+rm -f "$OD_M/drafts/sender/link.md"
+
+# (e) a hardlinked own draft is kept (the other link would survive anyway).
+OD_E="$OD_M/drafts/sender/hard.md"; printf 'OD-HARD\n' > "$OD_E"
+ln "$OD_E" "$OD_TMP/hard-other.md"
+od_dispatch alpha "$OD_E" >/dev/null
+if [ -f "$OD_E" ] && od_control e; then
+  pass "hardlinked_draft_kept"
+else
+  fail "hardlinked_draft_kept" "hardlinked draft removed"
+fi
+rm -f "$OD_E" "$OD_TMP/hard-other.md"
+
+# (f) SESSION_CHAT_KEEP_DRAFTS=1 opts out.
+OD_F="$OD_M/drafts/sender/keep.md"; printf 'OD-KEEP\n' > "$OD_F"
+od_dispatch alpha "$OD_F" SESSION_CHAT_KEEP_DRAFTS=1 >/dev/null
+if [ -f "$OD_F" ] && od_delivered_has "OD-KEEP" && od_control f; then
+  pass "keep_drafts_opt_out"
+else
+  fail "keep_drafts_opt_out" "draft removed despite opt-out"
+fi
+rm -f "$OD_F"
+
+# (g) a hard failure (unknown target) keeps the draft for a retry.
+OD_G="$OD_M/drafts/sender/fail.md"; printf 'OD-FAIL\n' > "$OD_G"
+od_g_out=$(od_dispatch no-such-pane "$OD_G"); od_g_rc=$?
+if [ "$od_g_rc" -ne 0 ] && [ -f "$OD_G" ] && od_control g; then
+  pass "failed_dispatch_keeps_draft"
+else
+  fail "failed_dispatch_keeps_draft" "rc=$od_g_rc kept=$([ -f "$OD_G" ] && echo yes || echo no) out=$od_g_out"
+fi
+rm -f "$OD_G"
+
+# (h) a symlinked own drafts directory disqualifies every file in it.
+mv "$OD_M/drafts/sender" "$OD_TMP/real-sender-drafts"
+ln -s "$OD_TMP/real-sender-drafts" "$OD_M/drafts/sender"
+OD_H="$OD_M/drafts/sender/via-link.md"; printf 'OD-DIRLINK\n' > "$OD_H"
+od_dispatch alpha "$OD_H" >/dev/null
+od_h_kept=$([ -f "$OD_TMP/real-sender-drafts/via-link.md" ] && echo yes || echo no)
+rm -f "$OD_M/drafts/sender"; mv "$OD_TMP/real-sender-drafts" "$OD_M/drafts/sender"
+rm -f "$OD_M/drafts/sender/via-link.md"
+if [ "$od_h_kept" = "yes" ] && od_control h; then
+  pass "symlinked_drafts_dir_kept"
+else
+  fail "symlinked_drafts_dir_kept" "kept=$od_h_kept"
+fi
+
+# (i) consume_own_draft keeps an edited (even newline-only), or replaced draft;
+# an unchanged draft is removed (control).
+od_i_out=$(
+  export TMUX_PANE="$SENDER_PANE" SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M"
+  TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0"
+  export TMUX
+  tmux() { command tmux -L "$SOCKET" "$@"; }
+  source "$HERE/lib.sh"
+  f="$OD_M/drafts/sender/edit.md"
+  printf 'v1\n' > "$f"; id1=$(own_draft_identity "$f"); s1=$(file_sha256 "$f")
+  printf 'v2\n' > "$f"; consume_own_draft "$f" "$id1" "$s1"
+  [ -f "$f" ] && echo "EDIT_KEPT"
+  printf 'v1\n' > "$f"; id1=$(own_draft_identity "$f"); s1=$(file_sha256 "$f")
+  printf 'v1\n\n\n' > "$f"; consume_own_draft "$f" "$id1" "$s1"
+  [ -f "$f" ] && echo "NEWLINE_EDIT_KEPT"
+  printf 'v1\n' > "$f"; id1=$(own_draft_identity "$f"); s1=$(file_sha256 "$f")
+  printf 'v1\n' > "$f.new"; mv -f "$f.new" "$f"; consume_own_draft "$f" "$id1" "$s1"
+  [ -f "$f" ] && echo "REPLACED_KEPT"
+  id2=$(own_draft_identity "$f"); s2=$(file_sha256 "$f")
+  consume_own_draft "$f" "$id2" "$s2"
+  [ ! -e "$f" ] && echo "UNCHANGED_REMOVED"
+)
+if echo "$od_i_out" | grep -q EDIT_KEPT && echo "$od_i_out" | grep -q NEWLINE_EDIT_KEPT \
+   && echo "$od_i_out" | grep -q REPLACED_KEPT && echo "$od_i_out" | grep -q UNCHANGED_REMOVED; then
+  pass "edited_or_replaced_draft_kept"
+else
+  fail "edited_or_replaced_draft_kept" "out=$od_i_out"
+fi
+
+# (j) names outside <safe>.md|.txt (<=128 chars) and group-writable drafts are kept.
+OD_J1="$OD_M/drafts/sender/script.sh"; printf 'OD-EXT\n' > "$OD_J1"
+OD_J2="$OD_M/drafts/sender/$(printf 'n%.0s' $(seq 1 130)).md"; printf 'OD-LONG\n' > "$OD_J2"
+OD_J3="$OD_M/drafts/sender/shared.md"; printf 'OD-GW\n' > "$OD_J3"; chmod 664 "$OD_J3"
+od_dispatch alpha "$OD_J1" >/dev/null; od_dispatch alpha "$OD_J2" >/dev/null; od_dispatch alpha "$OD_J3" >/dev/null
+if [ -f "$OD_J1" ] && [ -f "$OD_J2" ] && [ -f "$OD_J3" ] && od_control j; then
+  pass "ineligible_name_or_mode_kept"
+else
+  fail "ineligible_name_or_mode_kept" "ext=$([ -f "$OD_J1" ] && echo kept) long=$([ -f "$OD_J2" ] && echo kept) gw=$([ -f "$OD_J3" ] && echo kept)"
+fi
+# (k) queued outcome (recipient busy: Enter fails): the draft is removed and the
+# queue row references the delivered copy, which stays readable. Control: the
+# same fixture with a live delivery (od_control) also consumes.
+OD_K="$OD_M/drafts/sender/queued.md"; printf 'OD-QUEUED-BODY\nline two\n' > "$OD_K"
+od_k_out=$(
+  env TMUX_PANE="$SENDER_PANE" SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
+    SESSION_CHAT_VERIFY_TIMEOUT_MS=1000 SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_SEND_RETRIES=0 \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" \
+    TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" \
+    bash -c "
+      tmux() {
+        if [ \"\$1\" = send-keys ]; then
+          local last=\"\${@: -1}\"
+          [ \"\$last\" = Enter ] && return 1
+        fi
+        command tmux -L '$SOCKET' \"\$@\"
+      }
+      export -f tmux
+      bash '$HERE/dispatch-to-session.sh' alpha '$OD_K'
+    " 2>&1
+)
+od_k_row=$(grep -F 'drafts' "$OD_M/queue/alpha.tsv" 2>/dev/null)
+od_k_ref=$(awk -F'\t' '{for(i=1;i<=NF;i++) if ($i ~ /\.md$/) print $i}' "$OD_M/queue/alpha.tsv" 2>/dev/null | tail -1)
+# Recover the queued dispatch as the recipient (alpha) on its Stop hook: the
+# surfaced body must be the complete queued payload, read from the copy.
+od_k_rec=$(printf '{"hook_event_name":"Stop"}' \
+  | env HOME="$OD_TMP" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$(cd "$HERE/.." && pwd)" \
+    SESSION_CHAT_PANE_NAME=alpha SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" \
+    SESSION_CHAT_INCOMING_MODE=auto SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0 \
+    bash "$HERE/detect-incoming-message.sh" 2>&1)
+if echo "$od_k_out" | grep -qF "Queued dispatch" && [ ! -e "$OD_K" ] && [ -z "$od_k_row" ] \
+   && [ -n "$od_k_ref" ] && grep -qF 'OD-QUEUED-BODY' "$od_k_ref" \
+   && echo "$od_k_rec" | grep -qF 'OD-QUEUED-BODY' && echo "$od_k_rec" | grep -qF 'line two' \
+   && od_control k; then
+  pass "queued_dispatch_consumes_draft_payload_survives"
+else
+  fail "queued_dispatch_consumes_draft_payload_survives" "out=$od_k_out kept=$([ -e "$OD_K" ] && echo yes || echo no) ref=$od_k_ref row=$od_k_row rec=$od_k_rec"
+fi
+# (l) a failed read (empty, or partial output then an error) sends nothing and
+# keeps the draft. A PATH shim fails `cat` for these drafts only. Control: the
+# same draft name pattern with the shim reading normally is consumed.
+OD_SHIM="$OD_TMP/shim"; mkdir -p "$OD_SHIM"
+cat > "$OD_SHIM/cat" <<'SHIM'
+#!/bin/bash
+for a in "$@"; do
+  case "$a" in
+    *readfail-partial*) printf 'OD-PARTIAL-HEAD\n'; exit 1 ;;
+    *readfail-empty*) exit 1 ;;
+  esac
+done
+exec /bin/cat "$@"
+SHIM
+chmod 755 "$OD_SHIM/cat"
+od_l_ok=yes
+for kind in partial empty; do
+  f="$OD_M/drafts/sender/readfail-$kind.md"; printf 'OD-READFAIL-%s-FULL\n' "$kind" > "$f"
+  before=$(find "$OD_M" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')
+  o=$(od_dispatch alpha "$f" PATH="$OD_SHIM:$PATH"); r=$?
+  after=$(find "$OD_M" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')
+  if [ "$r" -eq 0 ] || [ ! -f "$f" ] || [ "$before" != "$after" ] || od_delivered_has "OD-PARTIAL-HEAD" \
+     || ! echo "$o" | grep -qF "could not read prompt file"; then
+    od_l_ok="no($kind rc=$r kept=$([ -f "$f" ] && echo yes || echo no) files=$before/$after out=$o)"
+  fi
+  rm -f "$f"
+done
+OD_LC="$OD_M/drafts/sender/shim-control.md"; printf 'OD-SHIM-CONTROL\n' > "$OD_LC"
+od_lc_out=$(od_dispatch alpha "$OD_LC" PATH="$OD_SHIM:$PATH")
+if [ "$od_l_ok" = "yes" ] && [ ! -e "$OD_LC" ] && od_delivered_has "OD-SHIM-CONTROL"; then
+  pass "failed_read_sends_nothing_keeps_draft"
+else
+  fail "failed_read_sends_nothing_keeps_draft" "$od_l_ok control_out=$od_lc_out"
+fi
+
+# (m) group/other-writable store directories disqualify consumption: the own
+# drafts dir, the drafts/ parent, and the source messages root. Each is
+# restored and followed by a consuming control.
+od_m_ok=yes
+for d in "$OD_M/drafts/sender" "$OD_M/drafts" "$OD_M"; do
+  f="$OD_M/drafts/sender/dirmode.md"; printf 'OD-DIRMODE\n' > "$f"
+  chmod 777 "$d"; od_dispatch alpha "$f" >/dev/null; chmod 700 "$d"
+  [ -f "$f" ] || od_m_ok="no($d)"
+  rm -f "$f"
+  od_control "m$(basename "$d")" || od_m_ok="no(control after $d)"
+done
+if [ "$od_m_ok" = "yes" ]; then
+  pass "writable_store_dirs_keep_draft"
+else
+  fail "writable_store_dirs_keep_draft" "$od_m_ok"
+fi
+rm -rf "$OD_TMP"
+
 # --- Test 27: msg: path containing a space is parsed fully (not truncated) ---
 # A dispatch file under a HOME with a space must be recognized as trusted — the
 # msg: field is parsed to its ` id:<hex>]` delimiter, not the first space.
