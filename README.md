@@ -13,9 +13,9 @@ Every plugin below ships for both providers at the same version number.
 |--------|---------|---------|
 | `session-manager` | 1.7.11 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.18 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.5 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `session-scheduler` | 0.7.6 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.11.5 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.11.7 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -361,7 +361,21 @@ New scheduler IDs use `task-<epoch>-<8hex>` from OS randomness. Existing task
 IDs remain valid. Creation refuses collisions among cooperating scheduler
 writers under the shared task lock, then atomically publishes complete JSON.
 
+Ordinary done/block/review failures report `DIAG` JSON with separate transition,
+notification and bookkeeping observations. Workspace hook denials report the
+same schema. Each plugin ships its reason registry in `diagnostics/registry.json`.
+These lines are unauthenticated: echoed input can resemble a diagnostic, and
+missing output does not prove success. Inspect task status before retrying an
+uncertain transition. Contract-engine and other helper diagnostics remain deferred.
+
 ### session-workspace
+
+Version 0.11.7 permits quoted literal paths such as `src/app/[id]/page.tsx`
+while retaining containment and symlink checks. For supported Git pathspec
+commands, use `git --literal-pathspecs <command> -- '<path>'`; the new permission
+allows no other global option except `-C .`. Task notes and chat message bodies
+can mention plugin cache paths. File operands keep their existing restrictions.
+See the session-workspace skill for the supported Git forms and limitations.
 
 Since 0.11.1, strict-v1 permits `memory-auto-capture.sh [--store P] --staged FILE...`
 for orchestrators and executors. Reviewers are denied, and `--batch-dir` is refused.

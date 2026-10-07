@@ -28,6 +28,8 @@ fi
 if ! command -v python3 >/dev/null 2>&1; then
   cat >/dev/null 2>&1 || true
   echo "BLOCKED by session-workspace strict-v1 [runtime.python]: active harness requires python3" >&2
+  # Fixed diag/1 record: no Python, no jq, and no input interpolation.
+  printf '%s\n' 'DIAG {"schema":"diag/1","emitter":"workspace-hook","helper":null,"version":null,"subject":"admission","phase":"admission","reason":"hook.runtime.python","outcome":"refused","state_committed":false,"notification":null,"task":null,"generation":null,"event":null,"request":null,"also":[],"also_truncated":false}' >&2 || true
   exit 2
 fi
 

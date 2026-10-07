@@ -1,0 +1,799 @@
+{
+  "schema": "diag-registry/1",
+  "plugin": "session-workspace",
+  "codes": [
+    {
+      "code": "hook.bash.command",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The shell command is empty, unreadable, or not a string."
+    },
+    {
+      "code": "hook.bash.parse",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The shell command cannot be parsed safely or holds a forbidden control byte."
+    },
+    {
+      "code": "hook.coordination.draft",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A message-file edit is not limited to this pane's own draft files."
+    },
+    {
+      "code": "hook.coordination.message_read",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A read of a delivered message is outside the pane's message grant."
+    },
+    {
+      "code": "hook.coordination.message_traversal",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A working directory or operand reaches into a message store by traversal."
+    },
+    {
+      "code": "hook.coordination.write",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The helper operation is outside this role's coordination permissions."
+    },
+    {
+      "code": "hook.edit.path",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An edit tool call names no identifiable edit target."
+    },
+    {
+      "code": "hook.executor.containment",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An executor edit or shell operand leaves the executor's configured cwd."
+    },
+    {
+      "code": "hook.executor.inline_code",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An executor started inline code (eval, shell -c, interpreter -c or -e)."
+    },
+    {
+      "code": "hook.helper.allowlist",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The installed helper has no reviewed strict-v1 grammar."
+    },
+    {
+      "code": "hook.helper.argv",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The helper arguments are outside the reviewed argument grammar."
+    },
+    {
+      "code": "hook.helper.launch",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The helper was not launched as literal `bash <script>`."
+    },
+    {
+      "code": "hook.helper.path",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The helper path is not a literal, normalized, symlink-free cache path."
+    },
+    {
+      "code": "hook.helper.provenance",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The helper is outside the trusted selected plugin caches."
+    },
+    {
+      "code": "hook.helper.segment",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The helper command is composed with other shell syntax or expansion."
+    },
+    {
+      "code": "hook.helper.selection",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The helper plugin or version is not the selected installed one."
+    },
+    {
+      "code": "hook.helper.workdir",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer helper ran outside the configured pane cwd."
+    },
+    {
+      "code": "hook.identity.alias",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A pane-name alias disagrees with the engine pane identity."
+    },
+    {
+      "code": "hook.identity.config",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The active harness config is missing, invalid, drifted, or has mismatched guards."
+    },
+    {
+      "code": "hook.identity.cwd",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The launcher pane cwd does not match the configured pane."
+    },
+    {
+      "code": "hook.identity.missing",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The launcher left out required engine identity variables."
+    },
+    {
+      "code": "hook.identity.mode",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The launcher harness mode is invalid or does not match the validated config."
+    },
+    {
+      "code": "hook.identity.pane",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The launcher pane identity is unknown or ambiguous."
+    },
+    {
+      "code": "hook.identity.read_paths",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The pane read paths are unavailable or do not match the validated config."
+    },
+    {
+      "code": "hook.identity.role",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The launcher role does not match the configured pane or is not a harness role."
+    },
+    {
+      "code": "hook.identity.root",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The launcher project root does not match the validated config."
+    },
+    {
+      "code": "hook.identity.scope",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The launcher scope or environment does not match the validated ownership."
+    },
+    {
+      "code": "hook.identity.topology",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The validated topology has no unique scope orchestrator."
+    },
+    {
+      "code": "hook.input.empty",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The active harness received an empty hook payload."
+    },
+    {
+      "code": "hook.input.json",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The active harness received malformed hook JSON."
+    },
+    {
+      "code": "hook.input.shape",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The hook payload is valid JSON but not an object."
+    },
+    {
+      "code": "hook.orchestrator.child_chdir",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An orchestrator changed directory into a child repository (guard pack)."
+    },
+    {
+      "code": "hook.orchestrator.child_write",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The orchestrator tried to edit child-repository content."
+    },
+    {
+      "code": "hook.orchestrator.gh_mutation",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The orchestrator ran a gh command that mutates remote state."
+    },
+    {
+      "code": "hook.orchestrator.gh_unsupported",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The orchestrator ran a gh form outside the reviewed read set."
+    },
+    {
+      "code": "hook.orchestrator.git",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An orchestrator ran a local Git mutation that belongs to its executor."
+    },
+    {
+      "code": "hook.orchestrator.protected_file",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The orchestrator tried to edit a protected credential or lockfile (guard pack)."
+    },
+    {
+      "code": "hook.orchestrator.push",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An orchestrator ran git push; it must route the push to the owning executor."
+    },
+    {
+      "code": "hook.path.dynamic",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A path operand is dynamic, empty, or globbed and cannot be checked."
+    },
+    {
+      "code": "hook.path.option",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A path-bearing option does not carry a literal value."
+    },
+    {
+      "code": "hook.policy.internal",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The policy raised an internal error and refused (integrity deny)."
+    },
+    {
+      "code": "hook.reviewer.command",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer command is not a bare read-only allowlisted PATH name."
+    },
+    {
+      "code": "hook.reviewer.file_list",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer read loads file operands from a NUL-separated list."
+    },
+    {
+      "code": "hook.reviewer.find",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer find call uses a mutation or execution action."
+    },
+    {
+      "code": "hook.reviewer.git",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer Git option is not read-only allowlisted."
+    },
+    {
+      "code": "hook.reviewer.path",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer path operand is outside the reviewer's readable roots."
+    },
+    {
+      "code": "hook.reviewer.readonly",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer tried to edit, write, patch, move, or delete files."
+    },
+    {
+      "code": "hook.reviewer.search",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer search call is outside the restricted ripgrep form."
+    },
+    {
+      "code": "hook.reviewer.sed",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer tool can write or execute through its script argument."
+    },
+    {
+      "code": "hook.reviewer.shell",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer command is not one literal read-only segment without expansion, pipes, or redirection."
+    },
+    {
+      "code": "hook.reviewer.sort",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer sort call uses output or program options."
+    },
+    {
+      "code": "hook.reviewer.symlink_follow",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer read would traverse or compare through symlinks."
+    },
+    {
+      "code": "hook.reviewer.tail",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer tail call follows a file and never terminates."
+    },
+    {
+      "code": "hook.routing.master",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "Coordination transport ran outside the selected session-chat helper."
+    },
+    {
+      "code": "hook.routing.scope",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A routing or environment selector escapes this coordinator's scope."
+    },
+    {
+      "code": "hook.runtime.python",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The active harness cannot run because python3 is missing (hook wrapper deny)."
+    },
+    {
+      "code": "hook.shell.privilege",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A privilege wrapper is used; strict-v1 forbids it for every role."
+    },
+    {
+      "code": "hook.shell.sandbox_escape",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The command asks to bypass the sandbox, approvals, or permissions."
+    },
+    {
+      "code": "hook.shell.wrapper",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A command wrapper (for example env) is outside the reviewed forms."
+    },
+    {
+      "code": "hook.task.contract",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A contracted task operation is outside the reviewed contract grammar or role."
+    },
+    {
+      "code": "hook.task.scope",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A scoped task operation names a task outside this environment."
+    }
+  ]
+}

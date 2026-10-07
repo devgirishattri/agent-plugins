@@ -1,0 +1,505 @@
+{
+  "schema": "diag-registry/1",
+  "plugin": "session-scheduler",
+  "emitter": "scheduler",
+  "diag_schema": "diag/1",
+  "scope": "1.3a: ordinary paths of task-done.sh, task-block.sh and task-review.sh. A positively identified contracted route (task-contract.sh, including the shared note-file preflight of a contracted task) emits no scheduler diagnostic. Argument parsing that fails before the task is identified (a malformed --note-file) is not a positively identified route and emits a record. notification.for is one of assigner_ack, reviewer_request, verdict_event; bookkeeping records use the route they belong to. DIAG lines are unauthenticated observations.",
+  "codes": [
+    {
+      "code": "sched.env.home_unset",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "SESSION_SCHEDULER_HOME is not set in the helper's inherited environment. The helper stopped before reading the store; the requested transition was not committed."
+    },
+    {
+      "code": "sched.env.jq_missing",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "jq is not installed. This record is a fixed string with version null because jq cannot be used to build it. The helper stopped first; the requested transition was not committed."
+    },
+    {
+      "code": "sched.env.timezone_invalid",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "AGENT_PLUGINS_TIME_ZONE is not a known IANA timezone. The helper stopped during store checks; the requested transition was not committed."
+    },
+    {
+      "code": "sched.store.unsafe",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The scheduler store failed its safety check (symlink, wrong owner, nested symlink or special file). The requested transition was not committed. The check may already have tightened file modes."
+    },
+    {
+      "code": "sched.store.unavailable",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "failed"
+      ],
+      "description": "The scheduler store could not be created, traversed or locked down to owner-only modes. The requested transition was not committed."
+    },
+    {
+      "code": "sched.argv.usage",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "argv"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A required task id or note/reason argument is missing. The requested transition was not committed."
+    },
+    {
+      "code": "sched.argv.task_id_missing",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "argv"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "No task id was given. The requested transition was not committed."
+    },
+    {
+      "code": "sched.argv.task_id_invalid",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "argv"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The task id has characters outside letters, digits, underscore and hyphen. The serialized diagnostic carries no task id for it; the human ERROR text still echoes the argument. The requested transition was not committed."
+    },
+    {
+      "code": "sched.argv.generation_without_contract",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "argv"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "--generation was given with --note-file for a task that has no verification contract. The draft was not read and the requested transition was not committed."
+    },
+    {
+      "code": "sched.task.not_found",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "No task file exists for the id. The requested transition was not committed."
+    },
+    {
+      "code": "sched.lock.timeout",
+      "subjects": [
+        "lock"
+      ],
+      "phases": [
+        "transition"
+      ],
+      "outcomes": [
+        "failed"
+      ],
+      "description": "The per-task lock was not acquired within SESSION_SCHEDULER_LOCK_TIMEOUT_SECS. The requested transition did not happen."
+    },
+    {
+      "code": "sched.lock.unsafe",
+      "subjects": [
+        "lock"
+      ],
+      "phases": [
+        "transition"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The per-task lock path is a symlink, not a directory, or not owned by the caller. The requested transition did not happen."
+    },
+    {
+      "code": "sched.lock.holder_unwritable",
+      "subjects": [
+        "lock"
+      ],
+      "phases": [
+        "transition"
+      ],
+      "outcomes": [
+        "failed"
+      ],
+      "description": "The holder pid could not be written into a new lock directory. The requested transition did not happen."
+    },
+    {
+      "code": "sched.lock.release_failed",
+      "subjects": [
+        "lock"
+      ],
+      "phases": [
+        "cleanup"
+      ],
+      "outcomes": [
+        "failed"
+      ],
+      "description": "The per-task lock could not be released. As a primary record the guarded operation had already succeeded; as a secondary code it follows another fault in the same operation."
+    },
+    {
+      "code": "sched.contract.legacy_write_refused",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "transition"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The task gained a verification contract after the early route check. The legacy write was refused under the lock. The requested transition was not committed."
+    },
+    {
+      "code": "sched.transition.illegal",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "transition"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The status change is not a legal transition from the current status and --force was not given. The requested transition was not committed."
+    },
+    {
+      "code": "sched.ledger.write_refused",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "transition"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The new ledger content was empty or not a single JSON object. No write was attempted; the task file is unchanged."
+    },
+    {
+      "code": "sched.ledger.write_failed",
+      "subjects": [
+        "transition"
+      ],
+      "phases": [
+        "transition"
+      ],
+      "outcomes": [
+        "failed"
+      ],
+      "description": "The ledger write could not be staged or published. state_committed is false when the failure is proven to precede publication (the staged file still exists). It is null when the publication is unconfirmed (the staged file is gone, so the rename may have happened); then the human text says the result is unconfirmed and task-status must be inspected before any retry."
+    },
+    {
+      "code": "sched.duration.record_failed",
+      "subjects": [
+        "duration"
+      ],
+      "phases": [
+        "transition"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The transition to done succeeded but duration_seconds could not be recorded."
+    },
+    {
+      "code": "sched.review.packet_write_failed",
+      "subjects": [
+        "reviewer_request"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The review packet could not be written. No reviewer dispatch was attempted. The review transition (if any) stands; do not replay it."
+    },
+    {
+      "code": "sched.review.dispatch_failed",
+      "subjects": [
+        "reviewer_request"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The reviewer dispatch failed. The task stays in review and a later task-review retries the dispatch only."
+    },
+    {
+      "code": "sched.review.record_failed",
+      "subjects": [
+        "reviewer_request"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The reviewer packet was delivered or queued but the dispatch stamp could not be recorded. Do not re-run task-review: it would duplicate delivery."
+    },
+    {
+      "code": "sched.notify.failed",
+      "subjects": [
+        "assigner_ack",
+        "verdict_event"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The notification failed after the transition committed. Do not replay the transition."
+    },
+    {
+      "code": "sched.notify.inline_fallback",
+      "subjects": [
+        "assigner_ack",
+        "verdict_event"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The durable dispatch failed and a bounded inline message was sent instead (delivered, degraded; a duplicate pointer is possible)."
+    },
+    {
+      "code": "sched.notify.record_failed",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The verdict notification outcome could not be recorded on the event. persisted is pending when the write provably did not publish and unknown when its publication is unconfirmed."
+    },
+    {
+      "code": "sched.notify.state_unreadable",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The verdict event's notification state could not be read after the transition; no notification was attempted."
+    },
+    {
+      "code": "sched.bookkeeping.last_ack_failed",
+      "subjects": [
+        "bookkeeping"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "meta.last_ack could not be recorded after the assigner ack. The transition stands; persisted state is unknown."
+    },
+    {
+      "code": "sched.bookkeeping.reviewer_metadata_failed",
+      "subjects": [
+        "bookkeeping"
+      ],
+      "phases": [
+        "notify"
+      ],
+      "outcomes": [
+        "partial"
+      ],
+      "description": "The failed reviewer dispatch attempt could not be recorded in the review metadata. The transition stands; persisted state is unknown."
+    },
+    {
+      "code": "sched.note_file.option_malformed",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "argv"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "--note-file was repeated, had no path or had an empty path. Parsing stopped before the task or the draft was read, so this can happen before the helper knows whether the task is contracted. The requested transition was not committed."
+    },
+    {
+      "code": "sched.note_file.checker_unavailable",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "No session-chat install or no own-draft-check.sh helper is available. The draft was not read."
+    },
+    {
+      "code": "sched.note_file.python_missing",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "python3 is not available to validate the draft. The draft was not copied."
+    },
+    {
+      "code": "sched.note_file.validator_missing",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "verdict-file.py is not installed next to the helper. The draft was not copied."
+    },
+    {
+      "code": "sched.note_file.too_large",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The draft is larger than SESSION_SCHEDULER_NOTE_MAX_BYTES. It was not copied."
+    },
+    {
+      "code": "sched.note_file.changed_during_check",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The draft changed size while it was checked. It was read but not copied."
+    },
+    {
+      "code": "sched.note_file.check_failed",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The own-draft checker failed with an unclassified status (not own draft, usage error, missing tool, signal). The status is never read as proof of ownership."
+    },
+    {
+      "code": "sched.note_file.check_malformed",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The own-draft checker returned output that is not one well-formed OK record."
+    },
+    {
+      "code": "sched.note_file.event_id_failed",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A verdict event id could not be generated. The draft was checked but not copied."
+    },
+    {
+      "code": "sched.note_file.prepare_failed",
+      "subjects": [
+        "verdict_event"
+      ],
+      "phases": [
+        "validate"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The draft validator (verdict-file.py) refused the draft or its artifact could not be verified. No artifact is left and the requested transition was not committed."
+    }
+  ]
+}

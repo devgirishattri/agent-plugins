@@ -12,12 +12,14 @@ source "$(dirname "$0")/lib.sh"
 contract_route_if_needed "review" "${1:-}" "$@"
 
 if [ "$#" -lt 2 ]; then
+  sched_diag_emit reason=sched.argv.usage task="${1:-}" lib=0
   echo "ERROR: Usage: task-review.sh <task-id> [--force] <note>   (note required, e.g. a commit SHA)" >&2
   exit 1
 fi
 
 require_jq || exit 1
-ensure_dirs || exit 1
+sched_diag_reset
+ensure_dirs || { sched_diag_emit; exit 1; }
 
 
 
@@ -29,17 +31,20 @@ if [ "${1:-}" = "--force" ]; then
 fi
 NOTE="$*"
 if [ -z "$NOTE" ]; then
+  sched_diag_emit reason=sched.argv.usage task="${1:-}" lib=0
   echo "ERROR: Usage: task-review.sh <task-id> [--force] <note>   (note required, e.g. a commit SHA)" >&2
   exit 1
 fi
+validate_task_id "$ID" || { sched_diag_emit task="$ID"; exit 1; }
 FILE=$(task_file "$ID") || exit 1
-[ -f "$FILE" ] || { echo "ERROR: Task not found: $ID" >&2; exit 1; }
+[ -f "$FILE" ] || { echo "ERROR: Task not found: $ID" >&2; sched_diag_emit reason=sched.task.not_found task="$ID" lib=0; exit 1; }
 
 # Canonical review-delivery state lives under .meta so Claude and Codex can
 # safely retry one another's hand-offs. Older Codex releases wrote these keys
 # at the task root. Migrate those aliases only when the canonical key is
 # absent (an explicit canonical null means a newer assignment cleared it),
 # then remove every legacy alias in the same atomic rewrite.
+sched_diag_reset
 task_jq_update "$FILE" '
   (.meta | if type == "object" then . else {} end) as $meta
   | .meta = $meta
@@ -71,14 +76,17 @@ task_jq_update "$FILE" '
         .review_dispatch_error)
 ' || {
   echo "ERROR: Could not normalize review dispatch metadata for task $ID." >&2
+  sched_diag_emit committed=false task="$ID"
   exit 1
 }
+sched_diag_residual committed=false task="$ID"
 
 ACTOR=$(current_pane_name)
 REVIEWER=$(jq -r '.reviewer // empty' "$FILE")
 CURRENT_STATUS=$(jq -r '.status // ""' "$FILE")
 REVIEW_DISPATCHED_AT=$(jq -r '.meta.review_dispatched_at // empty' "$FILE")
 RETRY_REVIEW_DISPATCH=0
+RV_COMMITTED=true
 REVIEW_REQUEST_NOTE="$NOTE"
 
 # A failed automatic reviewer dispatch happens after the legal assigned->review
@@ -93,15 +101,23 @@ if [ "$CURRENT_STATUS" = "review" ]; then
     exit 0
   elif [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
     RETRY_REVIEW_DISPATCH=1
+    RV_COMMITTED=false
     STORED_REVIEW_NOTE=$(jq -r '[.history[]? | select(.event == "review")][-1].note // empty' "$FILE")
     [ -n "$STORED_REVIEW_NOTE" ] && REVIEW_REQUEST_NOTE="$STORED_REVIEW_NOTE"
   else
     echo "ERROR: Task $ID is already in review and has no pending external reviewer dispatch." >&2
     echo "Resolve it with task-done/task-block instead of creating another review event." >&2
+    sched_diag_emit reason=sched.transition.illegal committed=false task="$ID" lib=0
     exit 1
   fi
 else
-  append_history_update "$FILE" "review" "review" "$ACTOR" "$NOTE" || exit 1
+  sched_diag_reset
+  append_history_update "$FILE" "review" "review" "$ACTOR" "$NOTE" || {
+    if [ "$SCHED_WRITE_UNCERTAIN" = 1 ]; then sched_transition_failed "$ID" ""; fi
+    sched_diag_emit committed="$(sched_commit_state)" task="$ID"
+    exit 1
+  }
+  sched_diag_residual task="$ID"
 fi
 
 ASSIGNER=$(jq -r '.assigner // ""' "$FILE")
@@ -155,7 +171,12 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
       elif [ -n "$ORIGINAL_PROMPT" ]; then
         printf '\n## Original assignment\n\n(unavailable: stored prompt_file failed safety checks)\n'
       fi
-    } > "$REVIEW_PROMPT"
+    } > "$REVIEW_PROMPT"; PACKET_RC=$?
+    if [ "$PACKET_RC" -ne 0 ]; then
+      rm -f "$REVIEW_PROMPT" 2>/dev/null || true
+      echo "WARN: could not write the review packet; no reviewer dispatch was attempted. Task is in review; do not replay the transition. Fix the cause and retry reviewer dispatch only." >&2
+      sched_diag_emit reason=sched.review.packet_write_failed committed="$RV_COMMITTED" nfor=reviewer_request task="$ID" lib=0
+    else
     DISPATCH_OUTPUT=$(bash "$CHAT_ROOT/scripts/dispatch-to-session.sh" "$REVIEWER" "$REVIEW_PROMPT")
     DISPATCH_RC=$?
     REVIEW_REQUEST_ID=""
@@ -171,6 +192,7 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
         *) REVIEW_DISPATCH_STATUS="delivered" ;;
       esac
       [ -n "$DISPATCH_OUTPUT" ] && printf '%s\n' "$DISPATCH_OUTPUT"
+      sched_diag_reset
       task_jq_update "$FILE" --arg prompt "$REVIEW_PROMPT" --arg now "$NOW" --arg status "$REVIEW_DISPATCH_STATUS" --arg rid "$REVIEW_REQUEST_ID" \
         '(.meta //= {})
          | .meta.review_prompt_file=$prompt
@@ -186,12 +208,14 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
                .review_last_dispatch_attempt_at, .review_dispatch_attempts,
                .review_dispatch_error)' || {
         echo "ERROR: Review was dispatched, but its delivery metadata could not be recorded for task $ID." >&2
+        sched_diag_emit reason=sched.review.record_failed committed="$RV_COMMITTED" nfor=reviewer_request nobs="$REVIEW_DISPATCH_STATUS" npers=unknown task="$ID" request="$REVIEW_REQUEST_ID"
         exit 1
       }
     else
       NOW=$(now_iso)
       DISPATCH_ERROR="session-chat dispatch failed (rc=$DISPATCH_RC)"
       [ -n "$DISPATCH_OUTPUT" ] && printf '%s\n' "$DISPATCH_OUTPUT" >&2
+      sched_diag_reset
       task_jq_update "$FILE" --arg prompt "$REVIEW_PROMPT" --arg now "$NOW" --arg error "$DISPATCH_ERROR" \
         '(.meta //= {})
          | .meta.review_prompt_file=$prompt
@@ -207,12 +231,18 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
                .review_last_dispatch_attempt_at, .review_dispatch_attempts,
                .review_dispatch_error)' || {
         echo "ERROR: Could not record the failed review dispatch for task $ID." >&2
+        sched_diag_emit reason=sched.review.dispatch_failed committed="$RV_COMMITTED" nfor=reviewer_request nobs=failed npers=unknown task="$ID" lib=0
+        sched_diag_emit reason=sched.bookkeeping.reviewer_metadata_failed committed="$RV_COMMITTED" nfor=reviewer_request nobs=failed npers=unknown task="$ID"
         exit 1
       }
       echo "WARN: Task moved to review, but automatic dispatch to '$REVIEWER' failed." >&2
+      sched_diag_emit reason=sched.review.dispatch_failed committed="$RV_COMMITTED" nfor=reviewer_request nobs=failed npers=failed task="$ID" lib=0
+    fi
+    sched_diag_residual committed="$RV_COMMITTED" task="$ID"
     fi
   else
     NOW=$(now_iso)
+    sched_diag_reset
     task_jq_update "$FILE" --arg now "$NOW" \
       '(.meta //= {})
        | del(.meta.review_dispatched_at)
@@ -227,9 +257,13 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
              .review_last_dispatch_attempt_at, .review_dispatch_attempts,
              .review_dispatch_error)' || {
       echo "ERROR: Could not record the unavailable reviewer transport for task $ID." >&2
+      sched_diag_emit reason=sched.review.dispatch_failed committed="$RV_COMMITTED" nfor=reviewer_request npers=unknown task="$ID" lib=0
+      sched_diag_emit reason=sched.bookkeeping.reviewer_metadata_failed committed="$RV_COMMITTED" nfor=reviewer_request npers=unknown task="$ID"
       exit 1
     }
     echo "WARN: Task moved to review, but session-chat is unavailable for reviewer dispatch." >&2
+    sched_diag_emit reason=sched.review.dispatch_failed committed="$RV_COMMITTED" nfor=reviewer_request npers=failed task="$ID" lib=0
+    sched_diag_residual committed="$RV_COMMITTED" task="$ID"
   fi
 fi
 if [ "$RETRY_REVIEW_DISPATCH" -eq 0 ] && [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
@@ -239,7 +273,14 @@ if [ "$RETRY_REVIEW_DISPATCH" -eq 0 ] && [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != 
     echo "WARN: Durable assigner notification failed after task $ID reached review; reviewer routing proceeds independently (task remains in review)." >&2
     echo "Do NOT rerun task-review or use --force to repair the assigner notification." >&2
   fi
-  record_last_ack "$FILE" "review" "$ASSIGNER" "$SESSION_CHAT_ACK_STATUS" "$SESSION_CHAT_ACK_FILE" || true
+  sched_diag_reset
+  # shellcheck disable=SC2034  # consumed by sched_diag_ack_report
+  SCHED_LAST_ACK_RECORD=ok
+  record_last_ack "$FILE" "review" "$ASSIGNER" "$SESSION_CHAT_ACK_STATUS" "$SESSION_CHAT_ACK_FILE" || {
+    # shellcheck disable=SC2034  # consumed by sched_diag_ack_report
+    SCHED_LAST_ACK_RECORD=failed
+  }
+  sched_diag_ack_report "$RV_COMMITTED" "$ID"
 fi
 
 if [ "$RETRY_REVIEW_DISPATCH" -eq 1 ] && [ "$REVIEW_DISPATCHED" -eq 1 ]; then

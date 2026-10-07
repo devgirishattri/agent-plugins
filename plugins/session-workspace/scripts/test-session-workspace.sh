@@ -4420,6 +4420,13 @@ else
   fail "schema v5 environments and optional Jev regressions" "see unittest output"
 fi
 
+# Tier 1.3a hook diagnostics (registry completeness, DIAG protocol, adapter tests).
+if bash "$HERE/test-hook-diagnostics.sh"; then
+  pass "hook diagnostics: registry completeness and strict-v1 DIAG protocol (test-hook-diagnostics.sh)"
+else
+  fail "hook diagnostics: registry completeness and strict-v1 DIAG protocol (test-hook-diagnostics.sh)" "see test-hook-diagnostics.sh output"
+fi
+
 echo "session-workspace tests: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then
   echo

@@ -257,8 +257,11 @@ class SecretRoles(unittest.TestCase):
         copied = self.root / "scripts"
         shutil.copytree(HERE, copied)
         (copied / "secret-policy.jq").unlink(missing_ok=True)
+        # Run from the copy: jq also resolves modules relative to the working
+        # directory, so launching from the real scripts/ dir would find the
+        # deleted secret-policy.jq there and mask the failure under test.
         result = subprocess.run(["bash", str(copied / "workspace-doctor.sh"), "--config", str(self.path), "--json"],
-                                capture_output=True, text=True, env=self.env, timeout=60)
+                                capture_output=True, text=True, env=self.env, timeout=60, cwd=str(copied))
         checks = {c["id"]: c for c in json.loads(result.stdout)["checks"]}
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(checks["secrets.visibility"]["status"], "ERROR")

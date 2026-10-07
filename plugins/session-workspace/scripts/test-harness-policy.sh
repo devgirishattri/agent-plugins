@@ -236,13 +236,13 @@ as_exec_v3() { expect "$1" executor "$EXEC_PANE" "$CHILD" "$V3_CONFIG" enforce "
 
 echo "== decision object shape =="
 OUT="$(run_policy reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(edit_payload src/file.ts)")"
-if printf '%s' "$OUT" | jq -e 'keys == ["active","decision","mode","pane","profile","reason","role","rule","tool"]' >/dev/null 2>&1; then
+if printf '%s' "$OUT" | jq -e 'keys == ["active","decision","diagnostic","mode","pane","profile","reason","role","rule","tool"]' >/dev/null 2>&1; then
   pass "decision JSON has exactly the fixed sorted key set"
 else
   fail "decision JSON has exactly the fixed sorted key set" "$OUT"
 fi
 EXPECT_JSON="$(jq -cn --arg pane "$REVIEW_PANE" '{active:true,decision:"deny",mode:"enforce",pane:$pane,profile:"strict-v1",reason:"reviewer panes cannot edit, write, patch, move, or delete files",role:"reviewer",rule:"reviewer.readonly",tool:"Edit"}')"
-if [ "$OUT" = "$EXPECT_JSON" ]; then
+if [ "$(printf '%s' "$OUT" | jq -cS 'del(.diagnostic)')" = "$EXPECT_JSON" ] && printf '%s' "$OUT" | jq -e '.diagnostic.schema == "diag/1" and .diagnostic.reason == "hook.reviewer.readonly"' >/dev/null 2>&1; then
   pass "decision JSON is byte-stable (compact, sorted keys)"
 else
   fail "decision JSON is byte-stable (compact, sorted keys)" "got=$OUT want=$EXPECT_JSON"
@@ -278,7 +278,7 @@ assert_rendering_decision_parity "Codex rendering flag preserves integrity deny 
 
 echo "== inactive contract (true no-op) =="
 OUT="$(printf '%s' "$(bash_payload 'rm -rf /')" | env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_HARNESS_MODE "$PY" "$POLICY" --decision-json)"
-if [ "$OUT" = '{"active":false,"decision":"allow","mode":"","pane":"","profile":"","reason":"harness is not active","role":"","rule":"inactive","tool":""}' ]; then
+if [ "$OUT" = '{"active":false,"decision":"allow","diagnostic":null,"mode":"","pane":"","profile":"","reason":"harness is not active","role":"","rule":"inactive","tool":""}' ]; then
   pass "no SESSION_WORKSPACE_CONFIG is a true no-op with the inactive object"
 else
   fail "no SESSION_WORKSPACE_CONFIG is a true no-op with the inactive object" "$OUT"
@@ -659,7 +659,12 @@ as_exec "helper behind env wrapper is denied" "$(bash_payload "env bash $SEND $M
 as_exec "helper behind exec is denied" "$(bash_payload "exec bash $SEND $MASTER_PANE hi")" '.decision == "deny" and .rule == "helper.launch"'
 as_exec "helper run via sh instead of bash is denied" "$(bash_payload "sh $SEND $MASTER_PANE hi")" '.decision == "deny" and .rule == "helper.launch"'
 as_exec "helper executed directly (no bash) is denied" "$(bash_payload "$SEND $MASTER_PANE hi")" '.decision == "deny" and .rule == "helper.launch"'
-as_exec "helper naming another installed script as an argument is denied" "$(bash_payload "bash $SEND $MASTER_PANE $STALE_SEND")" '.decision == "deny" and .rule == "helper.argv"'
+# Tier 1.4 H4 rewrite: a send-message body is inert free text, so naming another
+# installed script THERE is now allowed; the refusal moves to operand slots the
+# helper grammar does not classify as free text (target, prompt-file operand).
+as_exec "helper naming another installed script as a prompt-file operand is denied" "$(bash_payload "bash $DISPATCH $MASTER_PANE $STALE_SEND")" '.decision == "deny" and .rule == "helper.argv"'
+as_exec "helper naming another installed script as the send target is denied" "$(bash_payload "bash $SEND $STALE_SEND hi")" '.decision == "deny" and .rule == "helper.argv"'
+as_exec "helper naming another installed script inside a send-message body is inert text and allowed (H4)" "$(bash_payload "bash $SEND $MASTER_PANE $STALE_SEND")" '.decision == "allow"'
 as_exec "helper with a multi-line argument is denied" "$(jq -cn --arg c "bash $SEND $MASTER_PANE 'line one
 line two'" '{tool_name:"Bash",tool_input:{command:$c}}')" '.decision == "deny" and (.rule == "helper.segment" or .rule == "helper.argv")'
 
@@ -1472,6 +1477,302 @@ if [ "$STATUS" -eq 2 ] && printf '%s' "$OUT" | grep -q '^Usage:'; then
 else
   fail "duplicate rendering flag prints usage and exits 2" "status=$STATUS $OUT"
 fi
+
+# --- Tier 1.4 (strict-v1 easing H1 + H4) --------------------------------------
+# H1: a quoted or backslash-escaped literal path with *?{}[ no longer raises
+# path.dynamic when the RAW scanner proved the metacharacters are not shell
+# globs. Git still globs pathspecs by itself, so a glob-bearing git operand is
+# admitted only under a parsed global --literal-pathspecs. $ and backtick stay
+# dynamic, helper operands never get the easing, and every refusal below sits
+# beside an allowed valid-path control.
+echo "== Tier 1.4 H1: quoted literal paths =="
+H1_ALLOW='.decision == "allow"'
+H1_DYN='.decision == "deny" and .rule == "path.dynamic"'
+mkdir -p "$CHILD/src/app/(x)/[id]" "$CHILD/src/app/[id]" "$CHILD/src/app/i" "$CHILD/src/app/d" "$ROOT/component-b/[id]"
+for f in "src/app/(x)/[id]/page.tsx" "src/app/[id]/page.tsx" "src/app/i/page.tsx" "src/app/d/page.tsx"; do printf 'x\n' > "$CHILD/$f"; done
+printf 'x\n' > "$ROOT/component-b/[id]/page.tsx"
+ln -s README.md "$CHILD/ok[1]"
+ln -s "$ROOT/component-b" "$CHILD/lnk[1]"
+ln -s "$ROOT/component-b" "$CHILD/src/app/lk"
+# executor
+as_exec "H1 control: executor plain literal path is allowed" "$(bash_payload "cat src/app/i/page.tsx")" "$H1_ALLOW"
+as_exec "H1 executor quoted route path with ( ) and [ ] is allowed" "$(bash_payload "cat 'src/app/(x)/[id]/page.tsx'")" "$H1_ALLOW"
+as_exec "H1 executor double-quoted bracket path is allowed" "$(bash_payload 'cat "src/app/[id]/page.tsx"')" "$H1_ALLOW"
+as_exec "H1 executor backslash-escaped brackets are literal and allowed (scanner treats them as non-glob)" "$(bash_payload 'cat src/app/\[id\]/page.tsx')" "$H1_ALLOW"
+as_exec "H1 executor absolute quoted bracket path inside cwd is allowed" "$(bash_payload "cat '$CHILD/src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_exec "H1 executor later segment of a composed command may carry a quoted bracket path" "$(bash_payload "ls src && cat 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_exec "H1 executor unquoted glob is still denied" "$(bash_payload 'cat src/*.ts')" "$H1_DYN"
+as_exec "H1 executor unquoted bracket glob is still denied" "$(bash_payload 'cat src/app/[id]/page.tsx')" "$H1_DYN"
+as_exec "H1 executor unquoted brace expansion is still denied" "$(bash_payload 'cat src/app/{i,d}/page.tsx')" "$H1_DYN"
+as_exec "H1 executor mixed quoted and unquoted glob tokens are denied" "$(bash_payload "cat 'src/app/[id]/page.tsx' src/b*")" "$H1_DYN"
+as_exec "H1 control: the same quoted token without the unquoted glob is allowed" "$(bash_payload "cat 'src/app/[id]/page.tsx' src/app/i/page.tsx")" "$H1_ALLOW"
+as_exec "H1 executor single-quoted dollar path is still dynamic" "$(bash_payload "cat '\$HOME/x'")" "$H1_DYN"
+as_exec "H1 executor quoted dollar plus bracket path is still dynamic" "$(bash_payload "cat '\$HOME/src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor double-quoted dollar path is still dynamic" "$(bash_payload 'cat "$HOME/x"')" "$H1_DYN"
+as_exec "H1 executor backtick text in single quotes is still dynamic for a path" "$(bash_payload "cat 'src/\`id\`/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor quoted bracket path outside containment is denied" "$(bash_payload "cat '$ROOT/component-b/[id]/page.tsx'")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "H1 executor quoted bracket path through a symlink escape is denied" "$(bash_payload "cat 'escape-link/[id]/page.tsx'")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "H1 executor quoted path through a symlink inside src escaping is denied" "$(bash_payload "cat 'src/app/lk/[id]/page.tsx'")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "H1 executor bare quoted name that is an escaping symlink is denied" "$(bash_payload "cat 'lnk[1]'")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "H1 control: bare quoted name that is a contained symlink is allowed" "$(bash_payload "cat 'ok[1]'")" "$H1_ALLOW"
+as_exec "H1 executor quoted glob path with a .. component is denied" "$(bash_payload "cat 'src/app/*/../../README.md'")" "$H1_DYN"
+as_exec "H1 control: a .. component without glob characters keeps its old allow" "$(bash_payload "cat src/app/../../README.md")" "$H1_ALLOW"
+as_exec "H1 executor quoted bracket executable path is not eased" "$(bash_payload "'./src/app/[id]/run.sh'")" "$H1_DYN"
+as_exec "H1 executor env --chdir with a bracket is not eased" "$(bash_payload "env --chdir='src/app/[id]' ls")" "$H1_DYN"
+as_exec "H1 control: env --chdir to a plain directory is allowed" "$(bash_payload "env --chdir=src/app/i ls")" "$H1_ALLOW"
+# reviewer
+as_review "H1 control: reviewer plain literal read is allowed" "$(bash_payload "cat src/app/i/page.tsx")" "$H1_ALLOW"
+as_review "H1 reviewer quoted route path with ( ) and [ ] is allowed" "$(bash_payload "cat 'src/app/(x)/[id]/page.tsx'")" "$H1_ALLOW"
+as_review "H1 reviewer shasum of a quoted bracket path is allowed" "$(bash_payload "shasum -a 256 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_review "H1 reviewer backslash-escaped brackets are literal and allowed" "$(bash_payload 'cat src/app/\[id\]/page.tsx')" "$H1_ALLOW"
+as_review "H1 reviewer unquoted glob is still denied" "$(bash_payload 'cat src/*.ts')" "$H1_DYN"
+as_review "H1 reviewer mixed quoted and unquoted glob tokens are denied" "$(bash_payload "cat 'src/app/[id]/page.tsx' src/b*")" "$H1_DYN"
+as_review "H1 reviewer single-quoted dollar path is still dynamic" "$(bash_payload "cat '\$HOME/x'")" "$H1_DYN"
+as_review "H1 reviewer quoted bracket path through a symlink escape is denied" "$(bash_payload "cat 'escape-link/[id]/page.tsx'")" '.decision == "deny" and .rule == "reviewer.path"'
+as_review "H1 reviewer quoted bracket path outside the reviewer roots is denied" "$(bash_payload "cat '$ROOT/component-b/[id]/page.tsx'")" '.decision == "deny" and .rule == "reviewer.path"'
+as_review "H1 reviewer quoted glob path with a .. component is denied" "$(bash_payload "cat 'src/app/*/../../README.md'")" "$H1_DYN"
+as_review "H1 reviewer rg with a quoted bracket path operand is allowed" "$(bash_payload "rg --no-config needle 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+# git pathspecs: shell quoting does not make them literal
+as_exec "H1 control: executor git add of a plain path needs no pathspec option" "$(bash_payload "git add -- src/app/i/page.tsx")" "$H1_ALLOW"
+as_exec "H1 executor git --literal-pathspecs add of a quoted bracket path is allowed" "$(bash_payload "git --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_exec "H1 executor git --literal-pathspecs add with a route group path is allowed" "$(bash_payload "git --literal-pathspecs add -- 'src/app/(x)/[id]/page.tsx'")" "$H1_ALLOW"
+as_exec "H1 executor git -C . --literal-pathspecs add is allowed" "$(bash_payload "git -C . --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_exec "H1 executor git --literal-pathspecs -C . add is allowed" "$(bash_payload "git --literal-pathspecs -C . add -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_exec "H1 executor git --literal-pathspecs commit with a quoted bracket pathspec is allowed" "$(bash_payload "git --literal-pathspecs commit -m 'route [id]' -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_exec "H1 executor git add of a quoted bracket path without --literal-pathspecs is denied" "$(bash_payload "git add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git add of an escaped bracket path without --literal-pathspecs is denied" "$(bash_payload 'git add -- src/app/\[id\]/page.tsx')" "$H1_DYN"
+as_exec "H1 executor git -C . add of a quoted bracket path without --literal-pathspecs is denied" "$(bash_payload "git -C . add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor --literal-pathspecs after the subcommand is not a global option and is denied" "$(bash_payload "git add --literal-pathspecs -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor --literal-pathspecs given as the -C value is not the option and is denied" "$(bash_payload "git -C --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs with --glob-pathspecs is denied" "$(bash_payload "git --literal-pathspecs --glob-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --glob-pathspecs then --literal-pathspecs is denied" "$(bash_payload "git --glob-pathspecs --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs with --icase-pathspecs is denied" "$(bash_payload "git --literal-pathspecs --icase-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs with --noglob-pathspecs is denied" "$(bash_payload "git --literal-pathspecs --noglob-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs add of :(glob) magic is denied" "$(bash_payload "git --literal-pathspecs add ':(glob)src/*'")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs add of :(icase) magic beside a bracket path is denied" "$(bash_payload "git --literal-pathspecs add -- ':(icase)src/app/i/page.tsx' 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs add of :/ top-level magic is denied" "$(bash_payload "git --literal-pathspecs add -- ':/src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --pathspec-from-file beside a bracket path is denied" "$(bash_payload "git --literal-pathspecs add --pathspec-from-file=list.txt -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --pathspec-from-file value form beside a bracket path is denied" "$(bash_payload "git --literal-pathspecs add --pathspec-from-file list.txt 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git -c before --literal-pathspecs (unparsed global form) is denied" "$(bash_payload "git -c core.quotepath=off --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs unquoted bracket glob is still denied" "$(bash_payload "git --literal-pathspecs add -- src/app/[id]/page.tsx")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs quoted \$ path is still dynamic" "$(bash_payload "git --literal-pathspecs add -- '\$HOME/src/[id]'")" "$H1_DYN"
+as_exec "H1 executor git --literal-pathspecs quoted bracket path outside containment is denied" "$(bash_payload "git --literal-pathspecs add -- '$ROOT/component-b/[id]/page.tsx'")" '.decision == "deny" and .rule == "executor.containment"'
+# Round 1: a -C other than `.` now ends the grant, so this refusal moved from
+# executor.containment to path.dynamic (still denied). The control keeps the
+# containment rule for the same -C without a glob operand.
+as_exec "H1 executor git -C outside the checkout stays denied with --literal-pathspecs" "$(bash_payload "git --literal-pathspecs -C ../component-b add -- 'x[id]/page.tsx'")" "$H1_DYN"
+as_exec "H1 control: executor git -C outside the checkout with a plain pathspec is denied by containment" "$(bash_payload "git --literal-pathspecs -C ../component-b add -- x.txt")" '.decision == "deny" and .rule == "executor.containment"'
+as_review "H1 control: reviewer git log of a plain path is allowed" "$(bash_payload "git log -- src/app/i/page.tsx")" "$H1_ALLOW"
+as_review "H1 reviewer git --literal-pathspecs log of a quoted bracket path is allowed" "$(bash_payload "git --literal-pathspecs log --oneline -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_review "H1 reviewer git -C . --literal-pathspecs diff of a quoted bracket path is allowed" "$(bash_payload "git -C . --literal-pathspecs diff -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_review "H1 reviewer git log of a quoted bracket path without --literal-pathspecs is denied" "$(bash_payload "git log -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_review "H1 reviewer git --literal-pathspecs --glob-pathspecs log is denied" "$(bash_payload "git --literal-pathspecs --glob-pathspecs log -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+as_review "H1 reviewer git --literal-pathspecs log of :(glob) magic is denied" "$(bash_payload "git --literal-pathspecs log -- ':(glob)src/*.tsx'")" "$H1_DYN"
+as_review "H1 reviewer git --literal-pathspecs unquoted glob is denied" "$(bash_payload "git --literal-pathspecs log -- src/*.tsx")" "$H1_DYN"
+as_review "H1 reviewer git --literal-pathspecs still refuses a write subcommand" "$(bash_payload "git --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" '.decision == "deny" and .rule == "reviewer.git"'
+as_review "H1 reviewer git --literal-pathspecs bracket path through a symlink escape is denied" "$(bash_payload "git --literal-pathspecs log -- 'escape-link/[id]/page.tsx'")" '.decision == "deny" and .rule == "reviewer.path"'
+# --- Tier 1.4 round 1: grant scope (R1 -C/global options, R2 subcommands, R3 bare
+# names, deviation 4 magic). Every refusal is paired with an allowed control.
+echo "== Tier 1.4 H1 round 1: git grant scope =="
+RG_OUT="$TMPROOT/rg-outside"
+mkdir -p "$RG_OUT" "$CHILD/sub[1]"
+printf 'outside secret\n' > "$RG_OUT/probe.txt"
+ln -s "$RG_OUT" "$CHILD/sub[1]/leak"
+printf 'local control\n' > "$CHILD/local.txt"
+printf 'p\n' > "$CHILD/plain.txt"; printf 'p\n' > "$CHILD/plain2.txt"; printf 'b\n' > "$CHILD/a[1]"
+# R1: -C changes the operand base; only no -C or `-C .` may use the grant.
+R1P="diff --no-index -- leak/probe.txt local.txt"
+for role in exec review; do
+  if [ "$role" = exec ]; then runner=as_exec; else runner=as_review; fi
+  "$runner" "R1 $role: --literal-pathspecs -C './sub[1]' diff --no-index through a symlink is refused" "$(bash_payload "git --literal-pathspecs -C './sub[1]' $R1P")" "$H1_DYN"
+  "$runner" "R1 $role: -C './sub[1]' before --literal-pathspecs is refused" "$(bash_payload "git -C './sub[1]' --literal-pathspecs $R1P")" "$H1_DYN"
+  "$runner" "R1 $role: bare -C 'sub[1]' (no slash, no --literal-pathspecs; escaped on the 1.3a baseline) is refused" "$(bash_payload "git -C 'sub[1]' $R1P")" "$H1_DYN"
+  "$runner" "R1 $role: bare -C 'sub[1]' with --literal-pathspecs is refused" "$(bash_payload "git --literal-pathspecs -C 'sub[1]' $R1P")" "$H1_DYN"
+  "$runner" "R1 $role: attached -C'sub[1]' is refused" "$(bash_payload "git --literal-pathspecs -C'sub[1]' $R1P")" "$H1_DYN"
+  "$runner" "R1 $role control: --literal-pathspecs -C . diff --no-index of contained files is allowed" "$(bash_payload "git --literal-pathspecs -C . diff --no-index -- local.txt local.txt")" "$H1_ALLOW"
+  "$runner" "R1 $role control: -C . before --literal-pathspecs is allowed" "$(bash_payload "git -C . --literal-pathspecs diff --no-index -- local.txt local.txt")" "$H1_ALLOW"
+  "$runner" "R1 $role control: plain contained diff --no-index is allowed" "$(bash_payload "git diff --no-index -- local.txt local.txt")" "$H1_ALLOW"
+  "$runner" "R1 $role control: -C . with a quoted bracket pathspec is allowed" "$(bash_payload "git --literal-pathspecs -C . diff -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+  "$runner" "R1 $role: -C . leaves the symlink check on a bracket path through the symlink in force" "$(bash_payload "git --literal-pathspecs -C . diff --no-index -- 'sub[1]/leak/probe.txt' local.txt")" '.decision == "deny" and (.rule == "executor.containment" or .rule == "reviewer.path")'
+  for opt in "--work-tree=sub" "--git-dir=.git" "--namespace=ns" "-c core.quotepath=off" "--no-pager" "--bare"; do
+    "$runner" "R1 $role: extra global option [$opt] disables the grant for a bracket pathspec" "$(bash_payload "git --literal-pathspecs $opt log -- 'a[1]'")" "$H1_DYN"
+  done
+done
+as_exec "R1 exec control: the same extra global options with a plain pathspec stay allowed" "$(bash_payload "git -c core.quotepath=off --no-pager status -- plain.txt")" "$H1_ALLOW"
+as_review "R1 review control: --no-pager with a plain pathspec stays allowed" "$(bash_payload "git --no-pager log -- plain.txt")" "$H1_ALLOW"
+as_exec "R1 exec: -C outside the checkout stays denied (containment of the -C value itself)" "$(bash_payload "git -C ../component-b status -- plain.txt")" '.decision == "deny" and .rule == "executor.containment"'
+# R2: enumerated subcommands only, classified pathspec positions only.
+BR="src/app/[id]/page.tsx"
+for sub in add rm diff ls-files status restore checkout log show commit; do
+  as_exec "R2 exec: git --literal-pathspecs $sub of a quoted bracket pathspec is allowed" "$(bash_payload "git --literal-pathspecs $sub -- '$BR'")" "$H1_ALLOW"
+  as_exec "R2 exec: git $sub of a quoted bracket pathspec without --literal-pathspecs is refused" "$(bash_payload "git $sub -- '$BR'")" "$H1_DYN"
+done
+for sub in diff ls-files status log show; do
+  as_review "R2 review: git --literal-pathspecs $sub of a quoted bracket pathspec is allowed" "$(bash_payload "git --literal-pathspecs $sub -- '$BR'")" "$H1_ALLOW"
+  as_review "R2 review: git $sub of a quoted bracket pathspec without --literal-pathspecs is refused" "$(bash_payload "git $sub -- '$BR'")" "$H1_DYN"
+done
+for sub in arbitrary co mv blame ls-tree grep; do
+  as_exec "R2 exec: git --literal-pathspecs $sub (not enumerated) with a bracket pathspec is refused" "$(bash_payload "git --literal-pathspecs $sub -- '$BR'")" "$H1_DYN"
+  as_exec "R2 exec control: git --literal-pathspecs $sub with a plain pathspec is not refused by the grant rule" "$(bash_payload "git --literal-pathspecs $sub -- plain.txt")" "$H1_ALLOW"
+done
+as_exec "R2 exec: unsupported subcommand with a bare bracket operand after -- is refused" "$(bash_payload "git --literal-pathspecs arbitrary -- 'a[1]'")" "$H1_DYN"
+as_review "R2 review: git --literal-pathspecs arbitrary -- bracket pathspec is denied" "$(bash_payload "git --literal-pathspecs arbitrary -- '$BR'")" '.decision == "deny"'
+as_review "R2 review: git grep with a quoted regex pattern and a plain pathspec is allowed (pattern is inert)" "$(bash_payload "git grep '[a-z]+' -- plain.txt")" "$H1_ALLOW"
+as_review "R2 review: git grep with a quoted regex and a bracket pathspec after -- is refused" "$(bash_payload "git grep '[a-z]+' -- 'a[1]'")" "$H1_DYN"
+# classification: option/format/message/revision values are not pathspecs
+as_review "R2 review: log --format='[%h]' with a plain pathspec needs no option (format is inert)" "$(bash_payload "git log --format='[%h]' -- plain.txt")" "$H1_ALLOW"
+as_review "R2 review: log --format='[%h]' -- bracket pathspec with --literal-pathspecs is allowed" "$(bash_payload "git --literal-pathspecs log --format='[%h]' -- '$BR'")" "$H1_ALLOW"
+as_review "R2 review: log --format='[%h]' -- bracket pathspec without --literal-pathspecs is refused (the pathspec, not the format)" "$(bash_payload "git log --format='[%h]' -- '$BR'")" "$H1_DYN"
+as_review "R2 review: log --grep with a separate bracket value and a plain pathspec is allowed" "$(bash_payload "git log --grep '[wip]' -- plain.txt")" "$H1_ALLOW"
+as_review "R2 review: log -n 3 style separate value does not matter, revision HEAD@{1} is not a pathspec" "$(bash_payload "git log 'HEAD@{1}' -- plain.txt")" "$H1_ALLOW"
+as_review "R2 review: show of a revision with brace syntax and no -- is allowed" "$(bash_payload "git show 'HEAD^{tree}'")" "$H1_ALLOW"
+as_review "R2 review: a revision before -- is not a pathspec (diff 'v[1]' -- plain.txt)" "$(bash_payload "git diff 'v[1]' -- plain.txt")" "$H1_ALLOW"
+as_review "R2 review: the same brace text AFTER -- is a pathspec and is refused" "$(bash_payload "git log -- 'HEAD@{1}'")" "$H1_DYN"
+as_exec "R2 exec: commit -m with a bracket message and no pathspec is allowed (message is inert)" "$(bash_payload "git commit -m 'fix [id] route'")" "$H1_ALLOW"
+as_exec "R2 exec: commit -m 'fix [id]' -- bracket pathspec without --literal-pathspecs is refused" "$(bash_payload "git commit -m 'fix [id]' -- '$BR'")" "$H1_DYN"
+as_exec "R2 exec: commit --message=[wip] with a plain pathspec is allowed" "$(bash_payload "git commit --message='[wip]' -- plain.txt")" "$H1_ALLOW"
+as_exec "R2 exec: commit -am with a bracket message and a bare bracket operand is refused" "$(bash_payload "git commit -am '[wip]' 'a[1]'")" "$H1_DYN"
+# R3: a bare glob-bearing pathspec (no slash) needs --literal-pathspecs, existing or missing.
+as_exec "R3 exec: git add -- 'a[1]' (existing, bare) without --literal-pathspecs is refused" "$(bash_payload "git add -- 'a[1]'")" "$H1_DYN"
+as_exec "R3 exec: git add -- 'b[1]' (missing, bare) without --literal-pathspecs is refused" "$(bash_payload "git add -- 'b[1]'")" "$H1_DYN"
+as_exec "R3 exec: git add 'a[1]' (no --) without --literal-pathspecs is refused" "$(bash_payload "git add 'a[1]'")" "$H1_DYN"
+as_exec "R3 exec: git add -- before-and-after bare operands, one with brackets, is refused" "$(bash_payload "git add plain.txt -- 'b[1]'")" "$H1_DYN"
+as_exec "R3 exec control: git --literal-pathspecs add -- 'a[1]' (existing) is allowed" "$(bash_payload "git --literal-pathspecs add -- 'a[1]'")" "$H1_ALLOW"
+as_exec "R3 exec control: git --literal-pathspecs add -- 'b[1]' (missing) is allowed" "$(bash_payload "git --literal-pathspecs add -- 'b[1]'")" "$H1_ALLOW"
+as_exec "R3 exec control: git --literal-pathspecs add 'a[1]' (no --) is allowed" "$(bash_payload "git --literal-pathspecs add 'a[1]'")" "$H1_ALLOW"
+as_exec "R3 exec control: plain names are allowed without the option" "$(bash_payload "git add -- plain.txt plain2.txt")" "$H1_ALLOW"
+as_exec "R3 exec control: plain names are allowed with the option" "$(bash_payload "git --literal-pathspecs add -- plain.txt plain2.txt")" "$H1_ALLOW"
+as_exec "R3 exec: a bare bracket name that is an escaping symlink is still contained-checked under the grant" "$(bash_payload "git --literal-pathspecs add -- 'lnk[1]'")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "R3 exec control: a bare bracket name that is a contained symlink is allowed under the grant" "$(bash_payload "git --literal-pathspecs add -- 'ok[1]'")" "$H1_ALLOW"
+as_review "R3 review: git log -- 'a[1]' (existing, bare) without --literal-pathspecs is refused" "$(bash_payload "git log -- 'a[1]'")" "$H1_DYN"
+as_review "R3 review: git log -- 'b[1]' (missing, bare) without --literal-pathspecs is refused" "$(bash_payload "git log -- 'b[1]'")" "$H1_DYN"
+as_review "R3 review: git status 'a[1]' (no --) without --literal-pathspecs is refused" "$(bash_payload "git status 'a[1]'")" "$H1_DYN"
+as_review "R3 review control: git --literal-pathspecs log -- 'a[1]' (existing) is allowed" "$(bash_payload "git --literal-pathspecs log -- 'a[1]'")" "$H1_ALLOW"
+as_review "R3 review control: git --literal-pathspecs log -- 'b[1]' (missing) is allowed" "$(bash_payload "git --literal-pathspecs log -- 'b[1]'")" "$H1_ALLOW"
+as_review "R3 review control: plain names are allowed without the option" "$(bash_payload "git log -- plain.txt plain2.txt")" "$H1_ALLOW"
+as_review "R3 review: a bare bracket name that is an escaping symlink is denied under the grant" "$(bash_payload "git --literal-pathspecs log -- 'lnk[1]'")" '.decision == "deny" and .rule == "reviewer.path"'
+# Deviation 4: pathspec magic is refused inside the grant even with no glob character.
+as_exec "D4 exec: --literal-pathspecs add -- ':(icase)README.md' is refused" "$(bash_payload "git --literal-pathspecs add -- ':(icase)README.md'")" "$H1_DYN"
+as_exec "D4 exec: --literal-pathspecs add ':/README.md' (no --) is refused" "$(bash_payload "git --literal-pathspecs add ':/README.md'")" "$H1_DYN"
+as_exec "D4 exec control: --literal-pathspecs add -- README.md is allowed" "$(bash_payload "git --literal-pathspecs add -- README.md")" "$H1_ALLOW"
+as_review "D4 review: --literal-pathspecs log -- ':(icase)README.md' is refused" "$(bash_payload "git --literal-pathspecs log -- ':(icase)README.md'")" "$H1_DYN"
+as_review "D4 review control: --literal-pathspecs log -- README.md is allowed" "$(bash_payload "git --literal-pathspecs log -- README.md")" "$H1_ALLOW"
+for conflict in --glob-pathspecs --icase-pathspecs --noglob-pathspecs; do
+  as_exec "D4 exec: --literal-pathspecs $conflict with a bare bracket pathspec is refused" "$(bash_payload "git --literal-pathspecs $conflict add -- 'a[1]'")" "$H1_DYN"
+done
+as_exec "D4 exec: --pathspec-from-file beside a bare bracket pathspec is refused" "$(bash_payload "git --literal-pathspecs add --pathspec-from-file=list.txt -- 'a[1]'")" "$H1_DYN"
+# Real-git premise for R1: the escape exists for real, and `-C .` has none.
+GIT_ENV=(env -i HOME="$TMPROOT" PATH="$PATH" GIT_CONFIG_NOSYSTEM=1)
+mkdir -p "$TMPROOT/rg-real/sub[1]" && printf 'local control\n' > "$TMPROOT/rg-real/local.txt" && ln -s "$RG_OUT" "$TMPROOT/rg-real/sub[1]/leak"
+GOT="$(cd "$TMPROOT/rg-real" && "${GIT_ENV[@]}" git --literal-pathspecs -C './sub[1]' diff --no-index -- leak/probe.txt ../local.txt 2>/dev/null)"
+if printf '%s' "$GOT" | grep -q 'outside secret'; then pass "R1 real git: -C './sub[1]' diff --no-index really reads through the symlink (premise)"; else fail "R1 real git: -C './sub[1]' diff --no-index really reads through the symlink (premise)" "$GOT"; fi
+GOT="$(cd "$TMPROOT/rg-real" && "${GIT_ENV[@]}" git --literal-pathspecs -C . diff --no-index -- local.txt local.txt 2>&1; echo "rc=$?")"
+if [ "$GOT" = "rc=0" ]; then pass "R1 real git control: -C . diff --no-index of a contained file reads nothing outside"; else fail "R1 real git control: -C . diff --no-index of a contained file reads nothing outside" "$GOT"; fi
+
+# helper operands never get the easing (control: an existing prompt file is allowed)
+printf 'prompt\n' > "$TMPROOT/prompt-ok.md"
+mkdir -p "$TMPROOT/br[1]" && printf 'prompt\n' > "$TMPROOT/br[1]/prompt.md"
+as_exec "H1 control: executor dispatch of an existing prompt file is allowed" "$(bash_payload "bash $DISPATCH $MASTER_PANE $TMPROOT/prompt-ok.md")" "$H1_ALLOW"
+as_exec "H1 executor dispatch prompt operand with brackets is not eased" "$(bash_payload "bash $DISPATCH $MASTER_PANE '$TMPROOT/br[1]/prompt.md'")" "$H1_DYN"
+as_review "H1 reviewer dispatch prompt operand with brackets is not eased" "$(bash_payload "bash $DISPATCH $MASTER_PANE '$TMPROOT/br[1]/prompt.md'")" "$H1_DYN"
+as_review "H1 reviewer pr-status snapshot operand with brackets is not eased" "$(bash_payload "bash $CLAUDE_CACHE/session-workspace/3.0.0/scripts/pr-status.sh --snapshot '$TMPROOT/br[1]/prompt.md'")" '.decision == "deny"'
+
+# Real-git evidence for the premise: without --literal-pathspecs the quoted
+# pathspec globs and stages the sibling directories i and d too; with it, only
+# the directory literally named [id]. The decisions above are policy-level only;
+# this block runs plain git in a throwaway repository and does not exercise the hook.
+echo "== Tier 1.4 H1: literal pathspec staging (real git) =="
+make_pathspec_repo() {
+  local dir="$1"
+  rm -rf "$dir" && mkdir -p "$dir/src/app/[id]" "$dir/src/app/i" "$dir/src/app/d"
+  printf 'x\n' > "$dir/src/app/[id]/page.tsx"; printf 'x\n' > "$dir/src/app/i/page.tsx"; printf 'x\n' > "$dir/src/app/d/page.tsx"
+  env -i HOME="$TMPROOT" PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 git -C "$dir" init -q
+}
+staged_after() { # staged_after DIR GIT-ARGS...
+  local dir="$1"; shift
+  env -i HOME="$TMPROOT" PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 git -C "$dir" "$@" >/dev/null 2>&1
+  env -i HOME="$TMPROOT" PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 git -C "$dir" diff --cached --name-only 2>/dev/null | sort | tr '\n' ' '
+}
+make_pathspec_repo "$TMPROOT/pathspec-literal"
+GOT="$(staged_after "$TMPROOT/pathspec-literal" --literal-pathspecs add -- 'src/app/[id]/page.tsx')"
+if [ "$GOT" = "src/app/[id]/page.tsx " ]; then pass "H1 real git: --literal-pathspecs stages only the directory named [id]"; else fail "H1 real git: --literal-pathspecs stages only the directory named [id]" "staged: $GOT"; fi
+make_pathspec_repo "$TMPROOT/pathspec-glob"
+GOT="$(staged_after "$TMPROOT/pathspec-glob" add -- 'src/app/[id]/page.tsx')"
+if [ "$GOT" = "src/app/[id]/page.tsx src/app/d/page.tsx src/app/i/page.tsx " ]; then pass "H1 real git control: without --literal-pathspecs the quoted pathspec also stages i and d"; else fail "H1 real git control: without --literal-pathspecs the quoted pathspec also stages i and d" "staged: $GOT"; fi
+
+# --- Tier 1.4 H4: inert note and message text may mention a cache path ---------
+echo "== Tier 1.4 H4: inert free text vs cache-path substring =="
+H4_ARGV='.decision == "deny" and .rule == "helper.argv"'
+CP='/x/plugins/cache/foo/scripts/h.sh'
+as_review "H4 control: reviewer task-block with a plain reason is allowed" "$(bash_payload "bash $SCHED/task-block.sh t-1234 'blocked by hook'")" "$H1_ALLOW"
+as_review "H4 reviewer task-block reason naming a cache path is allowed" "$(bash_payload "bash $SCHED/task-block.sh t-1234 'blocked by hook at $CP'")" "$H1_ALLOW"
+as_review "H4 reviewer task-done note naming a cache path is allowed" "$(bash_payload "bash $SCHED/task-done.sh t-1234 'approved; see /x/plugins/cache/y'")" "$H1_ALLOW"
+as_exec "H4 executor task-review note naming a cache path is allowed" "$(bash_payload "bash $SCHED/task-review.sh t-1234 'ready; hook $CP'")" "$H1_ALLOW"
+as_review "H4 contracted --generation note naming /plugins/cache/ is allowed" "$(bash_payload "bash $SCHED/task-done.sh ct-good --generation 2 'note mentions /plugins/cache/'")" "$H1_ALLOW"
+as_review "H4 control: contracted --generation without a cache path is allowed" "$(bash_payload "bash $SCHED/task-done.sh ct-good --generation 2 'note mentions nothing'")" "$H1_ALLOW"
+as_review "H4 a single quoted note that merely starts with --force text is inert and allowed" "$(bash_payload "bash $SCHED/task-done.sh t-1234 '--force /x/plugins/cache/z'")" "$H1_ALLOW"
+as_review "H4 unquoted --force before a cache-path note is still denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --force /x/plugins/cache/z")" "$H4_ARGV"
+as_review "H4 unquoted multi-word note (more than one note operand) is still denied by the grammar" "$(bash_payload "bash $SCHED/task-block.sh t-1234 blocked by hook at $CP")" "$H4_ARGV"
+as_review "H4 flag-like first note word after --generation is still denied" "$(bash_payload "bash $SCHED/task-done.sh ct-good --generation 2 '--evil $CP'")" "$H4_ARGV"
+as_review "H4 task id naming a cache path is denied" "$(bash_payload "bash $SCHED/task-block.sh /x/plugins/cache/z 'reason'")" "$H4_ARGV"
+as_review "H4 cache path in --generation value is denied" "$(bash_payload "bash $SCHED/task-done.sh ct-good --generation /x/plugins/cache/z 'note'")" "$H4_ARGV"
+as_review "H4 --note-file naming a cache path is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file /x/plugins/cache/y/verdict.md")" "$H4_ARGV"
+as_review "H4 control: --note-file own draft is still allowed" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/verdict.md")" "$H1_ALLOW"
+as_review "H4 note with a newline naming a cache path is denied" "$(bash_payload "bash $SCHED/task-block.sh t-1234 'line one
+$CP'")" "$H4_ARGV"
+as_review "H4 note with a newline and no cache path is denied (newline rule is independent)" "$(bash_payload "bash $SCHED/task-block.sh t-1234 'line one
+line two'")" "$H4_ARGV"
+as_review "H4 reviewer send-message body naming a cache path is allowed" "$(bash_payload "bash $SEND $MASTER_PANE 'see /x/plugins/cache/y'")" "$H1_ALLOW"
+as_review "H4 control: reviewer send-message plain body is allowed" "$(bash_payload "bash $SEND $MASTER_PANE 'see the notes'")" "$H1_ALLOW"
+as_review "H4 send-message multi-word body naming a cache path is allowed" "$(bash_payload "bash $SEND $MASTER_PANE see /x/plugins/cache/y here")" "$H1_ALLOW"
+as_review "H4 send-message body with --reply-to present is allowed" "$(bash_payload "bash $SEND --reply-to cafe1234 $MASTER_PANE 'see /x/plugins/cache/y'")" "$H1_ALLOW"
+as_review "H4 send-message body with --task present is allowed" "$(bash_payload "bash $SEND --task t-1234 $MASTER_PANE 'see /x/plugins/cache/y'")" "$H1_ALLOW"
+as_exec "H4 send-message body with all options present is allowed" "$(bash_payload "bash $SEND --priority high --ttl 5 --reply-to cafe1234 --task t-1234 $MASTER_PANE 'see /x/plugins/cache/y'")" "$H1_ALLOW"
+as_review "H4 send-message flag-like body words after the target are message text and allowed" "$(bash_payload "bash $SEND $MASTER_PANE --force /x/plugins/cache/z")" "$H1_ALLOW"
+as_review "H4 send-message cache path in --reply-to value is denied" "$(bash_payload "bash $SEND --reply-to /x/plugins/cache/y $MASTER_PANE hi")" "$H4_ARGV"
+as_review "H4 send-message cache path in --task value is denied" "$(bash_payload "bash $SEND --task /x/plugins/cache/y $MASTER_PANE hi")" "$H4_ARGV"
+as_review "H4 send-message cache path as the target is denied" "$(bash_payload "bash $SEND /x/plugins/cache/y hi")" "$H4_ARGV"
+as_review "H4 send-message option-looking value after the body is not an option and stays message text" "$(bash_payload "bash $SEND $MASTER_PANE hi --reply-to /x/plugins/cache/y")" "$H1_ALLOW"
+mkdir -p "$TMPROOT/stage/plugins/cache"
+printf 'prompt\n' > "$TMPROOT/stage/plugins/cache/evil.md"; printf 'prompt\n' > "$TMPROOT/stage/ok.md"
+as_review "H4 control: dispatch of an existing prompt file outside any cache path is allowed" "$(bash_payload "bash $DISPATCH $MASTER_PANE $TMPROOT/stage/ok.md")" "$H1_ALLOW"
+as_review "H4 dispatch prompt-file operand under a cache path is denied although the file exists" "$(bash_payload "bash $DISPATCH $MASTER_PANE $TMPROOT/stage/plugins/cache/evil.md")" "$H4_ARGV"
+as_exec "H4 dispatch of a nonexistent cache-path prompt is denied" "$(bash_payload "bash $DISPATCH $MASTER_PANE /x/plugins/cache/y/evil.md")" "$H4_ARGV"
+as_review "H4 control: message-search plain pattern is allowed" "$(bash_payload "bash $CLAUDE_CACHE/session-chat/1.2.3/scripts/message-search.sh needle")" "$H1_ALLOW"
+as_review "H4 helper without an inert slot (message-search) is denied for a cache-path pattern" "$(bash_payload "bash $CLAUDE_CACHE/session-chat/1.2.3/scripts/message-search.sh /x/plugins/cache/y")" "$H4_ARGV"
+as_master "H4 control: list-sessions all is allowed" "$(bash_payload "bash $SM/list-sessions.sh all")" "$H1_ALLOW"
+as_master "H4 helper without an inert slot (list-sessions) is denied for an installed-script operand" "$(bash_payload "bash $SM/list-sessions.sh $SEND")" "$H4_ARGV"
+as_master "H4 orchestrator task-new name naming a cache path is denied (no inert slot)" "$(bash_payload "bash $SCHED/task-new.sh 'name /x/plugins/cache/y'")" "$H4_ARGV"
+as_master "H4 control: orchestrator task-new plain name is allowed" "$(bash_payload "bash $SCHED/task-new.sh 'plain name'")" "$H1_ALLOW"
+
+# Native hook shapes for both easings: the real wrapper (exit code + stderr)
+# and a Codex-shaped payload through the decision path.
+echo "== Tier 1.4: native hook shapes =="
+hook_run() { # hook_run ROLE PANE OUTFILE ERRFILE PAYLOAD
+  printf '%s' "$5" | env \
+    SESSION_WORKSPACE_CONFIG="$CONFIG" SESSION_WORKSPACE_PROJECT_ROOT="$ROOT" \
+    SESSION_WORKSPACE_PANE_NAME="$2" SESSION_WORKSPACE_ROLE="$1" \
+    SESSION_WORKSPACE_PANE_CWD="$CHILD" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+    CLAUDE_HOME="$FAKE_CLAUDE" CODEX_HOME="$FAKE_CODEX" bash "$HERE/harness-hook.sh" >"$3" 2>"$4"
+}
+hook_run executor "$EXEC_PANE" "$TMPROOT/h1.out" "$TMPROOT/h1.err" "$(bash_payload "git --literal-pathspecs add -- 'src/app/[id]/page.tsx'")"
+if [ $? -eq 0 ] && [ ! -s "$TMPROOT/h1.err" ]; then pass "H1 hook wrapper: executor git --literal-pathspecs quoted bracket add exits 0 silently"; else fail "H1 hook wrapper: executor git --literal-pathspecs quoted bracket add exits 0 silently" "$(cat "$TMPROOT/h1.err")"; fi
+hook_run executor "$EXEC_PANE" "$TMPROOT/h2.out" "$TMPROOT/h2.err" "$(bash_payload "git add -- 'src/app/[id]/page.tsx'")"
+H2=$?
+if [ "$H2" -eq 2 ] && grep -q '^BLOCKED by session-workspace strict-v1 \[path.dynamic\]' "$TMPROOT/h2.err"; then pass "H1 hook wrapper: executor git add of a bracket pathspec without --literal-pathspecs is blocked"; else fail "H1 hook wrapper: executor git add of a bracket pathspec without --literal-pathspecs is blocked" "status=$H2 $(cat "$TMPROOT/h2.err")"; fi
+hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h3.out" "$TMPROOT/h3.err" "$(bash_payload "cat 'src/app/(x)/[id]/page.tsx'")"
+if [ $? -eq 0 ] && [ ! -s "$TMPROOT/h3.err" ]; then pass "H1 hook wrapper: reviewer quoted route path read exits 0 silently"; else fail "H1 hook wrapper: reviewer quoted route path read exits 0 silently" "$(cat "$TMPROOT/h3.err")"; fi
+hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h4.out" "$TMPROOT/h4.err" "$(bash_payload 'cat src/app/[id]/page.tsx')"
+H4S=$?
+if [ "$H4S" -eq 2 ] && grep -q '^BLOCKED by session-workspace strict-v1 \[path.dynamic\]' "$TMPROOT/h4.err"; then pass "H1 hook wrapper: reviewer unquoted bracket glob is blocked"; else fail "H1 hook wrapper: reviewer unquoted bracket glob is blocked" "status=$H4S $(cat "$TMPROOT/h4.err")"; fi
+hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h5.out" "$TMPROOT/h5.err" "$(bash_payload "bash $SCHED/task-block.sh t-1234 'blocked by hook at $CP'")"
+if [ $? -eq 0 ] && [ ! -s "$TMPROOT/h5.err" ]; then pass "H4 hook wrapper: reviewer task-block note naming a cache path exits 0 silently"; else fail "H4 hook wrapper: reviewer task-block note naming a cache path exits 0 silently" "$(cat "$TMPROOT/h5.err")"; fi
+hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h6.out" "$TMPROOT/h6.err" "$(bash_payload "bash $DISPATCH $MASTER_PANE $TMPROOT/stage/plugins/cache/evil.md")"
+H6=$?
+if [ "$H6" -eq 2 ] && grep -q '^BLOCKED by session-workspace strict-v1 \[helper.argv\]' "$TMPROOT/h6.err"; then pass "H4 hook wrapper: dispatch prompt operand under a cache path is blocked"; else fail "H4 hook wrapper: dispatch prompt operand under a cache path is blocked" "status=$H6 $(cat "$TMPROOT/h6.err")"; fi
+expect "H1 Codex-shaped payload: executor quoted bracket path under --literal-pathspecs is allowed" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(codex_bash_payload "git --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+expect "H1 Codex-shaped payload: executor bracket pathspec without the option is denied" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(codex_bash_payload "git add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
+expect "H1 Codex argv-list payload: reviewer quoted bracket path is allowed" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce '{"tool_name":"shell","tool_input":{"command":["cat","src/app/[id]/page.tsx"]}}' "$H1_ALLOW"
 
 echo "== hook wrapper (harness-hook.sh) =="
 WRAP="$HERE/harness-hook.sh"

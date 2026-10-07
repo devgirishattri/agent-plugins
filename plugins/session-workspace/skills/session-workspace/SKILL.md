@@ -439,6 +439,74 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
   new session-workspace hook hashes. Do this before you rely on lifecycle/Stop output.
 - When something is unexpectedly blocked, run `/session-workspace:harness-doctor` first.
 
+### Denial diagnostics (`DIAG` line, 0.11.7)
+
+- On every `BLOCKED` denial (enforce policy denial or integrity failure), the hook
+  writes one more stderr line after it: `DIAG ` followed by one-line JSON.
+- The JSON uses schema `diag/1`. It has `emitter` `workspace-hook`, `subject`
+  `admission`, `reason` `hook.<rule-id>`, `outcome` `refused`, and
+  `state_committed` `false`. Unavailable fields are `null`.
+- `helper` names a helper script only when the hook parsed a known installed helper.
+  `policy.internal` never names a helper. `version` is this plugin's version.
+- `--decision-json` (test mode) always adds a `diagnostic` key: the same object for a
+  deny, `null` for every other decision.
+- Read `diagnostics/registry.json` in this plugin for every `reason` code and its meaning.
+- `audit` reports, allowed calls, and inactive sessions emit no `DIAG` line.
+- The `DIAG` line never changes the exit code or the `BLOCKED` text.
+- A missing `python3` also gives `hook.runtime.python`.
+- The line holds no command, path, argument, or error text.
+- Treat a `DIAG` line as an unauthenticated observation. The `BLOCKED` text can echo
+  operand text that spans lines, so a line that starts with `DIAG ` can come from the
+  operand. No position (first, last, or only) proves who wrote it.
+- Do not use a `DIAG` line alone to decide that a call was or was not refused. The exit
+  code and the `BLOCKED` line decide that. A missing `DIAG` line does not show success.
+- Keep every `DIAG` line you see. Do not reduce several lines to one.
+
+### Quoted literal paths and inert note text (0.11.7)
+
+- A quoted or backslash-escaped path that contains `*`, `?`, `{`, `}`, or `[`
+  is now read as a literal path. Example: `cat 'src/app/(x)/[id]/page.tsx'`.
+  Containment and symlink checks are the same as for any other path.
+- An unquoted `*`, `?`, `{`, or `[` is still refused (`path.dynamic`). So is a
+  glob-bearing path with a `..` part. So is a `$` or backtick inside a token the
+  policy reads as a path. The shell-level check refuses real expansions first.
+- Shell quoting does not stop Git from globbing a pathspec. For Git, a path with
+  those characters is allowed only when ALL of these are true:
+  - The subcommand is one of `add`, `rm`, `diff`, `ls-files`, `status`, `restore`,
+    `checkout`, `log`, `show`, `commit`. An alias or any other subcommand gets no
+    grant.
+  - `--literal-pathspecs` is a global option before the subcommand.
+  - The only other global option is `-C .` (every `-C` value is exactly `.`, in any
+    order with `--literal-pathspecs`). Any other `-C` value, `-c`, `--git-dir`,
+    `--work-tree`, `--namespace`, `--no-pager`, or any other global option ends the
+    grant.
+  - No `--glob-pathspecs`, `--icase-pathspecs`, or `--noglob-pathspecs`.
+  Example: `git --literal-pathspecs add -- 'src/[id]/p.tsx'`.
+- Without the grant, a Git command is refused with `path.dynamic` when a pathspec
+  position contains one of those characters, even for a bare name such as
+  `'a[1]'`. A `-C` value with those characters is refused in every case.
+  - Pathspec positions are every operand after `--` and the non-option operands
+    before it. For an unsupported subcommand only the operands after `--` count.
+  - These are not pathspecs: option names, commit messages (`-m 'fix [id]'`),
+    `--format=[%h]`, values of the value-taking options the policy lists for
+    that subcommand (for example `--grep`, `--author`, `-n`), and, for `diff`,
+    `restore`, `checkout`, `log`, `show`, the operands before an explicit `--` and
+    revision text such as `HEAD@{1}` or `HEAD^{tree}`.
+  - A value that comes as a separate argument after an option the policy does not
+    list (for example `--format '[%h]'`) counts as a pathspec. Write `--format=...`.
+- Inside the grant, an operand that starts with `:` (pathspec magic) is refused
+  with or without glob characters. With a glob-bearing argument present,
+  `--pathspec-from-file` and `--pathspec-file-nul` are refused.
+- Helper operands (chat, scheduler, and the other reviewed helpers) never get this
+  change.
+- A task note or reason (`task-done.sh`, `task-block.sh`, `task-review.sh`) and a
+  `send-message.sh` message body may now contain the text `/plugins/cache/`. Flags,
+  their values, task ids, targets, prompt-file operands, and `--note-file`
+  operands may not. A line break in any argument is still refused.
+- No config migration. Update the plugin and restart affected agents. This release
+  ships with scheduler 0.7.6. To roll back, install the previous release:
+  session-workspace 0.11.5 (and session-scheduler 0.7.5, commit 69041bb).
+
 ## Reviewed orchestration (schema v4)
 
 When `orchestration.enabled` is true, use the `workspace-orchestrator` skill

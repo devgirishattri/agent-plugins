@@ -9,7 +9,9 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
-ensure_dirs || exit 1
+# Diagnostics (diag/1): see task-done.sh and lib.sh.
+sched_diag_reset
+ensure_dirs || { sched_diag_emit; exit 1; }
 
 ID="${1:-}"
 # A contracted task is handed to task-contract.sh with the original arguments
@@ -25,11 +27,13 @@ NOTE_SUFFIX=""
 
 if [ -z "$ID" ] || [ -z "$NOTE" ]; then
   echo "ERROR: Usage: task-review.sh <id> [--force] <note>   (note required, e.g. a commit SHA)" >&2
+  sched_diag_emit reason=sched.argv.usage task="$ID" lib=0
   exit 1
 fi
 
-validate_task_id "$ID" || exit 1
-task_exists "$ID" || { echo "ERROR: task '$ID' not found." >&2; exit 1; }
+sched_diag_reset
+validate_task_id "$ID" || { sched_diag_emit task="$ID"; exit 1; }
+task_exists "$ID" || { echo "ERROR: task '$ID' not found." >&2; sched_diag_emit reason=sched.task.not_found task="$ID" lib=0; exit 1; }
 
 ACTOR=$(current_pane_name)
 ASSIGNER=$(task_get "$ID" '.assigner')
@@ -54,6 +58,11 @@ REVIEW_DISPATCHED=$(task_get "$ID" '
 # refuse and point the user at task-done/task-block. Retry never mutates status
 # or history and preserves the original review note.
 RETRY=0
+# Diagnostics for the reviewer routing are collected and emitted after its human
+# WARN (RV_DIAG1/RV_DIAG2 hold sched_diag_emit arguments). state_committed is
+# true only when THIS invocation made the review transition.
+RV_DIAG1=(); RV_DIAG2=()
+RV_COMMITTED=true
 if [ "$CURRENT" = "review" ]; then
   if [ -n "$REVIEW_DISPATCHED" ] && [ "$REVIEW_DISPATCHED" != "null" ]; then
     # Already successfully dispatched — suppress the duplicate. Fully normalize a
@@ -73,6 +82,7 @@ if [ "$CURRENT" = "review" ]; then
     exit 0
   fi
   RETRY=1  # RETRY_REVIEW_DISPATCH
+  RV_COMMITTED=false  # dispatch-only retry: no new transition
   # A retry re-sends the ORIGINAL review request: the audit packet must carry
   # the note (e.g. commit SHA) recorded when the task entered review, not
   # whatever the retry invocation typed. The CLI note stays required
@@ -83,10 +93,15 @@ if [ "$CURRENT" = "review" ]; then
     NOTE_SUFFIX=" (original review note reused on retry)"
   fi
 else
+  sched_diag_reset
   if ! task_set_status "$ID" "review" "$ACTOR" "$NOTE"; then
-    echo "ERROR: task $ID NOT moved to review." >&2
+    sched_transition_failed "$ID" "moved to review."
+    # false only when the failure is proven to precede publication; an unconfirmed
+    # publication (SCHED_WRITE_UNCERTAIN) reports null.
+    sched_diag_emit committed="$(sched_commit_state)" task="$ID"
     exit 1
   fi
+  sched_diag_residual task="$ID"
   if [ -n "$ASSIGNER" ] && [ "$ASSIGNER" != "?" ] && [ "$ASSIGNER" != "$ACTOR" ]; then
     # Durable file-backed dispatch first (queued to the assigner's inbox when
     # busy — the same transport task-assign uses), inline /send as a
@@ -94,11 +109,13 @@ else
     # a failure here never blocks or retries the review transition, and never
     # collides with the review_dispatch_* bookkeeping reviewer routing owns.
     session_chat_ack "$ASSIGNER" "$ID" "review" "task ${ID} (${NAME}) ready for REVIEW by ${ACTOR}: ${NOTE}"
+    sched_diag_reset
     task_record_last_ack "$ID" "review" "$ASSIGNER" "$SESSION_CHAT_ACK_STATUS" "$SESSION_CHAT_ACK_FILE"
     if [ "$SESSION_CHAT_ACK_STATUS" = "failed" ]; then
       echo "WARN: durable ack to assigner '$ASSIGNER' failed — the assigner notification that task $ID is ready for review was not delivered." >&2
       echo "  Reviewer routing proceeds independently; task $ID stays in review. Do not rerun the transition to repair the notification." >&2
     fi
+    sched_diag_ack_report true "$ID"
   fi
 fi
 
@@ -126,7 +143,10 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "null" ] && [ "$REVIEWER" != "$ACTOR" 
       ORIG_ASSIGNMENT=$(cat "$ORIG_PROMPT_FILE")
     fi
   fi
-  cat > "$REVIEW_PROMPT" <<EOF
+  # The packet write is checked: an unwritable or short packet must never be
+  # dispatched as if it were the review request.
+  _rv_pkt=1
+  if ! cat > "$REVIEW_PROMPT" <<EOF
 Review requested — task ${ID}: ${NAME}
 Submitted by: ${ACTOR}
 Note (e.g. commit SHA): ${NOTE}
@@ -142,13 +162,28 @@ Audit the work, then record the outcome (use the form for your runtime):
 --- Original assignment ---
 ${ORIG_ASSIGNMENT}
 EOF
+  then
+    _rv_pkt=0
+  fi
+  if [ "$_rv_pkt" = "0" ]; then
+    rm -f "$REVIEW_PROMPT" 2>/dev/null || true
+    # Nothing was dispatched and no dispatch metadata was written: the review
+    # transition (if any) stands and a later /task-review retries the dispatch.
+    ROUTE_WARN="could not write the review packet for reviewer '$REVIEWER'; no reviewer dispatch was attempted. Task $ID is in review - do NOT replay the transition. After fixing the cause, re-run /task-review $ID to retry the reviewer dispatch only, or notify the reviewer manually."
+    RV_DIAG1=(reason=sched.review.packet_write_failed committed="$RV_COMMITTED" nfor=reviewer_request task="$ID" lib=0)
+  else
   chmod 600 "$REVIEW_PROMPT" 2>/dev/null || true
   # stdout is captured (stderr stays discarded) only to read the request id:
   # exactly one line "Message id: <hex>" printed by the dispatch itself. Notes
   # and stderr are never parsed. An older session-chat prints none, so the
   # request id is recorded as null (unknown), never guessed.
+  # _rv_attempt is typed: session_chat_dispatch returns 125 when it refused BEFORE invoking
+  # the script (missing install or below the durable-inbox floor), and any other status comes
+  # from the invoked script. The install is resolved once, inside that call.
   _rv_out=$(session_chat_dispatch "$REVIEWER" "$REVIEW_PROMPT" 2>/dev/null)
   dc=$?
+  _rv_attempt=1
+  if [ "$dc" = "$SESSION_CHAT_DISPATCH_NOT_INVOKED" ]; then _rv_attempt=0; dc=1; fi
   _rv_msg_id=""
   if [ "$(printf '%s\n' "$_rv_out" | grep -cE '^Message id: [a-f0-9]{8,16}$')" = "1" ]; then
     _rv_msg_id=$(printf '%s\n' "$_rv_out" | grep -E '^Message id: [a-f0-9]{8,16}$' | sed 's/^Message id: //')
@@ -158,11 +193,18 @@ EOF
   _rv_now=$(iso_now)
   case "$dc" in
     0|3)
+      # A queued dispatch (rc 3, or the dispatch's own "Queued dispatch to"
+      # stdout line) is recorded as queued, not delivered.
+      _rv_queued=0
+      if [ "$dc" = "3" ] || printf '%s\n' "$_rv_out" | grep -q '^Queued dispatch to '; then
+        _rv_queued=1
+      fi
       [ "$dc" = "3" ] && ROUTED="$REVIEWER (queued to durable inbox)" || ROUTED="$REVIEWER"
-      _rv_status=$([ "$dc" = "3" ] && echo queued || echo delivered)
+      _rv_status=$([ "$_rv_queued" = "1" ] && echo queued || echo delivered)
       # Delivered packet: the success stamp MUST persist, or a later
       # /task-review would re-dispatch and duplicate delivery. Report loudly.
-      task_update "$ID" \
+      sched_diag_reset
+      if task_update "$ID" \
         'with_entries(select((.key | startswith("review_")) | not))
          | .meta.review_dispatched_at = $t
          | .meta.review_dispatch_status = $s
@@ -171,16 +213,27 @@ EOF
          | .meta.review_request_msg_id = (if $rid == "" then null else $rid end)
          | .meta.review_last_dispatch_attempt_at = $t
          | .meta.review_dispatch_attempts = ((.meta.review_dispatch_attempts // 0) + 1)' \
-        --arg t "$_rv_now" --arg s "$_rv_status" --arg pf "$REVIEW_PROMPT" --arg rid "$_rv_msg_id" \
-        || ROUTE_WARN="reviewer packet was delivered to '$REVIEWER' but recording review_dispatched_at FAILED; do NOT re-run /task-review (it would duplicate delivery). Inspect $(task_path "$ID")."
+        --arg t "$_rv_now" --arg s "$_rv_status" --arg pf "$REVIEW_PROMPT" --arg rid "$_rv_msg_id"; then
+        # Stamp recorded. Only a lock-release fault can remain.
+        if [ "${#SCHED_DIAG_CODES[@]}" -gt 0 ]; then
+          RV_DIAG1=(committed="$RV_COMMITTED" task="$ID" request="$_rv_msg_id" codes="${SCHED_DIAG_CODES[*]-}")
+        fi
+      else
+        ROUTE_WARN="reviewer packet was delivered to '$REVIEWER' but recording review_dispatched_at FAILED; do NOT re-run /task-review (it would duplicate delivery). Inspect $(task_path "$ID")."
+        RV_DIAG1=(reason=sched.review.record_failed committed="$RV_COMMITTED" nfor=reviewer_request nobs="$_rv_status" npers=unknown task="$ID" request="$_rv_msg_id" codes="${SCHED_DIAG_CODES[*]-}")
+      fi
       ;;
     *)
       ROUTE_WARN="reviewer dispatch to '$REVIEWER' failed (rc=$dc); task remains in review. Fix the issue (see /session-chat:panes) and re-run /task-review, or notify the reviewer manually."
+      # observed is null when the dispatch script never ran (missing or too-old install).
+      _rv_obs="failed"
+      [ "$_rv_attempt" = 1 ] || _rv_obs=""
       # No success timestamp -> a later /task-review is allowed to retry. Also
       # clear stale legacy root review_* aliases AND force canonical
       # .meta.review_dispatched_at to null so a leftover root/meta success stamp
       # can never falsely suppress the retry.
-      task_update "$ID" \
+      sched_diag_reset
+      if task_update "$ID" \
         'with_entries(select((.key | startswith("review_")) | not))
          | .meta.review_dispatched_at = null
          | .meta.review_dispatch_status = null
@@ -190,9 +243,19 @@ EOF
          | .meta.review_prompt_file = $pf
          | .meta.review_request_msg_id = null
          | .meta.review_dispatch_attempts = ((.meta.review_dispatch_attempts // 0) + 1)' \
-        --arg t "$_rv_now" --arg e "dispatch failed rc=$dc" --arg pf "$REVIEW_PROMPT" || true
+        --arg t "$_rv_now" --arg e "dispatch failed rc=$dc" --arg pf "$REVIEW_PROMPT"; then
+        RV_DIAG1=(reason=sched.review.dispatch_failed committed="$RV_COMMITTED" nfor=reviewer_request nobs="$_rv_obs" npers=failed task="$ID" lib=0)
+        if [ "${#SCHED_DIAG_CODES[@]}" -gt 0 ]; then
+          RV_DIAG2=(committed="$RV_COMMITTED" task="$ID" codes="${SCHED_DIAG_CODES[*]-}")
+        fi
+      else
+        # The dispatch failure stands; the failed attempt could not be recorded.
+        RV_DIAG1=(reason=sched.review.dispatch_failed committed="$RV_COMMITTED" nfor=reviewer_request nobs="$_rv_obs" npers=unknown task="$ID" lib=0)
+        RV_DIAG2=(reason=sched.bookkeeping.reviewer_metadata_failed committed="$RV_COMMITTED" nfor=reviewer_request nobs="$_rv_obs" npers=unknown task="$ID" codes="${SCHED_DIAG_CODES[*]-}")
+      fi
       ;;
   esac
+  fi
 fi
 
 if [ "$RETRY" = "1" ]; then
@@ -205,4 +268,6 @@ echo "  note: ${NOTE}${NOTE_SUFFIX}"
 echo
 echo "Reviewer: approve with /task-done $ID [note], or reject with /task-block $ID <reason>."
 [ -n "$ROUTE_WARN" ] && echo "WARN: $ROUTE_WARN" >&2
+[ "${#RV_DIAG1[@]}" -gt 0 ] && sched_diag_emit "${RV_DIAG1[@]}"
+[ "${#RV_DIAG2[@]}" -gt 0 ] && sched_diag_emit "${RV_DIAG2[@]}"
 exit 0

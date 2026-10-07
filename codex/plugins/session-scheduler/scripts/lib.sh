@@ -3,6 +3,269 @@
 # Source this file: source "$(dirname "$0")/lib.sh"
 # Supported platforms: macOS, Linux
 
+# --- Diagnostics (diag/1) ---
+# Machine-readable fault lines for the ORDINARY paths of task-done.sh,
+# task-block.sh and task-review.sh. Every other caller of this library (the
+# other helpers, test code that sources it) keeps the exact pre-diagnostics
+# output: the emitter is a no-op unless the running script is one of the three.
+#
+# Contract (registry: ../diagnostics/registry.json):
+#   - one line on stderr, `DIAG ` + compact JSON, AFTER the existing human text;
+#   - built only by an allowlisting jq serializer (--arg/--argjson, no string
+#     interpolation); the jq-missing record is a fixed string;
+#   - a diagnostic never changes an exit code or the human output, and a failed
+#     emit is ignored;
+#   - codes are assigned at the failing branch (typed), never parsed from text.
+# Diagnostic state lives ONLY in the top-level helper process. Library functions
+# that run inside $(...) never touch it: they report through stdout/rc and the
+# helper maps that to a code. Library functions called directly (not in a
+# command substitution) may append a code to SCHED_DIAG_CODES before they
+# return non-zero; the first code is the primary fault, later ones are
+# secondary (cleanup/unlock) faults of the same operation.
+_SCHED_DIAG_HELPER=""
+case "${0##*/}" in
+  task-done.sh|task-block.sh|task-review.sh) _SCHED_DIAG_HELPER="${0##*/}" ;;
+esac
+_SCHED_DIAG_LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+SCHED_DIAG_CODES=()
+# 1 when the last ledger publication (the rename in task_write) failed in a way that
+# does not prove it did not happen (see task_write). Typed input for state_committed.
+SCHED_WRITE_UNCERTAIN=0
+
+# Forget every code noted so far. Call before each independent operation.
+sched_diag_reset() { SCHED_DIAG_CODES=(); SCHED_WRITE_UNCERTAIN=0; }
+
+# state_committed for a failed transition write: false only when the failure is proven to
+# precede publication; null when the publication is unconfirmed.
+sched_commit_state() { if [ "${SCHED_WRITE_UNCERTAIN:-0}" = 1 ]; then echo null; else echo false; fi; }
+
+# The human line for a failed transition. An unconfirmed publication must not claim that
+# nothing changed.
+sched_transition_failed() { # sched_transition_failed <id> <"marked done."|"marked blocked."|"moved to review.">
+  if [ "${SCHED_WRITE_UNCERTAIN:-0}" = 1 ]; then
+    echo "ERROR: task $1 result unconfirmed - the ledger write may have committed; inspect task-status before any retry." >&2
+  else
+    echo "ERROR: task $1 NOT $2" >&2
+  fi
+}
+
+# Append <code> unless already present. Direct calls only.
+_sched_diag_note() {
+  [ -n "$_SCHED_DIAG_HELPER" ] || return 0
+  local c
+  for c in ${SCHED_DIAG_CODES[@]+"${SCHED_DIAG_CODES[@]}"}; do
+    [ "$c" = "$1" ] && return 0
+  done
+  SCHED_DIAG_CODES+=("$1")
+  return 0
+}
+
+# The emitting plugin's own version: scripts/../.claude-plugin/plugin.json (or
+# the Codex manifest of the same tree). Empty when it cannot be read.
+_sched_diag_version() {
+  local mf ver
+  for mf in "$_SCHED_DIAG_LIBDIR/../.claude-plugin/plugin.json" "$_SCHED_DIAG_LIBDIR/../.codex-plugin/plugin.json"; do
+    [ -f "$mf" ] || continue
+    ver=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$mf" 2>/dev/null \
+      | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    [ -n "$ver" ] && { printf '%s' "$ver"; return 0; }
+  done
+  return 1
+}
+
+# Defaults for a code: subject, phase and outcome. A caller may override any.
+_sched_diag_meta() {
+  _DG_SUBJECT="transition"; _DG_PHASE="validate"; _DG_OUTCOME="refused"
+  case "$1" in
+    sched.store.unavailable) _DG_OUTCOME="failed" ;;
+    sched.argv.*) _DG_PHASE="argv" ;;
+    sched.lock.timeout|sched.lock.holder_unwritable) _DG_SUBJECT="lock"; _DG_PHASE="transition"; _DG_OUTCOME="failed" ;;
+    sched.lock.unsafe) _DG_SUBJECT="lock"; _DG_PHASE="transition" ;;
+    sched.lock.release_failed) _DG_SUBJECT="lock"; _DG_PHASE="cleanup"; _DG_OUTCOME="failed" ;;
+    sched.contract.legacy_write_refused|sched.transition.illegal|sched.ledger.write_refused) _DG_PHASE="transition" ;;
+    sched.ledger.write_failed) _DG_PHASE="transition"; _DG_OUTCOME="failed" ;;
+    sched.duration.record_failed) _DG_SUBJECT="duration"; _DG_PHASE="transition"; _DG_OUTCOME="partial" ;;
+    sched.review.*) _DG_SUBJECT="reviewer_request"; _DG_PHASE="notify"; _DG_OUTCOME="partial" ;;
+    sched.notify.*) _DG_SUBJECT="assigner_ack"; _DG_PHASE="notify"; _DG_OUTCOME="partial" ;;
+    sched.bookkeeping.*) _DG_SUBJECT="bookkeeping"; _DG_PHASE="notify"; _DG_OUTCOME="partial" ;;
+    sched.note_file.option_malformed) _DG_SUBJECT="verdict_event"; _DG_PHASE="argv" ;;
+    sched.note_file.*) _DG_SUBJECT="verdict_event" ;;
+  esac
+}
+
+# sched_diag_emit [key=value ...]
+# Keys: reason subject phase outcome committed(true|false|null) nfor nobs npers
+#   task generation event request also(space-separated extra codes)
+#   lib(0|1: merge SCHED_DIAG_CODES, default 1)
+#   codes(space-separated codes captured earlier, used instead of the array).
+# With lib=1 and no reason, the first noted code is the primary fault and the
+# rest become `also`. Prints nothing when disabled, when there is no code, or
+# when the serializer is unavailable; always returns 0.
+sched_diag_emit() {
+  [ -n "$_SCHED_DIAG_HELPER" ] || return 0
+  local reason="" subject="" phase="" outcome="" committed="false" nfor="" nobs="" npers=""
+  local task="" gen="" event="" request="" xalso="" lib=1 kv c libcodes="${SCHED_DIAG_CODES[*]-}"
+  for kv in "$@"; do
+    case "$kv" in
+      reason=*) reason="${kv#reason=}" ;;
+      subject=*) subject="${kv#subject=}" ;;
+      phase=*) phase="${kv#phase=}" ;;
+      outcome=*) outcome="${kv#outcome=}" ;;
+      committed=*) committed="${kv#committed=}" ;;
+      nfor=*) nfor="${kv#nfor=}" ;;
+      nobs=*) nobs="${kv#nobs=}" ;;
+      npers=*) npers="${kv#npers=}" ;;
+      task=*) task="${kv#task=}" ;;
+      generation=*) gen="${kv#generation=}" ;;
+      event=*) event="${kv#event=}" ;;
+      request=*) request="${kv#request=}" ;;
+      also=*) xalso="${kv#also=}" ;;
+      lib=*) lib="${kv#lib=}" ;;
+      codes=*) libcodes="${kv#codes=}" ;;
+    esac
+  done
+  local also=""
+  if [ "$lib" = 1 ]; then
+    for c in $libcodes; do
+      if [ -z "$reason" ]; then reason="$c"; elif [ "$c" != "$reason" ]; then also="$also $c"; fi
+    done
+  fi
+  for c in $xalso; do
+    [ "$c" = "$reason" ] || also="$also $c"
+  done
+  [ -n "$reason" ] || return 0
+  _sched_diag_meta "$reason"
+  [ -n "$subject" ] || subject="$_DG_SUBJECT"
+  [ -n "$phase" ] || phase="$_DG_PHASE"
+  [ -n "$outcome" ] || outcome="$_DG_OUTCOME"
+  case "$committed" in true|false|null) ;; *) committed="null" ;; esac
+  local version line
+  version=$(_sched_diag_version 2>/dev/null) || version=""
+  line=$(jq -cn \
+    --arg helper "$_SCHED_DIAG_HELPER" --arg version "$version" \
+    --arg subject "$subject" --arg phase "$phase" --arg reason "$reason" --arg outcome "$outcome" \
+    --argjson committed "$committed" \
+    --arg nfor "$nfor" --arg nobs "$nobs" --arg npers "$npers" \
+    --arg task "$task" --arg gen "$gen" --arg event "$event" --arg request "$request" \
+    --arg also "$also" '
+    def pick($set): if type == "string" and (. as $v | $set | index($v)) != null then . else null end;
+    def idv($re; $max): if type == "string" and test($re) and length <= $max then . else null end;
+    ($also | split(" ") | map(select(test("^[a-z]+(\\.[a-z_]+)+$")))) as $al
+    | {schema: "diag/1", emitter: "scheduler", helper: ($helper | pick(["task-done.sh", "task-block.sh", "task-review.sh"])),
+       version: ($version | idv("^[0-9]+\\.[0-9]+\\.[0-9]+$"; 32)),
+       subject: ($subject | pick(["transition", "assigner_ack", "reviewer_request", "verdict_event", "duration", "lock", "bookkeeping", "admission"])),
+       phase: ($phase | pick(["argv", "validate", "admission", "transition", "notify", "cleanup"])),
+       reason: ($reason | idv("^[a-z]+(\\.[a-z_]+)+$"; 64)),
+       outcome: ($outcome | pick(["refused", "failed", "partial"])),
+       state_committed: $committed,
+       notification: (($nfor | pick(["assigner_ack", "reviewer_request", "verdict_event"])) as $nf
+         | if $nf == null then null else
+           {for: $nf,
+            observed: ($nobs | pick(["delivered", "queued", "inline-fallback", "failed"])),
+            persisted: ($npers | pick(["pending", "delivered", "queued", "inline-fallback", "failed", "not-required", "unknown"]))} end),
+       task: ($task | idv("^[A-Za-z0-9_-]+$"; 128)),
+       generation: (if ($gen | test("^[0-9]{1,9}$")) then ($gen | tonumber) else null end),
+       event: ($event | idv("^[a-f0-9]{8,16}$"; 16)),
+       request: ($request | idv("^[a-f0-9]{8,16}$"; 16)),
+       also: ($al[:4]), also_truncated: (($al | length) > 4)}' 2>/dev/null) || return 0
+  case "$line" in
+    ""|*$'\n'*) return 0 ;;
+  esac
+  printf 'DIAG %s\n' "$line" >&2 2>/dev/null || true
+  return 0
+}
+
+# Emit a lock-release-only record when an operation SUCCEEDED but the lock
+# could not be released (the only code left in the slot after a success).
+sched_diag_residual() {
+  [ "${#SCHED_DIAG_CODES[@]}" -gt 0 ] || return 0
+  sched_diag_emit committed=true "$@"
+}
+
+# sched_diag_ack_report <committed> <task-id>
+# After session_chat_ack + task_record_last_ack (SCHED_DIAG_CODES reset before
+# the record call). Emits at most two independent operation records:
+#   - assigner_ack: the ack ended failed or inline-fallback;
+#   - bookkeeping: meta.last_ack could not be recorded (persisted unknown,
+#     never an invented pending record).
+# A delivered/queued ack with a recorded outcome emits nothing.
+sched_diag_ack_report() {
+  [ -n "$_SCHED_DIAG_HELPER" ] || return 0
+  local committed="$1" id="$2" obs="${SESSION_CHAT_ACK_OBSERVED:-}" persisted reason
+  case "${SESSION_CHAT_ACK_STATUS:-}" in
+    failed|inline-fallback)
+      persisted="${SESSION_CHAT_ACK_STATUS}"
+      [ "${SCHED_LAST_ACK_RECORD:-failed}" = "ok" ] || persisted="unknown"
+      reason="sched.notify.failed"
+      [ "${SESSION_CHAT_ACK_STATUS}" = "inline-fallback" ] && reason="sched.notify.inline_fallback"
+      sched_diag_emit reason="$reason" subject=assigner_ack committed="$committed" \
+        nfor=assigner_ack nobs="$obs" npers="$persisted" task="$id" lib=0
+      ;;
+  esac
+  if [ "${SCHED_LAST_ACK_RECORD:-failed}" = "ok" ]; then
+    sched_diag_residual committed="$committed" task="$id"
+  else
+    sched_diag_emit reason=sched.bookkeeping.last_ack_failed subject=bookkeeping committed="$committed" \
+      nfor=assigner_ack nobs="$obs" npers=unknown task="$id"
+  fi
+  return 0
+}
+
+# sched_diag_verdict_report <task-id> <event-id> <outcome> <record-state> <attempt>
+# After verdict_notify_typed (outcome word, attempt yes|no) and verdict_record_outcome
+# (record-state ok|failed|unconfirmed; SCHED_DIAG_CODES reset before it). One record for
+# the verdict_event operation; its first fault wins and a failed outcome record is a
+# secondary code. Delivered/queued with a recorded outcome emits nothing.
+# observed is "failed" only when a transport script ran (attempt yes); a refusal before
+# any transport reports null. persisted is the recorded state: "pending" when the outcome
+# write provably did not publish, "unknown" when its publication is unconfirmed.
+sched_diag_verdict_report() {
+  [ -n "$_SCHED_DIAG_HELPER" ] || return 0
+  local id="$1" ve="$2" outcome="$3" rec="$4" attempt="${5:-no}" persisted="pending" reason secondary="" obs
+  [ "$rec" = "unconfirmed" ] && persisted="unknown"
+  case "$outcome" in
+    failed|inline-fallback)
+      [ "$rec" = "ok" ] && persisted="$outcome"
+      [ "$rec" = "ok" ] || secondary="sched.notify.record_failed"
+      reason="sched.notify.failed"; obs="$outcome"
+      if [ "$outcome" = "inline-fallback" ]; then reason="sched.notify.inline_fallback"
+      elif [ "$attempt" != "yes" ]; then obs=""; fi
+      sched_diag_emit reason="$reason" subject=verdict_event committed=true nfor=verdict_event \
+        nobs="$obs" npers="$persisted" task="$id" event="$ve" also="$secondary"
+      ;;
+    delivered|queued)
+      if [ "$rec" = "ok" ]; then
+        sched_diag_residual task="$id" event="$ve"
+      else
+        sched_diag_emit reason=sched.notify.record_failed subject=verdict_event committed=true \
+          nfor=verdict_event nobs="$outcome" npers="$persisted" task="$id" event="$ve"
+      fi
+      ;;
+  esac
+  return 0
+}
+
+# Fixed bootstrap records for the two faults that happen before jq can be
+# trusted. No input is interpolated: helper and reason are matched against
+# literal constants and the JSON text is fixed.
+_sched_diag_bootstrap() {
+  [ -n "$_SCHED_DIAG_HELPER" ] || return 0
+  local h r
+  case "$_SCHED_DIAG_HELPER" in
+    task-done.sh) h='"task-done.sh"' ;;
+    task-block.sh) h='"task-block.sh"' ;;
+    task-review.sh) h='"task-review.sh"' ;;
+    *) return 0 ;;
+  esac
+  case "$1" in
+    sched.env.home_unset) r='"sched.env.home_unset"' ;;
+    sched.env.jq_missing) r='"sched.env.jq_missing"' ;;
+    *) return 0 ;;
+  esac
+  printf 'DIAG {"schema":"diag/1","emitter":"scheduler","helper":%s,"version":null,"subject":"transition","phase":"validate","reason":%s,"outcome":"refused","state_committed":false,"notification":null,"task":null,"generation":null,"event":null,"request":null,"also":[],"also_truncated":false}\n' "$h" "$r" >&2 2>/dev/null || true
+  return 0
+}
+
 # Ledger records and assignment/review prompts contain private workflow data.
 # Make every subsequently created file owner-only by default.
 umask 077
@@ -21,6 +284,11 @@ if [ -z "${SESSION_SCHEDULER_HOME:-}" ]; then
   echo "it or wrap this helper in env/variable assignments — request a relaunch of the" >&2
   echo "pane/session with the correct environment instead. (A human invoking the script" >&2
   echo "directly may export the variable in their own parent shell first.)" >&2
+  if command -v jq >/dev/null 2>&1; then
+    _sched_diag_note sched.env.home_unset; sched_diag_emit
+  else
+    _sched_diag_bootstrap sched.env.home_unset
+  fi
   exit 1
 fi
 
@@ -46,6 +314,7 @@ _scheduler_safe_dir() {
   local dir="$1"
   if [ ! -d "$dir" ] || [ -L "$dir" ] || [ ! -O "$dir" ]; then
     echo "ERROR: Refusing unsafe scheduler directory: $dir" >&2
+    _sched_diag_note sched.store.unsafe
     return 1
   fi
   # Close an overly broad legacy directory before inspecting or creating
@@ -53,14 +322,15 @@ _scheduler_safe_dir() {
   chmod 700 "$dir" 2>/dev/null || return 1
 }
 
-ensure_dirs() {
+_ensure_dirs() {
   local dir uid unsafe
-  agent_plugins_timezone >/dev/null || return 1
+  agent_plugins_timezone >/dev/null || { _sched_diag_note sched.env.timezone_invalid; return 1; }
 
   # Test -L before -e so a dangling pre-planted link is rejected instead of
   # being followed by mkdir -p.
   if [ -L "$SCHEDULER_DIR" ]; then
     echo "ERROR: Refusing unsafe scheduler root: $SCHEDULER_DIR" >&2
+    _sched_diag_note sched.store.unsafe
     return 1
   fi
   if [ ! -e "$SCHEDULER_DIR" ]; then
@@ -71,6 +341,7 @@ ensure_dirs() {
   for dir in "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" "$LOCKS_DIR"; do
     if [ -L "$dir" ]; then
       echo "ERROR: Refusing unsafe scheduler directory: $dir" >&2
+    _sched_diag_note sched.store.unsafe
       return 1
     fi
     if [ ! -e "$dir" ]; then
@@ -97,6 +368,7 @@ ensure_dirs() {
   }
   if [ -n "$unsafe" ]; then
     echo "ERROR: Refusing scheduler tree containing a symlink: $unsafe" >&2
+    _sched_diag_note sched.store.unsafe
     return 1
   fi
   unsafe=$(find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" ! -user "$uid" -print -quit 2>/dev/null) || {
@@ -105,6 +377,7 @@ ensure_dirs() {
   }
   if [ -n "$unsafe" ]; then
     echo "ERROR: Refusing scheduler tree containing an unowned path: $unsafe" >&2
+    _sched_diag_note sched.store.unsafe
     return 1
   fi
   unsafe=$(find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" ! -type d ! -type f -print -quit 2>/dev/null) || {
@@ -113,11 +386,18 @@ ensure_dirs() {
   }
   if [ -n "$unsafe" ]; then
     echo "ERROR: Refusing scheduler tree containing a special file: $unsafe" >&2
+    _sched_diag_note sched.store.unsafe
     return 1
   fi
 
   find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" -type d -exec chmod 700 {} + 2>/dev/null || return 1
   find "$TASKS_DIR" "$PROMPTS_DIR" "$HANDOFFS_DIR" -type f -exec chmod 600 {} + 2>/dev/null || return 1
+}
+
+ensure_dirs() {
+  if _ensure_dirs; then return 0; fi
+  [ "${#SCHED_DIAG_CODES[@]}" -gt 0 ] || _sched_diag_note sched.store.unavailable
+  return 1
 }
 
 # Non-reentrant, cross-provider task transaction lock. Never hold over transport.
@@ -158,7 +438,7 @@ acquire_task_lock() {
     if [ -L "$path" ] || [ ! -d "$path" ] || [ ! -O "$path" ]; then
       # The previous holder may have released between mkdir and inspection.
       [ ! -e "$path" ] && [ ! -L "$path" ] && continue
-      echo "ERROR: unsafe task lock: $path" >&2; return 1
+      echo "ERROR: unsafe task lock: $path" >&2; _sched_diag_note sched.lock.unsafe; return 1
     fi
     holder=""
     if [ -f "$path/pid" ] && [ ! -L "$path/pid" ] && [ -O "$path/pid" ]; then
@@ -171,24 +451,25 @@ acquire_task_lock() {
       fi
     fi
     if [ $(( $(now_epoch) - start )) -ge "$timeout" ]; then
-      echo "ERROR: timed out acquiring task lock: $path" >&2; return 1
+      echo "ERROR: timed out acquiring task lock: $path" >&2; _sched_diag_note sched.lock.timeout; return 1
     fi
     sleep 0.05
   done
   if ! printf '%s\n' "$$" > "$path/pid"; then
     rmdir "$path" 2>/dev/null || true
+    _sched_diag_note sched.lock.holder_unwritable
     return 1
   fi
 }
 
 release_task_lock() {
-  _scheduler_release_lock "$LOCKS_DIR/$1.lock"
+  _scheduler_release_lock "$LOCKS_DIR/$1.lock" || { _sched_diag_note sched.lock.release_failed; return 1; }
 }
 
 lock_task_for_command() {
   acquire_task_lock "$1" || return 1
   SCHEDULER_LOCKED_TASK="$1"
-  trap 'release_task_lock "$SCHEDULER_LOCKED_TASK" || true' EXIT
+  trap 'release_task_lock "$SCHEDULER_LOCKED_TASK" || true; _sched_diag_export' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
 }
@@ -200,7 +481,32 @@ require_flag_value() {
   fi
 }
 
-task_jq_update() (
+# Transactions run in a subshell as before. Only their typed diagnostic state
+# crosses back to the caller; their normal stdout is empty.
+_sched_diag_export() {
+  [ "${_SCHED_DIAG_CAPTURE:-0}" = 1 ] || return 0
+  local code
+  for code in ${SCHED_DIAG_CODES[@]+"${SCHED_DIAG_CODES[@]}"}; do printf 'code:%s\n' "$code"; done
+  printf 'uncertain:%s\n' "$SCHED_WRITE_UNCERTAIN"
+}
+
+_sched_diag_collect() {
+  local result rc line
+  result=$(
+    _SCHED_DIAG_CAPTURE=1
+    trap '_sched_diag_export' EXIT
+    "$@"
+  ); rc=$?
+  while IFS= read -r line; do
+    case "$line" in
+      code:sched.*) _sched_diag_note "${line#code:}" ;;
+      uncertain:1) SCHED_WRITE_UNCERTAIN=1 ;;
+    esac
+  done <<< "$result"
+  return "$rc"
+}
+
+_task_jq_update() {
   local file="$1" id
   shift
   id=$(basename "$file" .json)
@@ -208,14 +514,26 @@ task_jq_update() (
   [ -f "$file" ] || { echo "ERROR: Task not found: $id" >&2; exit 1; }
   if jq -e 'has("contract")' "$file" >/dev/null; then
     echo "ERROR: task has a verification contract; use task-contract.sh" >&2
+    _sched_diag_note sched.contract.legacy_write_refused
     exit 1
   fi
-  jq "$@" "$file" | write_json_atomic "$file"
-)
+  local updated
+  updated=$(jq "$@" "$file") || { _sched_diag_note sched.ledger.write_failed; return 1; }
+  write_json_atomic "$file" <<< "$updated"
+}
+
+task_jq_update() {
+  if [ -n "$_SCHED_DIAG_HELPER" ]; then
+    _sched_diag_collect _task_jq_update "$@"
+  else
+    ( _task_jq_update "$@" )
+  fi
+}
 
 require_jq() {
   if ! command -v jq >/dev/null 2>&1; then
     echo "ERROR: jq is required for session-scheduler." >&2
+    _sched_diag_bootstrap sched.env.jq_missing
     return 1
   fi
 }
@@ -301,6 +619,7 @@ validate_task_id() {
   local id="$1"
   if [ -z "$id" ] || [ "$id" = . ] || [ "$id" = .. ] || ! [[ "$id" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
     echo "ERROR: Invalid task id: $id" >&2
+    if [ -z "$id" ]; then _sched_diag_note sched.argv.task_id_missing; else _sched_diag_note sched.argv.task_id_invalid; fi
     return 1
   fi
 }
@@ -480,10 +799,11 @@ EOF
 # shellcheck disable=SC2034  # the globals are read by the sourcing task-* scripts
 session_chat_ack() {
   local target="$1" id="$2" event="$3" first_line="$4"
-  local ack_file chat_root dispatch_rc
+  local ack_file chat_root dispatch_rc dispatch_out
 
   SESSION_CHAT_ACK_STATUS="failed"
   SESSION_CHAT_ACK_FILE=""
+  SESSION_CHAT_ACK_OBSERVED=""
 
   case "$event" in
     done|blocked|review) ;;
@@ -503,18 +823,24 @@ session_chat_ack() {
 
   chat_root=$(session_chat_root 2>/dev/null || true)
   if [ -n "$SESSION_CHAT_ACK_FILE" ] && [ -n "$chat_root" ]; then
-    bash "$chat_root/scripts/dispatch-to-session.sh" "$target" "$SESSION_CHAT_ACK_FILE" \
-      >/dev/null 2>&1
+    dispatch_out=$(bash "$chat_root/scripts/dispatch-to-session.sh" "$target" "$SESSION_CHAT_ACK_FILE" 2>/dev/null)
     dispatch_rc=$?
+    SESSION_CHAT_ACK_OBSERVED="failed"
     if [ "$dispatch_rc" -eq 0 ] || [ "$dispatch_rc" -eq 3 ]; then
       SESSION_CHAT_ACK_STATUS="dispatched"
+      SESSION_CHAT_ACK_OBSERVED="delivered"
+      if [ "$dispatch_rc" = 3 ] || printf '%s\n' "$dispatch_out" | grep -q '^Queued dispatch to '; then
+        SESSION_CHAT_ACK_OBSERVED="queued"
+      fi
       return 0
     fi
   fi
 
+  if [ -n "$chat_root" ]; then SESSION_CHAT_ACK_OBSERVED="failed"; fi
   if [ -n "$chat_root" ] \
     && bash "$chat_root/scripts/send-message.sh" "$target" "$first_line" >/dev/null 2>&1; then
     SESSION_CHAT_ACK_STATUS="inline-fallback"
+    SESSION_CHAT_ACK_OBSERVED="inline-fallback"
     echo "WARN: durable ack dispatch to '$target' failed; ack delivered inline instead." >&2
     return 0
   fi
@@ -578,14 +904,17 @@ write_json_atomic() {
   # The caller holds the task lock across creation or read-modify-write.
   local file="$1" mode="${2:-}"
   local tmp
-  tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
+  SCHED_WRITE_UNCERTAIN=0
+  tmp=$(mktemp "${file}.tmp.XXXXXX") || { _sched_diag_note sched.ledger.write_failed; return 1; }
   cat > "$tmp" || {
     rm -f "$tmp"
+    _sched_diag_note sched.ledger.write_failed
     return 1
   }
   if ! jq -s -e 'length == 1 and (.[0] | type == "object")' "$tmp" >/dev/null 2>&1; then
     rm -f "$tmp"
     echo "ERROR: refusing invalid task JSON: $file" >&2
+    _sched_diag_note sched.ledger.write_refused
     return 1
   fi
   if [ "$mode" = "create" ] && { [ -e "$file" ] || [ -L "$file" ]; }; then
@@ -593,7 +922,11 @@ write_json_atomic() {
     echo "ERROR: task ID collision: $file already exists; it was left unchanged." >&2
     return 1
   fi
-  mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+  if ! mv "$tmp" "$file"; then
+    if [ -e "$tmp" ]; then rm -f "$tmp"; else SCHED_WRITE_UNCERTAIN=1; fi
+    _sched_diag_note sched.ledger.write_failed
+    return 1
+  fi
 }
 
 # --- Status transition enforcement ---
@@ -787,22 +1120,35 @@ verdict_note_prepare() {
   local id="$1" file="$2" summary="${3:-}"
   local root helper out rc tag ident sum size max pout prc event artifact
   VERDICT_EVENT=""; VERDICT_ARTIFACT=""; VERDICT_SHA=""; VERDICT_NOTE=""; VERDICT_IDENT=""; VERDICT_SRC="$file"
+  # Diagnostics: every refusal below notes ONE typed code (direct call, this
+  # function never runs inside $(...)). The checker is a subprocess: its status
+  # and output are mapped here, never its text. For a contracted task this
+  # preflight is the contract route; the helper emits nothing for it.
   if [ -z "$file" ]; then
     echo "ERROR: --note-file requires a path." >&2
+    _sched_diag_note sched.note_file.option_malformed
     return 1
   fi
   if ! root=$(session_chat_root); then
     echo "ERROR: --note-file needs session-chat (own-draft-check.sh); no session-chat install was found. Nothing was read or changed." >&2
+    _sched_diag_note sched.note_file.checker_unavailable
     return 1
   fi
   helper="$root/scripts/own-draft-check.sh"
   if [ ! -f "$helper" ]; then
     echo "ERROR: --note-file needs a newer session-chat: the installed copy has no scripts/own-draft-check.sh (the own-draft read check)." >&2
     echo "  Update session-chat, or give the verdict inline. The note file was not read and the task was not changed." >&2
+    _sched_diag_note sched.note_file.checker_unavailable
     return 1
   fi
-  if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$SCHEDULER_SCRIPTS_DIR/verdict-file.py" ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
     echo "ERROR: --note-file needs python3 and verdict-file.py to validate raw bytes; nothing was read or changed." >&2
+    _sched_diag_note sched.note_file.python_missing
+    return 1
+  fi
+  if [ ! -f "$SCHEDULER_SCRIPTS_DIR/verdict-file.py" ]; then
+    echo "ERROR: --note-file needs python3 and verdict-file.py to validate raw bytes; nothing was read or changed." >&2
+    _sched_diag_note sched.note_file.validator_missing
     return 1
   fi
   max=$(verdict_note_max_bytes)
@@ -811,19 +1157,25 @@ verdict_note_prepare() {
   out=$(bash "$helper" --max-bytes "$max" "$file"); rc=$?
   if [ "$rc" = "3" ]; then
     echo "ERROR: --note-file refused: the draft is larger than the limit of $max bytes (SESSION_SCHEDULER_NOTE_MAX_BYTES). It was not hashed or copied, and the task was not changed." >&2
+    _sched_diag_note sched.note_file.too_large
     return 1
   fi
   if [ "$rc" = "4" ]; then
     echo "ERROR: --note-file refused: the draft changed while it was being checked. It was read but not copied, and the task was not changed." >&2
+    _sched_diag_note sched.note_file.changed_during_check
     return 1
   fi
   if [ "$rc" -ne 0 ]; then
+    # Any other nonzero status (1, 2, 127, a signal, ...) is an unclassified
+    # checker failure. The status is never read as proof of "not an own draft".
     echo "ERROR: --note-file refused: '$file' is not an eligible own draft of this pane (the check exited $rc). The task was not changed." >&2
+    _sched_diag_note sched.note_file.check_failed
     return 1
   fi
   # Strict parse: exactly one line OK<TAB>dev:inode<TAB>sha256<TAB>size.
   if [[ "$out" == *$'\n'* ]]; then
     echo "ERROR: --note-file refused: the draft check printed more than one line." >&2
+    _sched_diag_note sched.note_file.check_malformed
     return 1
   fi
   local IFS=$'\t' extra=""
@@ -832,14 +1184,17 @@ verdict_note_prepare() {
   if [ "$tag" != "OK" ] || [ -n "$extra" ] || ! [[ "$ident" =~ ^[0-9]+:[0-9]+$ ]] \
      || ! [[ "$sum" =~ ^[a-f0-9]{64}$ ]] || ! [[ "$size" =~ ^[0-9]+$ ]]; then
     echo "ERROR: --note-file refused: the draft check returned malformed output." >&2
+    _sched_diag_note sched.note_file.check_malformed
     return 1
   fi
   if [ "$size" -gt "$max" ]; then
     echo "ERROR: --note-file refused: the file is $size bytes; the limit is $max (SESSION_SCHEDULER_NOTE_MAX_BYTES)." >&2
+    _sched_diag_note sched.note_file.too_large
     return 1
   fi
   if ! event=$(generate_verdict_event_id); then
     echo "ERROR: could not generate a verdict event id (no usable /dev/urandom via od); the draft was checked but not copied, and the task was not changed." >&2
+    _sched_diag_note sched.note_file.event_id_failed
     return 1
   fi
   artifact=$(verdict_artifact_path "$id" "$event")
@@ -847,12 +1202,14 @@ verdict_note_prepare() {
     --sha "$sum" --size "$size" --max-bytes "$max" --dest "$artifact" --summary="$summary"); prc=$?
   if [ "$prc" -ne 0 ]; then
     echo "  --note-file refused; the task was not changed." >&2
+    _sched_diag_note sched.note_file.prepare_failed
     return 1
   fi
   VERDICT_NOTE=$(printf '%s' "$pout" | jq -r 'select(.sha256 == "'"$sum"'") | .note') || VERDICT_NOTE=""
   if [ -z "$VERDICT_NOTE" ] || [ ! -f "$artifact" ]; then
     rm -f "$artifact" 2>/dev/null
     echo "ERROR: --note-file refused: could not verify the verdict artifact; the task was not changed." >&2
+    _sched_diag_note sched.note_file.prepare_failed
     return 1
   fi
   VERDICT_EVENT="$event"; VERDICT_ARTIFACT="$artifact"; VERDICT_SHA="$sum"; VERDICT_IDENT="$ident"
@@ -873,6 +1230,7 @@ verdict_split_args() {
       --note-file)
         if [ "$NOTE_FILE_SET" = 1 ] || [ $# -lt 2 ] || [ -z "$2" ]; then
           echo "ERROR: --note-file takes exactly one path and may be given once." >&2
+          _sched_diag_note sched.note_file.option_malformed
           return 1
         fi
         NOTE_FILE="$2"; NOTE_FILE_SET=1; shift 2 ;;
@@ -889,14 +1247,22 @@ verdict_split_args() {
 
 # --generation belongs to the contracted form only. With --note-file on an
 # uncontracted task it is refused here (never taken as note text).
+# shellcheck disable=SC2034  # returned to task-done/task-block
 verdict_refuse_generation_without_contract() {
-  local a
+  local a seen=0
+  SCHED_DIAG_GENERATION=""
   for a in ${LEAD_ARGS[@]+"${LEAD_ARGS[@]}"}; do
+    if [ "$seen" = 1 ]; then
+      SCHED_DIAG_GENERATION="$a"
+      break
+    fi
     if [ "$a" = "--generation" ]; then
       echo "ERROR: --generation applies only to a task with a verification contract; task $1 has none. Use: $1 --note-file <own draft>. Nothing was read or changed." >&2
-      return 1
+      _sched_diag_note sched.argv.generation_without_contract
+      seen=1
     fi
   done
+  [ "$seen" = 1 ] && return 1
   return 0
 }
 
@@ -952,7 +1318,8 @@ verdict_discard_unreferenced() {
 # bounded inline fallback runs only after a HARD dispatch failure and can in
 # rare cases duplicate a pointer. Never writes the ledger.
 verdict_notify() {
-  local id="$1" ve="$2" ev to artifact sha line notice dc dout limit pointer footer vf
+  local id="$1" ve="$2" ev to artifact sha line notice dc dout limit pointer footer vf sent attempted=no
+  _vn_out() { [ "${_SCHED_NOTIFY_TYPED:-0}" = 1 ] && echo "attempt:$attempted"; echo "$1"; }
   vf="$SCHEDULER_SCRIPTS_DIR/verdict-file.py"
   ev=$(jq -c --arg ve "$ve" '((.meta | objects | .verdict_events) // {})[$ve] // empty' "$(task_file "$id")" 2>/dev/null)
   to=$(printf '%s' "$ev" | jq -r '.route_to // empty' 2>/dev/null)
@@ -961,11 +1328,11 @@ verdict_notify() {
   if [ -z "$to" ] || ! validate_route_name "verdict route" "$to" 2>/dev/null \
      || [ "$artifact" != "$(verdict_artifact_path "$id" "$ve")" ] || ! [[ "$sha" =~ ^[a-f0-9]{64}$ ]]; then
     echo "WARN: verdict event $ve has no usable route or artifact record; no notification was sent." >&2
-    echo failed; return 0
+    _vn_out failed; return 0
   fi
   if ! line=$(python3 -I "$vf" excerpt --path "$artifact" --sha "$sha"); then
     echo "WARN: verdict artifact $artifact failed verification; no notification was sent." >&2
-    echo failed; return 0
+    _vn_out failed; return 0
   fi
   notice=$(verdict_notice_path "$id" "$ve")
   footer="Ack only: the ledger is updated; no dispatch action needed. Check status:
@@ -976,7 +1343,7 @@ verdict_notify() {
   # created is ever removed.
   if ! ( set -o noclobber; : > "$notice" ) 2>/dev/null; then
     echo "WARN: the verdict notice path already exists and was left untouched ($notice); no notification was sent." >&2
-    echo failed; return 0
+    _vn_out failed; return 0
   fi
   if ! ( printf '[task:%s] [event:%s] %s\n\n' "$id" "$ve" "$line"
          python3 -I "$vf" show --path "$artifact" --sha "$sha" || exit 1
@@ -984,25 +1351,40 @@ verdict_notify() {
        ) > "$notice" 2>/dev/null; then
     rm -f "$notice" 2>/dev/null
     echo "WARN: could not compose the verdict notification; no notification was sent." >&2
-    echo failed; return 0
+    _vn_out failed; return 0
   fi
   chmod 600 "$notice" 2>/dev/null || true
   dout=$(session_chat_dispatch "$to" "$notice"); dc=$?
+  if [ "$dc" = "$SESSION_CHAT_DISPATCH_NOT_INVOKED" ]; then dc=1; else attempted=yes; fi
   if [ "$dc" = "3" ] || { [ "$dc" = "0" ] && printf '%s\n' "$dout" | grep -q '^Queued dispatch to '; }; then
-    echo queued; return 0
+    _vn_out queued; return 0
   fi
   if [ "$dc" = "0" ]; then
-    echo delivered; return 0
+    _vn_out delivered; return 0
   fi
   # Hard dispatch failure only: bounded inline pointer to the recorded verdict.
   limit="${SESSION_CHAT_SEND_MAX_LEN:-1024}"
   [[ "$limit" =~ ^[0-9]+$ ]] && [ "$limit" -ge 1 ] || limit=1024
-  if pointer=$(python3 -I "$vf" pointer --task "$id" --event "$ve" --line "$line" --max-bytes "$limit") \
-     && session_chat_send "$to" "$pointer"; then
-    echo "WARN: durable verdict dispatch to '$to' failed; a bounded pointer was sent inline (a duplicate pointer is possible)." >&2
-    echo inline-fallback; return 0
+  if pointer=$(python3 -I "$vf" pointer --task "$id" --event "$ve" --line "$line" --max-bytes "$limit"); then
+    # session_chat_send reports through SESSION_CHAT_SEND_ATTEMPTED (a direct call here)
+    # whether it reached the send script; no discovery is repeated.
+    session_chat_send "$to" "$pointer"; sent=$?
+    [ "${SESSION_CHAT_SEND_ATTEMPTED:-0}" = 1 ] && attempted=yes
+    if [ "$sent" = 0 ]; then
+      echo "WARN: durable verdict dispatch to '$to' failed; a bounded pointer was sent inline (a duplicate pointer is possible)." >&2
+      _vn_out inline-fallback; return 0
+    fi
   fi
-  echo failed; return 0
+  _vn_out failed; return 0
+}
+
+# shellcheck disable=SC2034  # returned to task-done/task-block
+verdict_notify_typed() {
+  local raw
+  raw=$(_SCHED_NOTIFY_TYPED=1 verdict_notify "$1" "$2")
+  VERDICT_OUTCOME="${raw##*$'\n'}"
+  VERDICT_ATTEMPT=no
+  case "$raw" in "attempt:yes"*) VERDICT_ATTEMPT=yes ;; esac
 }
 
 # verdict_record_outcome <task-id> <event-id> <state>
@@ -1033,22 +1415,25 @@ verdict_consume_draft() {
 }
 
 # Transport wrappers keep the provider-specific root/version resolution.
+SESSION_CHAT_DISPATCH_NOT_INVOKED=125
 session_chat_dispatch() {
   local root
-  root=$(session_chat_root) || return 1
+  root=$(session_chat_root) || return "$SESSION_CHAT_DISPATCH_NOT_INVOKED"
   bash "$root/scripts/dispatch-to-session.sh" "$1" "$2"
 }
 
 session_chat_send() {
   local root
+  SESSION_CHAT_SEND_ATTEMPTED=0
   root=$(session_chat_root) || return 1
+  SESSION_CHAT_SEND_ATTEMPTED=1
   bash "$root/scripts/send-message.sh" "$1" "$2" >/dev/null 2>&1
 }
 
 # Update status + history. Enforces legal transitions unless
 # SESSION_SCHEDULER_FORCE=1 (then the history note records "forced").
 # Sets started_at the first time status becomes assigned.
-append_history_update() (
+_append_history_update() {
   local file="$1"
   local status="$2"
   local event="$3"
@@ -1058,6 +1443,7 @@ append_history_update() (
   lock_task_for_command "$(basename "$file" .json)" || exit 1
   if jq -e 'has("contract")' "$file" >/dev/null; then
     echo "ERROR: task has a verification contract; use task-contract.sh" >&2
+    _sched_diag_note sched.contract.legacy_write_refused
     return 1
   fi
   local current
@@ -1069,12 +1455,14 @@ append_history_update() (
       echo "ERROR: Illegal status transition '$current' -> '$status'." >&2
       echo "Current status: $current; legal next: $(legal_targets "$current")" >&2
       echo "Override with --force or SESSION_SCHEDULER_FORCE=1." >&2
+      _sched_diag_note sched.transition.illegal
       return 1
     fi
   fi
   local now
   now=$(now_iso)
-  jq \
+  local updated
+  updated=$(jq \
     --arg status "$status" \
     --arg now "$now" \
     --arg event "$event" \
@@ -1088,8 +1476,17 @@ append_history_update() (
         then .started_at=$now else . end)
      | .history += [{ts:$now,event:$event,actor:$actor,note:$note}]
      | '"$VERDICT_EVENT_FILTER" \
-    "$file" | write_json_atomic "$file"
-)
+    "$file") || { _sched_diag_note sched.ledger.write_failed; return 1; }
+  write_json_atomic "$file" <<< "$updated"
+}
+
+append_history_update() {
+  if [ -n "$_SCHED_DIAG_HELPER" ]; then
+    _sched_diag_collect _append_history_update "$@"
+  else
+    ( _append_history_update "$@" )
+  fi
+}
 
 file_mtime() {
   local file="$1"

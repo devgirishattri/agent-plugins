@@ -21,11 +21,13 @@ Hook mode reads one JSON event (Claude- or Codex-shaped) from stdin:
   audit             -> one stderr line, exit 0 (never blocks), or one inert
                        Codex ``systemMessage`` JSON object on stdout when
                        ``--codex-hook-output`` is selected by hooks.json
-  enforce deny      -> one concise stderr line, exit 2 (blocks the tool call)
+  enforce deny      -> one concise stderr line, exit 2 (blocks the tool call),
+                       then one ``DIAG {json}`` line (diag/1); audit emits none
 ``--decision-json`` (test/parity mode) always exits 0 and prints exactly one
 JSON object with a fixed, sorted key set so the two provider trees can
 byte-compare decisions:
-  {"active","decision","mode","pane","profile","reason","role","rule","tool"}
+  {"active","decision","diagnostic","mode","pane","profile","reason","role","rule","tool"}
+``diagnostic`` is the diag/1 object for a deny and null for every other decision.
 ``decision`` is one of allow | deny | audit. Integrity failures (invalid or
 drifted config, unknown/mismatched identity) are ``deny`` in BOTH modes --
 audit only softens policy denials.
@@ -851,14 +853,17 @@ def command_basename(tokens: List[str]) -> str:
     return Path(argv[0]).name if argv else ""
 
 
-def git_subcommand(tokens: List[str]) -> Tuple[str, int]:
+def git_subcommand(tokens: List[str], flags: Optional[set] = None) -> Tuple[str, int]:
     """Return (subcommand, index) for a git argv, honoring global options.
     Raises for a non-allowlisted global option (they can redirect execution:
-    -c, --exec-path, --config-env ...)."""
+    -c, --exec-path, --config-env ...). When FLAGS is a set, every parsed
+    value-less global flag is added to it (option VALUES never are)."""
     index = 1
     while index < len(tokens):
         token = tokens[index]
         if token in READ_GIT_GLOBAL_FLAGS:
+            if flags is not None:
+                flags.add(token)
             index += 1
             continue
         if token in READ_GIT_VALUE_OPTIONS:
@@ -914,14 +919,28 @@ def git_is_read_only(tokens: List[str]) -> bool:
     return True
 
 
+GLOB_CHARS = "*?{}["
+
+
 def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = (), resolve: bool = True,
-                   literal: bool = False) -> Optional[Path]:
+                   literal: bool = False, globs_quoted: bool = False) -> Optional[Path]:
     """Resolve one argv token as a path operand, or None when it is data.
     Path forms: absolute, ./ ../ ~/ prefixed, bare . / .. / ~, anything with a
     slash, `--opt=PATH`, an attached cwd option (`-C..`, `-C/tmp`), an
     assignment value (`OUT=/tmp/x`), and a BARE relative name that names an
     existing entry under BASE (the symlink-escape shape, `cat escape-link`,
-    with or without whitespace). Free text that names nothing stays data."""
+    with or without whitespace). Free text that names nothing stays data.
+
+    GLOBS_QUOTED (default False) is the H1 permission: the caller proved on
+    the RAW command text (has_unquoted_glob) that every `*?{}[` in the argv
+    was quoted or backslash-escaped, so the shell passes it through literally.
+    Only then are those characters ordinary path text; the path is resolved,
+    contained and symlink-checked exactly like any other literal. `$` or a
+    backtick in a token read as a path operand is dynamic in every mode (the
+    raw scanners refuse real expansions before this point). A glob-bearing
+    path with a `..`
+    component is refused even so: a tool that globs by itself could match a
+    symlinked directory and make the lexical collapse of `..` wrong."""
     value = token
     if not literal and token.startswith("--") and "=" in token:
         value = token.split("=", 1)[1]
@@ -936,7 +955,8 @@ def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = ()
     prefixed = value in {".", "..", "~"} or value.startswith(("/", "./", "../", "~/"))
     has_whitespace = any(char.isspace() for char in value)
     looks_path = prefixed or (not has_whitespace and ("/" in value or value in child_rel_names))
-    dynamic = "$" in value or "`" in value or any(char in value for char in "*?{}[")
+    has_glob = any(char in value for char in GLOB_CHARS)
+    dynamic = "$" in value or "`" in value or (has_glob and not globs_quoted)
     if not looks_path:
         # Unquoted expansions/globs are refused by the raw-command scanners
         # before this point; a quoted one ('a*b') is a literal pattern, data.
@@ -949,9 +969,161 @@ def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = ()
             return None
     if dynamic:
         raise PolicyFailure("path.dynamic", "dynamic or globbed path operands are outside strict-v1")
+    if has_glob and ".." in value.split("/"):
+        raise PolicyFailure("path.dynamic", "a quoted glob path operand cannot contain .. components")
     path = Path(value).expanduser()
     path = path if path.is_absolute() else base / path
     return canonical(path) if resolve else path
+
+
+GIT_PATHSPEC_CONFLICT_FLAGS = {"--glob-pathspecs", "--icase-pathspecs", "--noglob-pathspecs"}
+# The ONLY Git subcommands whose pathspec positions the H1 grant classifies.
+# Each entry: (revisions may precede `--`, short options whose value may be a
+# separate argv token, long options whose value may be a separate argv token).
+# Any other subcommand or alias gets no grant. The tables list only options
+# that really take a value: an option missing here has its separate value
+# treated as a pathspec, which is the stricter direction.
+GIT_PATHSPEC_SUBCOMMANDS = {
+    "add": (False, "", frozenset()),
+    "rm": (False, "", frozenset()),
+    "status": (False, "", frozenset()),
+    "ls-files": (False, "xX", frozenset({"--exclude", "--exclude-from"})),
+    "commit": (False, "mFCct", frozenset({"--message", "--file", "--author", "--date", "--reuse-message", "--reedit-message", "--template", "--fixup", "--squash"})),
+    "diff": (True, "", frozenset()),
+    "restore": (True, "s", frozenset({"--source"})),
+    "checkout": (True, "bB", frozenset()),
+    "log": (True, "n", frozenset({"--max-count", "--skip", "--since", "--until", "--after", "--before", "--author", "--committer", "--grep"})),
+    "show": (True, "n", frozenset({"--max-count", "--skip", "--since", "--until", "--after", "--before", "--author", "--committer", "--grep"})),
+}
+# Other global options whose arity is known (they never take a separate value).
+GIT_NOARG_GLOBALS = {"--exec-path", "--version", "--help", "--html-path", "--man-path", "--info-path"}
+GIT_REV_SYNTAX_RE = re.compile(r"(@|\^)\{[^{}]*\}")
+
+
+def has_glob_char(value: str) -> bool:
+    return any(char in value for char in GLOB_CHARS)
+
+
+def git_globals(argv: List[str]) -> Tuple[Optional[int], bool, bool, List[str], bool]:
+    """Small never-raising scan of Git's global options, used ONLY for the H1
+    grant (it is deliberately not git_subcommand's wider allowlist). Returns
+    (subcommand index or None when an option of unknown arity hides it,
+    saw --literal-pathspecs, saw a conflicting --glob/--icase/--noglob-
+    pathspecs, every -C value, saw any other global option)."""
+    literal = conflict = other = False
+    cdirs: List[str] = []
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if token == "--literal-pathspecs":
+            literal = True
+        elif token in GIT_PATHSPEC_CONFLICT_FLAGS:
+            conflict = True
+        elif token == "-C" or token in {"-c", "--git-dir", "--work-tree", "--namespace"}:
+            if index + 1 >= len(argv):
+                return None, literal, conflict, cdirs, True
+            if token == "-C":
+                cdirs.append(argv[index + 1])
+            else:
+                other = True
+            index += 1
+        elif token.startswith("-C") and len(token) > 2:
+            cdirs.append(token[2:])
+        elif token.startswith("-"):
+            other = True
+            if not (token in READ_GIT_GLOBAL_FLAGS or token in GIT_NOARG_GLOBALS or "=" in token):
+                return None, literal, conflict, cdirs, True
+        else:
+            return index, literal, conflict, cdirs, other
+        index += 1
+    return None, literal, conflict, cdirs, other
+
+
+def git_pathspec_operands(sub: str, rest: List[str]) -> List[str]:
+    """The argv tokens of a SUPPORTED subcommand that sit in pathspec position:
+    every operand after `--`, plus the non-option positionals before it. For
+    a revision-taking subcommand (diff, log, show, checkout, restore) the
+    positionals before an explicit `--` are revisions, not pathspecs, and so
+    is a positional whose only glob characters are revision syntax such as
+    `HEAD@{1}` or `HEAD^{tree}`. Option names and the values of options that
+    take a value are never pathspecs (`-m 'fix [id]'`, `--format=[%h]`)."""
+    revs_first, short_values, long_values = GIT_PATHSPEC_SUBCOMMANDS[sub]
+    before: List[str] = []
+    after: List[str] = []
+    dashdash = False
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        index += 1
+        if dashdash:
+            after.append(token)
+        elif token == "--":
+            dashdash = True
+        elif token.startswith("--"):
+            if "=" not in token and token in long_values:
+                index += 1
+        elif token.startswith("-") and token != "-":
+            for offset in range(1, len(token)):
+                if token[offset] in short_values:
+                    if offset == len(token) - 1:
+                        index += 1
+                    break
+        else:
+            before.append(token)
+    if revs_first:
+        before = [] if dashdash else [t for t in before if not (has_glob_char(t) and not has_glob_char(GIT_REV_SYNTAX_RE.sub("", t)))]
+    return before + after
+
+
+def quoted_globs_literal(argv: List[str], globs_quoted: bool) -> bool:
+    """Whether quoted `*?{}[` in ARGV's operands may be read as literal path
+    text (see candidate_path). GLOBS_QUOTED is the caller's proof from the raw
+    scan. Shell quoting does not stop Git from globbing a pathspec itself, so
+    for git the proof is not enough. The git grant applies ONLY when ALL hold:
+      - the subcommand is in GIT_PATHSPEC_SUBCOMMANDS;
+      - `--literal-pathspecs` is a global option before the subcommand;
+      - the only other global option is `-C .` (every -C value exactly `.`);
+        any -c, --git-dir, --work-tree, --namespace, --no-pager, ... or other
+        -C value ends the grant, because they change which tree or base the
+        operands resolve against and the policy cannot follow that;
+      - no --glob/--icase/--noglob-pathspecs anywhere.
+    Inside the grant these are refused: a pathspec operand that starts with
+    `:` (pathspec magic, with or without glob characters) and, when a
+    glob-bearing token is present, --pathspec-from-file / --pathspec-file-nul.
+    Outside the grant the old rule stands and is made explicit: a pathspec-
+    position operand (git_pathspec_operands; for an unsupported subcommand,
+    every operand after `--`) or a -C value that contains a glob character
+    raises path.dynamic. Without that, a bare operand such as `a[1]` would fall
+    through candidate_path as data. Inert values (commit messages, --format
+    text, revisions) are never refused only for containing brackets.
+    Non-git commands are unaffected."""
+    if not globs_quoted:
+        return False
+    if not argv or Path(argv[0]).name != "git":
+        return True
+    sub_index, literal, conflict, cdirs, other = git_globals(argv)
+    sub = argv[sub_index] if sub_index is not None else None
+    rest = argv[sub_index + 1 :] if sub_index is not None else argv[1:]
+    supported = sub in GIT_PATHSPEC_SUBCOMMANDS
+    if supported:
+        specs = git_pathspec_operands(sub, rest)
+    else:
+        specs = rest[rest.index("--") + 1 :] if "--" in rest else []
+    if any(has_glob_char(value) for value in cdirs):
+        raise PolicyFailure("path.dynamic", "a Git -C directory with glob characters cannot be checked for symlinks")
+    grant = (supported and literal and not conflict and not other
+             and all(value == "." for value in cdirs)
+             and not any(token in GIT_PATHSPEC_CONFLICT_FLAGS for token in rest))
+    if grant:
+        if any(token.startswith(":") for token in specs):
+            raise PolicyFailure("path.dynamic", "Git pathspec magic is outside strict-v1 even with --literal-pathspecs")
+        if any(has_glob_char(token) for token in rest) and any(
+                token in {"--pathspec-from-file", "--pathspec-file-nul"} or token.startswith("--pathspec-from-file=") for token in rest):
+            raise PolicyFailure("path.dynamic", "Git --pathspec-from-file cannot be checked for glob or magic entries")
+        return True
+    if any(has_glob_char(token) for token in specs):
+        raise PolicyFailure("path.dynamic", "a Git pathspec with glob characters needs --literal-pathspecs on a supported subcommand with no other global option except -C .")
+    return False
 
 
 # Only these reviewed options may suppress path inference for their values.
@@ -1050,11 +1222,12 @@ def argv_fields(argv: List[str], positional_only: bool = False) -> Iterable[Tupl
         yield "candidate", token
 
 
-def argv_paths(argv: List[str], base: Path, child_rel: Tuple[str, ...] = ()) -> Iterable[Tuple[str, Path, Path]]:
+def argv_paths(argv: List[str], base: Path, child_rel: Tuple[str, ...] = (),
+               globs_quoted: bool = False) -> Iterable[Tuple[str, Path, Path]]:
     for kind, value in argv_fields(argv):
         if kind == "option":
             continue
-        raw = candidate_path(value, base, child_rel, resolve=False, literal=kind == "literal")
+        raw = candidate_path(value, base, child_rel, resolve=False, literal=kind == "literal", globs_quoted=globs_quoted)
         if raw is not None:
             yield value, canonical(raw), raw
 
@@ -1194,7 +1367,7 @@ def file_list_read(tokens: List[str]) -> bool:
                and "--files0-from".startswith(value) for kind, value in argv_fields(tokens))
 
 
-def message_read_guard(ctx: Context, tokens: List[str], base: Path) -> bool:
+def message_read_guard(ctx: Context, tokens: List[str], base: Path, globs_quoted: bool = False) -> bool:
     """Deny message aliases and recursive store traversal before broad grants.
 
     Returns whether an explicit payload operand uses the scoped exception;
@@ -1204,7 +1377,8 @@ def message_read_guard(ctx: Context, tokens: List[str], base: Path) -> bool:
     if not argv:
         return False
     roots = guarded_message_roots(ctx)
-    operands = list(argv_paths(argv, base))
+    literal_globs = quoted_globs_literal(argv, globs_quoted)
+    operands = list(argv_paths(argv, base, globs_quoted=literal_globs))
     touched = False
     for _, path, raw in operands:
         lexical = Path(os.path.abspath(raw))
@@ -1228,7 +1402,7 @@ def message_read_guard(ctx: Context, tokens: List[str], base: Path) -> bool:
         if executable in {"rg", "grep"} and not any(
                 option in {"-e", "-f", "--regexp", "--file", "--files"} for option in options):
             positional = positional[1:]  # First positional is the search pattern.
-        scan_paths = [candidate_path(value, base, literal=True) for value in positional] or [base]
+        scan_paths = [candidate_path(value, base, literal=True, globs_quoted=literal_globs) for value in positional] or [base]
         if executable == "find" and (len(argv) == 1 or argv[1].startswith("-")):
             scan_paths.append(base)  # find expressions may omit the starting path.
         if any(path is not None and path.is_dir() and any(within(root, path) for root in roots) for path in scan_paths):
@@ -1330,14 +1504,18 @@ def segment_exec_cwd(segment: List[str], cwd: Path) -> Path:
 
 
 def ensure_paths_within(tokens: List[str], base: Path, allowed: Callable[[Path], bool], rule: str,
-                        extra_read: Optional[Callable[[Path], bool]] = None) -> None:
+                        extra_read: Optional[Callable[[Path], bool]] = None, globs_quoted: bool = False) -> None:
     """Every path-like operand of ONE segment must satisfy ALLOWED. The
     wrapper prefix (assignments, env and its option VALUES such as
     `-C ..`) resolves against BASE; the real command's execution cwd (BASE,
     or an env --chdir target, itself checked) is where its executable --
     when written as a path -- and its operands resolve, including
     redirection targets segments() folded in as explicit ./ paths. A bare
-    command name is a PATH lookup and is not an operand."""
+    command name is a PATH lookup and is not an operand.
+
+    GLOBS_QUOTED applies to the real command's operands only (never to the
+    wrapper values, the executable, or env --chdir targets) and is honored
+    only as quoted_globs_literal allows (git needs --literal-pathspecs)."""
     wrapped = parse_wrappers(tokens)
     argv = wrapped.argv
     for value in wrapped.values:
@@ -1350,7 +1528,7 @@ def ensure_paths_within(tokens: List[str], base: Path, allowed: Callable[[Path],
     path = executable_path(argv[0], exec_cwd) if argv else None
     if path is not None and not allowed(path):
         raise PolicyFailure(rule, "executable path escapes the allowed scope: %s" % argv[0])
-    for token, path, raw in argv_paths(argv, exec_cwd):
+    for token, path, raw in argv_paths(argv, exec_cwd, globs_quoted=quoted_globs_literal(argv, globs_quoted)):
         if path == Path("/dev/null"):
             continue
         if not allowed(path):
@@ -1673,11 +1851,16 @@ def require_route_target(ctx: Context, target: str) -> None:
         raise PolicyFailure("routing.master", "executor/reviewer outbound coordination must target the orchestrator pane")
 
 
-def chat_send(ctx: Context, script: str, args: List[str]) -> None:
+def chat_send(ctx: Context, script: str, args: List[str]) -> Optional[frozenset]:
+    """Returns the argv indices of the message body words: everything after
+    the target. parse_chat_options consumed the recognized options, so
+    `positional` is the tail of ARGS and positional[0] is the target."""
     positional = parse_chat_options(args)
     if len(positional) < 2:
         raise PolicyFailure("helper.argv", "%s requires a literal target and a message" % script)
     require_route_target(ctx, positional[0])
+    target_index = len(args) - len(positional)
+    return frozenset(range(target_index + 1, len(args)))
 
 
 def chat_dispatch(ctx: Context, script: str, args: List[str]) -> None:
@@ -1788,8 +1971,11 @@ def own_draft_note_file(ctx: Context, script: str, value: str) -> None:
         raise refusal
 
 
-def task_transition(note_required: bool, note_file: bool = False) -> Callable[[Context, str, List[str]], None]:
-    def check(ctx: Context, script: str, args: List[str]) -> None:
+def task_transition(note_required: bool, note_file: bool = False) -> Callable[[Context, str, List[str]], Optional[frozenset]]:
+    def check(ctx: Context, script: str, args: List[str]) -> Optional[frozenset]:
+        """Returns the argv index of the inline note/reason operand (inert
+        free text) for the two inline forms; the --note-file forms and the
+        bare id form have none."""
         if "--force" in args:
             raise PolicyFailure("helper.argv", "%s: forced transitions are not routine strict-v1 operations" % script)
         if "--note-file" in args:
@@ -1808,11 +1994,12 @@ def task_transition(note_required: bool, note_file: bool = False) -> Callable[[C
         if len(args)==4 and LABEL_RE.fullmatch(args[0]) and args[1]=='--generation' and POSITIVE_RE.fullmatch(args[2]) and args[3] and not args[3].startswith('--'):
             if not isinstance(contract_actor(ctx,script,args[0]).get('contract'),dict):
                 raise PolicyFailure('task.contract','the --generation form applies only to a contracted task')
-            return
+            return frozenset({3})
         if len(args) not in {1, 2} or not LABEL_RE.fullmatch(args[0]):
             raise PolicyFailure("helper.argv", "%s requires a literal task id and at most one note operand" % script)
         if note_required and len(args) != 2:
             raise PolicyFailure("helper.argv", "%s requires a literal reason/note" % script)
+        return frozenset({1}) if len(args) == 2 else None
 
     return check
 
@@ -2385,11 +2572,12 @@ def helper_invocation(ctx: Context, tokens: List[str], raw: str) -> Optional[Tup
     if len(tokens) < 2 or tokens[0] != "bash":
         raise PolicyFailure("helper.launch", "installed helpers require literal `bash` followed by one canonical script path")
     _, plugin, script_name = trusted_script(ctx, tokens[1])
+    _note_parsed_helper(plugin, script_name)
     args = tokens[2:]
     if any("\n" in arg or "\r" in arg or "\x00" in arg for arg in args):
         raise PolicyFailure("helper.argv", "helper arguments must be single-line literal argv")
-    if any("/plugins/cache/" in arg for arg in args):
-        raise PolicyFailure("helper.argv", "helper arguments must not name another installed script")
+    # The "/plugins/cache/" substring check runs in validate_helper, after the
+    # helper's grammar has classified which argv indices are inert free text.
     return plugin, script_name, args
 
 
@@ -2441,7 +2629,17 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
             raise PolicyFailure("routing.scope", "workspace installation/browser config belongs to root coordinator")
     if ctx.environment and (plugin, script) in {("session-scheduler", "tasks-clean.sh"), ("session-chat", "messages-clean.sh"), ("session-chat", "clean-messages.sh"), ("session-manager", "delete-all-sessions.sh"), ("session-manager", "delete-session.sh")}:
         raise PolicyFailure("routing.scope", "shared-store cleanup belongs to root coordinator")
-    grammar(ctx, script, args)
+    inert = grammar(ctx, script, args)
+    # H4: no argument may name another installed script, except argv indices
+    # the helper's own VALIDATED grammar returned as inert free text (a task
+    # note, a chat message body). Nothing else is exempt: not flags or their
+    # values, not prompt-file or --note-file operands, not path operands, and
+    # not helpers whose grammar returns no free-text indices. The newline/CR/
+    # NUL refusal in helper_invocation has already covered every argument.
+    exempt = inert if isinstance(inert, (set, frozenset)) else frozenset()
+    for index, arg in enumerate(args):
+        if index not in exempt and "/plugins/cache/" in arg:
+            raise PolicyFailure("helper.argv", "helper arguments must not name another installed script")
 
 
 # ---------------------------------------------------------------------------
@@ -2459,8 +2657,13 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
         raise PolicyFailure("reviewer.shell", "reviewer launch wrappers and environment assignments are forbidden")
     if "/" in tokens[0] or tokens[0].startswith("~"):
         raise PolicyFailure("reviewer.command", "reviewer commands must be bare PATH names, never a path to an executable: %s" % tokens[0])
+    # H1 call site 1/2 (reviewer read path): has_unquoted_glob(command) above
+    # was False for this exact one-segment raw command, so every `*?{}[` in
+    # its argv is quoted or escaped and reaches the tool literally. Only the
+    # reviewer's own read-path checks below receive that permission.
+    quoted_globs = True
     executable = command_basename(tokens)
-    message_read = message_read_guard(ctx, tokens, base)
+    message_read = message_read_guard(ctx, tokens, base, globs_quoted=quoted_globs)
     if file_list_read(tokens):
         raise PolicyFailure("reviewer.file_list", "restricted reads cannot load additional file operands from a NUL-separated list; name each file literally")
     if executable == "git":
@@ -2469,7 +2672,7 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
             raise PolicyFailure("reviewer.git", "reviewer Git requires an exact read-only subcommand")
         if not git_is_read_only(tokens):
             raise PolicyFailure("reviewer.git", "reviewer Git write/output/external-execution options are forbidden")
-        ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path")
+        ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path", globs_quoted=quoted_globs)
         return
     if executable in {"sed", "awk", "perl"}:
         # Script-taking tools can write (sed w/W, s///w, -i) or exec (awk
@@ -2509,7 +2712,7 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
                              (token.startswith("-") and not token.startswith("--") and any(c in token[1:] for c in short_follow))):
             raise PolicyFailure("reviewer.symlink_follow", "reviewer recursive symlink traversal is forbidden")
     if executable == "diff":
-        for _, path, _ in argv_paths(tokens, base):
+        for _, path, _ in argv_paths(tokens, base, globs_quoted=quoted_globs_literal(tokens, quoted_globs)):
             if path.is_dir():
                 raise PolicyFailure("reviewer.symlink_follow", "reviewer diff requires file operands; directory comparison follows leaf symlinks")
     if executable == "find" and any(token in {"-delete", "-exec", "-execdir", "-fls", "-fprint", "-fprint0", "-fprintf", "-ok", "-okdir"} for token in tokens):
@@ -2521,7 +2724,7 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
     if executable == "sort" and sort_writes(tokens):
         raise PolicyFailure("reviewer.sort", "reviewer sort output/program options are forbidden")
     ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path",
-                        extra_read=lambda p: skill_content_readable(ctx, p))
+                        extra_read=lambda p: skill_content_readable(ctx, p), globs_quoted=quoted_globs)
     return "coordination.message_read" if message_read else None
 
 
@@ -2903,10 +3106,15 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
             raise PolicyFailure("path.dynamic", "executor operands must be literal; shell expansion cannot be resolved by the policy")
         if has_unquoted_glob(command):
             raise PolicyFailure("path.dynamic", "unquoted glob/brace expansion produces operands the policy cannot resolve; quote the pattern or name the files")
+        # H1 call site 2/2 (executor floor): has_unquoted_glob(command) above
+        # was False for the full raw command, a superset of every segment's
+        # raw text, so each segment's `*?{}[` is quoted or escaped. The
+        # permission is used only by the two per-segment path checks below.
+        quoted_globs = True
         floor_base = (reviewer_base or ctx.pane_cwd) if ctx.semantic_role == "executor" else ctx.pane_cwd
         for segment, cwd, after in walk_segments(tokens, floor_base):
             if ctx.semantic_role == "executor":
-                message_read_guard(ctx, segment, cwd)
+                message_read_guard(ctx, segment, cwd, globs_quoted=quoted_globs)
             if ctx.semantic_role == "orchestrator" and command_basename(segment) == "git" and not git_is_read_only(segment):
                 raise PolicyFailure("orchestrator.git", "local coordinator Git mutations belong to its executor")
             if executor_inline_code(segment):
@@ -2916,7 +3124,7 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
             if not within(after, ctx.pane_cwd):
                 raise PolicyFailure("executor.containment", "cd target escapes the configured child cwd")
             ensure_paths_within(segment, cwd, lambda p: within(p, ctx.pane_cwd) and not any(
-                within(p, root) for root in ctx.message_roots), "executor.containment")
+                within(p, root) for root in ctx.message_roots), "executor.containment", globs_quoted=quoted_globs)
         return
 
     # Orchestrator: shell is free apart from two floor rules. (1) It never
@@ -3048,6 +3256,8 @@ def extract_command(tool_input: dict) -> Optional[str]:
 
 
 def evaluate(raw: str) -> Decision:
+    global _PARSED_HELPER
+    _PARSED_HELPER = None
     ctx, bootstrap_denial = load_context()
     if bootstrap_denial is not None:
         return bootstrap_denial
@@ -3091,6 +3301,85 @@ def evaluate(raw: str) -> Decision:
     return allow(ctx, tool_name)
 
 
+# --- Diagnostics (diag/1) ------------------------------------------------------
+# One machine-readable DIAG line follows the human BLOCKED line on every deny
+# (enforce policy denials and integrity denials). Built only from the allowlisted
+# fields below: never from payload text, paths, argv or exception text. Emission
+# is best-effort and never changes the exit code or the BLOCKED line.
+_PARSED_HELPER: Optional[Tuple[str, str]] = None
+_DIAG_RULE_RE = re.compile(r"\A[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*\Z")
+
+
+def _note_parsed_helper(plugin: str, script: str) -> None:
+    """Remember the last installed helper that passed provenance parsing."""
+    global _PARSED_HELPER
+    _PARSED_HELPER = (plugin, script)
+
+
+def _note_parsed_helper_reset() -> None:
+    global _PARSED_HELPER
+    _PARSED_HELPER = None
+
+
+def _diag_helper() -> Optional[str]:
+    parsed = _PARSED_HELPER
+    if parsed is None:
+        return None
+    plugin, script = parsed
+    table = HELPERS.get(plugin)
+    return script if isinstance(table, dict) and script in table else None
+
+
+def _diag_version() -> Optional[str]:
+    root = Path(__file__).resolve().parent.parent
+    for manifest in (".claude-plugin", ".codex-plugin"):
+        try:
+            data = json.loads((root / manifest / "plugin.json").read_text())
+        except (OSError, ValueError):
+            continue
+        version = data.get("version") if isinstance(data, dict) else None
+        if isinstance(version, str) and SAFE_VERSION_RE.fullmatch(version):
+            return version
+    return None
+
+
+def diagnostic_object(decision: Decision) -> Optional[dict]:
+    """The diag/1 record for a deny decision, else None."""
+    if decision.decision != "deny" or not _DIAG_RULE_RE.fullmatch(decision.rule):
+        return None
+    return {
+        "schema": "diag/1",
+        "emitter": "workspace-hook",
+        "helper": _diag_helper(),
+        "version": _diag_version(),
+        "subject": "admission",
+        "phase": "admission",
+        "reason": "hook." + decision.rule,
+        "outcome": "refused",
+        "state_committed": False,
+        "notification": None,
+        "task": None,
+        "generation": None,
+        "event": None,
+        "request": None,
+        "also": [],
+        "also_truncated": False,
+    }
+
+
+def emit_diagnostic(decision: Decision) -> None:
+    try:
+        record = diagnostic_object(decision)
+        if record is None:
+            return
+        line = "DIAG " + json.dumps(record, separators=(",", ":"))
+        if "\n" in line or "\r" in line:
+            return
+        print(line, file=sys.stderr)
+    except Exception:  # diagnostics never change the decision, rc, or BLOCKED text
+        return
+
+
 def audit_message(decision: Decision) -> str:
     return "AUDIT by session-workspace strict-v1 [%s]: %s (would deny in enforce mode)" % (decision.rule, decision.reason)
 
@@ -3123,12 +3412,19 @@ def main(argv: List[str]) -> int:
     try:
         decision = evaluate(sys.stdin.read())
     except Exception as exc:  # fail closed: a crashed hook would not block the tool call
+        _note_parsed_helper_reset()  # an internal error names no helper
         decision = deny(None, "", "policy.internal", "strict-v1 policy error (%s); refusing" % type(exc).__name__, integrity=True)
     if decision_json:
-        print(json.dumps(decision.normalized(), sort_keys=True, separators=(",", ":")))
+        normalized = decision.normalized()
+        try:
+            normalized["diagnostic"] = diagnostic_object(decision)
+        except Exception:
+            normalized["diagnostic"] = None
+        print(json.dumps(normalized, sort_keys=True, separators=(",", ":")))
         return 0
     if decision.decision == "deny":
         print("BLOCKED by session-workspace strict-v1 [%s]: %s" % (decision.rule, decision.reason), file=sys.stderr)
+        emit_diagnostic(decision)
         return 2
     if decision.decision == "audit":
         message = audit_message(decision)

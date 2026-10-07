@@ -2514,7 +2514,15 @@ else fail "contracted_crash_boundaries_sigkill_consistent_pending_no_replay" "$v
 
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
+MAIN_RC=0
 if [ "$FAIL" -gt 0 ]; then
   for f in "${FAILURES[@]}"; do echo "  - $f"; done
-  exit 1
+  MAIN_RC=1
 fi
+
+# Tier 1.3a diagnostics suite (its own counters and summary; the count above is unchanged).
+if [ -f "$HERE/test-diagnostics.sh" ]; then
+  echo
+  bash "$HERE/test-diagnostics.sh" || MAIN_RC=1
+fi
+exit "$MAIN_RC"
