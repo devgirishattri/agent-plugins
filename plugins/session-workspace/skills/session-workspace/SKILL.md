@@ -224,6 +224,21 @@ From 0.7.1:
 - Send verdicts as a single-line `/session-chat:reply`, a scheduler note, or a
   staged file sent with `dispatch-to-session.sh`.
 
+### Credentials, read grants and permission prompts (guidance)
+
+- [references/gh-credentials-and-read-grants.md](references/gh-credentials-and-read-grants.md):
+  give each pane its gh credential at launch instead of a per-command
+  `GH_CONFIG_DIR`; `read_paths` grant reading, never execution.
+- [references/claude-permission-guidance.md](references/claude-permission-guidance.md):
+  narrow Claude allow rules that can reduce classifier pauses for read-only and
+  helper commands, and the commands never to allow.
+
+- [references/verifier-capability.md](references/verifier-capability.md):
+  requirements for any owner-reviewed verifier execution route (content,
+  dependency and argument binding); it installs no runner.
+
+These pages are documentation only; they add no grant or permission rule.
+
 ### Read grants (`read_paths`) for reviewers and executors
 
 Schema v2–5 reviewers and executors can set `sessions[].panes[].read_paths` to

@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.18 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.6 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.11.7 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.11.8 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -376,6 +376,11 @@ commands, use `git --literal-pathspecs <command> -- '<path>'`; the new permissio
 allows no other global option except `-C .`. Task notes and chat message bodies
 can mention plugin cache paths. File operands keep their existing restrictions.
 See the session-workspace skill for the supported Git forms and limitations.
+
+For permission setup and proposed verifier execution, read the provider's
+session-workspace skill and its
+[owner-reviewed verifier guidance](plugins/session-workspace/skills/session-workspace/references/verifier-capability.md).
+These documents add no execution grants or sandbox exceptions.
 
 Since 0.11.1, strict-v1 permits `memory-auto-capture.sh [--store P] --staged FILE...`
 for orchestrators and executors. Reviewers are denied, and `--batch-dir` is refused.

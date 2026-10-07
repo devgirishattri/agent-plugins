@@ -356,6 +356,31 @@ checkout; routes only to its configured executor/reviewer panes;
   `bash <selected-cache-path>/scripts/<name>.sh args...` — no env prefix,
   wrapper, chaining, expansion, stale version, or copied script.
 
+### Codex permission boundaries
+
+For launch-pinned GitHub credentials and the limits of read grants, read
+[gh credentials and read grants](references/gh-credentials-and-read-grants.md).
+These are owner requirements and existing policy boundaries, not new grants.
+
+Native Codex approval and sandbox rules apply in addition to the harness.
+An admitted helper or read command can still be unavailable under those rules.
+Do not translate a Claude permission pattern into a Codex outside-sandbox allow
+rule. Do not grant a shell, interpreter, plugin directory, or package manager
+blanket execution merely to avoid a prompt.
+
+Codex `allow` rules authorize commands outside the sandbox without prompting;
+see the [official rules documentation](https://learn.chatgpt.com/docs/agent-configuration/rules).
+
+Use the selected helper's literal path and supported arguments. For GitHub
+reads, use only the current role's documented grammar; the orchestrator `gh`
+read grammar does not grant reviewer `gh` access. A branch name or protection
+setting does not authorize push or deployment. Route those operations through
+the project's existing owner-approved workflow.
+
+For a proposed verifier that needs separate execution authority, read
+[owner-reviewed verifier guidance](references/verifier-capability.md). The
+guidance adds no permission rule or executable capability.
+
 ### Audit and enforce modes
 
 | Mode | Policy denial | Identity/config/drift integrity failure |

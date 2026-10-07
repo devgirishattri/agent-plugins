@@ -1748,26 +1748,26 @@ as_master "H4 control: orchestrator task-new plain name is allowed" "$(bash_payl
 # Native hook shapes for both easings: the real wrapper (exit code + stderr)
 # and a Codex-shaped payload through the decision path.
 echo "== Tier 1.4: native hook shapes =="
-hook_run() { # hook_run ROLE PANE OUTFILE ERRFILE PAYLOAD
+h1_hook_run() { # h1_hook_run ROLE PANE OUTFILE ERRFILE PAYLOAD
   printf '%s' "$5" | env \
     SESSION_WORKSPACE_CONFIG="$CONFIG" SESSION_WORKSPACE_PROJECT_ROOT="$ROOT" \
     SESSION_WORKSPACE_PANE_NAME="$2" SESSION_WORKSPACE_ROLE="$1" \
     SESSION_WORKSPACE_PANE_CWD="$CHILD" SESSION_WORKSPACE_HARNESS_MODE=enforce \
     CLAUDE_HOME="$FAKE_CLAUDE" CODEX_HOME="$FAKE_CODEX" bash "$HERE/harness-hook.sh" >"$3" 2>"$4"
 }
-hook_run executor "$EXEC_PANE" "$TMPROOT/h1.out" "$TMPROOT/h1.err" "$(bash_payload "git --literal-pathspecs add -- 'src/app/[id]/page.tsx'")"
+h1_hook_run executor "$EXEC_PANE" "$TMPROOT/h1.out" "$TMPROOT/h1.err" "$(bash_payload "git --literal-pathspecs add -- 'src/app/[id]/page.tsx'")"
 if [ $? -eq 0 ] && [ ! -s "$TMPROOT/h1.err" ]; then pass "H1 hook wrapper: executor git --literal-pathspecs quoted bracket add exits 0 silently"; else fail "H1 hook wrapper: executor git --literal-pathspecs quoted bracket add exits 0 silently" "$(cat "$TMPROOT/h1.err")"; fi
-hook_run executor "$EXEC_PANE" "$TMPROOT/h2.out" "$TMPROOT/h2.err" "$(bash_payload "git add -- 'src/app/[id]/page.tsx'")"
+h1_hook_run executor "$EXEC_PANE" "$TMPROOT/h2.out" "$TMPROOT/h2.err" "$(bash_payload "git add -- 'src/app/[id]/page.tsx'")"
 H2=$?
 if [ "$H2" -eq 2 ] && grep -q '^BLOCKED by session-workspace strict-v1 \[path.dynamic\]' "$TMPROOT/h2.err"; then pass "H1 hook wrapper: executor git add of a bracket pathspec without --literal-pathspecs is blocked"; else fail "H1 hook wrapper: executor git add of a bracket pathspec without --literal-pathspecs is blocked" "status=$H2 $(cat "$TMPROOT/h2.err")"; fi
-hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h3.out" "$TMPROOT/h3.err" "$(bash_payload "cat 'src/app/(x)/[id]/page.tsx'")"
+h1_hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h3.out" "$TMPROOT/h3.err" "$(bash_payload "cat 'src/app/(x)/[id]/page.tsx'")"
 if [ $? -eq 0 ] && [ ! -s "$TMPROOT/h3.err" ]; then pass "H1 hook wrapper: reviewer quoted route path read exits 0 silently"; else fail "H1 hook wrapper: reviewer quoted route path read exits 0 silently" "$(cat "$TMPROOT/h3.err")"; fi
-hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h4.out" "$TMPROOT/h4.err" "$(bash_payload 'cat src/app/[id]/page.tsx')"
+h1_hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h4.out" "$TMPROOT/h4.err" "$(bash_payload 'cat src/app/[id]/page.tsx')"
 H4S=$?
 if [ "$H4S" -eq 2 ] && grep -q '^BLOCKED by session-workspace strict-v1 \[path.dynamic\]' "$TMPROOT/h4.err"; then pass "H1 hook wrapper: reviewer unquoted bracket glob is blocked"; else fail "H1 hook wrapper: reviewer unquoted bracket glob is blocked" "status=$H4S $(cat "$TMPROOT/h4.err")"; fi
-hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h5.out" "$TMPROOT/h5.err" "$(bash_payload "bash $SCHED/task-block.sh t-1234 'blocked by hook at $CP'")"
+h1_hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h5.out" "$TMPROOT/h5.err" "$(bash_payload "bash $SCHED/task-block.sh t-1234 'blocked by hook at $CP'")"
 if [ $? -eq 0 ] && [ ! -s "$TMPROOT/h5.err" ]; then pass "H4 hook wrapper: reviewer task-block note naming a cache path exits 0 silently"; else fail "H4 hook wrapper: reviewer task-block note naming a cache path exits 0 silently" "$(cat "$TMPROOT/h5.err")"; fi
-hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h6.out" "$TMPROOT/h6.err" "$(bash_payload "bash $DISPATCH $MASTER_PANE $TMPROOT/stage/plugins/cache/evil.md")"
+h1_hook_run reviewer "$REVIEW_PANE" "$TMPROOT/h6.out" "$TMPROOT/h6.err" "$(bash_payload "bash $DISPATCH $MASTER_PANE $TMPROOT/stage/plugins/cache/evil.md")"
 H6=$?
 if [ "$H6" -eq 2 ] && grep -q '^BLOCKED by session-workspace strict-v1 \[helper.argv\]' "$TMPROOT/h6.err"; then pass "H4 hook wrapper: dispatch prompt operand under a cache path is blocked"; else fail "H4 hook wrapper: dispatch prompt operand under a cache path is blocked" "status=$H6 $(cat "$TMPROOT/h6.err")"; fi
 expect "H1 Codex-shaped payload: executor quoted bracket path under --literal-pathspecs is allowed" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(codex_bash_payload "git --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
