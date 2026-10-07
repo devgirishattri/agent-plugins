@@ -70,6 +70,44 @@ denied; name explicit safe subdirectories. Writes still use native tools only
 for own drafts. Coordinator behavior and Claude's ungated native Read remain
 unchanged. Update both plugins and restart affected panes.
 
+## Reply envelopes and task association
+
+New message IDs use 16 lowercase hexadecimal characters from OS randomness.
+Existing 8–16 character IDs remain readable. Missing or failed randomness
+aborts the send or dispatch before creating its payload.
+
+The body can start with `[re:<id>]`, then `[task:<task-id>]`, separated by one
+space. Either token is optional. Task IDs contain letters, digits, `_` and `-`.
+Only this leading run is interpreted; quoted tokens later in the body stay
+unchanged. Repeated identical tokens collapse. Conflicting IDs or a reply
+token after a task token are refused. Use the helpers to compose the envelope.
+
+Pass `--task <task-id>` to `send-message.sh` or `dispatch-to-session.sh` to
+record task association. This metadata grants no authority or task completion.
+Sent-log column 8 holds the task ID. Reply-log columns 4–6 hold the task ID,
+receiving pane and incoming message ID. Legacy rows remain readable.
+
+Live sender, ID and body come from one leading transport header in the raw
+prompt or decoded hook JSON `prompt`. Other JSON fields cannot supply identity.
+Without Python or jq, live hook JSON correlation is unavailable; this does not
+prove no reply arrived. Queued send bodies and trusted dispatch files are
+parsed directly. The file parser reads at most `SESSION_CHAT_REPLY_SCAN_BYTES`
+(default 4096). If the complete envelope cannot be decided within that prefix,
+it records nothing. Glued or malformed tokens end the run only when their
+boundary is known.
+
+`check-replies.sh --task ID` filters associations. One request can show several
+replies with different task IDs. `verified` requires the expected sender and
+recipient; legacy rows show `replied (recipient-unknown)`. Unexpected senders,
+wrong recipients or missing new-row recipient context never count as answers.
+Every matching row is checked, so an unexpected reply cannot hide a valid one.
+An unconfirmed row does not establish task progress or liveness.
+
+Message listing supports `<epoch>-<pid>-<id>-<from>-to-<to>.md` and the legacy
+`<epoch>-<from>-to-<to>.md` format. Sender prefixes are preserved. Codex cleanup
+retains its stricter admission: only the current dispatch filename format is
+eligible for deletion.
+
 ## Staging files under a strict-v1 harness
 
 Under an active strict-v1 harness, a reviewer, executor, or confined coordinator
@@ -152,6 +190,7 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
 - `SESSION_CHAT_RETRY_BACKOFF_MS`: linear retry backoff base in milliseconds. Default: `200`.
 - `SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS`: how long a pre-live durable queue row waits before hook recovery if the sender dies mid-send. Default: auto-derived from lock plus send budget plus 1000ms; known live-send failures mark the row ready immediately.
 - `SESSION_CHAT_RECENT_ID_TTL_MS`: how long surfaced message ids suppress duplicate live arrivals. Default: `600000`.
+- `SESSION_CHAT_REPLY_SCAN_BYTES`: maximum dispatch prefix bytes for reply correlation. Default: `4096`; an undecided envelope records nothing.
 - `SESSION_CHAT_DISPATCH_INLINE_MAX`: maximum trusted dispatch-body characters inlined in `auto` mode. Default: `6000`; total hook context remains capped at `10000`.
 - `SESSION_CHAT_TARGET_MESSAGES_DIR`: overrides the local mailbox and every target mailbox. Export the same absolute directory in all participating panes before starting their agents; otherwise senders and receivers can resolve different queues.
 
@@ -185,7 +224,7 @@ Use `$session-chat:messages-list` to inspect trusted dispatch message files in `
 
 - `$session-chat:broadcast [--all] [--match GLOB] <text>`: fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `$session-chat:send` per pane.
 - `$session-chat:message-search <pattern> [--days N] [--peer NAME]`: search the message archive plus full dispatch bodies. The archive holds every sent and surfaced incoming message as a 200-character excerpt, with 30-day retention.
-- `$session-chat:check-replies [--pending] [--since MIN]`: which sent messages have confirmed correlated replies. Use `$session-chat:reply <pane> <id> <message>` for responses; it generates `[re:<id>]` automatically. An unconfirmed row is not evidence that the peer still has an active task.
+- `$session-chat:check-replies [--pending] [--since MIN] [--task TASK_ID]`: which sent messages have confirmed correlated replies. Use `$session-chat:reply <pane> <id> <message>` for responses; it generates `[re:<id>]` automatically. An unconfirmed row is not evidence that the peer still has an active task.
 - `$session-chat:pane-health [name] [--all]`: liveness, cwd/location, inbox backlog, and lock state per named pane; catches dead, duplicate, or repo-drifted workers before dispatch.
 
 ## Reinstalling Source Changes

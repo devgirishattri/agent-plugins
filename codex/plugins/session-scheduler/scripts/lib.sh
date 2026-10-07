@@ -285,13 +285,16 @@ humanize_age() {
 }
 
 generate_id() {
-  local rand
-  if command -v od >/dev/null 2>&1; then
-    rand=$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
-  else
-    rand="${RANDOM:-0}${RANDOM:-0}"
-  fi
-  printf 'task-%s-%s\n' "$(now_epoch)" "$rand"
+  local hex epoch
+  command -v od >/dev/null 2>&1 || return 1
+  # od's own exit status is checked in a plain assignment BEFORE any pipe, so a
+  # failing od can never be hidden by tr (no dependence on pipefail).
+  hex=$(od -An -N4 -tx1 /dev/urandom 2>/dev/null) || return 1
+  hex=$(printf '%s' "$hex" | tr -d ' \n')
+  [[ "$hex" =~ ^[a-f0-9]{8}$ ]] || return 1
+  epoch=$(date +%s 2>/dev/null) || return 1
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+  printf 'task-%s-%s' "$epoch" "$hex"
 }
 
 validate_task_id() {
@@ -572,7 +575,8 @@ workspace_root() {
 }
 
 write_json_atomic() {
-  local file="$1"
+  # The caller holds the task lock across creation or read-modify-write.
+  local file="$1" mode="${2:-}"
   local tmp
   tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
   cat > "$tmp" || {
@@ -582,6 +586,11 @@ write_json_atomic() {
   if ! jq -s -e 'length == 1 and (.[0] | type == "object")' "$tmp" >/dev/null 2>&1; then
     rm -f "$tmp"
     echo "ERROR: refusing invalid task JSON: $file" >&2
+    return 1
+  fi
+  if [ "$mode" = "create" ] && { [ -e "$file" ] || [ -L "$file" ]; }; then
+    rm -f "$tmp"
+    echo "ERROR: task ID collision: $file already exists; it was left unchanged." >&2
     return 1
   fi
   mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }

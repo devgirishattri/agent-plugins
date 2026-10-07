@@ -942,7 +942,7 @@ CS_HOME=$(mktemp -d); CS_MSGS="$CS_HOME/.claude/messages"; mkdir -p "$CS_MSGS/qu
 PLUGROOT="$(cd "$HERE/.." && pwd)"
 (
   source "$HERE/lib.sh"; export MESSAGES_DIR="$CS_MSGS"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
-  enqueue_message me cs1 send peer "ACK-BODY [re:deadbeef01]" "$CS_MSGS"
+  enqueue_message me cs1 send peer "[re:deadbeef01] ACK-BODY" "$CS_MSGS"
   mark_message_ready me cs1 "$CS_MSGS"
 )
 run_detect_cs() {
@@ -1130,8 +1130,9 @@ fi
 rm -rf "$DENY_BIN" "$PERM_BIN" "$OK_BIN"
 
 # --- Test 32: reply correlation — apply_reply_to normalization ---
-# Exactly-one leading token; repeated same-id tokens collapse; a conflicting
-# different token is refused; malformed ids fail closed.
+# Exactly-one leading token; repeated same-id LEADING tokens collapse (a token
+# later in the body is quoted text and stays verbatim); a conflicting different
+# leading token is refused; malformed ids fail closed.
 ar=$(
   source "$HERE/lib.sh"
   printf 'VALID=[%s]\n'    "$(apply_reply_to deadbeef 'hello world')"
@@ -1150,7 +1151,7 @@ ar=$(
 if echo "$ar" | grep -qF 'VALID=[[re:deadbeef] hello world]' \
    && echo "$ar" | grep -qF 'LEAD=[[re:deadbeef] hello]' \
    && echo "$ar" | grep -qF 'DUP=[[re:deadbeef] x]' \
-   && echo "$ar" | grep -qF 'MID=[[re:deadbeef] foo bar]' \
+   && echo "$ar" | grep -qF 'MID=[[re:deadbeef] foo [re:deadbeef] bar]' \
    && echo "$ar" | grep -q 'CONFLICT=ok' && echo "$ar" | grep -q 'MIXCONFLICT=ok' \
    && echo "$ar" | grep -q 'UPPER=ok' && echo "$ar" | grep -q 'SHORT=ok' \
    && echo "$ar" | grep -q 'LONG=ok' && echo "$ar" | grep -q 'SPACE=ok' \
@@ -1510,6 +1511,561 @@ else
   fail "dispatch_read_20kb_integration" "$(tail -20 "${TMPDIR:-/tmp}/session-chat-dispatch-read.$$.log")"
 fi
 rm -f "${TMPDIR:-/tmp}/session-chat-dispatch-read.$$.log"
+
+# ===========================================================================
+# Tier 1.2a — typed reply envelope (leading [re:] / [task:]), expected-peer
+# verification, and 16-hex message ids. Every refusal below has a paired
+# positive control in the same fixture.
+# ===========================================================================
+E_ROOT=$(mktemp -d)
+E_PLUG="$(cd "$HERE/.." && pwd)"
+
+# --- envelope grammar: conflicts / reorder refused, duplicates collapse ---
+ev=$(
+  source "$HERE/lib.sh"
+  chk() { # chk <label> <ok|refuse> <body>
+    local got=ok
+    parse_reply_envelope "$3" || got=refuse
+    if [ "$got" = "$2" ]; then echo "$1=pass"; else echo "$1=FAIL(got=$got re=$ENV_RE task=$ENV_TASK err=$ENV_ERR)"; fi
+  }
+  chk two_re_refused        refuse '[re:aaaaaaaa] [re:bbbbbbbb] x'
+  chk same_re_collapses     ok     '[re:aaaaaaaa] [re:aaaaaaaa] x'
+  parse_reply_envelope '[re:aaaaaaaa] [re:aaaaaaaa] x'
+  [ "$ENV_RE" = aaaaaaaa ] && [ "$ENV_REST" = x ] && echo "same_re_value=pass" || echo "same_re_value=FAIL($ENV_RE|$ENV_REST)"
+  chk full_run_consumed     refuse '[re:aaaaaaaa] [re:aaaaaaaa] [re:bbbbbbbb] x'
+  chk two_task_refused      refuse '[re:aaaaaaaa] [task:t1] [task:t2] x'
+  chk same_task_collapses   ok     '[re:aaaaaaaa] [task:t1] [task:t1] x'
+  chk task_before_re_refused refuse '[task:t1] [re:aaaaaaaa] x'
+  chk re_then_task_ok       ok     '[re:aaaaaaaa] [task:t1] x'
+  chk task_only_ok          ok     '[task:t1] x'
+  parse_reply_envelope '[task:t1] x'
+  [ -z "$ENV_RE" ] && [ "$ENV_TASK" = t1 ] && [ "$ENV_REST" = x ] && echo "task_only_value=pass" || echo "task_only_value=FAIL($ENV_RE|$ENV_TASK|$ENV_REST)"
+  # A token after non-envelope text is quoted text, whatever it says.
+  chk quoted_conflict_ignored ok 'see [re:aaaaaaaa] and [re:bbbbbbbb] [task:t1] [task:t2]'
+  parse_reply_envelope 'see [re:aaaaaaaa] x'
+  [ -z "$ENV_RE" ] && [ "$ENV_REST" = 'see [re:aaaaaaaa] x' ] && echo "quoted_not_parsed=pass" || echo "quoted_not_parsed=FAIL($ENV_RE|$ENV_REST)"
+  # Glued / malformed tokens end the run and are left verbatim.
+  parse_reply_envelope '[re:aaaaaaaa]x'
+  [ -z "$ENV_RE" ] && [ "$ENV_REST" = '[re:aaaaaaaa]x' ] && echo "glued_not_token=pass" || echo "glued_not_token=FAIL($ENV_RE|$ENV_REST)"
+  parse_reply_envelope '[re:aaaaaaaa] [task:bad!] [re:bbbbbbbb]'
+  [ "$ENV_RE" = aaaaaaaa ] && [ "$ENV_REST" = '[task:bad!] [re:bbbbbbbb]' ] && echo "malformed_ends_run=pass" || echo "malformed_ends_run=FAIL($ENV_RE|$ENV_REST)"
+)
+if [ "$(printf '%s\n' "$ev" | grep -c '=pass$')" = "14" ] && ! printf '%s\n' "$ev" | grep -q 'FAIL'; then
+  pass "envelope_grammar_refusals_with_controls"
+else
+  fail "envelope_grammar_refusals_with_controls" "out=$ev"
+fi
+
+# --- apply_envelope: compose re+task, leading-only normalization ---
+ae=$(
+  source "$HERE/lib.sh"
+  show() { local out; if out=$("$@" 2>/dev/null); then printf '[%s]' "$out"; else printf 'REFUSED'; fi; }
+  echo "BOTH=$(show apply_envelope aaaaaaaa t1 'hello')"
+  echo "TASKONLY=$(show apply_envelope '' t1 'hello')"
+  echo "IDEMP=$(show apply_envelope aaaaaaaa t1 '[re:aaaaaaaa] [task:t1] hello')"
+  echo "ADDTASK=$(show apply_envelope aaaaaaaa t1 '[re:aaaaaaaa] hello')"
+  echo "ADDRE=$(show apply_envelope aaaaaaaa t1 '[task:t1] hello')"
+  echo "TASKCONFLICT=$(show apply_envelope aaaaaaaa t2 '[re:aaaaaaaa] [task:t1] hello')"
+  echo "TASKCONFLICT_CTRL=$(show apply_envelope aaaaaaaa t1 '[re:aaaaaaaa] [task:t1] hello')"
+  echo "REORDER=$(show apply_envelope aaaaaaaa '' '[task:t1] [re:aaaaaaaa] hello')"
+  echo "BADTASK=$(show apply_envelope '' 'bad!' 'hello')"
+  echo "BADTASK_CTRL=$(show apply_envelope '' 'good-1_x' 'hello')"
+  echo "QUOTED=$(show apply_envelope aaaaaaaa t1 'see [re:bbbbbbbb] and [task:zz] in the doc')"
+  echo "QUOTED_LEADING=$(show apply_envelope aaaaaaaa '' '[re:bbbbbbbb] see doc')"
+  echo "MULTILINE=$(show apply_envelope aaaaaaaa t1 $'first\nsecond')"
+  echo "ENVONLY=$(show apply_envelope aaaaaaaa t1 '[re:aaaaaaaa]')"
+)
+if echo "$ae" | grep -qxF 'BOTH=[[re:aaaaaaaa] [task:t1] hello]' \
+   && echo "$ae" | grep -qxF 'TASKONLY=[[task:t1] hello]' \
+   && echo "$ae" | grep -qxF 'IDEMP=[[re:aaaaaaaa] [task:t1] hello]' \
+   && echo "$ae" | grep -qxF 'ADDTASK=[[re:aaaaaaaa] [task:t1] hello]' \
+   && echo "$ae" | grep -qxF 'ADDRE=[[re:aaaaaaaa] [task:t1] hello]' \
+   && echo "$ae" | grep -qxF 'TASKCONFLICT=REFUSED' \
+   && echo "$ae" | grep -qxF 'TASKCONFLICT_CTRL=[[re:aaaaaaaa] [task:t1] hello]' \
+   && echo "$ae" | grep -qxF 'REORDER=REFUSED' \
+   && echo "$ae" | grep -qxF 'BADTASK=REFUSED' \
+   && echo "$ae" | grep -qxF 'BADTASK_CTRL=[[task:good-1_x] hello]' \
+   && echo "$ae" | grep -qxF 'QUOTED=[[re:aaaaaaaa] [task:t1] see [re:bbbbbbbb] and [task:zz] in the doc]' \
+   && echo "$ae" | grep -qxF 'QUOTED_LEADING=REFUSED' \
+   && echo "$ae" | grep -qF 'MULTILINE=[[re:aaaaaaaa] [task:t1] first' \
+   && echo "$ae" | grep -qxF 'ENVONLY=[[re:aaaaaaaa] [task:t1]]'; then
+  pass "envelope_apply_compose_and_leading_only"
+else
+  fail "envelope_apply_compose_and_leading_only" "out=$ae"
+fi
+
+# --- log_reply_ids: quoted [re:] mid-body never correlates; leading does ---
+lr=$(
+  source "$HERE/lib.sh"
+  RB=$(mktemp -d); export MESSAGES_DIR="$RB/messages"
+  log_reply_ids peer 'thanks, see [re:cafe0001] for context' me 11112222
+  log_reply_ids peer '[re:cafe0002] [task:T1] thanks' me 11112223
+  log_reply_ids peer '[re:cafe0003] [re:cafe0004] conflicting' me 11112224
+  log_reply_ids peer '[task:T1] [re:cafe0005] reordered' me 11112225
+  log_reply_ids peer '[task:T1] task only, nothing to correlate' me 11112226
+  log_reply_ids peer '[re:cafe0006] [re:cafe0006] dup' me 11112227
+  for id in cafe0001 cafe0002 cafe0003 cafe0004 cafe0005 cafe0006; do
+    echo "$id=$(awk -F'\t' -v id="$id" '$2 == id' "$MESSAGES_DIR/replies-log.tsv" 2>/dev/null | wc -l | tr -d ' ')"
+  done
+  awk -F'\t' '$2 == "cafe0002" { print "ROW2=" NF ":" $3 ":" $4 ":" $5 ":" $6 }' "$MESSAGES_DIR/replies-log.tsv"
+  rm -rf "$RB"
+)
+if echo "$lr" | grep -qx 'cafe0001=0' && echo "$lr" | grep -qx 'cafe0002=1' \
+   && echo "$lr" | grep -qx 'cafe0003=0' && echo "$lr" | grep -qx 'cafe0004=0' \
+   && echo "$lr" | grep -qx 'cafe0005=0' && echo "$lr" | grep -qx 'cafe0006=1' \
+   && echo "$lr" | grep -qx 'ROW2=6:peer:T1:me:11112223'; then
+  pass "reply_log_leading_only_quoted_and_refused_record_nothing"
+else
+  fail "reply_log_leading_only_quoted_and_refused_record_nothing" "out=$lr"
+fi
+
+# --- sent-log column 8 carries the leading task; quoted/absent tasks do not ---
+sl=$(
+  source "$HERE/lib.sh"
+  RB=$(mktemp -d); export MESSAGES_DIR="$RB/messages"
+  log_sent_message s0000001 me peer send live '[re:aaaaaaaa] [task:T7] do it'
+  log_sent_message s0000002 me peer send live 'mention [task:T8] in passing'
+  log_sent_message s0000003 me peer send live 'plain'
+  awk -F'\t' '{ print $2 "=" NF ":" $8 }' "$MESSAGES_DIR/sent-log.tsv"
+  rm -rf "$RB"
+)
+if echo "$sl" | grep -qx 's0000001=8:T7' && echo "$sl" | grep -qx 's0000002=8:' && echo "$sl" | grep -qx 's0000003=8:'; then
+  pass "sent_log_task_column_leading_only"
+else
+  fail "sent_log_task_column_leading_only" "out=$sl"
+fi
+
+# --- incoming forms: each is reduced to its BODY, then the leading envelope is
+#     read. Every form has a leading (correlates) and a quoted (does not) case. ---
+EH="$E_ROOT/in-home"; EM="$EH/.claude/messages"; mkdir -p "$EM/queue"
+e_hook() { env HOME="$EH" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$E_PLUG" SESSION_CHAT_PANE_NAME=me \
+  SESSION_CHAT_INCOMING_MODE=auto SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0 bash "$HERE/detect-incoming-message.sh"; }
+e_rows() { awk -F'\t' -v id="$1" '$2 == id' "$EM/replies-log.tsv" 2>/dev/null; }
+# e_row_is <reply-id> <from> <task> <recipient> <incoming-id>: exactly one row, 6 columns, all matching.
+e_row_is() { e_rows "$1" | awk -F'\t' -v f="$2" -v t="$3" -v r="$4" -v m="$5" \
+  'NF == 6 && $3 == f && $4 == t && $5 == r && $6 == m { ok++ } END { exit !(ok == 1) }'; }
+e_no_row() { [ -z "$(e_rows "$1")" ]; }
+
+# (1) live raw header form
+printf '%s' '[from:peer pane:%1 id:abcd1234abcd1001] [re:11110001] [task:T-live] hello [id:abcd1234abcd1001]' | e_hook >/dev/null
+printf '%s' '[from:peer pane:%1 id:abcd1234abcd1002] please see [re:11110002] above [id:abcd1234abcd1002]' | e_hook >/dev/null
+printf '%s' '[from:peer pane:%1 id:abcd1234abcd1003] [from:other pane:%2 id:abcd1234abcd1999] [re:11110003] nested header [id:abcd1234abcd1003]' | e_hook >/dev/null
+if e_row_is 11110001 peer T-live me abcd1234abcd1001 && e_no_row 11110002 && e_no_row 11110003; then
+  pass "incoming_live_raw_header_leading_vs_quoted"
+else
+  fail "incoming_live_raw_header_leading_vs_quoted" "rows=$(cat "$EM/replies-log.tsv" 2>/dev/null)"
+fi
+
+# (2) live provider hook JSON form (prompt field only)
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 id:abcd1234abcd2001] [re:22220001] [task:T-json] line1\\nline2 [id:abcd1234abcd2001]"}' | e_hook >/dev/null
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 id:abcd1234abcd2002] intro [re:22220002] quoted [id:abcd1234abcd2002]"}' | e_hook >/dev/null
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"note [from:peer pane:%%1 id:abcd1234abcd2003] [re:22220003] header not first"}' | e_hook >/dev/null
+printf '{"hook_event_name":"UserPromptSubmit","note":"[re:22220004] decoy field","prompt":"[from:peer pane:%%1 id:abcd1234abcd2004] hi [id:abcd1234abcd2004]"}' | e_hook >/dev/null
+printf '{"hook_event_name":"UserPromptSubmit","note":"decoy field","prompt":"[from:peer pane:%%1 id:abcd1234abcd2005] [re:22220005] ok [id:abcd1234abcd2005]"}' | e_hook >/dev/null
+if e_row_is 22220001 peer T-json me abcd1234abcd2001 && e_no_row 22220002 && e_no_row 22220003 \
+   && e_no_row 22220004 && e_row_is 22220005 peer "" me abcd1234abcd2005; then
+  pass "incoming_live_provider_json_leading_vs_quoted"
+else
+  fail "incoming_live_provider_json_leading_vs_quoted" "rows=$(cat "$EM/replies-log.tsv" 2>/dev/null)"
+fi
+
+# (3) queued send recovery (Stop hook): the row payload IS the body
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$EM"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+  enqueue_message me 0a0a0a01 send peer "[re:33330001] [task:T-q] queued body" "$EM"
+  enqueue_message me 0a0a0a02 send peer "queued text mentioning [re:33330002] mid-body" "$EM"
+  enqueue_message me 0a0a0a03 send peer "[re:33330003] [re:33330004] conflicting" "$EM"
+  mark_message_ready me 0a0a0a01 "$EM"; mark_message_ready me 0a0a0a02 "$EM"; mark_message_ready me 0a0a0a03 "$EM"
+)
+printf '{"hook_event_name":"Stop"}' | e_hook >/dev/null
+if e_row_is 33330001 peer T-q me 0a0a0a01 && e_no_row 33330002 && e_no_row 33330003 && e_no_row 33330004; then
+  pass "incoming_queued_send_leading_vs_quoted"
+else
+  fail "incoming_queued_send_leading_vs_quoted" "rows=$(cat "$EM/replies-log.tsv" 2>/dev/null)"
+fi
+
+# (4) dispatch files, live notification and queued row
+mkf() { printf '%b' "$2" > "$EM/$1"; chmod 600 "$EM/$1"; }
+mkf d-live-lead.md '[re:44440001] [task:T-d] do the thing\nmore\n'
+mkf d-live-quoted.md 'do the thing\nplease cite [re:44440002]\n'
+mkf d-live-firstline-quoted.md 'quoted: [re:44440003] first line\n'
+mkf d-q-lead.md '[re:44440004] queued task\n'
+mkf d-q-quoted.md 'queued task, ref [re:44440005]\n'
+for pair in "d-live-lead.md:abcd1234abcd3001" "d-live-quoted.md:abcd1234abcd3002" "d-live-firstline-quoted.md:abcd1234abcd3003"; do
+  printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 msg:%s id:%s] dispatch (2 lines) — read msg file for full task id:%s"}' \
+    "$EM/${pair%%:*}" "${pair##*:}" "${pair##*:}" | e_hook >/dev/null
+done
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$EM"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+  enqueue_message me 0b0b0b01 dispatch peer "$EM/d-q-lead.md" "$EM"
+  enqueue_message me 0b0b0b02 dispatch peer "$EM/d-q-quoted.md" "$EM"
+  mark_message_ready me 0b0b0b01 "$EM"; mark_message_ready me 0b0b0b02 "$EM"
+)
+printf '{"hook_event_name":"Stop"}' | e_hook >/dev/null
+if e_row_is 44440001 peer T-d me abcd1234abcd3001 && e_no_row 44440002 && e_no_row 44440003 \
+   && e_row_is 44440004 peer "" me 0b0b0b01 && e_no_row 44440005; then
+  pass "incoming_dispatch_file_live_and_queued_leading_vs_quoted"
+else
+  fail "incoming_dispatch_file_live_and_queued_leading_vs_quoted" "rows=$(cat "$EM/replies-log.tsv" 2>/dev/null)"
+fi
+
+# --- check-replies: multi-task associations and --task filter ---
+MT_HOME="$E_ROOT/mt-home"; MT_MSGS="$MT_HOME/.claude/messages"; mkdir -p "$MT_MSGS"
+(
+  source "$HERE/lib.sh"; export MESSAGES_DIR="$MT_MSGS"
+  log_sent_message a1b2c3d4 me peer send live "do the four things"
+  log_sent_message a1b2c3d5 me peer send live "one plain request"
+  for t in T1 T2 T3 T4; do
+    log_reply_ids peer "[re:a1b2c3d4] [task:$t] done $t" me "5555000${t#T}"
+  done
+  log_reply_ids peer "[re:a1b2c3d5] ok" me 55550009
+)
+mt_out=$(env HOME="$MT_HOME" bash "$HERE/check-replies.sh" 2>&1)
+mt_four=$(printf '%s\n' "$mt_out" | awk -F'\t' '$1 == "a1b2c3d4" && $6 == "verified:peer" { printf "%s,", $8 }')
+mt_one=$(printf '%s\n' "$mt_out" | awk -F'\t' '$1 == "a1b2c3d5" { printf "%s|%s;", $6, $8 }')
+mt_filt=$(env HOME="$MT_HOME" bash "$HERE/check-replies.sh" --task T2 2>&1)
+mt_none=$(env HOME="$MT_HOME" bash "$HERE/check-replies.sh" --task T99 2>&1)
+if [ "$mt_four" = "T1,T2,T3,T4," ] && [ "$mt_one" = "verified:peer|;" ] \
+   && [ "$(printf '%s\n' "$mt_filt" | awk -F'\t' '$1 == "a1b2c3d4" { c++ } END { print c+0 }')" = "1" ] \
+   && printf '%s\n' "$mt_filt" | awk -F'\t' '$1 == "a1b2c3d4" && $8 == "T2" { ok = 1 } END { exit !ok }' \
+   && ! printf '%s\n' "$mt_filt" | grep -q 'a1b2c3d5' \
+   && printf '%s\n' "$mt_none" | grep -q 'tagged \[task:T99\]'; then
+  pass "check_replies_multi_task_associations_and_filter"
+else
+  fail "check_replies_multi_task_associations_and_filter" "four=$mt_four one=$mt_one filt=$mt_filt none=$mt_none"
+fi
+
+# --- check-replies: expected-peer verification (refusals paired with controls) ---
+VF_HOME="$E_ROOT/vf-home"; VF_MSGS="$VF_HOME/.claude/messages"; mkdir -p "$VF_MSGS"
+vf_now=$(( $(date +%s) * 1000 ))
+vsent() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$vf_now" "$1" me peer send live "req $1" "" >> "$VF_MSGS/sent-log.tsv"; }
+vrep() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$vf_now" "$1" "$2" "" "$3" "abcdef01" >> "$VF_MSGS/replies-log.tsv"; }
+for i in a0000001 b0000002 c0000003 d0000004 e0000005 f0000006 a0000008; do vsent "$i"; done
+# legacy 7-column sent rows (no task column)
+for i in a0000007 a0000009; do printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$vf_now" "$i" me peer send live "legacy $i" >> "$VF_MSGS/sent-log.tsv"; done
+vrep a0000001 peer me                       # control: from the recipient, received by the sender
+vrep b0000002 mallory me                    # reply from a non-recipient
+vrep c0000003 peer other                    # recipient replied, but recorded as received elsewhere
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$vf_now" d0000004 peer "" "" "" >> "$VF_MSGS/replies-log.tsv"   # new row, empty recipient
+vrep e0000005 mallory me                    # unexpected FIRST ...
+vrep e0000005 peer me                       # ... valid LATER
+vrep f0000006 peer me                       # control: valid alone
+printf '%s\t%s\t%s\n' "$vf_now" a0000007 peer >> "$VF_MSGS/replies-log.tsv"      # legacy 3-column, right sender
+printf '%s\t%s\t%s\n' "$vf_now" a0000008 mallory >> "$VF_MSGS/replies-log.tsv"   # legacy 3-column, wrong sender
+vrep a0000009 peer me                       # new reply against a legacy 7-column sent row
+vf_out=$(env HOME="$VF_HOME" bash "$HERE/check-replies.sh" 2>&1)
+vf_pend=$(env HOME="$VF_HOME" bash "$HERE/check-replies.sh" --pending 2>&1)
+vcol() { printf '%s\n' "$vf_out" | awk -F'\t' -v id="$1" '$1 == id { print $6 }'; }
+vf_bad=""
+vexp() { # vexp <id> <must-match-regex>... ; also reports unexpected extras
+  local id="$1" rx; shift
+  for rx in "$@"; do vcol "$id" | grep -qE -- "$rx" || vf_bad="$vf_bad $id:missing($rx)"; done
+}
+vnot() { local id="$1" rx="$2"; ! vcol "$id" | grep -qE -- "$rx" || vf_bad="$vf_bad $id:unwanted($rx)"; }
+vexp a0000001 '^verified:peer$';                      vnot a0000001 'unconfirmed|^unexpected'
+vexp b0000002 '^unconfirmed$' '^unexpected:mallory \(not the recipient'; vnot b0000002 '^verified:|^replied'
+vexp c0000003 '^unconfirmed$' "^unexpected:peer \(received by 'other'"; vnot c0000003 '^verified:|^replied'
+vexp d0000004 '^unconfirmed$' '^unexpected:peer \(no recipient context'; vnot d0000004 '^verified:|^replied'
+vexp e0000005 '^verified:peer$' '^unexpected:mallory';  vnot e0000005 'unconfirmed'
+vexp f0000006 '^verified:peer$';                      vnot f0000006 'unconfirmed|unexpected'
+vexp a0000007 '^replied \(recipient-unknown\):peer$'; vnot a0000007 '^verified|unconfirmed|unexpected'
+vexp a0000008 '^unconfirmed$' '^unexpected:mallory';  vnot a0000008 '^verified:|^replied'
+vexp a0000009 '^verified:peer$'
+pend_ids=$(printf '%s\n' "$vf_pend" | awk -F'\t' 'NR > 1 && $1 ~ /^[a-f0-9]{8}$/ { print $1 }' | sort -u | tr '\n' ' ')
+if [ -z "$vf_bad" ] && [ "$pend_ids" = "a0000008 b0000002 c0000003 d0000004 " ]; then
+  pass "check_replies_expected_peer_verification"
+else
+  fail "check_replies_expected_peer_verification" "bad=$vf_bad pend=$pend_ids out=$vf_out"
+fi
+
+# --- 8-hex (legacy) and 16-hex ids through every id-consuming path ---
+RT_BAD=""
+for RT_ID in 1a2b3c4d 0123456789abcdef; do
+  RT_HOME="$E_ROOT/rt-home-$RT_ID"; RT_MSGS="$RT_HOME/.claude/messages"; mkdir -p "$RT_MSGS/queue"
+  RT_Q="${RT_ID%?}0"   # distinct queued id of the same length
+  rt_hook() { env HOME="$RT_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$E_PLUG" SESSION_CHAT_PANE_NAME=me \
+    SESSION_CHAT_INCOMING_MODE=notify SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0 bash "$HERE/detect-incoming-message.sh"; }
+  # live hook read
+  live=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%%1 id:%s] [re:%s] ping [id:%s]"}' "$RT_ID" "$RT_ID" "$RT_ID" | rt_hook)
+  echo "$live" | grep -qF "use /reply peer $RT_ID " || RT_BAD="$RT_BAD $RT_ID:live-hint"
+  grep -qxF "$RT_ID" <(cut -f1 "$RT_MSGS/queue/.recent-me.tsv" 2>/dev/null) || RT_BAD="$RT_BAD $RT_ID:live-recent"
+  awk -F'\t' -v id="$RT_ID" '$2 == id && $6 == id && $5 == "me" { ok = 1 } END { exit !ok }' "$RT_MSGS/replies-log.tsv" 2>/dev/null || RT_BAD="$RT_BAD $RT_ID:live-replyrow"
+  # queued recovery (Stop)
+  ( source "$HERE/lib.sh"; export MESSAGES_DIR="$RT_MSGS" SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+    enqueue_message me "$RT_Q" send peer "queued ping" "$RT_MSGS"; mark_message_ready me "$RT_Q" "$RT_MSGS" )
+  queued=$(printf '{"hook_event_name":"Stop"}' | rt_hook)
+  echo "$queued" | grep -qF "use /reply peer $RT_Q " || RT_BAD="$RT_BAD $RT_ID:queued-hint"
+  grep -qxF "$RT_Q" <(cut -f1 "$RT_MSGS/queue/.recent-me.tsv" 2>/dev/null) || RT_BAD="$RT_BAD $RT_ID:queued-recent"
+  [ -z "$(grep -F "$RT_Q" "$RT_MSGS/queue/me.tsv" 2>/dev/null)" ] || RT_BAD="$RT_BAD $RT_ID:queued-not-drained"
+  # archive + message-search
+  srch=$(env HOME="$RT_HOME" bash "$HERE/message-search.sh" "$RT_ID" 2>&1)
+  srch_q=$(env HOME="$RT_HOME" bash "$HERE/message-search.sh" "$RT_Q" 2>&1)
+  echo "$srch" | awk -F'\t' -v id="$RT_ID" '$2 == "in" && $5 == id { ok = 1 } END { exit !ok }' || RT_BAD="$RT_BAD $RT_ID:search-live"
+  echo "$srch_q" | awk -F'\t' -v id="$RT_Q" '$2 == "in" && $5 == id { ok = 1 } END { exit !ok }' || RT_BAD="$RT_BAD $RT_ID:search-queued"
+  # messages-clean / messages-list parse the <epoch>-<pid>-<id>-<from>-to-<to>.md name
+  old_file="$RT_MSGS/$(( $(date +%s) - 20 * 86400 ))-4242-${RT_ID}-peer-to-me.md"
+  printf 'old body\n' > "$old_file"; chmod 600 "$old_file"
+  lst=$(env HOME="$RT_HOME" bash "$HERE/messages-list.sh" --from peer 2>&1)
+  echo "$lst" | grep -qF "$(basename "$old_file")" || RT_BAD="$RT_BAD $RT_ID:list-from"
+  dry=$(env HOME="$RT_HOME" bash "$HERE/messages-clean.sh" --older-than 7 --from peer 2>&1)
+  echo "$dry" | grep -qF "$(basename "$old_file")" || RT_BAD="$RT_BAD $RT_ID:clean-from"
+  ctl=$(env HOME="$RT_HOME" bash "$HERE/messages-clean.sh" --older-than 7 --from nobody 2>&1)   # control: parsing is not a match-all
+  echo "$ctl" | grep -qF "$(basename "$old_file")" && RT_BAD="$RT_BAD $RT_ID:clean-ctl"
+  env HOME="$RT_HOME" bash "$HERE/messages-clean.sh" --older-than 7 --from peer --apply >/dev/null 2>&1
+  [ ! -e "$old_file" ] || RT_BAD="$RT_BAD $RT_ID:clean-apply"
+  # explicit --reply-to (+ --task) through the real transport into a live pane
+  rt_send=$(
+    TMUX_PANE="$SENDER_PANE" SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
+    SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 SESSION_CHAT_SETTLE_MS=50 \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$RT_MSGS" \
+    TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" \
+    bash -c "
+      tmux() { command tmux -L '$SOCKET' \"\$@\"; }
+      export -f tmux
+      bash '$HERE/send-message.sh' --reply-to '$RT_ID' --task T-rt alpha 'rt-ack-$RT_ID'
+    " 2>&1
+  )
+  echo "$rt_send" | grep -q '^Sent to alpha' || RT_BAD="$RT_BAD $RT_ID:send-rc($rt_send)"
+  cap_wait "$RECIPIENT_PANE" "[re:$RT_ID] [task:T-rt] rt-ack-$RT_ID" >/dev/null || RT_BAD="$RT_BAD $RT_ID:send-envelope-not-in-pane"
+  awk -F'\t' -v id="$RT_ID" 'NF == 8 && $2 ~ /^[a-f0-9]{16}$/ && $7 ~ ("^\\[re:" id "\\] \\[task:T-rt\\] rt-ack") && $8 == "T-rt" { ok = 1 } END { exit !ok }' "$RT_MSGS/sent-log.tsv" || RT_BAD="$RT_BAD $RT_ID:sent-log"
+  # the same envelope read back by the receiving hook
+  printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:sender pane:%%1 id:abcd1234abcd9999] [re:%s] [task:T-rt] rt-ack [id:abcd1234abcd9999]"}' "$RT_ID" | rt_hook >/dev/null
+  awk -F'\t' -v id="$RT_ID" '$2 == id && $3 == "sender" && $4 == "T-rt" { ok = 1 } END { exit !ok }' "$RT_MSGS/replies-log.tsv" || RT_BAD="$RT_BAD $RT_ID:roundtrip-reply"
+  # strict-v1 grammar (read-only): REPLY_RE and MESSAGE_NAME_RE accept this id
+  env PYTHONDONTWRITEBYTECODE=1 python3 -B -I -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("hp", sys.argv[1])
+m = importlib.util.module_from_spec(spec); sys.modules["hp"] = m; spec.loader.exec_module(m)
+i = sys.argv[2]
+sys.exit(0 if m.REPLY_RE.fullmatch(i) and m.MESSAGE_NAME_RE.fullmatch("1700000000-4242-%s-peer-to-me.md" % i) else 1)
+' "$HERE/../../session-workspace/scripts/harness-policy.py" "$RT_ID" || RT_BAD="$RT_BAD $RT_ID:strict-v1-grammar"
+done
+if [ -z "$RT_BAD" ]; then
+  pass "message_ids_8hex_and_16hex_roundtrip"
+else
+  fail "message_ids_8hex_and_16hex_roundtrip" "bad=$RT_BAD"
+fi
+
+# --- dispatch --task/--reply-to writes the envelope at the top of the file ---
+DT_MSGS="$E_ROOT/dt-msgs"; DT_PF="$E_ROOT/dt-prompt.txt"
+printf 'line one\nsee [re:deadbeef] quoted\n' > "$DT_PF"
+dt_out=$(
+  TMUX_PANE="$SENDER_PANE" SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
+  SESSION_CHAT_VERIFY_TIMEOUT_MS=1000 SESSION_CHAT_SETTLE_MS=50 \
+  SESSION_CHAT_TARGET_MESSAGES_DIR="$DT_MSGS" \
+  TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" \
+  bash -c "
+    tmux() { command tmux -L '$SOCKET' \"\$@\"; }
+    export -f tmux
+    bash '$HERE/dispatch-to-session.sh' --reply-to 0123456789abcdef --task T-disp alpha '$DT_PF'
+  " 2>&1
+)
+dt_file=$(find "$DT_MSGS" -maxdepth 1 -name '*.md' 2>/dev/null | head -1)
+dt_bad_out=$(
+  TMUX_PANE="$SENDER_PANE" bash "$HERE/dispatch-to-session.sh" --task 'bad!' alpha "$DT_PF" 2>&1; echo "rc=$?"
+)
+if echo "$dt_out" | grep -q "^Dispatched task to 'alpha'" && [ -n "$dt_file" ] \
+   && [ "$(head -1 "$dt_file")" = '[re:0123456789abcdef] [task:T-disp] line one' ] \
+   && grep -qxF 'see [re:deadbeef] quoted' "$dt_file" \
+   && echo "$dt_bad_out" | grep -q -- '--task expects' && echo "$dt_bad_out" | grep -q 'rc=1'; then
+  pass "dispatch_task_envelope_at_top_and_bad_task_refused"
+else
+  fail "dispatch_task_envelope_at_top_and_bad_task_refused" "out=$dt_out file=$dt_file head=$(head -3 "$dt_file" 2>/dev/null) bad=$dt_bad_out"
+fi
+
+# --- generate_id: 16 lowercase hex from urandom only; fails closed otherwise ---
+GI_SHIM="$E_ROOT/od-shim"; mkdir -p "$GI_SHIM"
+gi_shim() { printf '#!/bin/sh\n%s\n' "$1" > "$GI_SHIM/od"; chmod +x "$GI_SHIM/od"; }
+gi_run() { PATH="$GI_SHIM:$PATH" bash -c 'source "$1"; id=$(generate_id); rc=$?; printf "%s|%s" "$rc" "$id"' _ "$HERE/lib.sh"; }
+gi_ok=$(bash -c 'source "$1"; a=$(generate_id); b=$(generate_id); printf "%s %s" "$a" "$b"' _ "$HERE/lib.sh")
+gi_bad=""
+read -r gi_a gi_b <<< "$gi_ok"
+{ [[ "${gi_a:-}" =~ ^[a-f0-9]{16}$ ]] && [[ "${gi_b:-}" =~ ^[a-f0-9]{16}$ ]] && [ "${gi_a:-}" != "${gi_b:-}" ]; } || gi_bad="$gi_bad normal($gi_ok)"
+gi_shim 'exit 1';                                       [ "$(gi_run)" = "1|" ] || gi_bad="$gi_bad od-fails($(gi_run))"
+gi_shim 'printf " ab cd\n"';                            [ "$(gi_run)" = "1|" ] || gi_bad="$gi_bad short($(gi_run))"
+gi_shim 'printf " zz zz zz zz zz zz zz zz\n"';          [ "$(gi_run)" = "1|" ] || gi_bad="$gi_bad nonhex($(gi_run))"
+gi_shim 'printf " AB CD EF 01 23 45 67 89\n"';          [ "$(gi_run)" = "1|" ] || gi_bad="$gi_bad uppercase($(gi_run))"
+gi_shim 'printf " 01 23 45 67 89 ab cd ef 00\n"';       [ "$(gi_run)" = "1|" ] || gi_bad="$gi_bad long($(gi_run))"
+gi_shim 'printf " 01 23 45 67 89 ab cd ef\n"';          [ "$(gi_run)" = "0|0123456789abcdef" ] || gi_bad="$gi_bad shim-control($(gi_run))"
+GI_NOOD="$E_ROOT/no-od"; mkdir -p "$GI_NOOD"; ln -sf "$(command -v tr)" "$GI_NOOD/tr"
+[ "$(PATH="$GI_NOOD" "$BASH" -c 'source "$1"; id=$(generate_id); rc=$?; printf "%s|%s" "$rc" "$id"' _ "$HERE/lib.sh")" = "1|" ] || gi_bad="$gi_bad no-od"
+if [ -z "$gi_bad" ]; then
+  pass "generate_id_16hex_urandom_only_fails_closed"
+else
+  fail "generate_id_16hex_urandom_only_fails_closed" "bad=$gi_bad"
+fi
+
+# --- send/dispatch abort BEFORE writing or sending when no id can be made ---
+tree_state() { { find "$TEST_MSGS_DIR" 2>/dev/null | sort; cat "$TEST_MSGS_DIR/sent-log.tsv" 2>/dev/null; } | cksum; }
+gi_shim 'exit 1'
+ab_before=$(tree_state)
+ab_send=$(PATH="$GI_SHIM:$PATH" run_lib "$SENDER_PANE" "send_message alpha 'abort-send-marker'" 2>&1); ab_send_rc=$?
+ab_disp=$(PATH="$GI_SHIM:$PATH" run_lib "$SENDER_PANE" "dispatch_message alpha 'abort-dispatch-marker'" 2>&1); ab_disp_rc=$?
+ab_after=$(tree_state)
+sleep 0.3
+ab_cap=$(cap "$RECIPIENT_PANE")
+# control: the same calls with a working od succeed and DO change the tree / pane
+SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "send_message alpha 'abort-ctl-send-marker'" >/dev/null 2>&1; ok_send_rc=$?
+SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 run_lib "$SENDER_PANE" "dispatch_message alpha 'abort-ctl-dispatch-marker'" >/dev/null 2>&1; ok_disp_rc=$?
+ok_after=$(tree_state)
+if [ "$ab_send_rc" -ne 0 ] && echo "$ab_send" | grep -q 'could not generate a message id' \
+   && [ "$ab_disp_rc" -ne 0 ] && echo "$ab_disp" | grep -q 'could not generate a message id' \
+   && [ "$ab_before" = "$ab_after" ] \
+   && ! echo "$ab_cap" | grep -q 'abort-send-marker' && ! echo "$ab_cap" | grep -q 'abort-dispatch' \
+   && [ "$ok_send_rc" -eq 0 ] && [ "$ok_disp_rc" -eq 0 ] && [ "$ab_after" != "$ok_after" ] \
+   && cap_wait "$RECIPIENT_PANE" 'abort-ctl-send-marker' >/dev/null; then
+  pass "send_dispatch_abort_without_writing_when_id_unavailable"
+else
+  fail "send_dispatch_abort_without_writing_when_id_unavailable" "send(rc=$ab_send_rc)=$ab_send disp(rc=$ab_disp_rc)=$ab_disp same=$([ "$ab_before" = "$ab_after" ] && echo y || echo n) ctl=$ok_send_rc/$ok_disp_rc"
+fi
+
+# ===========================================================================
+# Review fixes R1-R4 (session-chat). Each refusal has a paired control.
+# ===========================================================================
+
+# --- R1: sender, id and body are bound from ONE parsed header of the
+#     authoritative prompt; a decoy in another JSON field supplies nothing ---
+D_HOME="$E_ROOT/decoy-home"; D_MSGS="$D_HOME/.claude/messages"; mkdir -p "$D_MSGS/queue"
+d_hook() { env HOME="$D_HOME" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$E_PLUG" SESSION_CHAT_PANE_NAME=me \
+  SESSION_CHAT_INCOMING_MODE=auto SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0 bash "$HERE/detect-incoming-message.sh"; }
+d_rows() { awk -F'\t' -v id="$1" '$2 == id' "$D_MSGS/replies-log.tsv" 2>/dev/null; }
+d_row_is() { d_rows "$1" | awk -F'\t' -v f="$2" -v m="$3" 'NF == 6 && $3 == f && $5 == "me" && $6 == m { ok++ } END { exit !(ok == 1) }'; }
+# (a) live send: decoy metadata field BEFORE the real prompt
+d_out_a=$(printf '{"hook_event_name":"UserPromptSubmit","meta":"[from:peer pane:%%1 id:11111111] ignored","prompt":"[from:attacker pane:%%2 id:22222222] [re:aaaa1111] body [id:22222222]"}' | d_hook)
+# control: the same input without the decoy field
+d_out_b=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:attacker pane:%%2 id:22222223] [re:aaaa1112] body [id:22222223]"}' | d_hook)
+if d_row_is aaaa1111 attacker 22222222 && d_row_is aaaa1112 attacker 22222223 \
+   && ! grep -q 'peer' "$D_MSGS/replies-log.tsv" && ! grep -q '11111111' "$D_MSGS/replies-log.tsv" \
+   && echo "$d_out_a" | grep -qF '[attacker]' && ! echo "$d_out_a" | grep -qF '[peer]' \
+   && echo "$d_out_a" | grep -qF '/reply attacker 22222222 ' && echo "$d_out_b" | grep -qF '/reply attacker 22222223 '; then
+  pass "incoming_live_send_metadata_decoy_ignored_with_control"
+else
+  fail "incoming_live_send_metadata_decoy_ignored_with_control" "rows=$(cat "$D_MSGS/replies-log.tsv" 2>/dev/null) out=$d_out_a"
+fi
+# (b) dispatch notification: decoy header (pointing at a different trusted file) before the real prompt
+printf '[re:bbbb2222] real task\n' > "$D_MSGS/real-task.md"; chmod 600 "$D_MSGS/real-task.md"
+printf '[re:cccc3333] decoy task\n' > "$D_MSGS/decoy-task.md"; chmod 600 "$D_MSGS/decoy-task.md"
+d_out_c=$(printf '{"hook_event_name":"UserPromptSubmit","meta":"[from:peer pane:%%1 msg:%s id:11111111] x","prompt":"[from:attacker pane:%%2 msg:%s id:22222224] dispatch (1 lines) — read msg file for full task id:22222224"}' \
+  "$D_MSGS/decoy-task.md" "$D_MSGS/real-task.md" | d_hook)
+printf '[re:bbbb2223] control task\n' > "$D_MSGS/control-task.md"; chmod 600 "$D_MSGS/control-task.md"
+d_out_d=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:attacker pane:%%2 msg:%s id:22222225] dispatch (1 lines) — read msg file for full task id:22222225"}' \
+  "$D_MSGS/control-task.md" | d_hook)
+if d_row_is bbbb2222 attacker 22222224 && d_row_is bbbb2223 attacker 22222225 && [ -z "$(d_rows cccc3333)" ] \
+   && echo "$d_out_c" | grep -qF 'real-task.md' && ! echo "$d_out_c" | grep -qF 'decoy-task.md' \
+   && echo "$d_out_c" | grep -qF 'dispatch from [attacker]' && ! echo "$d_out_c" | grep -qF '[peer]' \
+   && echo "$d_out_d" | grep -qF 'control-task.md'; then
+  pass "incoming_dispatch_notification_metadata_decoy_ignored_with_control"
+else
+  fail "incoming_dispatch_notification_metadata_decoy_ignored_with_control" "rows=$(cat "$D_MSGS/replies-log.tsv" 2>/dev/null) out=$d_out_c"
+fi
+
+# --- R2: file names are split as epoch, pid, ONE id, then <from>-to-<to> ---
+FN_HOME="$E_ROOT/fn-home"; FN_MSGS="$FN_HOME/.claude/messages"; mkdir -p "$FN_MSGS"
+fn_files="1-123-0123456789abcdef-deadbeefdeadbeef-worker-to-alpha.md 1-123-0123456789abcdef-worker-to-alpha.md 1-123-0123456789abcdef-12345678-worker-to-alpha.md 1-worker-to-alpha.md 1-deadbeef-worker-to-alpha.md"
+for f in $fn_files; do printf 'body\n' > "$FN_MSGS/$f"; chmod 600 "$FN_MSGS/$f"; done
+fn_ls() { env HOME="$FN_HOME" bash "$HERE/messages-list.sh" "$@" 2>&1 | awk -F'\t' 'NR > 1 && $5 ~ /\.md$/ { print $5 }' | sort | tr '\n' ' '; }
+fn_dry() { env HOME="$FN_HOME" bash "$HERE/messages-clean.sh" --older-than 0 "$@" 2>&1 | grep -E '^  [0-9]+-.*\.md$' | sed 's/^  //' | sort | tr '\n' ' '; }
+fn_left() { find "$FN_MSGS" -maxdepth 1 -name '*.md' -exec basename {} \; | sort | tr '\n' ' '; }
+F1=1-123-0123456789abcdef-deadbeefdeadbeef-worker-to-alpha.md
+F2=1-123-0123456789abcdef-worker-to-alpha.md
+F3=1-123-0123456789abcdef-12345678-worker-to-alpha.md
+F4=1-worker-to-alpha.md
+F5=1-deadbeef-worker-to-alpha.md
+fn_bad=""
+[ "$(fn_ls --from worker)" = "$F2 $F4 " ] || fn_bad="$fn_bad list-worker($(fn_ls --from worker))"
+[ "$(fn_ls --from deadbeefdeadbeef-worker)" = "$F1 " ] || fn_bad="$fn_bad list-hexsender"
+[ "$(fn_ls --from 12345678-worker)" = "$F3 " ] || fn_bad="$fn_bad list-numsender"
+[ "$(fn_ls --from deadbeef-worker)" = "$F5 " ] || fn_bad="$fn_bad list-legacy-hexsender"
+[ -z "$(fn_ls --from nobody)" ] || fn_bad="$fn_bad list-control"
+[ "$(fn_ls --to alpha | wc -w | tr -d ' ')" = "5" ] || fn_bad="$fn_bad list-to"
+[ "$(fn_dry --from worker)" = "$F2 $F4 " ] || fn_bad="$fn_bad dry-worker($(fn_dry --from worker))"
+[ -z "$(fn_dry --from nobody)" ] || fn_bad="$fn_bad dry-control"
+env HOME="$FN_HOME" bash "$HERE/messages-clean.sh" --older-than 0 --from worker --apply >/dev/null 2>&1
+[ "$(fn_left)" = "$(printf '%s\n' $F1 $F3 $F5 | sort | tr '\n' ' ')" ] || fn_bad="$fn_bad apply-worker-left($(fn_left))"
+env HOME="$FN_HOME" bash "$HERE/messages-clean.sh" --older-than 0 --from deadbeefdeadbeef-worker --apply >/dev/null 2>&1
+[ "$(fn_left)" = "$(printf '%s\n' $F3 $F5 | sort | tr '\n' ' ')" ] || fn_bad="$fn_bad apply-hex-left($(fn_left))"
+if [ -z "$fn_bad" ]; then
+  pass "messages_clean_list_exact_sender_hexlike_and_numeric"
+else
+  fail "messages_clean_list_exact_sender_hexlike_and_numeric" "bad=$fn_bad"
+fi
+
+# --- R3: a failing od with plausible output never yields an id (no pipefail) ---
+R3_SHIM="$E_ROOT/r3-shim"; mkdir -p "$R3_SHIM"
+r3_od() { printf '#!/bin/sh\nprintf " 01 23 45 67 89 ab cd ef\\n"\nexit %s\n' "$1" > "$R3_SHIM/od"; chmod +x "$R3_SHIM/od"; }
+R3_MSGS="$E_ROOT/r3-msgs"; mkdir -p "$R3_MSGS"; R3_PF="$E_ROOT/r3-prompt.txt"; printf 'r3 body\n' > "$R3_PF"
+printf '%s\n' '#!/usr/bin/env bash' 'tmux() { command tmux -L "$R3_SOCK" "$@"; }' 'export -f tmux' 'exec bash "$@"' > "$E_ROOT/r3run.sh"
+r3_wrap() { # r3_wrap <script> <args...> — the real wrapper against the test tmux, with the shimmed od first on PATH
+  local script="$1"; shift
+  TMUX_PANE="$SENDER_PANE" SESSION_CHAT_ALLOW_SHELL_TARGET=1 SESSION_CHAT_VERIFY_TIMEOUT_MS=1500 SESSION_CHAT_SETTLE_MS=50 \
+  SESSION_CHAT_TARGET_MESSAGES_DIR="$R3_MSGS" PATH="$R3_SHIM:$PATH" R3_SOCK="$SOCKET" \
+  TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" \
+  bash "$E_ROOT/r3run.sh" "$HERE/$script" "$@" 2>&1
+}
+r3_tree() { find "$R3_MSGS" 2>/dev/null | sort | cksum; }
+r3_bad=""
+r3_od 1
+rg=$(PATH="$R3_SHIM:$PATH" bash -c 'source "$1"; id=$(generate_id); echo "$?|$id"' _ "$HERE/lib.sh")
+[ "$rg" = "1|" ] || r3_bad="$r3_bad generate_id($rg)"
+before=$(r3_tree)
+s_out=$(r3_wrap send-message.sh alpha 'r3-send-marker'); s_rc=$?
+d_out=$(r3_wrap dispatch-to-session.sh alpha "$R3_PF"); d_rc=$?
+{ [ "$s_rc" != 0 ] && echo "$s_out" | grep -q 'could not generate a message id' && [ "$d_rc" != 0 ] && echo "$d_out" | grep -q 'could not generate a message id' && [ "$before" = "$(r3_tree)" ]; } \
+  || r3_bad="$r3_bad failing-od(send rc=$s_rc out=$s_out; disp rc=$d_rc out=$d_out)"
+# control: the same plausible output with exit 0 is accepted and the wrappers deliver
+r3_od 0
+rg=$(PATH="$R3_SHIM:$PATH" bash -c 'source "$1"; id=$(generate_id); echo "$?|$id"' _ "$HERE/lib.sh")
+[ "$rg" = "0|0123456789abcdef" ] || r3_bad="$r3_bad control-generate_id($rg)"
+s_out=$(r3_wrap send-message.sh alpha 'r3-send-ok-marker'); s_rc=$?
+d_out=$(r3_wrap dispatch-to-session.sh alpha "$R3_PF"); d_rc=$?
+{ [ "$s_rc" = 0 ] && echo "$s_out" | grep -q '^Sent to alpha' && [ "$d_rc" = 0 ] && echo "$d_out" | grep -q "^Dispatched task to 'alpha'" && [ "$before" != "$(r3_tree)" ]; } \
+  || r3_bad="$r3_bad control-wrappers(send rc=$s_rc out=$s_out; disp rc=$d_rc out=$d_out)"
+if [ -z "$r3_bad" ]; then
+  pass "generate_id_failing_od_with_output_aborts_through_wrappers"
+else
+  fail "generate_id_failing_od_with_output_aborts_through_wrappers" "bad=$r3_bad"
+fi
+
+# --- R4: a read-limited prefix never validates an envelope whose extent is unknown ---
+R4=$(
+  source "$HERE/lib.sh"
+  RB=$(mktemp -d); export MESSAGES_DIR="$RB/messages"
+  n=0
+  try() { # try <label> <scan-bytes> <file-content>  -> "<label>=<rows>" (rows recorded for reply ids a/b)
+    n=$((n + 1)); local f="$RB/f$n.md"
+    printf '%s' "$3" > "$f"
+    mkdir -p "$MESSAGES_DIR"; : > "$MESSAGES_DIR/replies-log.tsv"
+    SESSION_CHAT_REPLY_SCAN_BYTES="$2" log_reply_ids_from_file peer "$f" me 12345678
+    echo "$1=$(awk -F'\t' '{ printf "%s/%s;", $2, $4 }' "$MESSAGES_DIR/replies-log.tsv")"
+  }
+  try glued_cut_at_boundary 13 '[re:aaaaaaaa]suffix'
+  try glued_control_short 4096 '[re:aaaaaaaa] suffix'
+  try exact_undecided_at_cap 14 '[re:aaaaaaaa] body-text'
+  try exact_decided_one_past 15 '[re:aaaaaaaa] body-text'
+  try exact_full_budget 4096 '[re:aaaaaaaa] body-text'
+  try whole_file_fits 23 '[re:aaaaaaaa] body-text'
+  big=$(printf 'x%.0s' $(seq 1 100))
+  try task_crossing_cap 60 "[re:aaaaaaaa] [task:${big}] body"
+  try task_complete_control 4096 "[re:aaaaaaaa] [task:${big}] body"
+  many=$(printf '[re:aaaaaaaa] %.0s' $(seq 1 300))
+  try conflict_beyond_cap 4096 "${many}[re:bbbbbbbb] body"
+  few=$(printf '[re:aaaaaaaa] %.0s' $(seq 1 100))
+  try many_tokens_decided_control 4096 "${few}body"
+  try short_conflict_control 4096 '[re:aaaaaaaa] [re:bbbbbbbb] body'
+  rm -rf "$RB"
+)
+if echo "$R4" | grep -qx 'glued_cut_at_boundary=' && echo "$R4" | grep -qx 'glued_control_short=aaaaaaaa/;' \
+   && echo "$R4" | grep -qx 'exact_undecided_at_cap=' && echo "$R4" | grep -qx 'exact_decided_one_past=aaaaaaaa/;' \
+   && echo "$R4" | grep -qx 'exact_full_budget=aaaaaaaa/;' && echo "$R4" | grep -qx 'whole_file_fits=aaaaaaaa/;' \
+   && echo "$R4" | grep -qx 'task_crossing_cap=' && echo "$R4" | grep -q '^task_complete_control=aaaaaaaa/x\{100\};$' \
+   && echo "$R4" | grep -qx 'conflict_beyond_cap=' && echo "$R4" | grep -qx 'many_tokens_decided_control=aaaaaaaa/;' \
+   && echo "$R4" | grep -qx 'short_conflict_control='; then
+  pass "reply_scan_prefix_undecided_envelope_records_nothing"
+else
+  fail "reply_scan_prefix_undecided_envelope_records_nothing" "out=$R4"
+fi
+
+rm -rf "$E_ROOT"
 
 # --- Summary ---
 echo

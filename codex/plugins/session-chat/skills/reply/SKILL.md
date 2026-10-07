@@ -8,6 +8,11 @@ description: "Reply to an incoming session-chat message with automatic message-i
 When this skill is invoked, do not add a preamble. Send the reply, then report
 only the transport result or the shortest actionable error.
 
+Accept optional `--task <task-id>` before the positional arguments. Preserve
+this association when calling the helper; do not infer a task ID. Task IDs use
+letters, digits, `_` and `-`. The helper adds the leading task token after any
+reply token. Later quoted tokens remain body text.
+
 Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
 the directory two levels above this `SKILL.md`. Use that absolute path; never
 infer it from cwd or hardcode a marketplace cache version.
@@ -31,7 +36,7 @@ adds it exactly once through `--reply-to`.
 For a safe single-line reply within `SESSION_CHAT_SEND_MAX_LEN`, run:
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/send-message.sh" --reply-to "<message-id>" "<pane-name>" "<message>"
+bash "$PLUGIN_ROOT/scripts/send-message.sh" --reply-to "<message-id>" [--task <task-id>] "<pane-name>" "<message>"
 ```
 
 The generated token counts toward the send limit. If this reports the length
@@ -67,7 +72,7 @@ shell call and use a native tool to write the file there.
 2. Run:
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" --reply-to "<message-id>" "<pane-name>" "<draft-path>"
+   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" --reply-to "<message-id>" [--task <task-id>] "<pane-name>" "<draft-path>"
    ```
 
 3. After delivered or durable queued success, the transport removes eligible

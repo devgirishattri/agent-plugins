@@ -62,21 +62,25 @@ json_escape() {
   fi
 }
 
-# Extract the dispatch path from the notification's explicit delimiter:
-#   msg:<arbitrary path, including spaces> id:<hex>]
-# Splitting at the first space truncates valid CODEX_HOME paths and can lose a
-# live-delivered dispatch after its durable row has already been dequeued.
-extract_dispatch_path() {
-  local text="$1"
+# hook_prompt_text <hook-input> — print the "prompt" string of a provider hook
+# JSON object. Returns 1 when the input is not a JSON object with a string
+# prompt, or when no JSON decoder (python3, then jq) exists: without one the live
+# paste cannot be read from the JSON authoritatively, so it is not parsed at all
+# (no raw-text greps stand in for it) — the pasted text is still in the prompt
+# the agent sees, but there is no live hint, correlation or archive row.
+hook_prompt_text() {
   if command -v python3 >/dev/null 2>&1; then
-    printf '%s' "$text" | python3 -c '
-import re, sys
-match = re.search(r"msg:(.*?) id:[a-f0-9]+\]", sys.stdin.read(), re.S)
-if match:
-    sys.stdout.write(match.group(1))
-'
+    printf '%s' "$1" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+p = d.get("prompt") if isinstance(d, dict) else None
+if not isinstance(p, str):
+    sys.exit(1)
+sys.stdout.write(p)' 2>/dev/null
+  elif command -v jq >/dev/null 2>&1; then
+    printf '%s' "$1" | jq -j 'select(type == "object" and (.prompt | type) == "string") | .prompt' 2>/dev/null
   else
-    printf '%s\n' "$text" | sed -n 's/.*msg:\(.*\) id:[a-f0-9][a-f0-9]*].*/\1/p' | head -1
+    return 1
   fi
 }
 
@@ -280,6 +284,7 @@ LIVE_ID=""
 LIVE_FROM=""
 LIVE_TYPE=""
 LIVE_ARCHIVE_PAYLOAD=""
+LIVE_BODY=""
 LINES=()
 
 build_combined() {
@@ -307,33 +312,50 @@ build_hook_context() {
 }
 
 # 1) Live paste in the just-submitted prompt (UserPromptSubmit only — a Stop
-#    event carries no prompt body).
-if [ "$HOOK_EVENT" != "Stop" ] && printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
-  s_name=$(printf '%s' "$HOOK_INPUT" | grep -oE '\[from:[^ ]+ ' | head -1 | sed 's/\[from://; s/ $//')
-  s_id=$(printf '%s' "$HOOK_INPUT" | grep -oE 'id:[a-f0-9]+' | head -1 | sed 's/id://')
-  s_msgfile=$(extract_dispatch_path "$HOOK_INPUT")
-  s_name=$(printf '%s' "$s_name" | tr -cd 'a-zA-Z0-9_:-')
-  if [ -n "$s_name" ]; then
-    [ -n "$s_id" ] && LIVE_ID="$s_id"
-    # Cross-turn dedup is read-only here. A fresh live id is marked only after
-    # the hook output succeeds, together with the queued ids it accompanies.
-    # Two concurrent hooks may therefore both surface a row, which is the
-    # intentional at-least-once tradeoff: duplication beats pre-emit loss.
-    live_seen=0
-    if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen "$MY_NAME" "$LIVE_ID"; then
-      live_seen=1
-    fi
-    if [ "$live_seen" = "0" ]; then
-      LIVE_FROM="$s_name"
-      if [ -n "$s_msgfile" ]; then
-        LIVE_TYPE="dispatch"
-        LIVE_ARCHIVE_PAYLOAD="$s_msgfile"
-        LINES+=("$(describe_record dispatch "$s_name" "$s_id" "$s_msgfile" 0)")
-      else
-        LIVE_TYPE="send"
-        LIVE_ARCHIVE_PAYLOAD=$(printf '%s' "$HOOK_INPUT" | grep -oE '\[from:[^]]*\][^"]{0,200}' | head -1)
-        LINES+=("$(describe_record send "$s_name" "$s_id" "" 0)")
-      fi
+#    event carries no prompt body). The authoritative text is normalized ONCE:
+#    the "prompt" string of the hook JSON object (or the raw text when the input
+#    is not JSON). ONE transport header is parsed from the start of that same
+#    text, and sender, pane, id, dispatch file and body are all bound from that
+#    single match — no field is ever taken from elsewhere in HOOK_INPUT, so a
+#    decoy in some other JSON field cannot supply a sender or an id.
+#      send:      [from:NAME pane:%N id:HEX] <body> [id:HEX]
+#      dispatch:  [from:NAME pane:%N msg:<file> id:HEX] dispatch (N lines) ...
+LIVE_TEXT=""
+if [ "$HOOK_EVENT" != "Stop" ]; then
+  case "$HOOK_INPUT" in
+    '{'*|[[:space:]]*'{'*) LIVE_TEXT=$(hook_prompt_text "$HOOK_INPUT") || LIVE_TEXT="" ;;
+    *) LIVE_TEXT="$HOOK_INPUT" ;;
+  esac
+fi
+live_hdr_send='^\[from:([a-zA-Z0-9_:-]+) pane:%[0-9]+ id:([a-f0-9]{8,16})\] '
+# The file path may contain spaces, so the msg: field runs to the LAST ` id:<hex>] `
+# of the header; its safety comes from trusted_message_file, not from this match.
+live_hdr_dispatch='^\[from:([a-zA-Z0-9_:-]+) pane:%[0-9]+ msg:(.+) id:([a-f0-9]{8,16})\] '
+s_name=""; s_id=""; s_msgfile=""; s_body=""
+if [[ "$LIVE_TEXT" =~ $live_hdr_send ]]; then
+  s_name="${BASH_REMATCH[1]}"; s_id="${BASH_REMATCH[2]}"
+  s_body="${LIVE_TEXT:${#BASH_REMATCH[0]}}"
+elif [[ "$LIVE_TEXT" =~ $live_hdr_dispatch ]]; then
+  s_name="${BASH_REMATCH[1]}"; s_msgfile="${BASH_REMATCH[2]}"; s_id="${BASH_REMATCH[3]}"
+fi
+if [ -n "$s_name" ]; then
+  LIVE_ID="$s_id"
+  # Marking stays after successful output, preserving at-least-once recovery.
+  live_seen=0
+  if [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen "$MY_NAME" "$LIVE_ID"; then
+    live_seen=1
+  fi
+  if [ "$live_seen" = "0" ]; then
+    LIVE_FROM="$s_name"
+    LIVE_BODY="$s_body"
+    if [ -n "$s_msgfile" ]; then
+      LIVE_TYPE="dispatch"
+      LIVE_ARCHIVE_PAYLOAD="$s_msgfile"
+      LINES+=("$(describe_record dispatch "$s_name" "$s_id" "$s_msgfile" 0)")
+    else
+      LIVE_TYPE="send"
+      LIVE_ARCHIVE_PAYLOAD="${LIVE_TEXT:0:260}"
+      LINES+=("$(describe_record send "$s_name" "$s_id" "" 0)")
     fi
   fi
 fi
@@ -411,18 +433,19 @@ fi
 # them after the emit as well, so an output failure does not record a false
 # surfaced/replied event while the durable row remains queued.
 if [ "$HAVE_LIB" = "1" ] && [ -n "$LIVE_FROM" ]; then
-  log_reply_ids "$LIVE_FROM" "$HOOK_INPUT" || true
-  if [ "$LIVE_TYPE" = "dispatch" ] && trusted_message_file "$LIVE_ARCHIVE_PAYLOAD"; then
-    log_reply_ids "$LIVE_FROM" "$(LC_ALL=C head -c 512 "$LIVE_ARCHIVE_PAYLOAD" 2>/dev/null || true)" || true
+  if [ "$LIVE_TYPE" = "send" ]; then
+    log_reply_ids "$LIVE_FROM" "$LIVE_BODY" "$MY_NAME" "$LIVE_ID" || true
+  elif trusted_message_file "$LIVE_ARCHIVE_PAYLOAD"; then
+    log_reply_ids_from_file "$LIVE_FROM" "$LIVE_ARCHIVE_PAYLOAD" "$MY_NAME" "$LIVE_ID" || true
   fi
   archive_message "in" "$LIVE_FROM" "$LIVE_TYPE" "$LIVE_ID" "$LIVE_ARCHIVE_PAYLOAD" || true
 fi
 for selected_index in "${!SELECTED_TYPES[@]}"; do
   if [ "${SELECTED_TYPES[$selected_index]}" = "send" ]; then
-    log_reply_ids "${SELECTED_FROMS[$selected_index]}" "${SELECTED_PAYLOADS[$selected_index]}" || true
+    log_reply_ids "${SELECTED_FROMS[$selected_index]}" "${SELECTED_PAYLOADS[$selected_index]}" "$MY_NAME" "${SELECTED_QUEUE_IDS[$selected_index]}" || true
   elif trusted_message_file "${SELECTED_PAYLOADS[$selected_index]}"; then
-    log_reply_ids "${SELECTED_FROMS[$selected_index]}" \
-      "$(LC_ALL=C head -c 512 "${SELECTED_PAYLOADS[$selected_index]}" 2>/dev/null || true)" || true
+    log_reply_ids_from_file "${SELECTED_FROMS[$selected_index]}" "${SELECTED_PAYLOADS[$selected_index]}" \
+      "$MY_NAME" "${SELECTED_QUEUE_IDS[$selected_index]}" || true
   fi
   archive_message "in" "${SELECTED_FROMS[$selected_index]}" "${SELECTED_TYPES[$selected_index]}" \
     "${SELECTED_QUEUE_IDS[$selected_index]}" \

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # dispatch-to-session.sh — Send a task to an existing named session via file-based messaging
-# Usage: dispatch-to-session.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] <target-name> <prompt-file>
+# Usage: dispatch-to-session.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] [--task TASK_ID] <target-name> <prompt-file>
 #   --priority high  queued recovery surfaces this before normal messages
 #   --ttl MINUTES    if still queued after this window, drop instead of surfacing
 # Supported platforms: macOS, Linux
@@ -9,6 +9,7 @@ source "$(dirname "$0")/lib.sh"
 
 REPLY_TO=""
 REPLY_TO_SET=0
+TASK_ID=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --priority)
@@ -25,6 +26,14 @@ while [ $# -gt 0 ]; do
       REPLY_TO="${1:-}"
       REPLY_TO_SET=1
       ;;
+    --task)
+      shift
+      TASK_ID="${1:-}"
+      if ! [[ "$TASK_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo "ERROR: --task expects a task id of letters, digits, _ and -." >&2
+        exit 1
+      fi
+      ;;
     *) break ;;
   esac
   shift
@@ -34,7 +43,7 @@ TARGET_NAME="${1:-}"
 PROMPT_FILE="${2:-}"
 
 if [ -z "$TARGET_NAME" ] || [ -z "$PROMPT_FILE" ]; then
-  echo "ERROR: Usage: dispatch-to-session.sh [--reply-to ID] <target-name> <prompt-file>"
+  echo "ERROR: Usage: dispatch-to-session.sh [--reply-to ID] [--task TASK_ID] <target-name> <prompt-file>"
   exit 1
 fi
 
@@ -72,8 +81,8 @@ if [ -n "$DRAFT_IDENT" ]; then
     DRAFT_IDENT=""
   fi
 fi
-if [ "$REPLY_TO_SET" = "1" ]; then
-  PROMPT_TEXT=$(correlate_reply "$REPLY_TO" "$PROMPT_TEXT") || exit 1
+if [ "$REPLY_TO_SET" = "1" ] || [ -n "$TASK_ID" ]; then
+  PROMPT_TEXT=$(apply_envelope "$REPLY_TO" "$TASK_ID" "$PROMPT_TEXT") || exit 1
 fi
 
 dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"

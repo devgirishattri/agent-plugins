@@ -46,16 +46,9 @@ threshold=$(( now - DAYS * 86400 ))
 candidates=()
 for f in "${files[@]}"; do
   base=$(basename "$f")
-  epoch="${base%%-*}"
-  if ! [[ "$epoch" =~ ^[0-9]+$ ]]; then continue; fi
+  parse_message_filename "$base" || continue
+  epoch="$MF_EPOCH"; from="$MF_FROM"; to="$MF_TO"
   if [ "$epoch" -ge "$threshold" ]; then continue; fi
-  rest="${base%.md}"
-  rest="${rest#*-}"
-  from="${rest%-to-*}"
-  to="${rest##*-to-}"
-  while [[ "$from" =~ ^[0-9]+- ]] || [[ "$from" =~ ^[0-9a-f]{8}- ]]; do
-    from="${from#*-}"
-  done
   if [ -n "$FROM" ] && [ "$from" != "$FROM" ]; then continue; fi
   if [ -n "$TO" ] && [ "$to" != "$TO" ]; then continue; fi
   candidates+=("$f")

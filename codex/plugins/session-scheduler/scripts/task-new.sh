@@ -100,10 +100,13 @@ if [ -n "$DEPENDS_RAW" ]; then
   done
 fi
 
-ID=$(generate_id)
+if ! ID=$(generate_id); then
+  echo "ERROR: could not generate a task id (needs od reading /dev/urandom); nothing was created." >&2
+  exit 1
+fi
 FILE=$(task_file "$ID") || exit 1
 lock_task_for_command "$ID" || exit 1
-[ ! -e "$FILE" ] || { echo "ERROR: task ID collision: $ID" >&2; exit 1; }
+[ ! -e "$FILE" ] && [ ! -L "$FILE" ] || { echo "ERROR: task ID collision: $ID" >&2; exit 1; }
 NOW=$(now_iso)
 ASSIGNER=$(current_pane_name)
 
@@ -134,7 +137,7 @@ jq -n \
     eta_at:null,
     meta:($meta + (if $workflow == "" then {} else {workflow_id:$workflow} end)),
     history:[{ts:$created,event:"created",actor:$assigner,note:$name}]
-  }' | write_json_atomic "$FILE" || exit 1
+  }' | write_json_atomic "$FILE" create || exit 1
 
 echo "Created task $ID: $NAME"
 [ -n "$STAGE" ] && echo "Stage: $STAGE"

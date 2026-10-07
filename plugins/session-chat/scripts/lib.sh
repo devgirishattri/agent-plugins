@@ -468,15 +468,47 @@ now_ms() {
   printf '%s000\n' "$seconds"
 }
 
-# --- Unique id for verify markers (guaranteed unique per call) ---
+# --- Message id for verify markers and reply correlation ---
 
+# 16 lowercase hex chars (64 bits) from /dev/urandom via od — nothing else.
+# There is deliberately no PID/RANDOM fallback: a predictable id would weaken
+# reply correlation. Random bits make a collision unlikely; they do not prove
+# uniqueness. On a missing od/urandom, a failing od, a short read or malformed
+# output this prints NOTHING and returns non-zero; every caller must abort on
+# failure before it writes or sends anything. od's own exit status is checked
+# first, in a plain assignment, so the result never depends on the caller's
+# pipefail setting (a pipe into tr would hide a failing od).
 generate_id() {
-  # 8 hex chars from /dev/urandom; no python/awk dependency
-  if command -v od >/dev/null 2>&1; then
-    od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
-  else
-    printf '%08x%04x%04x\n' "$$" "${RANDOM:-0}" "${RANDOM:-0}"
+  local raw
+  command -v od >/dev/null 2>&1 || return 1
+  raw=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null) || return 1
+  raw=$(printf '%s' "$raw" | tr -d ' \n')
+  [[ "$raw" =~ ^[a-f0-9]{16}$ ]] || return 1
+  printf '%s' "$raw"
+}
+
+# parse_message_filename <basename> — split a dispatch task file name into
+# MF_EPOCH, MF_FROM and MF_TO. Two forms are supported, nothing else is guessed:
+#   current  <epoch>-<pid>-<id>-<from>-to-<to>.md   (id = ONE 8-16 hex segment)
+#   legacy   <epoch>-<from>-to-<to>.md
+# After the epoch, exactly one <pid>-<id>- prefix is removed (current form); the
+# rest is <from>-to-<to> verbatim, so a sender whose own name starts with hex or
+# digits keeps every byte of it. Returns 1 when the name has no numeric epoch or
+# no -to- split.
+parse_message_filename() {
+  local base="${1%.md}" rest
+  MF_EPOCH=""; MF_FROM=""; MF_TO=""
+  MF_EPOCH="${base%%-*}"
+  [[ "$MF_EPOCH" =~ ^[0-9]+$ ]] || return 1
+  rest="${base#*-}"
+  [[ "$rest" == *-to-* ]] || return 1
+  if [[ "$rest" =~ ^[0-9]+-[a-f0-9]{8,16}-(.+-to-.+)$ ]]; then
+    rest="${BASH_REMATCH[1]}"
   fi
+  # shellcheck disable=SC2034  # read by messages-list.sh / messages-clean.sh
+  MF_FROM="${rest%-to-*}"
+  # shellcheck disable=SC2034
+  MF_TO="${rest##*-to-}"
 }
 
 clear_partial_input() {
@@ -1033,8 +1065,12 @@ drain_inbox() {
 # O_APPEND printf calls (atomic for short lines). Readers tolerate a partial
 # view; the occasional lost row under a concurrent trim is acceptable — this
 # ledger powers /check-replies reporting, not delivery.
-#   sent-log.tsv:    <ts_ms>\t<id>\t<from>\t<to>\t<type>\t<delivery>\t<excerpt>
-#   replies-log.tsv: <ts_ms>\t<reply_to_id>\t<from>
+#   sent-log.tsv:    <ts_ms>\t<id>\t<from>\t<to>\t<type>\t<delivery>\t<excerpt>\t<task_id>
+#   replies-log.tsv: <ts_ms>\t<reply_to_id>\t<from>\t<task_id>\t<recipient>\t<incoming_id>
+# Older rows have 7 sent columns (no task_id) and 3 reply columns (no task,
+# recipient or incoming id); readers key on the field count and never assume the
+# newer columns exist. <recipient> is the pane that RECEIVED the reply (the hook's
+# own name); /check-replies verifies it against the original request's sender.
 
 sent_log_file() { printf '%s/sent-log.tsv' "$MESSAGES_DIR"; }
 replies_log_file() { printf '%s/replies-log.tsv' "$MESSAGES_DIR"; }
@@ -1061,90 +1097,217 @@ trim_log_file() {
 log_sent_message() {
   # log_sent_message <id> <from> <to> <type> <delivery> <excerpt-source>
   local id="$1" from="$2" to="$3" type="$4" delivery="$5"
-  local excerpt slf
+  local excerpt slf task=""
   excerpt=$(log_excerpt "$6")
+  # The task association is whatever the message's LEADING envelope carries (so
+  # --task, a hand-typed leading [task:ID], and broadcast all record the same
+  # way); a refused/absent envelope records no task.
+  if parse_reply_envelope "$6"; then task="$ENV_TASK"; fi
   ensure_messages_dir || return 0
   slf=$(sent_log_file)
   # Never append the outbound ledger through a redirected leaf.
   safe_messages_file "$slf" || return 0
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" >> "$slf" 2>/dev/null || true
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(now_ms)" "$id" "$from" "$to" "$type" "$delivery" "$excerpt" "$task" >> "$slf" 2>/dev/null || true
   trim_log_file "$slf"
   archive_message "out" "$to" "$type" "$id" "$6"
 }
 
-# Validate a reply-to message id and return the message carrying a single
-# leading [re:ID] correlation token. The id charset (8-16 lowercase hex) is
-# exactly what log_reply_ids correlates, so a token this produces is always
-# matchable. Idempotent: if the message already contains the exact [re:ID]
-# token, it is returned unchanged — the token must appear exactly once (a doubled
-# literal token is noise even though log_reply_ids dedupes by id). Prints the
-# (possibly-prefixed) message on stdout; on a malformed id prints an error to
-# stderr and returns 1 WITHOUT printing a message, so callers can fail closed.
-apply_reply_to() {
-  local id="$1" message="$2"
-  if ! printf '%s' "$id" | grep -qE '^[a-f0-9]{8,16}$'; then
+# --- Leading reply envelope ---
+# A message body may START with an envelope: an optional [re:<hex8-16>] then an
+# optional [task:<id>], single-space separated, in that fixed order. Only this
+# leading run is ever interpreted. A [re:...] or [task:...] anywhere later in the
+# body is ordinary quoted text: it never correlates, conflicts, or gets rewritten.
+
+# parse_reply_envelope <body> [truncated] — fills ENV_RE, ENV_TASK and ENV_REST
+# (the body after the envelope; empty when there is none). Consumes the FULL
+# leading run of well-formed tokens before deciding, then returns 1 with ENV_ERR
+# set (and ENV_RE / ENV_TASK cleared) when the run is unusable:
+#   - two different [re:] ids, or two different [task:] ids   (conflict)
+#   - a [re:] after a [task:]                                  (reordered)
+# Identical repeated tokens collapse to one. A token must be followed by a space,
+# whitespace or the end of the body; one glued to following text, or a malformed
+# [re:]/[task:], ends the run and is left in ENV_REST verbatim.
+# With <truncated>=1 the input is only a PREFIX of a longer body (the read stopped
+# at a byte budget), so its end is not a boundary: the run counts as decided only
+# when it ended strictly inside the bytes read, at text that cannot grow into a
+# token. If the prefix ends at (or inside) a token, or right after a token's
+# separator, the full run is unknown and this returns 1 with ENV_UNDECIDED=1 — a
+# caller must then record nothing.
+parse_reply_envelope() {
+  local rest="$1" truncated="${2:-0}" kind val after term
+  ENV_RE=""; ENV_TASK=""; ENV_REST=""; ENV_ERR=""; ENV_UNDECIDED=0
+  while :; do
+    if [[ "$rest" =~ ^\[re:([a-f0-9]{8,16})\] ]]; then
+      kind="re"
+    elif [[ "$rest" =~ ^\[task:([a-zA-Z0-9_-]+)\] ]]; then
+      kind="task"
+    else
+      break
+    fi
+    val="${BASH_REMATCH[1]}"
+    after="${rest:${#BASH_REMATCH[0]}}"
+    case "$after" in
+      '') term="end" ;;
+      ' '*) term="space" ;;
+      [[:space:]]*) term="ws" ;;
+      *) break ;;
+    esac
+    if [ "$kind" = "re" ]; then
+      if [ -n "$ENV_TASK" ]; then
+        [ -n "$ENV_ERR" ] || ENV_ERR="[re:$val] follows a [task:] token (reordered envelope; the order is [re:] then [task:])"
+      elif [ -n "$ENV_RE" ] && [ "$ENV_RE" != "$val" ]; then
+        [ -n "$ENV_ERR" ] || ENV_ERR="conflicting [re:] tokens ([re:$ENV_RE] and [re:$val])"
+      else
+        ENV_RE="$val"
+      fi
+    else
+      if [ -n "$ENV_TASK" ] && [ "$ENV_TASK" != "$val" ]; then
+        [ -n "$ENV_ERR" ] || ENV_ERR="conflicting [task:] tokens ([task:$ENV_TASK] and [task:$val])"
+      else
+        ENV_TASK="$val"
+      fi
+    fi
+    case "$term" in
+      space) rest="${after# }" ;;
+      ws) rest="$after"; break ;;
+      *) rest=""; break ;;
+    esac
+  done
+  ENV_REST="$rest"
+  if [ "$truncated" = "1" ] && [ -z "$ENV_ERR" ]; then
+    # The run is open at the end of the prefix when nothing follows the last
+    # consumed token, a token is complete but touches the end, or the tail is a
+    # proper start of a token ("[", "[re:aaa", "[task:abc" ... no closing yet).
+    if [ -z "$rest" ] || [ "$rest" = "[" ] || [[ "$rest" =~ ^\[(r|re|re:[a-f0-9]{0,16}|t|ta|tas|task|task:[a-zA-Z0-9_-]*)$ ]] \
+       || [[ "$rest" =~ ^\[re:[a-f0-9]{8,16}\]$ ]] || [[ "$rest" =~ ^\[task:[a-zA-Z0-9_-]+\]$ ]]; then
+      # shellcheck disable=SC2034  # part of the parser's result contract
+      ENV_UNDECIDED=1
+      ENV_ERR="the envelope run reaches the end of the bytes read, so its full extent is unknown"
+    fi
+  fi
+  if [ -n "$ENV_ERR" ]; then
+    ENV_RE=""; ENV_TASK=""
+    return 1
+  fi
+  return 0
+}
+
+# Compose the leading envelope onto a message. <reply_id> and <task_id> are
+# either empty or validated here (8-16 lowercase hex / [a-zA-Z0-9_-]+). Only the
+# message's EXISTING LEADING envelope is inspected and normalized (same-id
+# duplicates collapse to one, the order is re-before-task); tokens later in the
+# body are left untouched. A leading token for a DIFFERENT id, or a malformed
+# leading run (conflict/reorder), is refused rather than silently resolved.
+# Prints the message on stdout; on any refusal prints an error to stderr and
+# returns 1 WITHOUT printing a message, so callers can fail closed.
+apply_envelope() {
+  local id="$1" task="$2" message="$3"
+  if [ -n "$id" ] && ! printf '%s' "$id" | grep -qE '^[a-f0-9]{8,16}$'; then
     echo "ERROR: --reply-to expects an 8-16 char lowercase hex message id (got '$id')." >&2
     return 1
   fi
-  # Inspect correlation tokens already present. A token for a DIFFERENT id is a
-  # conflict — a single reply cannot correlate to two different messages, so
-  # refuse rather than silently pick one. Tokens for the SAME id (however many,
-  # wherever placed) are collapsed to exactly one leading token below.
-  local existing other
-  existing=$(printf '%s' "$message" | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null | sort -u)
-  other=$(printf '%s\n' "$existing" | grep -vxF "[re:$id]" | sed '/^$/d')
-  if [ -n "$other" ]; then
-    echo "ERROR: message already carries a conflicting correlation token ($(printf '%s' "$other" | tr '\n' ' ')); refusing to add [re:$id]." >&2
+  if [ -n "$task" ] && ! [[ "$task" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "ERROR: --task expects a task id of letters, digits, _ and - (got '$task')." >&2
     return 1
   fi
-  # Strip every existing [re:$id] token (and any spaces trailing it), then
-  # prepend exactly one leading token. ($id is validated hex, so the sed pattern
-  # carries no metacharacters, and the message is sed INPUT, never the pattern.)
-  local stripped
-  stripped=$(printf '%s' "$message" | sed "s/\[re:$id\] *//g")
-  printf '[re:%s] %s' "$id" "$stripped"
+  if ! parse_reply_envelope "$message"; then
+    echo "ERROR: message starts with an unusable correlation envelope: $ENV_ERR." >&2
+    return 1
+  fi
+  local re_out="$ENV_RE" task_out="$ENV_TASK" rest="$ENV_REST"
+  if [ -n "$id" ]; then
+    if [ -n "$re_out" ] && [ "$re_out" != "$id" ]; then
+      echo "ERROR: message already carries a conflicting correlation token ([re:$re_out]); refusing to add [re:$id]." >&2
+      return 1
+    fi
+    re_out="$id"
+  fi
+  if [ -n "$task" ]; then
+    if [ -n "$task_out" ] && [ "$task_out" != "$task" ]; then
+      echo "ERROR: message already carries a conflicting task token ([task:$task_out]); refusing to add [task:$task]." >&2
+      return 1
+    fi
+    task_out="$task"
+  fi
+  local env=""
+  [ -n "$re_out" ] && env="[re:$re_out]"
+  [ -n "$task_out" ] && env="${env:+$env }[task:$task_out]"
+  case "$rest" in
+    '') printf '%s' "$env" ;;
+    [[:space:]]*) printf '%s%s' "$env" "$rest" ;;
+    *) printf '%s %s' "$env" "$rest" ;;
+  esac
 }
 
+# apply_reply_to <id> <message> — the reply-only form of apply_envelope.
+apply_reply_to() {
+  apply_envelope "$1" "" "$2"
+}
+
+# --- Incoming body normalization ---
+# The envelope is only meaningful at the start of the message BODY, but what the
+# hook sees is wrapped in transport framing. detect-incoming-message.sh reduces
+# each supported form to a bound (sender, id, body) triple ONCE, from a single
+# authoritative text, before anything here runs; nothing ever searches the raw
+# input for a [re:] token:
+#   live send     the "prompt" string of the provider hook JSON (or raw pasted
+#                 text) must START with one [from:NAME pane:%N id:HEX] header; the
+#                 body is what follows it
+#   queued send   the queue row payload IS the body
+#   dispatch file the file contents ARE the body (see log_reply_ids_from_file)
+# A live dispatch notification has no body: its envelope is read from the
+# trusted file named in that same header.
+
+# log_reply_ids <from> <body> [recipient] [incoming_id] [truncated] — record the leading
+# [re:<id>] of <body> (already normalized: see above) as a reply from <from>,
+# with its optional [task:] association, the receiving pane <recipient> and the
+# incoming message's own transport id. A refused (conflicting/reordered) or
+# re-less envelope records nothing. The bracketed form is required: a bare "re:"
+# inside an arbitrary word (e.g. "more:<hex>") never registers as a reply.
+# <truncated>=1 says <body> is only a read-limited prefix (see
+# parse_reply_envelope): an envelope whose extent is not known records nothing.
 log_reply_ids() {
-  # log_reply_ids <from> <text> — record every [re:<id>] token in <text> as a
-  # reply from <from>. The bracketed form is required: a bare "re:" inside an
-  # arbitrary word (e.g. "more:<hex>") must not register as a reply.
-  local from="$1" text="$2"
+  local from="$1" body="$2" recipient="${3:-}" incoming_id="${4:-}" truncated="${5:-0}"
   [ -n "$from" ] || return 0
-  local rf id
+  parse_reply_envelope "$body" "$truncated" || return 0
+  [ -n "$ENV_RE" ] || return 0
+  local rf
   rf=$(replies_log_file)
   ensure_messages_dir || return 0
   # Never append the replies ledger through a redirected leaf.
   safe_messages_file "$rf" || return 0
-  printf '%s' "$text" | grep -oE '\[re:[a-f0-9]{8,16}\]' 2>/dev/null | sed 's/^\[re://; s/\]$//' | sort -u | \
-  while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    printf '%s\t%s\t%s\n' "$(now_ms)" "$id" "$from" >> "$rf" 2>/dev/null || true
-  done
+  [[ "$incoming_id" =~ ^[a-f0-9]{8,16}$ ]] || incoming_id=""
+  recipient=$(printf '%s' "$recipient" | tr '\t\n\r' '   ')
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(now_ms)" "$ENV_RE" "$from" "$ENV_TASK" "$recipient" "$incoming_id" >> "$rf" 2>/dev/null || true
   trim_log_file "$rf"
 }
 
 log_reply_ids_from_file() {
-  # log_reply_ids_from_file <from> <file> — correlate [re:<id>] tokens carried in
-  # a dispatched task body. Dispatch queue rows store only the file path (not the
-  # body), so live AND queued dispatch replies are correlated by scanning a
-  # bounded prefix of the file here. The caller MUST have already validated the
-  # file as trusted (trusted_message_file) before calling this — we read its
-  # contents, so an untrusted/symlinked path must never reach it.
+  # log_reply_ids_from_file <from> <file> [recipient] [incoming_id] — correlate the
+  # leading envelope of a dispatched task body. Dispatch queue rows store only the
+  # file path (not the body), so live AND queued dispatch replies are correlated by
+  # reading a bounded prefix of the file here (the file contents ARE the body).
+  # The caller MUST have already validated the file as trusted
+  # (trusted_message_file) before calling this — we read its contents, so an
+  # untrusted/symlinked path must never reach it.
   #
-  # Only a bounded prefix is scanned: --reply-to prepends [re:<id>] at the very
-  # top, so a small prefix always suffices, and bounding the read caps cost and
-  # blast radius for a large or hostile body. Override with the byte budget
-  # SESSION_CHAT_REPLY_SCAN_BYTES (default 4096).
-  local from="$1" file="$2"
+  # Only a bounded prefix is read, to cap cost and blast radius for a large or
+  # hostile body. Override with the byte budget SESSION_CHAT_REPLY_SCAN_BYTES
+  # (default 4096). A prefix does NOT always contain the whole envelope: when the
+  # file is longer than the budget the parser is told so, and an envelope run
+  # that is not decided strictly inside the bytes read records no correlation.
+  local from="$1" file="$2" recipient="${3:-}" incoming_id="${4:-}"
   [ -n "$from" ] || return 0
   [ -f "$file" ] || return 0
-  local bytes prefix
+  local bytes prefix size truncated=0
   bytes=$(normalize_positive_int "${SESSION_CHAT_REPLY_SCAN_BYTES:-4096}" 4096)
+  size=$(wc -c < "$file" 2>/dev/null | tr -d ' ')
+  is_nonnegative_int "$size" || return 0
+  [ "$size" -gt "$bytes" ] && truncated=1
   prefix=$(head -c "$bytes" "$file" 2>/dev/null) || return 0
   [ -n "$prefix" ] || return 0
-  log_reply_ids "$from" "$prefix"
+  log_reply_ids "$from" "$prefix" "$recipient" "$incoming_id" "$truncated"
 }
 
 # --- Message archive (search) ---
@@ -1340,7 +1503,10 @@ send_message() {
   local target_messages_dir
   target_messages_dir=$(target_messages_dir_for_pane "$target_pane")
   local uid
-  uid=$(generate_id)
+  if ! uid=$(generate_id); then
+    echo "ERROR: could not generate a message id (no usable /dev/urandom via od); nothing was sent." >&2
+    return 1
+  fi
   # Durable copy first so a busy/failed paste is never a lost message.
   if ! enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" "$target_messages_dir"; then
     echo "ERROR: cannot queue message — recipient messages dir is unsafe (symlink/unowned) or unavailable: $target_messages_dir" >&2
@@ -1378,6 +1544,13 @@ dispatch_message() {
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
   ensure_agent_target "$target_name" "$target_pane" || return 1
+  # Generate the id BEFORE touching the filesystem: a failure must leave no
+  # directory, task file or queue row behind.
+  local uid
+  if ! uid=$(generate_id); then
+    echo "ERROR: could not generate a message id (no usable /dev/urandom via od); nothing was written or sent." >&2
+    return 1
+  fi
   # Resolve the recipient runtime's trusted dir: the task file must live where
   # that pane's hook will trust + read it (each runtime trusts only its own).
   local target_messages_dir
@@ -1389,8 +1562,6 @@ dispatch_message() {
     echo "ERROR: recipient messages dir is unsafe (symlink/unowned) or unavailable: $target_messages_dir" >&2
     return 1
   fi
-  local uid
-  uid=$(generate_id)
   # PID + uid prevents same-second / same-target collisions overwriting files.
   local msg_id
   msg_id="$(date +%s)-$$-${uid}-${my_name}-to-${target_name}"

@@ -12,6 +12,25 @@ fail() {
   exit 1
 }
 
+# Extract one full creation record; unrelated hex in names is never an ID.
+created_task_id() {
+  local ids
+  ids=$(printf '%s\n' "$1" | sed -nE \
+    -e 's/^Created task: ([A-Za-z0-9_-]+)$/\1/p' \
+    -e 's/^Created task ([A-Za-z0-9_-]+): .*$/\1/p')
+  [[ "$ids" =~ ^task-[0-9]+-[a-f0-9]{8}$ ]] || fail "expected exactly one new-format creation record: $1"
+  printf '%s\n' "$ids"
+}
+
+for record in 'Created task: task-1700000001-deadbeef' 'Created task task-1700000001-deadbeef: a cafebabe name'; do
+  [ "$(created_task_id "$record")" = task-1700000001-deadbeef ] || fail "creation record positive control failed"
+done
+for record in 'diagnostic deadbeef' 'Created task: deadbeef' $'Created task: task-1700000001-deadbeef\nCreated task: task-1700000002-cafebabe'; do
+  if (created_task_id "$record") >/dev/null 2>&1; then
+    fail "creation parser accepted an absent, legacy-only or duplicate record"
+  fi
+done
+
 # Review routing metadata describes one assignment cycle only. Both providers
 # must clear every canonical field and every pre-.meta compatibility alias on
 # reassignment; leaving even one value can suppress or corrupt the next review.
@@ -177,7 +196,7 @@ CLAUDE_SCRIPTS="$ROOT/plugins/session-scheduler/scripts"
 CODEX_SCRIPTS="$ROOT/codex/plugins/session-scheduler/scripts"
 
 claude_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "Claude-created shared task" --workflow shared-claude)
-CLAUDE_ID=$(printf '%s\n' "$claude_created" | grep -oE '[a-f0-9]{8}' | head -1)
+CLAUDE_ID=$(created_task_id "$claude_created")
 [ -n "$CLAUDE_ID" ] || fail "could not parse Claude-created task id"
 bash "$CODEX_SCRIPTS/task-assign.sh" parity-worker "$CLAUDE_ID" --reviewer parity-reviewer --context auto "Codex assigns Claude task" >/dev/null
 CLAUDE_FILE="$SESSION_SCHEDULER_HOME/tasks/$CLAUDE_ID.json"
@@ -209,7 +228,7 @@ bash "$CODEX_SCRIPTS/task-done.sh" "$CLAUDE_ID" "approved by Codex" >/dev/null
 [ "$(jq -r '.status' "$CLAUDE_FILE")" = "done" ] || fail "Codex could not complete Claude-created task"
 
 codex_created=$(bash "$CODEX_SCRIPTS/task-new.sh" "Codex-created shared task" --workflow shared-codex --reviewer parity-reviewer)
-CODEX_ID=$(printf '%s\n' "$codex_created" | grep -oE 'task-[a-zA-Z0-9_.-]+' | head -1)
+CODEX_ID=$(created_task_id "$codex_created")
 [ -n "$CODEX_ID" ] || fail "could not parse Codex-created task id"
 bash "$CLAUDE_SCRIPTS/task-assign.sh" parity-worker "$CODEX_ID" --context auto "Claude assigns Codex task" >/dev/null
 CODEX_FILE="$SESSION_SCHEDULER_HOME/tasks/$CODEX_ID.json"
@@ -391,11 +410,11 @@ done
 # the outcome. The ack packet body must be byte-identical across providers
 # once the provider-specific task id is normalized out.
 new_ack_task() {
-  # new_ack_task <scripts-dir> <id-pattern> — create+assign a task named
+  # new_ack_task <scripts-dir> — create+assign a task named
   # "Ack parity task" as parity-orchestrator; echo the parsed id.
-  local scripts="$1" pattern="$2" created id
+  local scripts="$1" created id
   created=$(bash "$scripts/task-new.sh" "Ack parity task")
-  id=$(printf '%s\n' "$created" | grep -oE "$pattern" | head -1)
+  id=$(created_task_id "$created")
   [ -n "$id" ] || fail "could not parse ack-parity task id from $scripts"
   bash "$scripts/task-assign.sh" parity-worker "$id" "ack parity work" >/dev/null
   printf '%s\n' "$id"
@@ -429,15 +448,13 @@ set_parity_identity() {
 for provider in claude codex; do
   if [ "$provider" = "claude" ]; then
     ack_scripts="$CLAUDE_SCRIPTS"
-    ack_id_pattern='[a-f0-9]{8}'
   else
     ack_scripts="$CODEX_SCRIPTS"
-    ack_id_pattern='task-[a-zA-Z0-9_.-]+'
   fi
 
   # Happy path: done-ack goes through durable dispatch, never inline send.
   set_parity_identity parity-orchestrator
-  ack_id=$(new_ack_task "$ack_scripts" "$ack_id_pattern")
+  ack_id=$(new_ack_task "$ack_scripts")
   ack_file="$SESSION_SCHEDULER_HOME/prompts/${ack_id}-ack-done.md"
   ack_sends_before=$(wc -l < "$PARITY_SEND_LOG" | tr -d ' ')
   set_parity_identity parity-worker
@@ -466,7 +483,7 @@ for provider in claude codex; do
 
   # Failure ladder: dispatch down + send up => inline-fallback recorded.
   set_parity_identity parity-orchestrator
-  fb_id=$(new_ack_task "$ack_scripts" "$ack_id_pattern")
+  fb_id=$(new_ack_task "$ack_scripts")
   set_parity_identity parity-worker
   PARITY_DISPATCH_FAIL=1 bash "$ack_scripts/task-block.sh" "$fb_id" "fallback reason" \
     >/dev/null 2> "$TMP/${provider}-ack-fallback.err"
@@ -485,7 +502,7 @@ for provider in claude codex; do
 
   # Failure ladder: both transports down => transition intact, failed recorded.
   set_parity_identity parity-orchestrator
-  ff_id=$(new_ack_task "$ack_scripts" "$ack_id_pattern")
+  ff_id=$(new_ack_task "$ack_scripts")
   set_parity_identity parity-worker
   PARITY_DISPATCH_FAIL=1 PARITY_SEND_FAIL=1 bash "$ack_scripts/task-done.sh" "$ff_id" "total ack failure" \
     >/dev/null 2> "$TMP/${provider}-ack-failed.err" \
@@ -610,7 +627,7 @@ regex_lines=$(grep -hoE "(SESSION_SCHEDULER|KNOWLEDGE)_CANONICAL_NAME_REGEX='[^'
 # under one provider's path must block the other provider's mutation (and the
 # same call succeeds once released). Both directions.
 lock_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "lock parity")
-LOCK_ID=$(printf '%s\n' "$lock_created" | grep -oE '[a-f0-9]{8}' | head -1)
+LOCK_ID=$(created_task_id "$lock_created")
 for provider in claude codex; do
   [ "$provider" = "claude" ] && scripts="$CLAUDE_SCRIPTS" || scripts="$CODEX_SCRIPTS"
   mkdir -p "$SESSION_SCHEDULER_HOME/locks/$LOCK_ID.lock"
@@ -645,7 +662,7 @@ done
 # Explicit --context NAME still goes through the knowledge store, from either provider.
 printf 'shared snapshot\n' > "$SESSION_CONTEXT_HOME/parity_ctx.md"
 explicit_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "explicit context task")
-EXPLICIT_ID=$(printf '%s\n' "$explicit_created" | grep -oE '[a-f0-9]{8}' | head -1)
+EXPLICIT_ID=$(created_task_id "$explicit_created")
 bash "$CODEX_SCRIPTS/task-assign.sh" parity-worker "$EXPLICIT_ID" --context parity_ctx "Codex explicit context" >/dev/null \
   || fail "Codex could not assign with an explicit context"
 assert_provider_neutral_packet "$SESSION_SCHEDULER_HOME/prompts/$EXPLICIT_ID.md" "Codex explicit-context assignment" explicit
@@ -661,7 +678,7 @@ assert_provider_neutral_packet "$SESSION_SCHEDULER_HOME/prompts/$EXPLICIT_ID.md"
 for provider in claude codex; do
   [ "$provider" = "claude" ] && scripts="$CLAUDE_SCRIPTS" || scripts="$CODEX_SCRIPTS"
   nc_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "$provider no-context-home task")
-  NC_ID=$(printf '%s\n' "$nc_created" | grep -oE '[a-f0-9]{8}' | head -1)
+  NC_ID=$(created_task_id "$nc_created")
   env -u SESSION_CONTEXT_HOME bash "$scripts/task-assign.sh" parity-worker "$NC_ID" --context auto "$provider auto without context home" >/dev/null \
     || fail "$provider --context auto required SESSION_CONTEXT_HOME"
   assert_scheduler_auto_context_consumable "$SESSION_SCHEDULER_HOME/tasks/$NC_ID.json" "$provider auto without context home"
@@ -673,7 +690,7 @@ done
 
 # Review retry from the OTHER provider reuses the original note in the packet.
 rn_created=$(bash "$CODEX_SCRIPTS/task-new.sh" "retry note parity" --reviewer parity-reviewer)
-RN_ID=$(printf '%s\n' "$rn_created" | grep -oE 'task-[a-zA-Z0-9_.-]+' | head -1)
+RN_ID=$(created_task_id "$rn_created")
 bash "$CLAUDE_SCRIPTS/task-assign.sh" parity-worker "$RN_ID" "work" >/dev/null
 PARITY_DISPATCH_FAIL=1 bash "$CLAUDE_SCRIPTS/task-review.sh" "$RN_ID" "sha-parity-original" >/dev/null 2>&1
 bash "$CODEX_SCRIPTS/task-review.sh" "$RN_ID" "codex retry typo" >/dev/null 2>&1 || fail "Codex retry of a Claude review failed"
@@ -683,7 +700,7 @@ if grep -F "codex retry typo" "$SESSION_SCHEDULER_HOME/prompts/${RN_ID}-review.m
   fail "Codex retry packet carries the retry note instead of the original"
 fi
 rn2_created=$(bash "$CLAUDE_SCRIPTS/task-new.sh" "retry note parity 2" --reviewer parity-reviewer)
-RN2_ID=$(printf '%s\n' "$rn2_created" | grep -oE '[a-f0-9]{8}' | head -1)
+RN2_ID=$(created_task_id "$rn2_created")
 bash "$CODEX_SCRIPTS/task-assign.sh" parity-worker "$RN2_ID" "work" >/dev/null
 PARITY_DISPATCH_FAIL=1 bash "$CODEX_SCRIPTS/task-review.sh" "$RN2_ID" "sha-parity-original-2" >/dev/null 2>&1
 bash "$CLAUDE_SCRIPTS/task-review.sh" "$RN2_ID" "claude retry typo" >/dev/null 2>&1 || fail "Claude retry of a Codex review failed"
@@ -700,5 +717,8 @@ done
 
 python3 -B "$ROOT/scripts/test-chat-draft-consumption.py" \
   || fail "cross-provider draft consumption regression failed"
+
+python3 -B "$ROOT/scripts/test-chat-envelope.py" || fail "cross-provider envelope regression failed"
+python3 -B "$ROOT/scripts/test-scheduler-create.py" || fail "cross-provider creation regression failed"
 
 echo "cross-provider scheduler, context, reply-correlation, and draft consumption parity tests passed"

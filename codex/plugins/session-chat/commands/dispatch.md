@@ -5,6 +5,10 @@ argument-hint: <session-name> <prompt>
 
 ## Instructions
 
+Accept optional `--task <task-id>` before the positional arguments. Pass it
+through to the helper; do not infer an ID. Task IDs use letters, digits, `_`
+and `-`. Follow the canonical skill for envelope and conflict behavior.
+
 1. Parse `$ARGUMENTS`: optional `--priority high` and `--ttl <minutes>` come first; then the target session name; everything after is the prompt.
 2. If either value is missing, tell the user: `Usage: $session-chat:dispatch <session-name> <task prompt>`.
    If this is a response to an incoming message, use `$session-chat:reply`

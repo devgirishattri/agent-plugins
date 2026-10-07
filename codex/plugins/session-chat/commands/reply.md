@@ -5,6 +5,10 @@ argument-hint: <pane-name> <message-id> <message>
 
 ## Instructions
 
+Accept optional `--task <task-id>` before the positional arguments. Pass it
+through to the helper; do not infer an ID. Task IDs use letters, digits, `_`
+and `-`. Follow the canonical skill for envelope and conflict behavior.
+
 1. Parse the sender pane, incoming lowercase-hex message id, and reply from
    `$ARGUMENTS`. If any is missing, report:
    `Usage: $session-chat:reply <pane-name> <message-id> <message>`.
@@ -15,7 +19,7 @@ argument-hint: <pane-name> <message-id> <message>
 4. For a safe single-line reply, run:
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/send-message.sh" --reply-to "<message-id>" "<pane-name>" "<message>"
+   bash "$PLUGIN_ROOT/scripts/send-message.sh" --reply-to "<message-id>" [--task <task-id>] "<pane-name>" "<message>"
    ```
 
 5. For file dispatch, follow `$session-chat:reply`'s canonical staging
@@ -23,7 +27,7 @@ argument-hint: <pane-name> <message-id> <message>
    `<messages-grant>/drafts/<pane-name>/` namespace, with a fresh safe `.md` or
    `.txt` filename. Other sessions may use a separately created temporary
    directory. Preserve the verbatim body as data; never interpolate it into shell
-   source. Dispatch using the installed `dispatch-to-session.sh` helper with `--reply-to`.
+   source. Dispatch using the installed `dispatch-to-session.sh` helper with `--reply-to` and the supplied `--task`, if any.
    After delivered or durable queued success, the transport consumes eligible
    own-pane drafts unless `SESSION_CHAT_KEEP_DRAFTS=1`. Do not delete retained
    drafts or resend successful messages. Preserve drafts after hard failure.

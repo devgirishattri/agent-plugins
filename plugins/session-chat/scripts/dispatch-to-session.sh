@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # dispatch-to-session.sh — Send a task to an existing named session via file-based messaging
-# Usage: dispatch-to-session.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] <target-name> <prompt-file>
+# Usage: dispatch-to-session.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] [--task TASK_ID] <target-name> <prompt-file>
 #   --priority high  queued recovery surfaces this before normal messages
 #   --ttl MINUTES    if still queued after this window, drop instead of surfacing
 #   --reply-to ID    prepend a single [re:ID] correlation token (8-16 hex) to the
 #                    task body; also surfaced into the notification so a long
 #                    (dispatched) reply correlates on the original sender's side
+#   --task TASK_ID   put a [task:TASK_ID] token after it (letters, digits, _ and -);
+#                    /check-replies --task TASK_ID lists everything tagged with it.
+#                    Both tokens form a LEADING envelope at the very top of the body.
 # Supported platforms: macOS, Linux
 
 source "$(dirname "$0")/lib.sh"
 
 REPLY_TO=""
+TASK_ID=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --priority)
@@ -25,6 +29,14 @@ while [ $# -gt 0 ]; do
     --reply-to)
       shift
       REPLY_TO="${1:-}"
+      ;;
+    --task)
+      shift
+      TASK_ID="${1:-}"
+      if [ -z "$TASK_ID" ]; then
+        echo "ERROR: --task requires a task id." >&2
+        exit 1
+      fi
       ;;
     *) break ;;
   esac
@@ -46,9 +58,13 @@ fi
 
 # Fail on a malformed --reply-to id BEFORE ensure_tmux, so a bad id is reported
 # as such rather than as a missing tmux (matching send-message.sh's ordering).
-# apply_reply_to below repeats the check and also refuses conflicting tokens.
+# apply_envelope below repeats the checks and also refuses conflicting tokens.
 if [ -n "$REPLY_TO" ] && ! printf '%s' "$REPLY_TO" | grep -qE '^[a-f0-9]{8,16}$'; then
   echo "ERROR: --reply-to expects an 8-16 char lowercase hex message id (got '$REPLY_TO')." >&2
+  exit 1
+fi
+if [ -n "$TASK_ID" ] && ! [[ "$TASK_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "ERROR: --task expects a task id of letters, digits, _ and - (got '$TASK_ID')." >&2
   exit 1
 fi
 
@@ -68,9 +84,9 @@ else
   DRAFT_IDENT=""
 fi
 
-# Read the body as data (never as shell), then prepend the reply-correlation
-# token to the in-memory text so it lands at the top of the dispatched file (and
-# is later scanned for correlation on the recipient).
+# Read the body as data (never as shell), then compose the leading envelope
+# ([re:ID] then [task:ID]) onto the in-memory text so it lands at the very top of
+# the dispatched file (and is later read for correlation on the recipient).
 # A failed or partial read must never be sent, and must never let cleanup
 # remove the only complete copy: fail closed before dispatch.
 if ! PROMPT_TEXT=$(cat "$PROMPT_FILE"); then
@@ -83,8 +99,8 @@ if [ -n "$DRAFT_IDENT" ]; then
     DRAFT_IDENT=""  # changed while being read: deliver what was read, keep the file
   fi
 fi
-if [ -n "$REPLY_TO" ]; then
-  PROMPT_TEXT=$(apply_reply_to "$REPLY_TO" "$PROMPT_TEXT") || exit 1
+if [ -n "$REPLY_TO" ] || [ -n "$TASK_ID" ]; then
+  PROMPT_TEXT=$(apply_envelope "$REPLY_TO" "$TASK_ID" "$PROMPT_TEXT") || exit 1
 fi
 
 dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"

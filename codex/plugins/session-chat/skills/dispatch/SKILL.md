@@ -7,6 +7,11 @@ description: "Dispatch a task prompt to another named tmux pane through session-
 
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
+Accept optional `--task <task-id>` before the positional arguments. Preserve
+this association when calling the helper; do not infer a task ID. Task IDs use
+letters, digits, `_` and `-`. The helper adds the leading task token after any
+reply token. Later quoted tokens remain body text.
+
 Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
 the directory two levels above this `SKILL.md`. Use that absolute path; never
 infer it from cwd or hardcode a marketplace cache version.
@@ -53,7 +58,7 @@ shell call and use a native tool to write the file there.
 2. Run:
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target>" "<draft-path>"
+   bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] [--task <task-id>] "<target>" "<draft-path>"
    ```
 
 3. After delivered or durable queued success, the transport removes eligible

@@ -5,6 +5,10 @@ argument-hint: <pane-name> <message>
 
 ## Instructions
 
+Accept optional `--task <task-id>` before the positional arguments. Pass it
+through to the helper; do not infer an ID. Task IDs use letters, digits, `_`
+and `-`. Follow the canonical skill for envelope and conflict behavior.
+
 `$session-chat:send` is for single-line messages up to 1024 characters by default. Use `$session-chat:dispatch` for multi-line or quoting-sensitive content.
 For a response to an incoming message, use `$session-chat:reply` so correlation
 is transport-generated rather than manually typed.
@@ -17,7 +21,7 @@ is transport-generated rather than manually typed.
 4. Run:
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/send-message.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target-name>" "<message>"
+   bash "$PLUGIN_ROOT/scripts/send-message.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] [--task <task-id>] "<target-name>" "<message>"
    ```
 
 5. If the output says `Sent to ...`, confirm to the user.

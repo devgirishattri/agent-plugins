@@ -7,6 +7,11 @@ description: "Send a message to another named tmux pane through session-chat. Us
 
 When this skill is invoked, do not add a preamble or narrate the plan. Run the relevant script directly, then return only the formatted result or the shortest actionable message.
 
+Accept optional `--task <task-id>` before the positional arguments. Preserve
+this association when calling the helper; do not infer a task ID. Task IDs use
+letters, digits, `_` and `-`. The helper adds the leading task token after any
+reply token. Later quoted tokens remain body text.
+
 Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it is
 the directory two levels above this `SKILL.md`. Use that absolute path; never
 infer it from cwd or hardcode a marketplace cache version.
@@ -25,7 +30,7 @@ records correlation automatically.
 Run:
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/send-message.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] "<target-name>" "<message>"
+bash "$PLUGIN_ROOT/scripts/send-message.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] [--task <task-id>] "<target-name>" "<message>"
 ```
 
 If tmux is not active, explain that messaging requires running Codex inside tmux.

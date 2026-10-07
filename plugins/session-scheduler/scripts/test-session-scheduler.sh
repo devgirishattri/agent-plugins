@@ -1444,6 +1444,251 @@ else
   fail "contract_doctor_reports_unadmitted" "$(echo "$dr_out" | grep -A4 contracts)"
 fi
 
+# --- Tier 1.2a: task ids are task-<epoch>-<8hex> from urandom only; creation is
+#     exclusive (O_EXCL); legacy 8-hex ids stay valid. ---
+ID_HOME="$TMP/id-home"; mkdir -p "$ID_HOME"
+ID_SHIM="$TMP/id-shim"; mkdir -p "$ID_SHIM"
+REAL_DATE=$(command -v date)
+id_new() { SESSION_SCHEDULER_HOME="$ID_HOME" bash "$HERE/task-new.sh" "$@" 2>&1; }
+id_count() { find "$ID_HOME/tasks" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
+od_shim() { printf '#!/bin/sh\n%s\n' "$1" > "$ID_SHIM/od"; chmod +x "$ID_SHIM/od"; }
+rm_shim() { rm -f "$ID_SHIM/od" "$ID_SHIM/date"; }
+
+# 55: new ids match task-<epoch>-<8hex>, resolve through the normal readers, and
+#     a legacy bare 8-hex id is still accepted by the same readers.
+n_out=$(id_new "fmt-task"); n_id=$(echo "$n_out" | awk '/Created task:/ {print $3}')
+n_status=$(SESSION_SCHEDULER_HOME="$ID_HOME" bash "$HERE/task-status.sh" "$n_id" 2>&1); n_status_rc=$?
+LEG_ID=deadbeef
+jq --arg id "$LEG_ID" '.id = $id | .name = "legacy-8hex"' "$ID_HOME/tasks/$n_id.json" > "$ID_HOME/tasks/$LEG_ID.json"
+l_status=$(SESSION_SCHEDULER_HOME="$ID_HOME" bash "$HERE/task-status.sh" "$LEG_ID" 2>&1); l_status_rc=$?
+n_id2=$(id_new "fmt-task-2" | awk '/Created task:/ {print $3}')
+if [[ "$n_id" =~ ^task-[0-9]+-[a-f0-9]{8}$ ]] && [[ "$n_id2" =~ ^task-[0-9]+-[a-f0-9]{8}$ ]] && [ "$n_id" != "$n_id2" ] \
+   && [ -f "$ID_HOME/tasks/$n_id.json" ] && [ "$(jq -r .id "$ID_HOME/tasks/$n_id.json")" = "$n_id" ] \
+   && [ "$n_status_rc" = 0 ] && echo "$n_status" | grep -qF "$n_id" \
+   && [ "$l_status_rc" = 0 ] && echo "$l_status" | grep -q "legacy-8hex"; then
+  pass "task_id_format_epoch_hex_and_legacy_ids_valid"
+else
+  fail "task_id_format_epoch_hex_and_legacy_ids_valid" "id=$n_id id2=$n_id2 status_rc=$n_status_rc legacy_rc=$l_status_rc out=$n_out"
+fi
+
+# 56: no urandom (od fails / short read / malformed) -> task-new fails closed
+#     with nothing created; the control (real od) creates a task.
+ur_bad=""
+for variant in 'exit 1' 'printf " de ad\n"' 'printf " zz zz zz zz\n"' 'printf " DE AD BE EF\n"'; do
+  od_shim "$variant"
+  before=$(id_count)
+  v_out=$(PATH="$ID_SHIM:$PATH" id_new "no-urandom"); v_rc=$?
+  after=$(id_count)
+  { [ "$v_rc" != 0 ] && ! echo "$v_out" | grep -q 'Created task:' && echo "$v_out" | grep -q 'could not generate a task id' && [ "$before" = "$after" ]; } \
+    || ur_bad="$ur_bad [$variant rc=$v_rc before=$before after=$after out=$v_out]"
+done
+# control: a well-formed shim output is accepted (the refusals above are not a blanket failure)
+od_shim 'printf " 0a 1b 2c 3d\n"'
+c_out=$(PATH="$ID_SHIM:$PATH" id_new "urandom-control"); c_id=$(echo "$c_out" | awk '/Created task:/ {print $3}')
+[[ "$c_id" =~ ^task-[0-9]+-0a1b2c3d$ ]] || ur_bad="$ur_bad [control id=$c_id out=$c_out]"
+# no od on PATH at all
+NO_OD="$TMP/no-od-bin"; mkdir -p "$NO_OD"
+# every executable the script needs (system dirs + jq's dir) EXCEPT od
+for d in /bin /usr/bin "$(dirname "$(command -v jq)")"; do
+  for f in "$d"/*; do
+    n=$(basename "$f")
+    [ "$n" != od ] && [ -x "$f" ] && [ ! -e "$NO_OD/$n" ] && ln -s "$f" "$NO_OD/$n" 2>/dev/null
+  done
+done
+[ ! -e "$NO_OD/od" ] || ur_bad="$ur_bad [no-od fixture still has od]"
+nb=$(id_count)
+no_out=$(SESSION_SCHEDULER_HOME="$ID_HOME" PATH="$NO_OD" "$BASH" "$HERE/task-new.sh" "no-od" 2>&1); no_rc=$?
+{ [ "$no_rc" != 0 ] && echo "$no_out" | grep -q 'could not generate a task id' && [ "$(id_count)" = "$nb" ]; } || ur_bad="$ur_bad [no-od rc=$no_rc out=$no_out]"
+rm_shim
+if [ -z "$ur_bad" ]; then
+  pass "task_new_fails_closed_without_urandom"
+else
+  fail "task_new_fails_closed_without_urandom" "$ur_bad"
+fi
+
+# 57: exclusive creation — a pre-existing file (or symlink) at the target is
+#     refused and left untouched; control: the same id on a free path is created.
+od_shim 'printf " de ad be ef\n"'
+printf '#!/bin/sh\nif [ "$1" = "+%%s" ]; then echo 1700000000; else exec %s "$@"; fi\n' "$REAL_DATE" > "$ID_SHIM/date"; chmod +x "$ID_SHIM/date"
+COL_ID="task-1700000000-deadbeef"
+COL_FILE="$ID_HOME/tasks/$COL_ID.json"
+rm -f "$COL_FILE"
+printf 'PRE-EXISTING-SENTINEL\n' > "$COL_FILE"
+ex_bad=""
+c1_out=$(PATH="$ID_SHIM:$PATH" id_new "collides"); c1_rc=$?
+{ [ "$c1_rc" != 0 ] && ! echo "$c1_out" | grep -q 'Created task:' && echo "$c1_out" | grep -q 'already exists' \
+  && [ "$(cat "$COL_FILE")" = "PRE-EXISTING-SENTINEL" ]; } || ex_bad="$ex_bad [file rc=$c1_rc out=$c1_out content=$(cat "$COL_FILE")]"
+# symlink at the path: refused, and nothing is created through it
+rm -f "$COL_FILE"; ln -s "$TMP/symlink-victim.json" "$COL_FILE"
+c2_out=$(PATH="$ID_SHIM:$PATH" id_new "collides-symlink"); c2_rc=$?
+{ [ "$c2_rc" != 0 ] && ! echo "$c2_out" | grep -q 'Created task:' && [ -L "$COL_FILE" ] && [ ! -e "$TMP/symlink-victim.json" ]; } \
+  || ex_bad="$ex_bad [symlink rc=$c2_rc out=$c2_out victim=$([ -e "$TMP/symlink-victim.json" ] && echo created || echo none)]"
+# control: free path -> created with exactly this id and valid JSON
+rm -f "$COL_FILE"
+c3_out=$(PATH="$ID_SHIM:$PATH" id_new "no-collision"); c3_rc=$?
+{ [ "$c3_rc" = 0 ] && echo "$c3_out" | grep -q "Created task: $COL_ID" && [ "$(jq -r .name "$COL_FILE")" = "no-collision" ]; } \
+  || ex_bad="$ex_bad [control rc=$c3_rc out=$c3_out]"
+# a second creation of the same id after the control is now refused, original intact
+PATH="$ID_SHIM:$PATH" id_new "collides-again" >/dev/null; c4_rc=$?
+{ [ "$c4_rc" != 0 ] && [ "$(jq -r .name "$COL_FILE")" = "no-collision" ]; } || ex_bad="$ex_bad [recollide rc=$c4_rc name=$(jq -r .name "$COL_FILE" 2>/dev/null)]"
+rm_shim
+# the library write: "create" refuses an existing target; the default replace path still updates
+lw=$(SESSION_SCHEDULER_HOME="$ID_HOME" bash -c '
+  source "$1"; id=lib-excl-1
+  task_write "$id" "{\"id\":\"$id\",\"v\":1}" create; echo "FIRST=$?"
+  task_write "$id" "{\"id\":\"$id\",\"v\":2}" create 2>/dev/null; echo "SECOND=$?"
+  echo "AFTER_CREATE=$(jq -r .v "$(task_path "$id")")"
+  task_write "$id" "{\"id\":\"$id\",\"v\":3}"; echo "UPDATE=$?"
+  echo "AFTER_UPDATE=$(jq -r .v "$(task_path "$id")")"' _ "$HERE/lib.sh")
+{ echo "$lw" | grep -qx 'FIRST=0' && echo "$lw" | grep -qx 'SECOND=1' && echo "$lw" | grep -qx 'AFTER_CREATE=1' \
+  && echo "$lw" | grep -qx 'UPDATE=0' && echo "$lw" | grep -qx 'AFTER_UPDATE=3'; } || ex_bad="$ex_bad [lib $lw]"
+if [ -z "$ex_bad" ]; then
+  pass "task_new_exclusive_create_refuses_collision"
+else
+  fail "task_new_exclusive_create_refuses_collision" "$ex_bad"
+fi
+
+# --- Review fixes R3/R5 (scheduler) ---
+# R3: a failing od with plausible output must not yield a task id, whatever the
+#     caller's pipefail setting; control: the same output with exit 0 is accepted.
+r3s_bad=""
+od_shim 'printf " de ad be ef\n"; exit 1'
+before=$(id_count)
+r3a_out=$(PATH="$ID_SHIM:$PATH" id_new "failing-od"); r3a_rc=$?
+lg=$(PATH="$ID_SHIM:$PATH" bash -c 'source "$1"; id=$(generate_task_id); echo "$?|$id"' _ "$HERE/lib.sh")
+{ [ "$r3a_rc" != 0 ] && ! echo "$r3a_out" | grep -q 'Created task:' && echo "$r3a_out" | grep -q 'could not generate a task id' \
+  && [ "$(id_count)" = "$before" ] && [ "$lg" = "1|" ]; } || r3s_bad="$r3s_bad [failing-od rc=$r3a_rc out=$r3a_out lib=$lg]"
+od_shim 'printf " de ad be ef\n"; exit 0'
+r3b_out=$(PATH="$ID_SHIM:$PATH" id_new "ok-od"); r3b_rc=$?
+lg=$(PATH="$ID_SHIM:$PATH" bash -c 'source "$1"; id=$(generate_task_id); echo "$?|$id"' _ "$HERE/lib.sh")
+{ [ "$r3b_rc" = 0 ] && echo "$r3b_out" | grep -qE 'Created task: task-[0-9]+-deadbeef$' && [[ "$lg" =~ ^0\|task-[0-9]+-deadbeef$ ]]; } \
+  || r3s_bad="$r3s_bad [control rc=$r3b_rc out=$r3b_out lib=$lg]"
+rm_shim
+if [ -z "$r3s_bad" ]; then
+  pass "task_new_failing_od_with_output_fails_closed"
+else
+  fail "task_new_failing_od_with_output_fails_closed" "$r3s_bad"
+fi
+
+# R5: task creation never exposes an empty/partial/multi-link file at the final
+#     path, never replaces, and is exclusive among concurrent creators.
+#     Crash instrumentation is EXTERNAL to the code under test: BASH_ENV loads a
+#     DEBUG trap (set -T, so functions inherit it) that SIGKILLs the shell when
+#     task_write reaches a chosen boundary, recognised only by BASH_COMMAND:
+#       before-fill      the command that writes the JSON content to a file
+#       before-publish   the mv/ln that publishes it under its final name
+#       after-publish    the first command run after that mv/ln
+#     It records the boundary in a marker file, then SIGKILLs the whole process
+#     group. Each trial runs task-new as the leader of its own session via python
+#     (start_new_session), whose returncode of -9 is the proof of death by SIGKILL;
+#     the trial also needs the marker, or it is reported as not proven.
+R5_TRAP="$TMP/r5-crash-trap.sh"
+cat > "$R5_TRAP" <<'TRAP'
+set -T
+__r5_after=0
+__r5_kill() {
+  case " ${FUNCNAME[*]} " in *" task_write "*) ;; *) return 0 ;; esac
+  local c="$BASH_COMMAND" hit=""
+  if [ "$__r5_after" = 1 ]; then hit=after-publish
+  else
+    case "$c" in
+      'printf '*'$json'*'>'*) hit=before-fill ;;   # bash may print a redirect as 1>&3
+      'mv '*|'ln '*) __r5_after=1; hit=before-publish ;;
+    esac
+  fi
+  if [ -n "$hit" ] && [ "$hit" = "${R5_CRASH_AT:-}" ]; then
+    printf '%s\n' "$hit" > "$R5_MARK"
+    kill -KILL 0   # the whole process group: the shell and any subshell it is running in
+  fi
+  return 0
+}
+[ -n "${R5_CRASH_AT:-}" ] && trap '__r5_kill' DEBUG
+TRAP
+R5_ID="task-1700000002-0badf00d"
+od_shim 'printf " 0b ad f0 0d\n"'
+printf '#!/bin/sh\nif [ "$1" = "+%%s" ]; then echo 1700000002; else exec %s "$@"; fi\n' "$REAL_DATE" > "$ID_SHIM/date"; chmod +x "$ID_SHIM/date"
+r5_nlink() { stat -c '%h' "$1" 2>/dev/null || stat -f '%l' "$1" 2>/dev/null; }
+r5_home() { cd -P "$(mktemp -d "$TMP/r5-home.XXXXXX")" && pwd -P; }
+r5_tmp_count() { find "$1/tasks" -maxdepth 1 -name '*.tmp.*' 2>/dev/null | wc -l | tr -d ' '; }
+# r5_invariant <home>: final path absent, OR complete valid JSON with link count 1;
+# both readers keep working (the contract reader must get PAST the file checks).
+r5_invariant() {
+  local home="$1" f="$1/tasks/$R5_ID.json" out
+  if [ -e "$f" ] || [ -L "$f" ]; then
+    [ -f "$f" ] && [ ! -L "$f" ] || { echo "not-regular"; return 1; }
+    [ "$(r5_nlink "$f")" = 1 ] || { echo "nlink=$(r5_nlink "$f")"; return 1; }
+    jq -e --arg id "$R5_ID" 'type == "object" and .id == $id' "$f" >/dev/null 2>&1 || { echo "partial-or-invalid-json(size=$(wc -c < "$f" | tr -d ' '))"; return 1; }
+    out=$(SESSION_SCHEDULER_HOME="$home" python3 -B "$HERE/task-contract.py" inspect "$R5_ID" 2>&1)
+    echo "$out" | grep -q 'missing or unsupported contract' || { echo "contract-reader: $out"; return 1; }
+  fi
+  SESSION_SCHEDULER_HOME="$home" bash "$HERE/task-status.sh" --all >/dev/null 2>&1 || { echo "task-status-failed"; return 1; }
+  return 0
+}
+r5_bad=""
+for boundary in before-fill before-publish after-publish; do
+  th=$(r5_home); mark="$th/crash.mark"
+  rc=$(PATH="$ID_SHIM:$PATH" SESSION_SCHEDULER_HOME="$th" BASH_ENV="$R5_TRAP" R5_CRASH_AT="$boundary" R5_MARK="$mark" \
+    python3 -B -I -c 'import subprocess, sys
+print(subprocess.run(sys.argv[1:], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode)' \
+    bash "$HERE/task-new.sh" crashes 2>/dev/null)
+  if [ "$rc" != -9 ] || [ "$(cat "$mark" 2>/dev/null)" != "$boundary" ]; then
+    r5_bad="$r5_bad [$boundary: SIGKILL not proven rc=$rc mark=$(cat "$mark" 2>/dev/null)]"; continue
+  fi
+  inv=$(r5_invariant "$th") || r5_bad="$r5_bad [$boundary: invariant violated after proven SIGKILL: $inv]"
+  # recovery: a plain creation afterwards still works when the id is not taken (a stale lock is reclaimed)
+  if [ ! -e "$th/tasks/$R5_ID.json" ]; then
+    rec=$(PATH="$ID_SHIM:$PATH" SESSION_SCHEDULER_HOME="$th" bash "$HERE/task-new.sh" "recovers" 2>&1) \
+      && echo "$rec" | grep -q 'Created task:' || r5_bad="$r5_bad [$boundary: recovery failed: $rec]"
+  fi
+done
+# control: the same trap loaded but never armed (no R5_CRASH_AT) = uninstrumented normal creation
+th=$(r5_home)
+nc_out=$(PATH="$ID_SHIM:$PATH" SESSION_SCHEDULER_HOME="$th" bash "$HERE/task-new.sh" "normal" 2>&1); nc_rc=$?
+{ [ "$nc_rc" = 0 ] && echo "$nc_out" | grep -q "Created task: $R5_ID" && r5_invariant "$th" >/dev/null && [ "$(jq -r .name "$th/tasks/$R5_ID.json")" = normal ] \
+  && [ "$(r5_tmp_count "$th")" = 0 ] && [ ! -e "$th/locks/$R5_ID.lock" ]; } || r5_bad="$r5_bad [normal creation rc=$nc_rc out=$nc_out]"
+# forced collision: refused, existing bytes identical, no temp, lock released (file, symlink and directory forms)
+cp "$th/tasks/$R5_ID.json" "$th/before.json"
+co_out=$(PATH="$ID_SHIM:$PATH" SESSION_SCHEDULER_HOME="$th" bash "$HERE/task-new.sh" "collides" 2>&1); co_rc=$?
+{ [ "$co_rc" != 0 ] && echo "$co_out" | grep -q 'already exists' && ! echo "$co_out" | grep -q 'Created task:' && cmp -s "$th/tasks/$R5_ID.json" "$th/before.json" \
+  && [ "$(r5_tmp_count "$th")" = 0 ] && [ ! -e "$th/locks/$R5_ID.lock" ]; } || r5_bad="$r5_bad [collision rc=$co_rc out=$co_out]"
+rm -f "$th/tasks/$R5_ID.json"; ln -s "$th/elsewhere.json" "$th/tasks/$R5_ID.json"
+PATH="$ID_SHIM:$PATH" SESSION_SCHEDULER_HOME="$th" bash "$HERE/task-new.sh" "collides-symlink" >/dev/null 2>&1; cs_rc=$?
+{ [ "$cs_rc" != 0 ] && [ -L "$th/tasks/$R5_ID.json" ] && [ ! -e "$th/elsewhere.json" ] && [ "$(r5_tmp_count "$th")" = 0 ] && [ ! -e "$th/locks/$R5_ID.lock" ]; } || r5_bad="$r5_bad [symlink collision rc=$cs_rc]"
+rm -f "$th/tasks/$R5_ID.json"; mkdir "$th/tasks/$R5_ID.json"
+PATH="$ID_SHIM:$PATH" SESSION_SCHEDULER_HOME="$th" bash "$HERE/task-new.sh" "collides-dir" >/dev/null 2>&1; cd_rc=$?
+{ [ "$cd_rc" != 0 ] && [ -z "$(ls -A "$th/tasks/$R5_ID.json")" ] && [ "$(r5_tmp_count "$th")" = 0 ] && [ ! -e "$th/locks/$R5_ID.lock" ]; } || r5_bad="$r5_bad [dir collision rc=$cd_rc]"
+# the same collision refusal at the library boundary (independent of id generation)
+lh=$(r5_home); mkdir -p "$lh/tasks" "$lh/locks"; chmod 700 "$lh" "$lh/tasks" "$lh/locks"
+printf '{"id":"lib-col","keep":true}\n' > "$lh/tasks/lib-col.json"; cp "$lh/tasks/lib-col.json" "$lh/lib-before.json"
+lc_out=$(SESSION_SCHEDULER_HOME="$lh" bash -c 'source "$1"; task_write lib-col "{\"id\":\"lib-col\",\"keep\":false}" create' _ "$HERE/lib.sh" 2>&1); lc_rc=$?
+SESSION_SCHEDULER_HOME="$lh" bash -c 'source "$1"; task_write lib-free "{\"id\":\"lib-free\"}" create' _ "$HERE/lib.sh" >/dev/null 2>&1; lf_rc=$?
+{ [ "$lc_rc" != 0 ] && echo "$lc_out" | grep -q 'already exists' && cmp -s "$lh/tasks/lib-col.json" "$lh/lib-before.json" && [ "$(r5_tmp_count "$lh")" = 0 ] \
+  && [ ! -e "$lh/locks/lib-col.lock" ] && [ "$lf_rc" = 0 ] && [ "$(r5_nlink "$lh/tasks/lib-free.json")" = 1 ] && jq -e '.id == "lib-free"' "$lh/tasks/lib-free.json" >/dev/null 2>&1; } \
+  || r5_bad="$r5_bad [lib collision rc=$lc_rc out=$lc_out free_rc=$lf_rc]"
+# concurrent creators of the SAME id: exactly one wins, its bytes survive, the loser fails cleanly
+for round in 1 2 3 4 5 6; do
+  th=$(r5_home); mkdir -p "$th/tasks" "$th/locks"; chmod 700 "$th" "$th/tasks" "$th/locks"
+  go="$th/go"; cid="conc-$round"
+  for who in A B; do
+    ( until [ -e "$go" ]; do :; done
+      SESSION_SCHEDULER_HOME="$th" bash -c 'source "$1"; task_write "$2" "$3" create' _ "$HERE/lib.sh" "$cid" "{\"id\":\"$cid\",\"who\":\"$who\"}" >"$th/out.$who" 2>&1
+      echo $? > "$th/rc.$who" ) &
+  done
+  sleep 0.2; touch "$go"; wait
+  wins=0; [ "$(cat "$th/rc.A")" = 0 ] && wins=$((wins + 1)); [ "$(cat "$th/rc.B")" = 0 ] && wins=$((wins + 1))
+  winner=$(jq -r .who "$th/tasks/$cid.json" 2>/dev/null)
+  { [ "$wins" = 1 ] && [ "$(cat "$th/rc.$winner")" = 0 ] && [ "$(cat "$th/tasks/$cid.json")" = "{\"id\":\"$cid\",\"who\":\"$winner\"}" ] \
+    && [ "$(r5_nlink "$th/tasks/$cid.json")" = 1 ] && [ "$(r5_tmp_count "$th")" = 0 ] && [ ! -e "$th/locks/$cid.lock" ] \
+    && grep -q 'already exists' "$th/out.$([ "$winner" = A ] && echo B || echo A)"; } \
+    || r5_bad="$r5_bad [concurrent round $round: wins=$wins winner=$winner rcA=$(cat "$th/rc.A") rcB=$(cat "$th/rc.B") loser=$(cat "$th/out.$([ "$winner" = A ] && echo B || echo A)" 2>/dev/null)]"
+done
+rm_shim
+if [ -z "$r5_bad" ]; then
+  pass "task_create_crash_safe_exclusive_and_concurrent"
+else
+  fail "task_create_crash_safe_exclusive_and_concurrent" "$r5_bad"
+fi
+
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -gt 0 ]; then

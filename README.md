@@ -12,10 +12,10 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.7.11 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.16 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.3 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `session-chat` | 0.17.17 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.4 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.11.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.11.4 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -299,6 +299,17 @@ exchange messages must agree on one mailbox root, so if you override
 `SESSION_CHAT_TARGET_MESSAGES_DIR`, export the same absolute path in every pane
 before its agent starts.
 
+New message IDs contain 16 lowercase hexadecimal characters from OS randomness.
+Existing 8–16 character IDs remain readable. Failed randomness aborts sending.
+The leading body envelope contains optional `[re:<id>]` then optional
+`[task:<task-id>]`; later quoted tokens remain body text. Use `--task` on the
+send or dispatch helper to add task association. `check-replies.sh --task ID`
+shows matching associations, including multiple task replies to one request.
+New replies are verified against the request's sender and recipient; legacy
+rows without recipient context remain explicitly unknown. Correlation does not
+establish task completion. Live hook JSON needs Python or jq to decode its
+`prompt`; without either, live correlation is unavailable.
+
 ### session-scheduler
 
 Needs `jq`, `SESSION_SCHEDULER_HOME`, and a working `session-chat` at **0.13.0
@@ -332,6 +343,10 @@ handoff directory; cleanup retains contracted tasks. All participating panes
 and consumers need scheduler 0.7.0. Verification needs Python 3 and Git, runs
 with an isolated environment, and preserves the active harness policy. Local
 digests do not authenticate an external runner or authorize a release.
+
+New scheduler IDs use `task-<epoch>-<8hex>` from OS randomness. Existing task
+IDs remain valid. Creation refuses collisions among cooperating scheduler
+writers under the shared task lock, then atomically publishes complete JSON.
 
 ### session-workspace
 
@@ -505,10 +520,11 @@ stem starts with an ASCII letter/digit, contains only ASCII letters/digits,
 `.`, `_`, or `-`, and is at most 128 characters. Resolve the grant and identity
 from the validated workspace plan; inherited variables cannot grant access.
 Use the installed dispatch helper with `--reply-to` for replies. It creates a
-separate transport copy. After delivered or durable queued success, delete only
-your draft using a native delete tool where available (Codex `apply_patch`).
-Claude has no native delete tool and retains its inert draft. Retain drafts after
-a hard failure. Cleanup is explicit, never automatic.
+separate transport copy. After delivered or durable queued success, session-chat
+consumes eligible unchanged own-pane drafts unless `SESSION_CHAT_KEEP_DRAFTS=1`.
+Failed reads and hard transport failures retain the source. Changed or ineligible
+files remain intact. Do not delete a retained draft or resend a successful
+packet because cleanup kept its source.
 Shell staging/cleanup, transport-message edits, peer drafts, queue/archive/ledger
 state, symlinks, hardlinks, moves, and mixed draft/product patches remain blocked.
 No grant means no staging exception. Existing reviewer top-level drafts must be
@@ -646,7 +662,7 @@ or reload the session. Command-scoped exports affect only that invocation.
 | `CODEX_HOME` | Both, for Codex storage | `$HOME/.codex` | Locates Codex sessions and the default Codex `messages/` directory when `SESSION_CHAT_TARGET_MESSAGES_DIR` is unset. |
 | `CLAUDE_HOME` | Both, for Claude storage | `$HOME/.claude` | Locates the default Claude `messages/` directory used by normal transport and cross-runtime routing when `SESSION_CHAT_TARGET_MESSAGES_DIR` is unset. |
 | `SESSION_CHAT_SURFACE_MAX` | Claude only | `9000` | Maximum combined queued-message surface budget before the hook stops selecting additional rows. |
-| `SESSION_CHAT_REPLY_SCAN_BYTES` | Claude only | `4096` | Maximum prefix read from a trusted dispatch file when scanning for reply-correlation tokens. |
+| `SESSION_CHAT_REPLY_SCAN_BYTES` | Both | `4096` | Maximum prefix read from a trusted dispatch file for its leading reply envelope. An undecided envelope at the limit records no correlation. |
 
 `HOME` supplies the standard fallback roots, and `TMPDIR` selects the parent
 for private temporary and send-lock directories. The runtime supplies `TMUX`,

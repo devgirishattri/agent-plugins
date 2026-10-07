@@ -295,6 +295,28 @@ describe_record() {
   printf '%s%s' "$out" "$reply_hint"
 }
 
+# hook_prompt_text <hook-input> — print the "prompt" string of a provider hook
+# JSON object. Returns 1 when the input is not a JSON object with a string
+# prompt, or when no JSON decoder (python3, then jq) exists: without one the live
+# paste cannot be read from the JSON authoritatively, so it is not parsed at all
+# (no raw-text greps stand in for it) — the pasted text is still in the prompt
+# the agent sees, but there is no live hint, correlation or archive row.
+hook_prompt_text() {
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$1" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+p = d.get("prompt") if isinstance(d, dict) else None
+if not isinstance(p, str):
+    sys.exit(1)
+sys.stdout.write(p)' 2>/dev/null
+  elif command -v jq >/dev/null 2>&1; then
+    printf '%s' "$1" | jq -j 'select(type == "object" and (.prompt | type) == "string") | .prompt' 2>/dev/null
+  else
+    return 1
+  fi
+}
+
 LIVE_ID=""
 LINES=()
 # Deferred live-message state: reply-correlation, archive, and recent-marking are
@@ -304,40 +326,55 @@ LIVE_SURFACE=0
 LIVE_NAME=""
 LIVE_MSGFILE=""
 LIVE_SNIPPET=""
+LIVE_BODY=""
 
 # 1) Live paste in the just-submitted prompt (UserPromptSubmit only — a Stop
-#    event carries no prompt body).
-if [ "$HOOK_EVENT" != "Stop" ] && printf '%s' "$HOOK_INPUT" | grep -q '\[from:'; then
-  s_name=$(printf '%s' "$HOOK_INPUT" | grep -oE '\[from:[^ ]+ ' | head -1 | sed 's/\[from://; s/ $//')
-  s_id=$(printf '%s' "$HOOK_INPUT" | grep -oE 'id:[a-f0-9]+' | head -1 | sed 's/id://')
-  # Parse the msg: field through the explicit ` id:<hex>]` closing delimiter, NOT
-  # `[^ ]+` — a message file path can legitimately contain spaces (e.g. a
-  # CLAUDE_HOME under a directory with a space), and truncating it here after the
-  # live paste already dequeued the durable row would lose the dispatch. The
-  # filename component has no spaces (sender/target names are validated), so the
-  # ` id:<hex>]` boundary unambiguously ends the path.
-  s_msgfile=$(printf '%s' "$HOOK_INPUT" | grep -oE 'msg:.+ id:[0-9a-f]+\]' | head -1 | sed -E 's/^msg://; s/ id:[0-9a-f]+\]$//')
-  s_name=$(printf '%s' "$s_name" | tr -cd 'a-zA-Z0-9_:-')
-  if [ -n "$s_name" ]; then
-    [ -n "$s_id" ] && LIVE_ID="$s_id"
-    # Cross-turn dedup: READ-ONLY check whether this id already surfaced from the
-    # inbox on an earlier turn. Marking is deferred to post-emit so a failed emit
-    # doesn't record the message as seen.
-    live_seen=0
-    if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen "$MY_NAME" "$LIVE_ID"; then
-      live_seen=1
+#    event carries no prompt body). The authoritative text is normalized ONCE:
+#    the "prompt" string of the hook JSON object (or the raw text when the input
+#    is not JSON). ONE transport header is parsed from the start of that same
+#    text, and sender, pane, id, dispatch file and body are all bound from that
+#    single match — no field is ever taken from elsewhere in HOOK_INPUT, so a
+#    decoy in some other JSON field cannot supply a sender or an id.
+#      send:      [from:NAME pane:%N id:HEX] <body> [id:HEX]
+#      dispatch:  [from:NAME pane:%N msg:<file> id:HEX] dispatch (N lines) ...
+LIVE_TEXT=""
+if [ "$HOOK_EVENT" != "Stop" ]; then
+  case "$HOOK_INPUT" in
+    '{'*|[[:space:]]*'{'*) LIVE_TEXT=$(hook_prompt_text "$HOOK_INPUT") || LIVE_TEXT="" ;;
+    *) LIVE_TEXT="$HOOK_INPUT" ;;
+  esac
+fi
+live_hdr_send='^\[from:([a-zA-Z0-9_:-]+) pane:%[0-9]+ id:([a-f0-9]{8,16})\] '
+# The file path may contain spaces, so the msg: field runs to the LAST ` id:<hex>] `
+# of the header; its safety comes from trusted_message_file, not from this match.
+live_hdr_dispatch='^\[from:([a-zA-Z0-9_:-]+) pane:%[0-9]+ msg:(.+) id:([a-f0-9]{8,16})\] '
+s_name=""; s_id=""; s_msgfile=""; s_body=""
+if [[ "$LIVE_TEXT" =~ $live_hdr_send ]]; then
+  s_name="${BASH_REMATCH[1]}"; s_id="${BASH_REMATCH[2]}"
+  s_body="${LIVE_TEXT:${#BASH_REMATCH[0]}}"
+elif [[ "$LIVE_TEXT" =~ $live_hdr_dispatch ]]; then
+  s_name="${BASH_REMATCH[1]}"; s_msgfile="${BASH_REMATCH[2]}"; s_id="${BASH_REMATCH[3]}"
+fi
+if [ -n "$s_name" ]; then
+  LIVE_ID="$s_id"
+  # Cross-turn dedup: READ-ONLY check whether this id already surfaced from the
+  # inbox on an earlier turn. Marking is deferred to post-emit so a failed emit
+  # doesn't record the message as seen.
+  live_seen=0
+  if [ -n "$LIVE_ID" ] && [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ] && recent_id_seen "$MY_NAME" "$LIVE_ID"; then
+    live_seen=1
+  fi
+  if [ "$live_seen" = "0" ]; then
+    if [ -n "$s_msgfile" ]; then
+      LINES+=("$(describe_record dispatch "$s_name" "$s_msgfile" 0 "$LIVE_ID")")
+    else
+      LINES+=("$(describe_record send "$s_name" "" 0 "$LIVE_ID")")
     fi
-    if [ "$live_seen" = "0" ]; then
-      if [ -n "$s_msgfile" ]; then
-        LINES+=("$(describe_record dispatch "$s_name" "$s_msgfile" 0 "$LIVE_ID")")
-      else
-        LINES+=("$(describe_record send "$s_name" "" 0 "$LIVE_ID")")
-      fi
-      LIVE_SURFACE=1
-      LIVE_NAME="$s_name"
-      LIVE_MSGFILE="$s_msgfile"
-      LIVE_SNIPPET=$(printf '%s' "$HOOK_INPUT" | grep -oE '\[from:[^]]*\][^"]{0,200}' | head -1)
-    fi
+    LIVE_SURFACE=1
+    LIVE_NAME="$s_name"
+    LIVE_MSGFILE="$s_msgfile"
+    LIVE_BODY="$s_body"
+    LIVE_SNIPPET="${LIVE_TEXT:0:260}"
   fi
 fi
 
@@ -424,12 +461,17 @@ fi
 if [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
   if [ "$LIVE_SURFACE" = "1" ]; then
     mark_recent_id "$MY_NAME" "$LIVE_ID" || true
-    log_reply_ids "$LIVE_NAME" "$HOOK_INPUT" || true
+    # A live send's reply envelope is read from the BODY bound in step 1 (never
+    # from HOOK_INPUT); a dispatch notification has no body, its envelope comes
+    # from the trusted file below.
+    if [ -z "$LIVE_MSGFILE" ]; then
+      log_reply_ids "$LIVE_NAME" "$LIVE_BODY" "$MY_NAME" "$LIVE_ID" || true
+    fi
     if [ -n "$LIVE_MSGFILE" ]; then
-      # A live dispatch's [re:<id>] reply token lives at the top of the task file,
-      # not in the notification (HOOK_INPUT) scanned above — correlate it from a
-      # bounded prefix of the trusted file. Re-verify trust before reading.
-      trusted_message_file "$LIVE_MSGFILE" && { log_reply_ids_from_file "$LIVE_NAME" "$LIVE_MSGFILE" || true; }
+      # A live dispatch's envelope leads the task file, not the notification
+      # (HOOK_INPUT) — correlate it from a bounded prefix of the trusted file.
+      # Re-verify trust before reading.
+      trusted_message_file "$LIVE_MSGFILE" && { log_reply_ids_from_file "$LIVE_NAME" "$LIVE_MSGFILE" "$MY_NAME" "$LIVE_ID" || true; }
       archive_message "in" "$LIVE_NAME" "dispatch" "$LIVE_ID" "$LIVE_MSGFILE" || true
     else
       archive_message "in" "$LIVE_NAME" "send" "$LIVE_ID" "$LIVE_SNIPPET" || true
@@ -438,12 +480,13 @@ if [ "$HAVE_LIB" = "1" ] && [ -n "$MY_NAME" ]; then
   _i=0
   while [ "$_i" -lt "${#SEL_IDS[@]}" ]; do
     if [ "${SEL_TYPES[$_i]}" = "send" ]; then
-      log_reply_ids "${SEL_FROMS[$_i]}" "${SEL_PAYLOADS[$_i]}" || true
+      # A queued send row's payload IS the body (no transport header).
+      log_reply_ids "${SEL_FROMS[$_i]}" "${SEL_PAYLOADS[$_i]}" "$MY_NAME" "${SEL_IDS[$_i]}" || true
     elif [ "${SEL_TYPES[$_i]}" = "dispatch" ]; then
       # Queued dispatch rows carry only the trusted file path (never the body),
       # so correlate the reply token from a bounded prefix of that file — the
       # same mechanism as the live path, giving queued dispatch replies parity.
-      trusted_message_file "${SEL_PAYLOADS[$_i]}" && { log_reply_ids_from_file "${SEL_FROMS[$_i]}" "${SEL_PAYLOADS[$_i]}" || true; }
+      trusted_message_file "${SEL_PAYLOADS[$_i]}" && { log_reply_ids_from_file "${SEL_FROMS[$_i]}" "${SEL_PAYLOADS[$_i]}" "$MY_NAME" "${SEL_IDS[$_i]}" || true; }
     fi
     archive_message "in" "${SEL_FROMS[$_i]}" "${SEL_TYPES[$_i]}" "${SEL_IDS[$_i]}" "${SEL_PAYLOADS[$_i]}" || true
     _i=$((_i + 1))

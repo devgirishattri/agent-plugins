@@ -146,7 +146,7 @@ CORRELATED_REPLY="$(CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; correlate_repl
 if CODEX_HOME="$TEST_HOME" bash -c 'source "$0"; correlate_reply deadbeef "[re:cafebabe] conflicting"' "$SCRIPT_DIR/lib.sh" 2>"$ERR_FILE"; then
   fail "correlate_reply accepted a conflicting token"
 fi
-assert_file_contains "$ERR_FILE" "conflicting correlation token [re:cafebabe]"
+assert_file_contains "$ERR_FILE" "conflicting correlation token ([re:cafebabe])"
 
 QUEUED_REPLY_FILE="$TEST_HOME/messages/queued-reply.md"
 printf '%s\n' "[re:0badf00d] queued dispatch reply" > "$QUEUED_REPLY_FILE"
@@ -374,7 +374,7 @@ assert_file_contains "$TEST_HOME/messages/replies-log.tsv" $'cafebabe\tsender-te
 
 CHECK_REPLIES_OUT="$(CODEX_HOME="$TEST_HOME" bash "$SCRIPT_DIR/check-replies.sh" --since 60)"
 assert_contains "unconfirmed" "$CHECK_REPLIES_OUT"
-assert_contains "not task-liveness status" "$CHECK_REPLIES_OUT"
+assert_contains "not the recipient's task progress or liveness" "$CHECK_REPLIES_OUT"
 
 # Manually/external tmux names bypass set_pane_name, so outbound paths must
 # revalidate both sender and target labels before creating any dispatch file.

@@ -29,3 +29,12 @@ pane relaunch with the correct environment instead of deriving another ledger.
 - `--workflow ID` — group related tasks; `--workflow-id` is accepted as an alias.
 
 Return the created task id and name.
+
+New task IDs use `task-<epoch>-<8hex>`, with randomness from the OS.
+Existing task IDs remain valid. Missing or failed randomness aborts creation.
+Creation holds the shared task lock, refuses any existing target and publishes
+complete JSON by atomic rename. This prevents collisions among cooperating
+scheduler writers; it does not isolate unrelated same-user filesystem writes.
+A crash can leave a staging file named `<task-id>.json.tmp.*`. Confirm there is
+no live task-lock holder before manually removing an exact stale staging file.
+Do not remove a task JSON file or an active writer's staging file.

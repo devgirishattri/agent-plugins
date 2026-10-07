@@ -25,4 +25,6 @@ Options:
 - `--reviewer PANE` — record a reviewer pane on the task (stored as `.reviewer`). When the executor runs `/task-review`, the audit request is auto-dispatched to this pane.
 - `--depends-on id1,id2` — comma-separated existing task ids this task depends on. Each id must already exist. `/task-assign` refuses to dispatch until every dependency is `done`, unless `--force` is set.
 
+The new task id has the form `task-<epoch>-<8 hex>`. The hex comes from `/dev/urandom` only; with no usable `od`/`/dev/urandom` the command stops with an error and creates nothing. The ledger file is created exclusively, so a colliding id is refused and the existing task stays unchanged. Older bare 8-hex ids remain valid everywhere.
+
 After creation, report the new task id first. Then suggest `/task-assign <pane> <id> <prompt>` to dispatch.

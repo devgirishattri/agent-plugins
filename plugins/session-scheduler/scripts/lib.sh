@@ -322,13 +322,23 @@ current_pane_name() {
   fi
 }
 
-# Generate task id: 8 hex chars from /dev/urandom.
+# Generate a task id: task-<epoch>-<8 hex>, the hex from /dev/urandom via od
+# and nothing else. There is deliberately no PID/RANDOM fallback: a guessable id
+# is not acceptable for a ledger key. A missing od/urandom, a short read or
+# malformed output prints NOTHING and returns non-zero, and task-new then fails
+# closed. Ids from before this format (bare 8 hex) remain valid everywhere
+# (validate_task_id only checks the charset).
 generate_task_id() {
-  if command -v od >/dev/null 2>&1; then
-    od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'
-  else
-    printf '%s%s' "$$" "${RANDOM:-0}${RANDOM:-0}"
-  fi
+  local hex epoch
+  command -v od >/dev/null 2>&1 || return 1
+  # od's own exit status is checked in a plain assignment BEFORE any pipe, so a
+  # failing od can never be hidden by tr (no dependence on pipefail).
+  hex=$(od -An -N4 -tx1 /dev/urandom 2>/dev/null) || return 1
+  hex=$(printf '%s' "$hex" | tr -d ' \n')
+  [[ "$hex" =~ ^[a-f0-9]{8}$ ]] || return 1
+  epoch=$(date +%s 2>/dev/null) || return 1
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+  printf 'task-%s-%s' "$epoch" "$hex"
 }
 
 agent_plugins_timezone() {
@@ -547,14 +557,52 @@ task_get() {
 # ledger. The content must be exactly one JSON object: callers build it with
 # `updated=$(... | jq ...)` under `set -uo pipefail` without errexit, so a
 # failed jq leaves it empty or partial and must never replace the task file.
+#
+# With a third argument of "create" the task is created WITHOUT replacing:
+# under the per-task lock (task_lock, the same mkdir lock every mutator uses,
+# with its stale-holder recovery) the JSON is written and validated in a private
+# 0600 staging file beside the target, the target name is checked to be absent in
+# ANY form (file, symlink, directory, other), and only then is the staging file
+# renamed over it (mv in the same directory: atomic, link count stays 1). The
+# final path therefore never exists empty or partial, and a collision is refused
+# with the existing entry untouched. The guarantee is no-replace among
+# cooperating scheduler writers (they all take this lock); it is not a defence
+# against an unrelated writer of the same UID that ignores the lock.
+# Staging names are <tasks-dir>/<id>.json.tmp.<6 random chars>. A crash between
+# staging and the rename can leave one behind; it is not a *.json ledger entry
+# and nothing reads it. No sweep removes it: delete it by hand only after
+# confirming no process holds the lock for that id (<locks-dir>/<id>.lock).
+# Updates (no third argument) keep the tmp + mv replace.
 task_write() {
   local id="$1"
   local json="$2"
+  local mode="${3:-}"
   local target
   target=$(task_path "$id")
   if ! printf '%s' "$json" | jq -s -e 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1; then
     echo "ERROR: refusing to write non-object ledger content for $id; $target left unchanged." >&2
     return 1
+  fi
+  if [ "$mode" = "create" ]; then
+    local ctmp rc=1
+    task_lock "$id" || return 1
+    if ! ctmp=$(mktemp "${target}.tmp.XXXXXX" 2>/dev/null); then
+      echo "ERROR: failed to stage new ledger file for $id beside $target" >&2
+    elif ! printf '%s\n' "$json" > "$ctmp" \
+         || ! jq -e 'type == "object"' "$ctmp" >/dev/null 2>&1; then
+      rm -f "$ctmp" 2>/dev/null
+      echo "ERROR: failed to write and validate the new ledger file for $id at $ctmp" >&2
+    elif [ -e "$target" ] || [ -L "$target" ]; then
+      rm -f "$ctmp" 2>/dev/null
+      echo "ERROR: refusing to create task $id: $target already exists; it was left unchanged." >&2
+    elif ! mv "$ctmp" "$target" 2>/dev/null; then
+      rm -f "$ctmp" 2>/dev/null
+      echo "ERROR: could not publish new ledger file for $id at $target." >&2
+    else
+      rc=0
+    fi
+    task_unlock "$id"
+    return "$rc"
   fi
   local tmp="${target}.tmp.$$"
   if ! printf '%s\n' "$json" > "$tmp"; then

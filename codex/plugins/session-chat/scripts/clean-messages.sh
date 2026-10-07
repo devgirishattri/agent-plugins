@@ -33,19 +33,10 @@ duration_to_seconds() {
 }
 
 parse_message_name() {
-  local base="$1"
-  MSG_TS="${base%%-*}"
-  local rest="${base%.md}"
-  rest="${rest#*-}"
-  rest="${rest#*-}"
-  rest="${rest#*-}"
-  MSG_SENDER=""
-  MSG_RECIPIENT=""
-
-  if [[ "$rest" == *-to-* ]]; then
-    MSG_SENDER="${rest%-to-*}"
-    MSG_RECIPIENT="${rest##*-to-}"
-  fi
+  parse_message_filename "$1" || return 1
+  MSG_TS="$MF_EPOCH"
+  MSG_SENDER="$MF_FROM"
+  MSG_RECIPIENT="$MF_TO"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -119,7 +110,7 @@ for file in "$MESSAGES_DIR"/*.md; do
   [ -e "$file" ] || [ -L "$file" ] || continue
   validate_cleanup_file "$file" || exit 1
   base=${file##*/}
-  parse_message_name "$base"
+  parse_message_name "$base" || continue
   case "$MSG_TS" in
     ''|*[!0-9]*) age=0 ;;
     *) age=$((now - MSG_TS)) ;;

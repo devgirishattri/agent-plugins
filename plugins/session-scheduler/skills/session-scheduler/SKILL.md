@@ -89,7 +89,7 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
 
 | Command | Purpose |
 |---|---|
-| `/task-new <name> [--meta k=v] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id. |
+| `/task-new <name> [--meta k=v] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id, `task-<epoch>-<8 hex>` (hex from `/dev/urandom` only; creation fails closed without it, and a colliding id is refused rather than replaced). Older bare 8-hex ids stay valid. Creation takes the per-task lock, writes a private staging file `tasks/<id>.json.tmp.<6 random chars>`, refuses if the task name already exists in any form, then renames the staging file into place, so a `tasks/<id>.json` is never empty or partial. This is no-replace among scheduler writers, not a defence against another same-user process that ignores the lock. A crash can leave a staging file behind. Nothing reads or sweeps it; remove it by hand only after confirming no process holds `locks/<id>.lock`. |
 | `/task-assign <pane> <id> [--eta MIN] [--stage NAME] [--context NAME] [--reviewer PANE] [--workflow ID] [--force] <prompt>` | Dispatch the task to an executor and update the ledger. |
 | `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage\|--by-workflow\|--workflow ID]` | Read-only view. Default = active (created+assigned+review); `--pending` = created only; `--mine` = assigner, assignee, or reviewer is me. Shows OVERDUE/STALE flags. |
 | `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); durably acks the assigner. A dispatch-only retry reuses the original note. |

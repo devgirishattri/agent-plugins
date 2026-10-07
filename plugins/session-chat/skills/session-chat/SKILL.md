@@ -38,8 +38,10 @@ When you orchestrate peer agents, set `SESSION_CHAT_INCOMING_MODE=auto` in the r
 
 Both operations produce a single line in the recipient's prompt buffer:
 
-- `/send` →  `[from:NAME pane:%N id:HEX8] <message text> [id:HEX8]`
-- `/dispatch` → `[from:NAME pane:%N msg:/path/to/file.md id:HEX8] dispatch (N lines) — read msg file for full task id:HEX8`
+- `/send` →  `[from:NAME pane:%N id:HEX16] <message text> [id:HEX16]`
+- `/dispatch` → `[from:NAME pane:%N msg:/path/to/file.md id:HEX16] dispatch (N lines) — read msg file for full task id:HEX16`
+
+The message id is 16 lowercase hex characters, from `/dev/urandom` only. If the system cannot produce one, `/send`, `/dispatch` and `/broadcast` stop with an error before they write or send anything. Older 8-hex ids still work wherever an id is read (`--reply-to`, `/check-replies`, queued rows, archives).
 
 The `id:` field is a unique verification marker. It is repeated at the tail so it stays visible in TUIs that show the end of long input lines. The dispatch line **does not include a preview** of the message body. The recipient must read `$msg_file`.
 
@@ -89,12 +91,21 @@ To reply from a shell, run the installed helper `bash <plugin-root>/scripts/send
 
 Under strict-v1, read installed instructions with separate literal read commands (`cat <absolute-path>`). Chaining, pipes, and redirection do not qualify for cache read access.
 
-Every `/send` and `/dispatch` has a unique `id:HEX8`. To reply, use **`/reply <pane> <message-id> <message>`**.
+Every `/send` and `/dispatch` has a unique `id:<hex>`. To reply, use **`/reply <pane> <message-id> <message>`**.
 
 - `/reply` prepends the `[re:<id>]` correlation token for you (exactly once). The original sender's `/check-replies` then matches it.
 - `/reply` auto-picks `/send` for a short reply or `/dispatch` for a long/multiline one.
 - Pass the `id:<hex>` from the message you're answering. Do **not** hand-type `[re:<id>]` tokens.
 - The raw transports also accept `--reply-to <id>` if you script them directly.
+- **Leading envelope.** The correlation tokens form an envelope at the very start of the message body: an optional `[re:<id>]` (8-16 lowercase hex), then an optional `[task:<task-id>]` (letters, digits, `_`, `-`), separated by single spaces, in that order. Only this leading run is ever read. A `[re:<id>]` or `[task:<id>]` quoted later in a body is plain text: it never correlates, conflicts, or gets rewritten.
+  - Identical repeated leading tokens collapse to one. Two different `[re:]` ids, two different `[task:]` ids, or a `[task:]` before a `[re:]` are refused: `--reply-to`/`--task` fail with an error, and a received message with such an envelope records no reply.
+  - On receipt, the hook reduces each supported form to its body before reading the envelope: a live `/send` paste (raw, or the `prompt` string of the provider hook JSON) loses its single `[from:NAME pane:%N id:HEX]` header; a queued send row is already the body; a dispatch file is read from its first bytes. A live dispatch notification has no body; its envelope comes from the trusted file. Nothing searches other text for a token.
+  - The sender, pane, id and body of a live message come from ONE transport header at the start of the one prompt text, so a decoy in another JSON field supplies none of them.
+  - Reading the `prompt` string of the hook JSON needs python3 or jq. Without either, live `/send` correlation and the live hint are unavailable. That is not proof that no reply arrived; queued and dispatch-file correlation do not depend on it.
+  - A dispatch file is read only up to `SESSION_CHAT_REPLY_SCAN_BYTES` (default 4096) bytes. A malformed or glued token ends the envelope only when the full input boundary is known. If the file is longer than the budget and the envelope run is not decided strictly inside the bytes read (it ends in or at the cap, or a later token could still conflict), no correlation is recorded.
+  - Dispatch task file names are `<epoch>-<pid>-<id>-<from>-to-<to>.md` (one 8-16 hex id segment) or the older `<epoch>-<from>-to-<to>.md`; `/messages-list` and `/messages-clean` take the sender verbatim from what follows, so sender names that look like hex or digits are not truncated.
+- `--task <task-id>` on `send-message.sh` and `dispatch-to-session.sh` (`/send`, `/dispatch`, `/reply`) writes `[task:<task-id>]` into the envelope after any `[re:]`. It is recorded in `sent-log.tsv` (column 8). A task-tagged reply records its task, the receiving pane and the incoming message id in `replies-log.tsv` (columns 4-6). Older 7-column sent rows and 3-column reply rows still read correctly.
+- `/check-replies` shows one row per reply association, so one request with four task-tagged replies shows four rows. A reply is `verified` only when it came from the request's recipient and was recorded as received by the request's sender. Older reply rows with no recorded receiver show as `replied (recipient-unknown)`, which is not verification. A reply from another pane, or recorded as received elsewhere or with no receiver context, is `unexpected` and is never counted as an answer; every reply row for an id is scanned, so an earlier unexpected row never hides a later valid one. Use `--task <task-id>` to filter.
 - When you ask a peer a question and expect an answer, tell it to `/reply` with your message id. Then poll `/check-replies --pending` instead of re-pinging panes that already answered.
 
 ## Staging files under a strict-v1 harness
@@ -195,7 +206,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 
 - `/broadcast [--all] [--match GLOB] <text>` — fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `/send` per pane.
 - `/reply <pane> <message-id> <message>` — reply to a received message, auto-correlated: prepends the `[re:<id>]` token and picks `/send` (short) or `/dispatch` (long/multiline) for you. Use this instead of hand-typing `[re:<id>]`.
-- `/check-replies [--pending] [--since MIN]` — which sent messages have a correlated reply (via `[re:<id>]` tokens) and which are still `unconfirmed`. This reflects reply **correlation only**, not the recipient's task progress or liveness. An `unconfirmed` row does not mean the pane is stuck. Use `/pane-health` to check liveness.
+- `/check-replies [--pending] [--since MIN] [--task TASK_ID]` — which sent messages have a correlated reply (via the leading `[re:<id>]` token) and which are still `unconfirmed`, with each reply marked `verified`, `replied (recipient-unknown)` or `unexpected`. This reflects reply **correlation only**, not the recipient's task progress or liveness. An `unconfirmed` row does not mean the pane is stuck. Use `/pane-health` to check liveness.
 - `/pane-health [name] [--all]` — liveness, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them.
 - `/message-search <pattern> [--days N] [--peer NAME]` — search the message archive plus full dispatch bodies. The archive holds every sent and surfaced incoming message as a 200-char excerpt. Retention is 30 days via `SESSION_CHAT_ARCHIVE_RETENTION_DAYS`.
 - `/incoming-mode` — show or set `SESSION_CHAT_INCOMING_MODE` (prints an `export` line to `eval`).

@@ -110,7 +110,10 @@ if [ -n "$DEPENDS_RAW" ]; then
   done
 fi
 
-ID=$(generate_task_id)
+if ! ID=$(generate_task_id); then
+  echo "ERROR: task NOT created — could not generate a task id (needs od reading /dev/urandom; there is no fallback)." >&2
+  exit 1
+fi
 ASSIGNER=$(current_pane_name)
 NOW=$(iso_now)
 
@@ -134,7 +137,9 @@ JSON=$(jq -n \
     meta: $meta,
     history: [{ts: $now, event: "created", actor: $assigner, note: ""}]}')
 
-if ! task_write "$ID" "$JSON"; then
+# "create" = exclusive (O_EXCL) creation: an id collision is refused, never
+# replaces an existing task file.
+if ! task_write "$ID" "$JSON" create; then
   echo "ERROR: task NOT created — ledger write failed for $ID." >&2
   exit 1
 fi

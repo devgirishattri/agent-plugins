@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # send-message.sh — Send a message to a named tmux pane
-# Usage: send-message.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] <target-name> <message>
+# Usage: send-message.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] [--task TASK_ID] <target-name> <message>
 #   --priority high  queued recovery surfaces this before normal messages
 #   --ttl MINUTES    if still queued after this window, drop instead of surfacing
 #   --reply-to ID    prepend a single [re:ID] correlation token (8-16 hex) so the
 #                    original sender's /check-replies matches this as a reply
+#   --task TASK_ID   put a [task:TASK_ID] token after it (letters, digits, _ and -);
+#                    /check-replies --task TASK_ID lists everything tagged with it.
+#                    Both tokens form a LEADING envelope: only the very start of
+#                    the message body is ever read as one.
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
 source "$(dirname "$0")/lib.sh"
 
 REPLY_TO=""
+TASK_ID=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --priority)
@@ -25,6 +30,14 @@ while [ $# -gt 0 ]; do
     --reply-to)
       shift
       REPLY_TO="${1:-}"
+      ;;
+    --task)
+      shift
+      TASK_ID="${1:-}"
+      if [ -z "$TASK_ID" ]; then
+        echo "ERROR: --task requires a task id." >&2
+        exit 1
+      fi
       ;;
     *) break ;;
   esac
@@ -46,11 +59,12 @@ if [ -z "$MESSAGE" ]; then
   exit 1
 fi
 
-# Prepend the reply-correlation token BEFORE the length/newline guards in
-# send_message run, so an over-length reply fails loudly rather than dropping
-# the token. apply_reply_to fails closed on a malformed id.
-if [ -n "$REPLY_TO" ]; then
-  MESSAGE=$(apply_reply_to "$REPLY_TO" "$MESSAGE") || exit 1
+# Compose the leading envelope ([re:ID] then [task:ID]) BEFORE the length/newline
+# guards in send_message run, so an over-length reply fails loudly rather than
+# dropping a token. apply_envelope fails closed on a malformed id or a
+# conflicting leading token.
+if [ -n "$REPLY_TO" ] || [ -n "$TASK_ID" ]; then
+  MESSAGE=$(apply_envelope "$REPLY_TO" "$TASK_ID" "$MESSAGE") || exit 1
 fi
 
 ensure_tmux

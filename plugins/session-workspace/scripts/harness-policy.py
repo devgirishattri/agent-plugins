@@ -210,6 +210,7 @@ OUTBOUND_HELPER_BASENAMES = {
 
 LABEL_RE = re.compile(r"\A[A-Za-z0-9_.-]+\Z")
 REPLY_RE = re.compile(r"\A[a-f0-9]{8,16}\Z")
+TASK_ID_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 POSITIVE_RE = re.compile(r"\A[1-9][0-9]*\Z")
 SAFE_VERSION_RE = re.compile(r"\A[0-9][A-Za-z0-9._+-]*\Z")
 ISO_UTC_RE = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
@@ -1645,7 +1646,7 @@ def parse_chat_options(args: List[str]) -> List[str]:
     seen = set()
     while remaining and remaining[0].startswith("--"):
         flag = remaining.pop(0)
-        if flag in seen or flag not in {"--priority", "--ttl", "--reply-to"} or not remaining:
+        if flag in seen or flag not in {"--priority", "--ttl", "--reply-to", "--task"} or not remaining:
             raise PolicyFailure("helper.argv", "session-chat options are duplicated, unknown, or missing a value")
         seen.add(flag)
         value = remaining.pop(0)
@@ -1655,6 +1656,8 @@ def parse_chat_options(args: List[str]) -> List[str]:
             raise PolicyFailure("helper.argv", "--ttl must be an integer in 1..1440")
         if flag == "--reply-to" and not REPLY_RE.fullmatch(value):
             raise PolicyFailure("helper.argv", "--reply-to must be a literal correlation id")
+        if flag == "--task" and not TASK_ID_RE.fullmatch(value):
+            raise PolicyFailure("helper.argv", "--task must be a literal task id")
     return remaining
 
 
@@ -1697,10 +1700,21 @@ def pane_health(ctx: Context, script: str, args: List[str]) -> None:
 
 def check_replies(ctx: Context, script: str, args: List[str]) -> None:
     remaining = list(args)
-    if remaining and remaining[0] == "--pending":
-        remaining.pop(0)
-    if remaining and (len(remaining) != 2 or remaining[0] != "--since" or not POSITIVE_RE.fullmatch(remaining[1])):
-        raise PolicyFailure("helper.argv", "check-replies.sh accepts [--pending] [--since MINUTES]")
+    seen = set()
+    while remaining:
+        flag = remaining.pop(0)
+        if flag in seen or flag not in {"--pending", "--since", "--task"}:
+            raise PolicyFailure("helper.argv", "check-replies.sh accepts [--pending] [--since MINUTES] [--task ID]")
+        seen.add(flag)
+        if flag == "--pending":
+            continue
+        if not remaining:
+            raise PolicyFailure("helper.argv", "check-replies.sh accepts [--pending] [--since MINUTES] [--task ID]")
+        value = remaining.pop(0)
+        if flag == "--since" and not POSITIVE_RE.fullmatch(value):
+            raise PolicyFailure("helper.argv", "--since must be a positive integer")
+        if flag == "--task" and not TASK_ID_RE.fullmatch(value):
+            raise PolicyFailure("helper.argv", "--task must be a literal task id")
 
 
 def messages_list(ctx: Context, script: str, args: List[str]) -> None:
