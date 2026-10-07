@@ -27,6 +27,7 @@ Lead with the result. Add text only for errors or the follow-ups below. Run the 
 4. Report the script's result **verbatim**. Both success cases are fine, but they mean different things:
    - `Dispatched task to '<target>'` — the prompt landed live in the recipient's pane now.
    - `Queued dispatch to '<target>' — recipient was busy; it will arrive on their next turn.` — durable delivery. The recipient's inbox surfaces it on its next turn. **This is success — do not re-dispatch.**
+   - After either success line, the helper prints one more line, `Message id: <hex>`: the transport id of this dispatch. A hard failure prints none. Callers such as `/task-review` record it as the request id.
    Then add: "Use `/panes` to check status or `/send <target> <message>` to follow up. Note: if `<target>` runs with `SESSION_CHAT_INCOMING_MODE=notify` (default), they will be **told not to read** the dispatch file. Set `auto` or `assist` for orchestration."
 
 5. If the error says the target is not found, run `/panes` to show available sessions.

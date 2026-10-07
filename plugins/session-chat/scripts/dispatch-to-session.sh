@@ -9,6 +9,8 @@
 #   --task TASK_ID   put a [task:TASK_ID] token after it (letters, digits, _ and -);
 #                    /check-replies --task TASK_ID lists everything tagged with it.
 #                    Both tokens form a LEADING envelope at the very top of the body.
+# Output: after a delivered or queued result only, one extra stdout line
+#   `Message id: <hex>` (the transport id this dispatch used).
 # Supported platforms: macOS, Linux
 
 source "$(dirname "$0")/lib.sh"
@@ -110,6 +112,12 @@ case "$rc" in
   3) echo "Queued dispatch to '$TARGET_NAME' — recipient was busy; it will arrive on their next turn." ;;
   *) exit 1 ;;
 esac
+# One extra line, only for a delivered or queued result: the transport message
+# id this dispatch used, so a caller (task-review) can record the request id.
+# A hard failure exits above and prints no id.
+if printf '%s' "$DISPATCH_MESSAGE_ID" | grep -qE '^[a-f0-9]{8,16}$'; then
+  echo "Message id: $DISPATCH_MESSAGE_ID"
+fi
 # Only a durable outcome (0 delivered, 3 queued) reaches here; a hard failure
 # exited above and keeps the draft for a retry with the same file.
 if [ -n "$DRAFT_IDENT" ]; then

@@ -12,10 +12,10 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.7.11 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.17 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.4 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `session-chat` | 0.17.18 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.5 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.11.4 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.11.5 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -317,6 +317,19 @@ or newer**, which it enforces at runtime and which exists so a dispatch to a
 busy pane is recovered from the durable inbox instead of lost. It layers a
 file-backed ledger on that transport, so set up `session-chat` first and confirm
 panes can actually message each other before assigning tasks.
+
+Scheduler 0.7.5 accepts a complete reviewer verdict through
+`task-done <id> --note-file <own draft>` or `task-block` with the same operands.
+Contracted tasks also require `--generation <N>`. This option requires chat
+0.17.18 and workspace 0.11.5 for the matching strict-v1 grammar. Install the
+three versions together on both providers. Missing draft-validation support
+refuses this option before reading the file; legacy inline notes remain usable.
+The transition and verdict event commit together, then one normal-path
+notification carries the complete verdict to the assigner. Task status shows
+the saved artifact and delivery outcome; `pending` means unconfirmed. Do not
+rerun a transition to repair notification, or send a duplicate correlated
+reply. An unchanged own draft is consumed after commit unless
+`SESSION_CHAT_KEEP_DRAFTS=1`. Delivery does not prove recipient observation.
 
 The ledger itself does not touch tmux, so creating and querying tasks works
 outside it. Legacy assigning, reviewing, completing, and blocking notify through
@@ -724,6 +737,7 @@ rule as the scheduler's transport-bearing helpers.
 | `SESSION_SCHEDULER_HOME` | Yes | Yes | Required (inherited) | Shared task ledger root. Must already be present in the environment a pane/agent inherits at startup; scheduler commands and skills never export or derive it, and scripts fail closed when it is unset. |
 | `SESSION_CONTEXT_HOME` | Yes | Yes | Required for explicit context (inherited) | Resolves an explicit `--context NAME` snapshot. `--context auto` uses scheduler-owned handoffs and does not require this variable. |
 | `SESSION_SCHEDULER_STALE_MINUTES` | Yes | Yes | `30` | Age after which assigned or review tasks are marked `STALE`. |
+| `SESSION_SCHEDULER_NOTE_MAX_BYTES` | Yes | Yes | `65536` | Maximum bytes for an own-draft verdict passed with `--note-file`; size is checked before hashing, then raw UTF-8 and NUL validation runs. |
 | `SESSION_SCHEDULER_FORCE` | Yes | Yes | `0` | Set to `1` to permit otherwise illegal legacy status transitions. Prefer `--force`. Contracted tasks refuse both overrides. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the scheduler's `session-chat` dependency. |
 | `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for `session-chat`. |

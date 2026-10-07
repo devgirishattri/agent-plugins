@@ -93,6 +93,11 @@ case "$rc" in
   *) exit 1 ;;
 esac
 
+# Print the transport id only after delivered or queued success.
+if printf '%s' "$DISPATCH_MESSAGE_ID" | grep -qE '^[a-f0-9]{8,16}$'; then
+  echo "Message id: $DISPATCH_MESSAGE_ID"
+fi
+
 # Delivered and queued outcomes own a separate durable payload. Cleanup cannot
 # change the successful transport result; failure/uncertainty keeps the source.
 if [ -n "$DRAFT_IDENT" ]; then

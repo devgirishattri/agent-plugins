@@ -750,6 +750,43 @@ for shape in ct-list ct-null ct-meta; do
 done
 as_review "--generation form on an uncontracted task is denied" "$(bash_payload "bash $SCHED/task-done.sh ct-plain --generation 1 'APPROVE abc123'")" '.decision == "deny" and .rule == "task.contract"'
 as_review "legacy note form on the same uncontracted task stays allowed (control)" "$(bash_payload "bash $SCHED/task-done.sh ct-plain 'approved at abc123'")" '.decision == "allow"'
+# --- 1.2b-min: --note-file on task-done/task-block admits only this pane's own
+# existing draft inside the validated messages grant. Each refusal sits beside
+# the allowed own-draft control; the chat read-check helper is not agent-callable.
+NF_DIR="$ROOT/.tmp/messages/drafts/$REVIEW_PANE"
+mkdir -p "$NF_DIR" "$ROOT/.tmp/messages/drafts/$EXEC_PANE"
+printf 'verdict body\n' > "$NF_DIR/verdict.md"
+printf 'peer draft\n' > "$ROOT/.tmp/messages/drafts/$EXEC_PANE/peer.md"
+printf 'script\n' > "$NF_DIR/verdict.sh"
+printf 'linked\n' > "$NF_DIR/target.md"; ln -s "$NF_DIR/target.md" "$NF_DIR/link.md"
+printf 'hard\n' > "$NF_DIR/hard.md"; ln "$NF_DIR/hard.md" "$TMPROOT/nf-hard-other.md"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$CLAUDE_CACHE/session-chat/1.2.3/scripts/own-draft-check.sh"
+as_review "reviewer task-done --note-file own draft is allowed (control)" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/verdict.md")" '.decision == "allow"'
+as_review "reviewer task-block --note-file own draft is allowed (control)" "$(bash_payload "bash $SCHED/task-block.sh t-1234 --note-file $NF_DIR/verdict.md")" '.decision == "allow"'
+as_review "contracted task-done --generation --note-file own draft is allowed (control)" "$(bash_payload "bash $SCHED/task-done.sh ct-good --generation 1 --note-file $NF_DIR/verdict.md")" '.decision == "allow"'
+as_review "contracted --generation --note-file on an uncontracted task is denied" "$(bash_payload "bash $SCHED/task-done.sh ct-plain --generation 1 --note-file $NF_DIR/verdict.md")" '.decision == "deny" and .rule == "task.contract"'
+NF_DENY='.decision == "deny" and .rule == "helper.argv"'
+as_review "note-file: the executor's draft is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $ROOT/.tmp/messages/drafts/$EXEC_PANE/peer.md")" "$NF_DENY"
+as_review "note-file: a delivered message file is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $FAKE_CLAUDE/messages/task.md")" "$NF_DENY"
+as_review "note-file: a file directly in the messages root is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $ROOT/.tmp/messages/hardlink.md")" "$NF_DENY"
+as_review "note-file: a file in the checkout is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $CHILD/README.md")" "$NF_DENY"
+as_review "note-file: a symlink in the own drafts directory is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/link.md")" "$NF_DENY"
+as_review "note-file: a hardlinked own draft is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/hard.md")" "$NF_DENY"
+as_review "note-file: a missing own draft is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/absent.md")" "$NF_DENY"
+as_review "note-file: a draft with an ineligible name is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/verdict.sh")" "$NF_DENY"
+as_review "note-file: traversal back into the drafts directory is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/../$REVIEW_PANE/verdict.md")" "$NF_DENY"
+as_review "note-file: an option-like path is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file --force")" "$NF_DENY"
+as_review "note-file: with an inline note is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/verdict.md 'extra note'")" "$NF_DENY"
+as_review "note-file: with --force is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --force --note-file $NF_DIR/verdict.md")" "$NF_DENY"
+as_review "note-file: repeated flag is denied" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/verdict.md --note-file $NF_DIR/verdict.md")" "$NF_DENY"
+as_review "note-file: missing path operand is denied" "$(bash_payload "bash $SCHED/task-block.sh t-1234 --note-file")" "$NF_DENY"
+as_review "note-file: on task-review (executor-only helper) is denied" "$(bash_payload "bash $SCHED/task-review.sh t-1234 --note-file $NF_DIR/verdict.md")" '.decision == "deny" and .rule == "coordination.write"'
+as_exec "note-file: the executor's own draft is allowed on task-block (control)" "$(bash_payload "bash $SCHED/task-block.sh t-1234 --note-file $ROOT/.tmp/messages/drafts/$EXEC_PANE/peer.md")" '.decision == "allow"'
+as_exec "note-file: the executor may not use the reviewer's draft" "$(bash_payload "bash $SCHED/task-block.sh t-1234 --note-file $NF_DIR/verdict.md")" "$NF_DENY"
+as_review "chat own-draft-check helper is not agent-callable" "$(bash_payload "bash $CLAUDE_CACHE/session-chat/1.2.3/scripts/own-draft-check.sh $NF_DIR/verdict.md")" '.decision == "deny" and .rule == "helper.allowlist"'
+as_review "chat own-draft-check --consume is not agent-callable" "$(bash_payload "bash $CLAUDE_CACHE/session-chat/1.2.3/scripts/own-draft-check.sh --consume $NF_DIR/verdict.md 1:2 $(printf '0%.0s' $(seq 1 64))")" '.decision == "deny" and .rule == "helper.allowlist"'
+as_master "orchestrator task-done --note-file stays denied (worker-owned stage)" "$(bash_payload "bash $SCHED/task-done.sh t-1234 --note-file $NF_DIR/verdict.md")" '.decision == "deny" and .rule == "coordination.write"'
+
 as_master "contract reconcile with a literal note is allowed (control)" "$(bash_payload "bash $SCHED/task-contract.sh reconcile ct-good --generation 1 --note 'worker stopped; no external effects'")" '.decision == "allow"'
 as_master "contract reconcile with an option-like note is denied" "$(bash_payload "bash $SCHED/task-contract.sh reconcile ct-good --generation 1 --note --force")" '.decision == "deny" and .rule == "helper.argv"'
 

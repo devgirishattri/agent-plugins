@@ -12,6 +12,14 @@ fail() {
   exit 1
 }
 
+# These helpers have no provider-specific behavior; keep the reviewed bytes equal.
+for helper in session-chat/scripts/own-draft-check.sh \
+              session-scheduler/scripts/verdict-file.py \
+              session-scheduler/scripts/task-contract.py; do
+  cmp -s "$ROOT/plugins/$helper" "$ROOT/codex/plugins/$helper" \
+    || fail "shared verdict helper differs across providers: $helper"
+done
+
 # Extract one full creation record; unrelated hex in names is never an ID.
 created_task_id() {
   local ids
@@ -720,5 +728,6 @@ python3 -B "$ROOT/scripts/test-chat-draft-consumption.py" \
 
 python3 -B "$ROOT/scripts/test-chat-envelope.py" || fail "cross-provider envelope regression failed"
 python3 -B "$ROOT/scripts/test-scheduler-create.py" || fail "cross-provider creation regression failed"
+python3 -B "$ROOT/scripts/test-verdict-events.py" || fail "cross-provider verdict event regression failed"
 
 echo "cross-provider scheduler, context, reply-correlation, and draft consumption parity tests passed"

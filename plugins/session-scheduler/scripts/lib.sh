@@ -745,6 +745,327 @@ task_append_history() {
     --arg note "$note"
 }
 
+# --- Verdict events (Tier 1.2b-min) ---
+# A reviewer verdict given as --note-file is ONE event, recorded in
+# meta.verdict_events[<event id>] by the same atomic ledger write as the
+# semantic transition (done|blocked). The verdict body lives in an exclusive
+# artifact prompts/<id>-verdict-<event id>.md bound by SHA-256. Notification
+# bookkeeping lives on the event (notification.state), never in history.
+# Scope: only the --note-file forms create events; inline notes keep the
+# lifecycle ack path (meta.last_ack) unchanged.
+
+# jq fragment appended to the status-flip filter. $ve is null (no event) or
+# {event_id, artifact, sha}. route_to, request id and generation are read from
+# the current task JSON inside the lock, never from caller-side snapshots.
+# shellcheck disable=SC2016  # jq program text, not shell
+VERDICT_EVENT_FILTER='(if $ve == null then . else
+     (.assigner // "") as $a
+     | ((.meta | objects | .review_request_msg_id) // null) as $r
+     | (if $a == "" or $a == "?" then null else $a end) as $route
+     | .meta = ((.meta | if type == "object" then . else {} end)
+         | .verdict_events = ((.verdict_events // {}) + {($ve.event_id): {
+             schema: 1,
+             event_id: $ve.event_id,
+             transition: $status,
+             actor: $actor,
+             route_to: $route,
+             request_msg_id: (if ($r | type) == "string" and ($r | test("^[a-f0-9]{8,16}$")) then $r else null end),
+             generation: ((.contract.generation // null)),
+             artifact: $ve.artifact,
+             artifact_sha256: $ve.sha,
+             created_at: $ts,
+             notification: (if $route != null and $route != $actor then {state: "pending"} else {state: "not-required"} end)
+           }}))
+   end)'
+
+# Upper bound for a --note-file verdict body (env-only tunable, read per call).
+verdict_note_max_bytes() {
+  local v="${SESSION_SCHEDULER_NOTE_MAX_BYTES:-65536}"
+  [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -ge 1 ] || v=65536
+  printf '%s\n' "$v"
+}
+
+# 16 random hex chars from /dev/urandom via od and nothing else; prints nothing
+# and returns non-zero on any failure (same fail-closed style as generate_task_id).
+generate_verdict_event_id() {
+  local hex
+  command -v od >/dev/null 2>&1 || return 1
+  hex=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null) || return 1
+  hex=$(printf '%s' "$hex" | tr -d ' \n')
+  [[ "$hex" =~ ^[a-f0-9]{16}$ ]] || return 1
+  printf '%s' "$hex"
+}
+
+verdict_artifact_path() { prompt_path "${1}-verdict-${2}"; }
+verdict_notice_path() { prompt_path "${1}-verdict-${2}-notice"; }
+
+# Exact artifact names a task owns, from its recorded events (read before the
+# task file is removed). One path per line: the verdict and its notice.
+task_verdict_artifacts() {
+  local id="$1" ve
+  task_exists "$id" || return 0
+  while IFS= read -r ve; do
+    [[ "$ve" =~ ^[a-f0-9]{16}$ ]] || continue
+    verdict_artifact_path "$id" "$ve"
+    verdict_notice_path "$id" "$ve"
+  done < <(jq -r '((.meta | objects | .verdict_events) // {}) | keys[]' "$(task_path "$id")" 2>/dev/null)
+}
+
+# verdict_note_prepare <task-id> <note-file> [<inline-summary>]
+# Validates the note file BEFORE any transition and copies it to the exclusive
+# artifact. Sets VERDICT_EVENT, VERDICT_ARTIFACT, VERDICT_SHA, VERDICT_NOTE
+# (the bounded history note), VERDICT_IDENT and VERDICT_SRC. On any refusal it
+# prints a reason, leaves no artifact, and returns 1.
+# shellcheck disable=SC2034  # VERDICT_* are read by the sourcing task-* scripts
+verdict_note_prepare() {
+  local id="$1" file="$2" summary="${3:-}"
+  local root helper out rc tag ident sum size max pout prc event artifact
+  VERDICT_EVENT=""; VERDICT_ARTIFACT=""; VERDICT_SHA=""; VERDICT_NOTE=""; VERDICT_IDENT=""; VERDICT_SRC="$file"
+  if [ -z "$file" ]; then
+    echo "ERROR: --note-file requires a path." >&2
+    return 1
+  fi
+  if ! root=$(session_chat_root); then
+    echo "ERROR: --note-file needs session-chat (own-draft-check.sh); no session-chat install was found. Nothing was read or changed." >&2
+    return 1
+  fi
+  helper="$root/scripts/own-draft-check.sh"
+  if [ ! -f "$helper" ]; then
+    echo "ERROR: --note-file needs a newer session-chat: the installed copy has no scripts/own-draft-check.sh (the own-draft read check)." >&2
+    echo "  Update session-chat, or give the verdict inline. The note file was not read and the task was not changed." >&2
+    return 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$SCHEDULER_SCRIPTS_DIR/verdict-file.py" ]; then
+    echo "ERROR: --note-file needs python3 and verdict-file.py to validate raw bytes; nothing was read or changed." >&2
+    return 1
+  fi
+  max=$(verdict_note_max_bytes)
+  # The limit goes to the checker so an oversize draft is refused on its size
+  # alone, before any content is read or hashed (exit 3).
+  out=$(bash "$helper" --max-bytes "$max" "$file"); rc=$?
+  if [ "$rc" = "3" ]; then
+    echo "ERROR: --note-file refused: the draft is larger than the limit of $max bytes (SESSION_SCHEDULER_NOTE_MAX_BYTES). It was not hashed or copied, and the task was not changed." >&2
+    return 1
+  fi
+  if [ "$rc" = "4" ]; then
+    echo "ERROR: --note-file refused: the draft changed while it was being checked. It was read but not copied, and the task was not changed." >&2
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "ERROR: --note-file refused: '$file' is not an eligible own draft of this pane (the check exited $rc). The task was not changed." >&2
+    return 1
+  fi
+  # Strict parse: exactly one line OK<TAB>dev:inode<TAB>sha256<TAB>size.
+  if [[ "$out" == *$'\n'* ]]; then
+    echo "ERROR: --note-file refused: the draft check printed more than one line." >&2
+    return 1
+  fi
+  local IFS=$'\t' extra=""
+  read -r tag ident sum size extra <<< "$out"
+  IFS=$' \t\n'
+  if [ "$tag" != "OK" ] || [ -n "$extra" ] || ! [[ "$ident" =~ ^[0-9]+:[0-9]+$ ]] \
+     || ! [[ "$sum" =~ ^[a-f0-9]{64}$ ]] || ! [[ "$size" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: --note-file refused: the draft check returned malformed output." >&2
+    return 1
+  fi
+  if [ "$size" -gt "$max" ]; then
+    echo "ERROR: --note-file refused: the file is $size bytes; the limit is $max (SESSION_SCHEDULER_NOTE_MAX_BYTES)." >&2
+    return 1
+  fi
+  if ! event=$(generate_verdict_event_id); then
+    echo "ERROR: could not generate a verdict event id (no usable /dev/urandom via od); the draft was checked but not copied, and the task was not changed." >&2
+    return 1
+  fi
+  artifact=$(verdict_artifact_path "$id" "$event")
+  pout=$(python3 -I "$SCHEDULER_SCRIPTS_DIR/verdict-file.py" prepare --src "$file" --ident "$ident" \
+    --sha "$sum" --size "$size" --max-bytes "$max" --dest "$artifact" --summary="$summary"); prc=$?
+  if [ "$prc" -ne 0 ]; then
+    echo "  --note-file refused; the task was not changed." >&2
+    return 1
+  fi
+  VERDICT_NOTE=$(printf '%s' "$pout" | jq -r 'select(.sha256 == "'"$sum"'") | .note') || VERDICT_NOTE=""
+  if [ -z "$VERDICT_NOTE" ] || [ ! -f "$artifact" ]; then
+    rm -f "$artifact" 2>/dev/null
+    echo "ERROR: --note-file refused: could not verify the verdict artifact; the task was not changed." >&2
+    return 1
+  fi
+  VERDICT_EVENT="$event"; VERDICT_ARTIFACT="$artifact"; VERDICT_SHA="$sum"; VERDICT_IDENT="$ident"
+  return 0
+}
+
+# verdict_split_args <args after the task id...>
+# Recognises --note-file <path> only as a LEADING option (before the note
+# words, alongside --force / --generation N), so a note that merely mentions
+# the flag is never reinterpreted. Sets NOTE_FILE_SET (0|1), NOTE_FILE, LEAD_ARGS
+# (the other leading options, in order) and NOTE_WORDS (everything after them).
+# Returns 1 with a message on a malformed --note-file.
+# shellcheck disable=SC2034  # read by the sourcing task-done/task-block scripts
+verdict_split_args() {
+  NOTE_FILE=""; NOTE_FILE_SET=0; LEAD_ARGS=(); NOTE_WORDS=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --note-file)
+        if [ "$NOTE_FILE_SET" = 1 ] || [ $# -lt 2 ] || [ -z "$2" ]; then
+          echo "ERROR: --note-file takes exactly one path and may be given once." >&2
+          return 1
+        fi
+        NOTE_FILE="$2"; NOTE_FILE_SET=1; shift 2 ;;
+      --force) LEAD_ARGS+=("$1"); shift ;;
+      --generation)
+        [ $# -ge 2 ] || break
+        LEAD_ARGS+=("$1" "$2"); shift 2 ;;
+      *) break ;;
+    esac
+  done
+  NOTE_WORDS=("$@")
+  return 0
+}
+
+# --generation belongs to the contracted form only. With --note-file on an
+# uncontracted task it is refused here (never taken as note text).
+verdict_refuse_generation_without_contract() {
+  local a
+  for a in ${LEAD_ARGS[@]+"${LEAD_ARGS[@]}"}; do
+    if [ "$a" = "--generation" ]; then
+      echo "ERROR: --generation applies only to a task with a verification contract; task $1 has none. Use: $1 --note-file <own draft>. Nothing was read or changed." >&2
+      return 1
+    fi
+  done
+  return 0
+}
+
+# verdict_contract_route <done|block> <task-id>  (uses the verdict_split_args globals)
+# --note-file on a contracted task: validate and copy the draft first, then hand
+# the transition to the engine with the event id and digest. Never returns.
+verdict_contract_route() {
+  local op="$1" id="$2" gen="" summary="" rc out
+  if [ "${#LEAD_ARGS[@]}" -ne 2 ] || [ "${LEAD_ARGS[0]}" != "--generation" ] || ! [[ "${LEAD_ARGS[1]}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: a contracted task takes: $id --generation <N> --note-file <draft> (no --force)." >&2
+    exit 2
+  fi
+  gen="${LEAD_ARGS[1]}"
+  summary="${NOTE_WORDS[*]+"${NOTE_WORDS[*]}"}"
+  if [ ! -f "$SCHEDULER_SCRIPTS_DIR/task-contract.sh" ]; then
+    echo "ERROR: task $id has a verification contract but task-contract.sh is not installed; refusing the legacy $op path." >&2
+    exit 2
+  fi
+  verdict_note_prepare "$id" "$NOTE_FILE" "$summary" || exit 1
+  out=$(bash "$SCHEDULER_SCRIPTS_DIR/task-contract.sh" route "$op" "$id" --generation "$gen" "$VERDICT_NOTE" \
+    --verdict-event "$VERDICT_EVENT" --verdict-sha "$VERDICT_SHA"); rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out"
+  if [ "$rc" -ne 0 ]; then
+    verdict_discard_unreferenced "$id" "$VERDICT_EVENT"
+    exit "$rc"
+  fi
+  verdict_consume_draft "$NOTE_FILE" "$VERDICT_IDENT" "$VERDICT_SHA"
+  exit 0
+}
+
+# Compact JSON for task_set_status's optional 5th argument.
+verdict_event_arg() {
+  jq -cn --arg e "$VERDICT_EVENT" --arg a "$VERDICT_ARTIFACT" --arg s "$VERDICT_SHA" '{event_id: $e, artifact: $a, sha: $s}'
+}
+
+# Remove the artifact of a transition that did not commit. Kept whenever the
+# ledger records the event (or cannot be read): an unreferenced artifact is the
+# only kind that is safe to delete.
+verdict_discard_unreferenced() {
+  local id="$1" ve="$2" artifact
+  [ -n "$ve" ] || return 0
+  artifact=$(verdict_artifact_path "$id" "$ve")
+  if jq -e --arg ve "$ve" '((.meta | objects | .verdict_events) // {}) | has($ve) | not' "$(task_path "$id")" >/dev/null 2>&1; then
+    rm -f "$artifact" 2>/dev/null
+  fi
+  return 0
+}
+
+# verdict_notify <task-id> <event-id>
+# ONE notification to the recorded route. Prints exactly one outcome word on
+# stdout: delivered | queued | inline-fallback | failed. Everything else goes
+# to stderr. A queued dispatch is a durable success and is never resent; the
+# bounded inline fallback runs only after a HARD dispatch failure and can in
+# rare cases duplicate a pointer. Never writes the ledger.
+verdict_notify() {
+  local id="$1" ve="$2" ev to artifact sha line notice dc dout limit pointer footer vf
+  vf="$SCHEDULER_SCRIPTS_DIR/verdict-file.py"
+  ev=$(jq -c --arg ve "$ve" '((.meta | objects | .verdict_events) // {})[$ve] // empty' "$(task_path "$id")" 2>/dev/null)
+  to=$(printf '%s' "$ev" | jq -r '.route_to // empty' 2>/dev/null)
+  artifact=$(printf '%s' "$ev" | jq -r '.artifact // empty' 2>/dev/null)
+  sha=$(printf '%s' "$ev" | jq -r '.artifact_sha256 // empty' 2>/dev/null)
+  if [ -z "$to" ] || ! validate_pane_name "$to" "verdict route" 2>/dev/null \
+     || [ "$artifact" != "$(verdict_artifact_path "$id" "$ve")" ] || ! [[ "$sha" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "WARN: verdict event $ve has no usable route or artifact record; no notification was sent." >&2
+    echo failed; return 0
+  fi
+  if ! line=$(python3 -I "$vf" excerpt --path "$artifact" --sha "$sha"); then
+    echo "WARN: verdict artifact $artifact failed verification; no notification was sent." >&2
+    echo failed; return 0
+  fi
+  notice=$(verdict_notice_path "$id" "$ve")
+  footer="Ack only: the ledger is updated; no dispatch action needed. Check status:
+  Claude: /session-scheduler:task-status ${id}
+  Codex:  \$session-scheduler:task-status ${id}"
+  # Exclusive create (O_EXCL via noclobber): an existing file, symlink or
+  # directory at this path is refused and left untouched. Only a file this call
+  # created is ever removed.
+  if ! ( set -o noclobber; : > "$notice" ) 2>/dev/null; then
+    echo "WARN: the verdict notice path already exists and was left untouched ($notice); no notification was sent." >&2
+    echo failed; return 0
+  fi
+  if ! ( printf '[task:%s] [event:%s] %s\n\n' "$id" "$ve" "$line"
+         python3 -I "$vf" show --path "$artifact" --sha "$sha" || exit 1
+         printf '\n\n%s\n' "$footer"
+       ) > "$notice" 2>/dev/null; then
+    rm -f "$notice" 2>/dev/null
+    echo "WARN: could not compose the verdict notification; no notification was sent." >&2
+    echo failed; return 0
+  fi
+  chmod 600 "$notice" 2>/dev/null || true
+  dout=$(session_chat_dispatch "$to" "$notice"); dc=$?
+  if [ "$dc" = "3" ] || { [ "$dc" = "0" ] && printf '%s\n' "$dout" | grep -q '^Queued dispatch to '; }; then
+    echo queued; return 0
+  fi
+  if [ "$dc" = "0" ]; then
+    echo delivered; return 0
+  fi
+  # Hard dispatch failure only: bounded inline pointer to the recorded verdict.
+  limit="${SESSION_CHAT_SEND_MAX_LEN:-1024}"
+  [[ "$limit" =~ ^[0-9]+$ ]] && [ "$limit" -ge 1 ] || limit=1024
+  if pointer=$(python3 -I "$vf" pointer --task "$id" --event "$ve" --line "$line" --max-bytes "$limit") \
+     && session_chat_send "$to" "$pointer"; then
+    echo "WARN: durable verdict dispatch to '$to' failed; a bounded pointer was sent inline (a duplicate pointer is possible)." >&2
+    echo inline-fallback; return 0
+  fi
+  echo failed; return 0
+}
+
+# verdict_record_outcome <task-id> <event-id> <state>
+# Re-takes the task lock and records the notification outcome ON THAT EVENT
+# only (no history entry, no status change). A missing event is left missing.
+verdict_record_outcome() {
+  local id="$1" ve="$2" state="$3"
+  task_update "$id" \
+    'if ((.meta | objects | .verdict_events) // {}) | has($ve)
+     then .meta.verdict_events[$ve].notification = {state: $s, at: $t}
+     else . end' \
+    --arg ve "$ve" --arg s "$state" --arg t "$(iso_now)"
+}
+
+# verdict_consume_draft <file> <dev:inode> <sha256>
+# After the event is committed, ask session-chat (subprocess) to remove the
+# reviewer's draft if it is still the same eligible own draft. A kept or
+# failed cleanup never undoes the verdict.
+verdict_consume_draft() {
+  local file="$1" ident="$2" sum="$3" root helper
+  if ! root=$(session_chat_root) || [ ! -f "$root/scripts/own-draft-check.sh" ]; then
+    echo "NOTE: kept draft (session-chat cleanup helper unavailable): $file"
+    return 0
+  fi
+  helper="$root/scripts/own-draft-check.sh"
+  bash "$helper" --consume "$file" "$ident" "$sum" || echo "NOTE: kept draft (cleanup helper failed): $file"
+  return 0
+}
+
 # --- Status transition enforcement ---
 # Legal transitions. assigned->assigned is allowed to support reassignment
 # (documented behavior: re-dispatch a silent executor's task to a new pane).
@@ -793,6 +1114,10 @@ task_set_status() {
 # metadata update and status flip into one locked mutation.
 task_set_status_unlocked() {
   local id="$1" status="$2" actor="$3" note="${4:-}"
+  # Optional 5th argument: compact JSON {event_id, artifact, sha} of a verdict
+  # event. It is recorded in the SAME atomic ledger write as the transition
+  # (see verdict_event_filter); absent or empty means no event.
+  local verdict_json="${5:-null}"
   local current_status
   contract_legacy_guard "$id" "$(cat "$(task_path "$id")")" || return 1
   current_status=$(task_get "$id" '.status')
@@ -814,11 +1139,13 @@ task_set_status_unlocked() {
     --arg status "$status" \
     --arg actor "$actor" \
     --arg note "$note" \
+    --argjson ve "$verdict_json" \
     '.status = $status
      | .updated_at = $ts
      | (if $status == "assigned" and ((.started_at // null) == null)
         then .started_at = $ts else . end)
-     | .history += [{ts: $ts, event: $status, actor: $actor, note: $note}]')
+     | .history += [{ts: $ts, event: $status, actor: $actor, note: $note}]
+     | '"$VERDICT_EVENT_FILTER")
   task_write "$id" "$updated"
 }
 

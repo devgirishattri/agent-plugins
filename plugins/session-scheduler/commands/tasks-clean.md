@@ -10,7 +10,7 @@ Lead with the result. Add text only for errors or the follow-ups below. This com
 
 The command always retains tasks with a verification contract (see the `task-contract` skill), whatever their age or status.
 
-One task's cleanup removes these items by exact name, never an `<id>-*` glob: `tasks/<id>.json`, `prompts/<id>.md`, `prompts/<id>-review.md`, `prompts/<id>-ack-{done,blocked,review}.md`, the whole `handoffs/<id>/` directory, and a leftover `locks/<id>.lock/`.
+One task's cleanup removes these items by exact name, never an `<id>-*` glob: `tasks/<id>.json`, `prompts/<id>.md`, `prompts/<id>-review.md`, `prompts/<id>-ack-{done,blocked,review}.md`, the verdict artifacts and notices named by the task's recorded verdict events (`prompts/<id>-verdict-<event>.md` and `-notice.md`), the whole `handoffs/<id>/` directory, and a leftover `locks/<id>.lock/`.
 
 The command keeps a candidate that a task *not* being deleted still lists in `depends_on`. It reports that candidate as `kept <id> (referenced by …)`.
 

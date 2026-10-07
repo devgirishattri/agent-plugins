@@ -5,6 +5,7 @@
 #
 # Per candidate task (updated_at older than the threshold): tasks/<id>.json,
 # prompts/<id>.md, prompts/<id>-review.md, prompts/<id>-ack-{done,blocked,review}.md,
+# prompts/<id>-verdict-<event>.md (+ -notice.md) for each recorded verdict event,
 # handoffs/<id>/ and locks/<id>.lock/. Exact names only — never <id>-* globs.
 # A candidate still referenced by a surviving task's depends_on is KEPT, so
 # cleanup never turns an assignable task into an unmet-dependency one.
@@ -128,6 +129,10 @@ prompt_owned() {
         task_exists "${stem%"$suffix"}" && return 0 ;;
     esac
   done
+  # Verdict artifacts: <id>-verdict-<16 hex> and its -notice.
+  if [[ "$stem" =~ ^(.+)-verdict-[a-f0-9]{16}(-notice)?$ ]]; then
+    task_exists "${BASH_REMATCH[1]}" && return 0
+  fi
   return 1
 }
 orphans=()
@@ -185,7 +190,18 @@ for id in "${final_ids[@]+"${final_ids[@]}"}"; do
     echo "WARN: kept $id: a verification contract was attached during cleanup." >&2
     continue
   fi
+  # Verdict artifacts are named by the task's recorded events; read them
+  # before the task file goes away.
+  verdict_artifacts=()
+  while IFS= read -r artifact; do
+    verdict_artifacts+=("$artifact")
+  done < <(task_verdict_artifacts "$id")
   rm -f "$(task_path "$id")"
+  for artifact in "${verdict_artifacts[@]+"${verdict_artifacts[@]}"}"; do
+    stem=$(basename "$artifact" .md)
+    if task_exists "$stem"; then continue; fi
+    rm -f "$artifact"
+  done
   while IFS= read -r artifact; do
     # Dual-ownership rule (same as the orphan sweep): prompts/<id>-review.md is
     # ALSO the base prompt of a task literally named "<id>-review". If such a

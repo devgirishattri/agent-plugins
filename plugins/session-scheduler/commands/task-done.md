@@ -1,6 +1,6 @@
 ---
 description: Mark a task done; ack the assigner via session-chat
-argument-hint: <id> [--force] [note]
+argument-hint: <id> [--force] [note] | <id> [--generation <N>] --note-file <own draft>
 allowed-tools: Bash(bash:*)
 ---
 
@@ -8,7 +8,9 @@ allowed-tools: Bash(bash:*)
 
 Lead with the result. Add text only for errors or the follow-ups below.
 
-Only the bound reviewer can complete a task with a verification contract (see the `task-contract` skill). The reviewer passes `<id> --generation <N> "<note>"`. `--force` is refused. A bare done status is not acceptance. The script sends no acknowledgement to the assigner (ledger-only).
+Only the bound reviewer can complete a task with a verification contract (see the `task-contract` skill). The reviewer passes `<id> --generation <N> "<note>"`. `--force` is refused. A bare done status is not acceptance. The script sends no acknowledgement to the assigner (ledger-only), except for `--note-file` (see below).
+
+Reviewer verdicts: put the complete verdict in your own session-chat draft and pass `--note-file <your draft>` (contracted task: `<id> --generation <N> --note-file <your draft>`). Do not send a separate `[re:]` reply. The helper checks and copies the draft, records one verdict event with the transition, and sends ONE notification (`[task:<id>] [event:<event>]` plus the full verdict) to the assigner. The assigner reads the full verdict from that notification or with `/task-status <id>`. The notification state is `delivered`, `queued`, `inline-fallback`, `failed`, or `pending` (unconfirmed). Never rerun `task-done` to repair it. The size limit is `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536). The draft is removed afterwards only if it is unchanged. These are not guarantees of exactly-once delivery or of assigner observation.
 
 `SESSION_SCHEDULER_HOME` must already be present in this session's environment. It is inherited when the agent process started. The pane/session launcher sets it. Never export or derive it here.
 

@@ -1524,7 +1524,14 @@ send_message() {
   return 3
 }
 
+# dispatch_message sets DISPATCH_MESSAGE_ID to the transport message id it used,
+# only when it returns 0 (delivered) or 3 (queued); dispatch-to-session.sh
+# prints it so a sender can record the request id. Empty on any other result.
+# shellcheck disable=SC2034  # read by dispatch-to-session.sh
+DISPATCH_MESSAGE_ID=""
+# shellcheck disable=SC2034  # DISPATCH_MESSAGE_ID is read by dispatch-to-session.sh
 dispatch_message() {
+  DISPATCH_MESSAGE_ID=""
   local target_name="$1"
   local message="$2"
   local my_name tmux_err
@@ -1609,10 +1616,12 @@ dispatch_message() {
     "id:${uid}"; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "live" "$message"
+    DISPATCH_MESSAGE_ID="$uid"
     return 0
   fi
   mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
   log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "queued" "$message"
+  DISPATCH_MESSAGE_ID="$uid"
   return 3
 }
 

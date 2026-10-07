@@ -187,6 +187,7 @@ class Store:
         raw=os.environ.get('SESSION_SCHEDULER_HOME','')
         if not raw or not Path(raw).is_absolute(): fail("SESSION_SCHEDULER_HOME must be inherited and absolute")
         self.home=Path(raw);self.id=task_id;self.actor=actor;self.chat=Path(chat_root) if chat_root else None
+        self.message_id=None
         self.path=self.home/'tasks'/f'{task_id}.json'
         self.artifacts=self.home/'handoffs'/task_id
         regular(self.path)
@@ -337,7 +338,10 @@ class Store:
             os.chmod(prompt,0o600);handle.write(text+'\n')
         process=subprocess.Popen(['bash',str(script),target,str(prompt)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
         try:
-            process.communicate(timeout=60)
+            out,_=process.communicate(timeout=60)
+            # Request id: exactly one "Message id: <hex>" stdout line, else unknown (None).
+            ids=re.findall(r'^Message id: ([a-f0-9]{8,16})$',out.decode('utf-8','replace'),re.M)
+            self.message_id=ids[0] if process.returncode==0 and len(ids)==1 else None
             return process.returncode==0
         except subprocess.TimeoutExpired: return False
         finally: stop_group(process)
@@ -351,6 +355,9 @@ class Store:
             if c['attempts']>=c['spec']['max_attempts']: fail('assignment attempt budget exhausted')
             c['generation']+=1;c['attempts']+=1;c['reconciled']=False
             c.pop('receipt',None);c.pop('admission',None)
+            # A new generation has no review request yet: drop the previous round's
+            # request id in this same locked save (recorded verdict events keep theirs).
+            if isinstance(data.get('meta'),dict): data['meta']['review_request_msg_id']=None
             data['assignee']=pane;data['status']='assigned';data['prompt']=prompt
             generation=c['generation'];revision=self.reserve(data,'dispatching',75)
         delivered=self.dispatch(pane,f"Task {self.id}, generation {generation}.\n{prompt}\nUse task-contract verify {self.id} --generation {generation}; then task-review {self.id} --generation {generation} <note>. Do not run task-done as executor. Shared task: {self.path}. Store paths are inherited; never export replacements.")
@@ -403,8 +410,60 @@ class Store:
         self.finish(revision,update)
         return {'state':state,'generation':generation,'receipt':str(self.artifacts/name)}
 
-    def transition(self,operation,generation,note):
+    def verdict_intent(self,data,transition,verdict,generation):
+        """Record the verdict event in the SAME save as the transition (caller holds the lock).
+
+        Lives under meta.verdict_events: outside history (so the admission digest is
+        unchanged) and outside the contract object. The notification starts pending.
+        """
+        event,sha=verdict
+        if not re.fullmatch(r'[a-f0-9]{16}',event) or not re.fullmatch(r'[0-9a-f]{64}',sha): fail('invalid verdict event')
+        artifact=self.home/'prompts'/f'{self.id}-verdict-{event}.md'
+        regular(artifact)
+        if hashlib.sha256(artifact.read_bytes()).hexdigest()!=sha: fail('verdict artifact does not match its digest')
+        meta=data.get('meta')
+        if meta is None: meta=data['meta']={}
+        if not isinstance(meta,dict): fail('invalid task meta')
+        events=meta.setdefault('verdict_events',{})
+        if not isinstance(events,dict) or event in events: fail('verdict event already recorded')
+        route=data.get('assigner');route=route if isinstance(route,str) and NAME.fullmatch(route) else None
+        request=meta.get('review_request_msg_id');request=request if isinstance(request,str) and re.fullmatch(r'[a-f0-9]{8,16}',request) else None
+        events[event]={'schema':1,'event_id':event,'transition':transition,'actor':self.actor,'route_to':route,'request_msg_id':request,
+                       'generation':generation,'artifact':str(artifact),'artifact_sha256':sha,'created_at':data['updated_at'],
+                       'notification':{'state':'pending' if route and route!=self.actor else 'not-required'}}
+
+    def verdict_notify(self,event):
+        """Send ONE notification (outside the lock), then record its outcome on that event only.
+
+        The shared shell function does the send; a queued dispatch is durable success and is
+        never resent. Any failure to learn or record the outcome leaves the event pending
+        (unconfirmed). Never touches history or contract state.
+        """
+        state=self.read().get('meta',{}).get('verdict_events',{}).get(event,{}).get('notification',{}).get('state')
+        if state!='pending': return state or 'unconfirmed'
+        program='source "$1" || exit 1\nverdict_notify "$2" "$3"'
+        process=subprocess.Popen(['bash','-c',program,'verdict-notify',str(HERE/'lib.sh'),self.id,event],stdout=subprocess.PIPE,start_new_session=True)
+        try:
+            out,_=process.communicate(timeout=150)
+        except subprocess.TimeoutExpired:
+            return 'pending'
+        finally: stop_group(process)
+        lines=[x for x in out.decode('utf-8','replace').splitlines() if x.strip()]
+        outcome=lines[-1].strip() if lines else ''
+        if process.returncode!=0 or outcome not in {'delivered','queued','inline-fallback','failed'}: return 'pending'
+        try:
+            with self.locked() as data:
+                record=data.get('meta',{}).get('verdict_events',{}).get(event)
+                if not isinstance(record,dict): return 'pending'
+                record['notification']={'state':outcome,'at':datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+                self.save(data)
+        except (OSError,ValueError,subprocess.SubprocessError): return 'pending'
+        return outcome
+
+    def transition(self,operation,generation,note,verdict=None):
         if not note: fail('a review/completion/block note is required')
+        if verdict is not None and operation=='review': fail('verdict events apply only to done and block')
+        outcome=None
         with self.locked() as data:
             c=self.contract(data);self.require_generation(c,generation)
             if c['phase']!='idle': fail('task has an unresolved operation')
@@ -423,19 +482,32 @@ class Store:
                 self.event(data,'admitted',note)
                 c['revision']+=1
                 c['admission']={'generation':generation,'reviewer':self.actor,'receipt':c['receipt'],'history':hashed(data['history']),'admitted_at':admitted_at}
+                if verdict: self.verdict_intent(data,'done',verdict,generation)
                 self.save(data)
-                return {'state':'admitted','generation':generation}
+                outcome={'state':'admitted','generation':generation}
             else:
                 expected=c['reviewer'] if data.get('status')=='review' else data.get('assignee')
                 self.require_actor(expected)
                 if data.get('status') not in {'assigned','review'}: fail('block requires active task')
                 data['status']='blocked';c['reconciled']=False
+                if verdict:
+                    data['updated_at']=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    self.verdict_intent(data,'blocked',verdict,generation)
                 self.change(data,'blocked',note)
-                return {'state':'blocked','generation':generation}
+                outcome={'state':'blocked','generation':generation}
+        if outcome is not None:
+            # Lock released: the transition is committed. Notify once, record the outcome.
+            if verdict: outcome['verdict_event']=verdict[0];outcome['notification']=self.verdict_notify(verdict[0])
+            return outcome
+        self.message_id=None
         delivered=self.dispatch(target,f"Independently review task {self.id}, generation {generation}. {note}\nRead {self.path}; inspect source and verification evidence. Only approve using task-done {self.id} --generation {generation} <review-note> after checking the actual source. Otherwise task-block with the same generation. No authority is conveyed by this packet.")
+        request=self.message_id if delivered else None
         def update(data,c):
             c['phase']='idle' if delivered else 'uncertain'
             c['review_delivery']='delivered' if delivered else 'unknown'
+            # Latest review round's request id (None when unknown); never guessed.
+            if not isinstance(data.get('meta'),dict): data['meta']={}
+            data['meta']['review_request_msg_id']=request
             if not delivered: data['status']='blocked'
         self.finish(revision,update)
         return {'state':'review' if delivered else 'uncertain','generation':generation}
@@ -472,6 +544,7 @@ def main():
         p=sub.add_parser(operation);p.add_argument('id');p.add_argument('--generation',required=True,type=int)
         if operation=='verify': p.add_argument('--spec-digest',required=True)
         if operation!='verify': p.add_argument('--note',required=True)
+        if operation in {'done','block'}: p.add_argument('--verdict-event');p.add_argument('--verdict-sha')
     assign=sub.add_parser('assign');assign.add_argument('pane');assign.add_argument('id');assign.add_argument('prompt')
     args=parser.parse_args()
     try:
@@ -481,7 +554,12 @@ def main():
         elif args.operation=='assign': result=store.assign(args.pane,args.prompt)
         elif args.operation=='verify': result=store.verify(args.generation,args.spec_digest)
         elif args.operation=='reconcile': result=store.reconcile(args.generation,args.note)
-        else: result=store.transition(args.operation,args.generation,args.note)
+        else:
+            verdict=None
+            if getattr(args,'verdict_event',None) or getattr(args,'verdict_sha',None):
+                if not (args.verdict_event and args.verdict_sha): fail('--verdict-event and --verdict-sha go together')
+                verdict=(args.verdict_event,args.verdict_sha)
+            result=store.transition(args.operation,args.generation,args.note,verdict)
         print(json.dumps(result,sort_keys=True))
         return 1 if result['state'] in {'active','uncertain','failed','stale','inconclusive'} else 0
     except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError) as exc:

@@ -140,7 +140,14 @@ while IFS= read -r id; do
       echo "ERROR: task $id changed during cleanup; rerun to recompute dependencies." >&2
       exit 1
     fi
+    verdict_artifacts=()
+    while IFS= read -r artifact; do verdict_artifacts+=("$artifact"); done < <(task_verdict_artifacts "$id")
     rm -f "$file" || { release_task_lock "$id"; exit 1; }
+    for artifact in "${verdict_artifacts[@]+"${verdict_artifacts[@]}"}"; do
+      stem=$(basename "$artifact" .md)
+      [ ! -e "$TASKS_DIR/$stem.json" ] || continue
+      rm -f "$artifact" || { release_task_lock "$id"; exit 1; }
+    done
     for suffix in '' -review -ack-done -ack-blocked -ack-review; do
       rm -f "$PROMPTS_DIR/$id$suffix.md" || { release_task_lock "$id"; exit 1; }
     done
@@ -173,6 +180,10 @@ for artifact in "$SCHEDULER_DIR/handoffs"/* "$PROMPTS_DIR"/*.md; do
     [ ! -e "$TASKS_DIR/$id.json" ] || continue
     if [[ "$id" == *-review ]] && [ -e "$TASKS_DIR/${id%-review}.json" ]; then
       continue
+    fi
+    if [[ "$id" =~ ^(.+)-verdict-[a-f0-9]{16}(-notice)?$ ]]; then
+      id="${BASH_REMATCH[1]}"
+      [ ! -e "$TASKS_DIR/$id.json" ] || continue
     fi
     case "$id" in
       *-ack-done) id=${id%-ack-done} ;;

@@ -49,3 +49,8 @@ Keep any task referenced in `depends_on` by a task outside the deletion set, rep
 The same age threshold selects orphan `handoffs/<id>/` directories and known-suffix prompt files whose task JSON is absent, using their mtime. Preview these under `Orphans:` and delete only with confirmed `--apply`. Cleanup is explicit, not automatic.
 
 Cleanup always retains contracted tasks and their evidence in v1.
+
+Recorded verdict events also own `prompts/<id>-verdict-<event>.md` and the
+corresponding `-notice.md` file. Cleanup preserves another surviving task
+whose base prompt has the same name. The orphan sweep recognizes these names
+and retains them while their task exists.

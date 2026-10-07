@@ -137,3 +137,39 @@ scheduler writers; it does not isolate unrelated same-user filesystem writes.
 A crash can leave a staging file named `<task-id>.json.tmp.*`. Confirm there is
 no live task-lock holder before manually removing an exact stale staging file.
 Do not remove a task JSON file or an active writer's staging file.
+
+## Reviewer verdicts from a note file (`--note-file`)
+
+A reviewer puts the complete verdict in the reviewer's own session-chat draft (`<messages>/drafts/<own-pane>/<name>.md`) and gives the path to the helper. Use `--note-file` instead of sending a separate `[re:]` reply to the master:
+
+```
+$session-scheduler:task-done  <id> --note-file <own draft>                        (contracted task only: <id> --generation <N> --note-file <own draft>)
+$session-scheduler:task-block <id> --note-file <own draft> [short summary]        (contracted task only: <id> --generation <N> --note-file <own draft>)
+```
+
+Before any change, the helper checks the draft with session-chat's `own-draft-check.sh` (run as a subprocess). It refuses a draft that is not this pane's own private regular file (peer draft, symlink, hardlink, other directory, bad name, unreadable). It also refuses a file larger than `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536; read on each call; the check uses the file size before it hashes or copies anything), a file with a NUL byte, and a file that is not valid UTF-8. An older session-chat with no `own-draft-check.sh` makes the helper refuse `--note-file` with an upgrade message before it reads the file. Inline notes still work with an older session-chat.
+
+After the checks, the helper copies the verdict to an exclusive file `prompts/<id>-verdict-<event>.md` (mode 0600) and verifies its SHA-256. `<event>` is 16 random hex characters. One atomic ledger write then records the transition and the event `meta.verdict_events[<event>]`: transition (`done` or `blocked`), actor, `route_to` (the assigner at that time), `request_msg_id`, `generation`, artifact path, `artifact_sha256`, and `notification`. The history note is a short excerpt (at most 200 bytes of the first line) plus the artifact path and SHA-256.
+
+`request_msg_id` is the transport id of the latest review request. `$session-scheduler:task-review` reads it from the single `Message id: <hex>` line that session-chat prints for a delivered or queued dispatch. It stores `meta.review_request_msg_id`; a contracted task stores it in the engine's review step. An older session-chat prints no such line. The value is then `null` and `$session-scheduler:task-status` shows `unknown`. The helper never guesses it.
+
+After it leaves the lock, the helper sends ONE notification to the assigner. The body starts with `[task:<id>] [event:<event>]` and the first line, then a blank line and the full verdict, then the status-check footer. The notification has no `[re:]` token, because the master never sent a request with that id. Then the helper records the outcome on that event:
+
+| `notification.state` | Meaning |
+|---|---|
+| `pending` | No outcome was recorded. A stop or crash after the transition can cause this. The notification may or may not have been sent. Treat it as unconfirmed. |
+| `delivered` | The dispatch reached the assigner. |
+| `queued` | The dispatch is in the assigner's durable inbox. This is a success. The helper does not resend or use the fallback. |
+| `inline-fallback` | The dispatch failed hard. The helper sent one inline pointer of at most `SESSION_CHAT_SEND_MAX_LEN` (default 1024) characters: `[task:<id>] [event:<event>] <first line> — full verdict recorded: task-status <id>`. A partial transport side effect can cause a duplicate pointer. |
+| `failed` | Both transports reported failure. Delivery is not confirmed (a transport can fail after a side effect). The verdict artifact is durable; the assigner reads it with `$session-scheduler:task-status <id>`. |
+| `not-required` | The assigner is unknown or is the actor. |
+
+Rules:
+
+- `--generation <N>` with `--note-file` is valid only for a contracted task. The helper refuses it for any other task.
+- The verdict is committed before any notification. Never rerun `$session-scheduler:task-done` or `$session-scheduler:task-block` to repair a notification: the rerun is refused. There is no retry helper. The assigner reads the full verdict with `$session-scheduler:task-status <id>`.
+- `$session-scheduler:task-status <id>` shows each event (event id, request id or `unknown`, artifact path, SHA-256, notification state) and the verdict text only after the SHA-256 matches. `--all` lists one line per event. Status never writes and never reconciles a `pending` event.
+- Afterwards, the helper asks session-chat to remove the draft. It removes the draft only if it is still the same own draft that was checked (same file identity and SHA-256). Otherwise it keeps the draft and prints a NOTE. A kept draft never undoes the verdict. `SESSION_CHAT_KEEP_DRAFTS=1` keeps the draft.
+- Only the `--note-file` forms create events. An inline note keeps the lifecycle ack (`meta.last_ack`) unchanged. For a contracted task, `--note-file` also sends the notification; the notification record is kept outside the history that the admission digest covers.
+- These claims are narrow: the helper does not promise exactly-once delivery or that the assigner sees the message. A crash before the draft check or before the ledger write leaves no event and keeps the draft. A crash before the artifact is referenced can leave one unreferenced artifact file; `$session-scheduler:tasks-clean` removes it after the task is removed or when it ages as an orphan.
+- Under the strict harness, `--note-file` is allowed only for the pane's own existing draft inside its messages grant, and only as `<id> --note-file <draft>` or `<id> --generation <N> --note-file <draft>`.

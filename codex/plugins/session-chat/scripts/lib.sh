@@ -1578,7 +1578,12 @@ send_message() {
   return 3
 }
 
+# Set only after delivered or durable queued success; read by the dispatch wrapper.
+# shellcheck disable=SC2034
+DISPATCH_MESSAGE_ID=""
+# shellcheck disable=SC2034
 dispatch_message() {
+  DISPATCH_MESSAGE_ID=""
   local target_name="$1"
   local message="$2"
   local my_name tmux_err
@@ -1619,10 +1624,12 @@ dispatch_message() {
   if send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" "id:${uid}"; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "live" "$message"
+    DISPATCH_MESSAGE_ID="$uid"
     return 0
   fi
   mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
   log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "queued" "$message"
+  DISPATCH_MESSAGE_ID="$uid"
   return 3
 }
 

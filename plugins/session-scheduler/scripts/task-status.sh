@@ -44,6 +44,58 @@ case "${1:-}" in
     ;;
 esac
 
+# Verdict events are shown observationally: this script never writes, never
+# reconciles a pending outcome, and prints a verdict body only after the
+# artifact's recorded SHA-256 has been verified.
+# jq text for one event's notification state (shared by both views).
+# shellcheck disable=SC2016  # jq program text, not shell
+VERDICT_STATE_JQ='(.notification.state // "unknown") as $st
+  | if $st == "pending" then "pending (UNCONFIRMED: no outcome was recorded; the notification may or may not have been sent)"
+    elif $st == "delivered" then "delivered"
+    elif $st == "queued" then "queued (durable; it arrives on the recipient'"'"'s next turn)"
+    elif $st == "inline-fallback" then "inline-fallback (durable dispatch failed; a bounded pointer was sent inline; a duplicate pointer is possible)"
+    elif $st == "failed" then "failed (delivery not confirmed: the transport reported failure; the verdict artifact is durable)"
+    elif $st == "not-required" then "not-required (no distinct assigner to notify)"
+    else $st end'
+
+print_verdict_events() {
+  local file="$1" id count ve artifact sha
+  count=$(jq -r '((.meta | objects | .verdict_events) // {}) | length' "$file" 2>/dev/null) || return 0
+  [ "${count:-0}" -gt 0 ] 2>/dev/null || return 0
+  id=$(jq -r '.id // empty' "$file" 2>/dev/null)
+  echo
+  echo "Verdict events (observational; this view never changes the ledger):"
+  jq -r '((.meta | objects | .verdict_events) // {}) | to_entries | sort_by(.value.created_at // "") | .[] | .value as $e
+    | "  event \($e.event_id // .key): \($e.transition // "?") by \($e.actor // "?") at \($e.created_at // "?")",
+      "    route: \($e.route_to // "none")   request: \($e.request_msg_id // "unknown")   generation: \($e.generation // "n/a")",
+      "    artifact: \($e.artifact // "?") sha256:\($e.artifact_sha256 // "?")",
+      "    notification: \($e | '"$VERDICT_STATE_JQ"')"' "$file" 2>/dev/null
+  while IFS=$'\t' read -r ve artifact sha; do
+    [[ "$ve" =~ ^[a-f0-9]{16}$ ]] && [[ "$sha" =~ ^[a-f0-9]{64}$ ]] || continue
+    echo
+    if [ "$artifact" != "$(verdict_artifact_path "$id" "$ve")" ]; then
+      echo "--- verdict $ve: artifact path is not the expected one; body not shown ---"
+      continue
+    fi
+    if command -v python3 >/dev/null 2>&1 && [ -f "$SCHEDULER_SCRIPTS_DIR/verdict-file.py" ] \
+       && body=$(python3 -I "$SCHEDULER_SCRIPTS_DIR/verdict-file.py" show --path "$artifact" --sha "$sha" 2>/dev/null); then
+      echo "--- verdict $ve (SHA-256 verified) ---"
+      printf '%s\n' "$body"
+      echo "--- end verdict $ve ---"
+    else
+      echo "--- verdict $ve: artifact missing, changed, or unreadable; body not shown ---"
+    fi
+  done < <(jq -r '((.meta | objects | .verdict_events) // {}) | to_entries | sort_by(.value.created_at // "") | .[] | [(.value.event_id // .key), (.value.artifact // ""), (.value.artifact_sha256 // "")] | @tsv' "$file" 2>/dev/null)
+}
+
+# One line per verdict event of a task file, for the table views.
+verdict_event_rows() {
+  # shellcheck disable=SC2016
+  jq -r '.id as $id | ((.meta | objects | .verdict_events) // {}) | to_entries | sort_by(.value.created_at // "") | .[] | .value as $e
+    | [$id, ($e.event_id // .key), ($e.transition // "?"), ("request:" + ($e.request_msg_id // "unknown")),
+       ("notification:" + (($e.notification.state // "unknown") | if . == "pending" then "pending (unconfirmed)" else . end))] | @tsv' "$1" 2>/dev/null
+}
+
 if [ -n "$SINGLE_ID" ]; then
   validate_task_id "$SINGLE_ID" || exit 1
   if ! task_exists "$SINGLE_ID"; then
@@ -56,6 +108,7 @@ if [ -n "$SINGLE_ID" ]; then
     echo
     echo "Flags: $flags"
   fi
+  print_verdict_events "$(task_path "$SINGLE_ID")"
   deps=$(task_get "$SINGLE_ID" '(.depends_on // [])[]')
   if [ -n "$deps" ]; then
     echo
@@ -153,6 +206,7 @@ fi
 
 printf 'ID\tSTATUS\tSTAGE\tASSIGNER\tASSIGNEE\tNAME\tUPDATED\tFLAGS\n'
 shown=0
+vrows=""
 for f in "${files[@]}"; do
   row=$(jq -r '[.id, .status, (.stage // "-"), .assigner, (.assignee // "-"), .name, .updated_at] | @tsv' "$f" 2>/dev/null) || continue
   status=$(printf '%s' "$row" | cut -f2)
@@ -175,8 +229,15 @@ for f in "${files[@]}"; do
   esac
   flags=$(task_flags "$f")
   printf '%s\t%s\n' "$row" "$flags"
+  vev=$(verdict_event_rows "$f")
+  [ -n "$vev" ] && vrows="${vrows}${vev}"$'\n'
   shown=$((shown + 1))
 done
 
+if [ -n "$vrows" ]; then
+  echo
+  echo "Verdict events (observational; run task-status <id> for the full verdict):"
+  printf '%s' "$vrows" | sed 's/^/  /'
+fi
 echo
 printf '%d task(s) shown (filter: %s).\n' "$shown" "$FILTER"

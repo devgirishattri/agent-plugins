@@ -58,5 +58,38 @@ Contract assignment accepts only pane, id and one prompt. Review, done and block
 require `<id> --generation <N> "<note>"`; only the bound reviewer may complete.
 Force never bypasses the contract. Inspect the task first to use its generation.
 
-Contracted done/block are ledger-only and do not send the legacy assigner
-acknowledgement. The coordinator reads task status for these outcomes.
+Contracted inline notes remain ledger-only. The `--note-file` form below also
+notifies the assigner after the transition is committed.
+
+## Complete verdict from an own draft
+
+Put the complete verdict in your own session-chat draft. Use one of these forms:
+
+```bash
+bash "<PLUGIN_ROOT>/scripts/task-done.sh" "<task-id>" --note-file "<own draft>"
+bash "<PLUGIN_ROOT>/scripts/task-done.sh" "<task-id>" --generation <N> --note-file "<own draft>"
+```
+
+Use the generation form only for a contracted task. Preserve its actor and
+admission requirements. Under strict-v1, do not combine an inline note with
+`--note-file`. Follow the same scoped transport approval rule above.
+
+The helper checks draft ownership, size, raw UTF-8 and NUL bytes before the
+transition. `SESSION_SCHEDULER_NOTE_MAX_BYTES` defaults to 65536. A missing chat
+read-check helper refuses this option before reading the draft; update chat.
+Legacy inline notes remain compatible.
+
+One ledger save records the transition, verdict event, artifact digest, request
+linkage and initial notification state. The assigner receives one normal-path
+notification carrying the complete verdict. Do not send a separate correlated
+reply. Status links the request and verdict; it does not fabricate a reply row.
+
+Report the event and notification outcome separately. `pending` means the
+outcome is unconfirmed. A failed dispatch can fall back to a bounded inline
+pointer; transport failure does not prove non-delivery. Never rerun the
+transition to repair notification. Read the full verdict with task-status.
+
+The helper removes the draft only after the event commits and only if its
+identity and digest still match. A kept-draft note does not undo the verdict.
+`SESSION_CHAT_KEEP_DRAFTS=1` retains it. Installation does not guarantee exactly
+once delivery or that the assigner observes the notification.

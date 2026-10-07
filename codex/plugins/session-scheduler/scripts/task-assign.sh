@@ -326,11 +326,11 @@ jq \
          .meta.review_prompt_file, .meta.review_dispatched_at,
          .meta.review_dispatch_status, .meta.review_dispatch_attempt_at,
          .meta.review_last_dispatch_attempt_at, .meta.review_dispatch_attempts,
-         .meta.review_dispatch_error,
+         .meta.review_dispatch_error, .meta.review_request_msg_id,
          .review_prompt_file, .review_dispatched_at,
          .review_dispatch_status, .review_dispatch_attempt_at,
          .review_last_dispatch_attempt_at, .review_dispatch_attempts,
-         .review_dispatch_error)' \
+         .review_dispatch_error, .review_request_msg_id)' \
   "$FILE" | write_json_atomic "$FILE" || exit 1
 
 echo "Assigned task $ID to $ASSIGNEE"

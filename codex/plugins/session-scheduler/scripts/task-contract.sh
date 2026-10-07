@@ -19,6 +19,13 @@ if [ "${1:-}" = route ]; then
   case "$operation" in
     assign) exec python3 "$HERE/task-contract.py" assign "$@" ;;
     review|done|block)
+      # Verdict-event form (done/block only, from task-done/task-block --note-file):
+      # id --generation N literal-note --verdict-event EVENT --verdict-sha SHA.
+      if [ "$#" -eq 8 ] && [ "$operation" != review ] && [ "${2:-}" = --generation ] \
+         && [ "${5:-}" = --verdict-event ] && [ "${7:-}" = --verdict-sha ]; then
+        exec python3 "$HERE/task-contract.py" "$operation" "$1" --generation "$3" "--note=$4" \
+          "--verdict-event=$6" "--verdict-sha=$8"
+      fi
       if [ "$#" -ne 4 ] || [ "${2:-}" != --generation ]; then
         echo '{"state":"invalid","error":"requires id --generation N literal-note"}'; exit 2
       fi

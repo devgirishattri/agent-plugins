@@ -226,6 +226,7 @@ class Envelope(unittest.TestCase):
                         failed = self.script(provider, dict(env, PATH=str(shim) + ':' + env['PATH']),
                                              script, 'peer', payload)
                         self.assertNotEqual(failed.returncode, 0)
+                        self.assertNotIn('Message id:', failed.stdout)
                         self.assertFalse(list(messages.glob('*.md')))
                         self.assertFalse((messages / 'sent-log.tsv').exists())
                         self.assertFalse(list(messages.glob('queue/*.tsv')))
@@ -236,6 +237,8 @@ class Envelope(unittest.TestCase):
                         self.assertRegex(sent[1], r'^[a-f0-9]{16}$')
                         self.assertEqual(sent[7], 'task-1')
                         if script == 'dispatch-to-session.sh':
+                            self.assertEqual([line for line in control.stdout.splitlines()
+                                              if line.startswith('Message id:')], ['Message id: ' + sent[1]])
                             packet, = messages.glob('*.md')
                             self.assertEqual(packet.read_text(),
                                              '[re:aaaaaaaa] [task:task-1] body quotes [re:bbbbbbbb]\n')

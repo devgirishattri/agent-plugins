@@ -156,8 +156,12 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
         printf '\n## Original assignment\n\n(unavailable: stored prompt_file failed safety checks)\n'
       fi
     } > "$REVIEW_PROMPT"
-    DISPATCH_OUTPUT=$(bash "$CHAT_ROOT/scripts/dispatch-to-session.sh" "$REVIEWER" "$REVIEW_PROMPT" 2>&1)
+    DISPATCH_OUTPUT=$(bash "$CHAT_ROOT/scripts/dispatch-to-session.sh" "$REVIEWER" "$REVIEW_PROMPT")
     DISPATCH_RC=$?
+    REVIEW_REQUEST_ID=""
+    if [ "$(printf '%s\n' "$DISPATCH_OUTPUT" | grep -cE '^Message id: [a-f0-9]{8,16}$')" = "1" ]; then
+      REVIEW_REQUEST_ID=$(printf '%s\n' "$DISPATCH_OUTPUT" | grep -E '^Message id: [a-f0-9]{8,16}$' | sed 's/^Message id: //')
+    fi
     if [ "$DISPATCH_RC" -eq 0 ] || [ "$DISPATCH_RC" -eq 3 ]; then
       REVIEW_DISPATCHED=1
       NOW=$(now_iso)
@@ -167,7 +171,7 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
         *) REVIEW_DISPATCH_STATUS="delivered" ;;
       esac
       [ -n "$DISPATCH_OUTPUT" ] && printf '%s\n' "$DISPATCH_OUTPUT"
-      task_jq_update "$FILE" --arg prompt "$REVIEW_PROMPT" --arg now "$NOW" --arg status "$REVIEW_DISPATCH_STATUS" \
+      task_jq_update "$FILE" --arg prompt "$REVIEW_PROMPT" --arg now "$NOW" --arg status "$REVIEW_DISPATCH_STATUS" --arg rid "$REVIEW_REQUEST_ID" \
         '(.meta //= {})
          | .meta.review_prompt_file=$prompt
          | .meta.review_dispatched_at=$now
@@ -175,6 +179,7 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
          | .meta.review_dispatch_attempt_at=$now
          | .meta.review_dispatch_attempts=(if (.meta.review_dispatch_attempts | type) == "number" then .meta.review_dispatch_attempts + 1 else 1 end)
          | .meta.review_dispatch_error=null
+         | .meta.review_request_msg_id=(if $rid == "" then null else $rid end)
          | del(.meta.review_last_dispatch_attempt_at,
                .review_prompt_file, .review_dispatched_at,
                .review_dispatch_status, .review_dispatch_attempt_at,
@@ -195,6 +200,7 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
          | .meta.review_dispatch_attempt_at=$now
          | .meta.review_dispatch_attempts=(if (.meta.review_dispatch_attempts | type) == "number" then .meta.review_dispatch_attempts + 1 else 1 end)
          | .meta.review_dispatch_error=$error
+         | .meta.review_request_msg_id=null
          | del(.meta.review_last_dispatch_attempt_at,
                .review_prompt_file, .review_dispatched_at,
                .review_dispatch_status, .review_dispatch_attempt_at,
@@ -214,6 +220,7 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
        | .meta.review_dispatch_attempt_at=$now
        | .meta.review_dispatch_attempts=(if (.meta.review_dispatch_attempts | type) == "number" then .meta.review_dispatch_attempts + 1 else 1 end)
        | .meta.review_dispatch_error="session-chat unavailable"
+       | .meta.review_request_msg_id=null
        | del(.meta.review_last_dispatch_attempt_at,
              .review_prompt_file, .review_dispatched_at,
              .review_dispatch_status, .review_dispatch_attempt_at,

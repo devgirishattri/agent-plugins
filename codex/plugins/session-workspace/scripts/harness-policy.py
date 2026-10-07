@@ -1770,10 +1770,41 @@ def task_status(ctx: Context, script: str, args: List[str]) -> None:
     raise PolicyFailure("helper.argv", "task-status.sh arguments are outside its reviewed grammar")
 
 
-def task_transition(note_required: bool) -> Callable[[Context, str, List[str]], None]:
+def own_draft_note_file(ctx: Context, script: str, value: str) -> None:
+    """--note-file must name this pane's own existing private draft inside the
+    validated messages grant (same draft rules as native draft edits and
+    dispatch). Delivered messages, peer drafts, symlinks, hardlinks and anything
+    outside the drafts namespace are refused. Not an atomic sandbox."""
+    refusal = PolicyFailure("helper.argv", "%s --note-file must be this pane's own existing draft inside the messages grant" % script)
+    if not value or any(char in value for char in "\n\r\x00") or value.startswith("-"):
+        raise refusal
+    raw = Path(value).expanduser()
+    raw = raw if raw.is_absolute() else ctx.pane_cwd / raw
+    if ".." in raw.parts:
+        raise refusal
+    if not any(raw.parent == root / "drafts" / ctx.pane_name for root in ctx.message_roots):
+        raise refusal
+    if not own_message_readable(ctx, raw, canonical(raw)):
+        raise refusal
+
+
+def task_transition(note_required: bool, note_file: bool = False) -> Callable[[Context, str, List[str]], None]:
     def check(ctx: Context, script: str, args: List[str]) -> None:
         if "--force" in args:
             raise PolicyFailure("helper.argv", "%s: forced transitions are not routine strict-v1 operations" % script)
+        if "--note-file" in args:
+            # Closed forms only: <id> --note-file <draft> and, for a contracted
+            # task, <id> --generation <N> --note-file <draft>. No inline note.
+            if note_file and len(args) == 3 and LABEL_RE.fullmatch(args[0]) and args[1] == "--note-file":
+                own_draft_note_file(ctx, script, args[2])
+                return
+            if note_file and len(args) == 5 and LABEL_RE.fullmatch(args[0]) and args[1] == "--generation" \
+                    and POSITIVE_RE.fullmatch(args[2]) and args[3] == "--note-file":
+                if not isinstance(contract_actor(ctx, script, args[0]).get("contract"), dict):
+                    raise PolicyFailure("task.contract", "the --generation form applies only to a contracted task")
+                own_draft_note_file(ctx, script, args[4])
+                return
+            raise PolicyFailure("helper.argv", "%s accepts --note-file only as <id> [--generation N] --note-file <own draft>" % script)
         if len(args)==4 and LABEL_RE.fullmatch(args[0]) and args[1]=='--generation' and POSITIVE_RE.fullmatch(args[2]) and args[3] and not args[3].startswith('--'):
             if not isinstance(contract_actor(ctx,script,args[0]).get('contract'),dict):
                 raise PolicyFailure('task.contract','the --generation form applies only to a contracted task')
@@ -2270,8 +2301,8 @@ HELPERS = {
         "task-contract.sh": ("oer", task_contract),
         "tasks-clean.sh": ("o", tasks_clean),
         "task-review.sh": ("e", task_transition(note_required=True)),
-        "task-done.sh": ("er", task_transition(note_required=False)),
-        "task-block.sh": ("er", task_transition(note_required=True)),
+        "task-done.sh": ("er", task_transition(note_required=False, note_file=True)),
+        "task-block.sh": ("er", task_transition(note_required=True, note_file=True)),
     },
     "knowledge": {
         "list-contexts.sh": ("oer", no_args),

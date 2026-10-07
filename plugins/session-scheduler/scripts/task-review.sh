@@ -143,8 +143,16 @@ Audit the work, then record the outcome (use the form for your runtime):
 ${ORIG_ASSIGNMENT}
 EOF
   chmod 600 "$REVIEW_PROMPT" 2>/dev/null || true
-  session_chat_dispatch "$REVIEWER" "$REVIEW_PROMPT" >/dev/null 2>&1
+  # stdout is captured (stderr stays discarded) only to read the request id:
+  # exactly one line "Message id: <hex>" printed by the dispatch itself. Notes
+  # and stderr are never parsed. An older session-chat prints none, so the
+  # request id is recorded as null (unknown), never guessed.
+  _rv_out=$(session_chat_dispatch "$REVIEWER" "$REVIEW_PROMPT" 2>/dev/null)
   dc=$?
+  _rv_msg_id=""
+  if [ "$(printf '%s\n' "$_rv_out" | grep -cE '^Message id: [a-f0-9]{8,16}$')" = "1" ]; then
+    _rv_msg_id=$(printf '%s\n' "$_rv_out" | grep -E '^Message id: [a-f0-9]{8,16}$' | sed 's/^Message id: //')
+  fi
   # Record dispatch metadata so a later /task-review can tell a successful
   # delivery (do NOT re-dispatch — would duplicate) from a failed one (retry OK).
   _rv_now=$(iso_now)
@@ -160,9 +168,10 @@ EOF
          | .meta.review_dispatch_status = $s
          | .meta.review_dispatch_error = null
          | .meta.review_prompt_file = $pf
+         | .meta.review_request_msg_id = (if $rid == "" then null else $rid end)
          | .meta.review_last_dispatch_attempt_at = $t
          | .meta.review_dispatch_attempts = ((.meta.review_dispatch_attempts // 0) + 1)' \
-        --arg t "$_rv_now" --arg s "$_rv_status" --arg pf "$REVIEW_PROMPT" \
+        --arg t "$_rv_now" --arg s "$_rv_status" --arg pf "$REVIEW_PROMPT" --arg rid "$_rv_msg_id" \
         || ROUTE_WARN="reviewer packet was delivered to '$REVIEWER' but recording review_dispatched_at FAILED; do NOT re-run /task-review (it would duplicate delivery). Inspect $(task_path "$ID")."
       ;;
     *)
@@ -179,6 +188,7 @@ EOF
          | .meta.review_last_dispatch_attempt_at = $t
          | .meta.review_dispatch_error = $e
          | .meta.review_prompt_file = $pf
+         | .meta.review_request_msg_id = null
          | .meta.review_dispatch_attempts = ((.meta.review_dispatch_attempts // 0) + 1)' \
         --arg t "$_rv_now" --arg e "dispatch failed rc=$dc" --arg pf "$REVIEW_PROMPT" || true
       ;;

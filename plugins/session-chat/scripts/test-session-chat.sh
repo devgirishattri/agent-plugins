@@ -888,6 +888,182 @@ if [ "$od_m_ok" = "yes" ]; then
 else
   fail "writable_store_dirs_keep_draft" "$od_m_ok"
 fi
+
+# (n) 1.2b-min V1: a delivered or queued dispatch prints exactly one extra
+# `Message id: <hex>` line (the id in the delivered file name); a hard failure
+# prints none. The delivered case is the control for the failure case.
+OD_N1="$OD_M/drafts/sender/mid-live.md"; printf 'OD-MID-LIVE\n' > "$OD_N1"
+od_n1_out=$(od_dispatch alpha "$OD_N1")
+od_n1_ids=$(printf '%s\n' "$od_n1_out" | grep -E '^Message id: [a-f0-9]{8,16}$')
+od_n1_id="${od_n1_ids#Message id: }"
+od_n1_file=$(ls "$OD_M"/*-"$od_n1_id"-sender-to-alpha.md 2>/dev/null | head -1)
+OD_N2="$OD_M/drafts/sender/mid-queued.md"; printf 'OD-MID-QUEUED\n' > "$OD_N2"
+od_n2_out=$(
+  env TMUX_PANE="$SENDER_PANE" SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
+    SESSION_CHAT_VERIFY_TIMEOUT_MS=1000 SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_SEND_RETRIES=0 \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" \
+    TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" \
+    bash -c "
+      tmux() {
+        if [ \"\$1\" = send-keys ]; then
+          local last=\"\${@: -1}\"
+          [ \"\$last\" = Enter ] && return 1
+        fi
+        command tmux -L '$SOCKET' \"\$@\"
+      }
+      export -f tmux
+      bash '$HERE/dispatch-to-session.sh' alpha '$OD_N2'
+    " 2>&1
+)
+od_n2_id=$(printf '%s\n' "$od_n2_out" | grep -E '^Message id: [a-f0-9]{8,16}$' | sed 's/^Message id: //')
+OD_N3="$OD_M/drafts/sender/mid-fail.md"; printf 'OD-MID-FAIL\n' > "$OD_N3"
+od_n3_out=$(od_dispatch no-such-pane "$OD_N3"); od_n3_rc=$?
+if [ "$(printf '%s\n' "$od_n1_ids" | wc -l | tr -d ' ')" = 1 ] && [ -n "$od_n1_file" ] \
+   && echo "$od_n1_out" | grep -qF "Dispatched task to" \
+   && echo "$od_n2_out" | grep -qF "Queued dispatch" && [ -n "$od_n2_id" ] && [ "$(printf '%s\n' "$od_n2_out" | grep -c '^Message id: ')" = 1 ] \
+   && grep -qF "$od_n2_id" "$OD_M/queue/alpha.tsv" \
+   && [ "$od_n3_rc" -ne 0 ] && ! echo "$od_n3_out" | grep -q '^Message id: ' \
+   && [ "$od_n1_id" != "$od_n2_id" ]; then
+  pass "dispatch_prints_message_id_for_delivered_and_queued_only"
+else
+  fail "dispatch_prints_message_id_for_delivered_and_queued_only" "live=[$od_n1_out] queued=[$od_n2_out] fail_rc=$od_n3_rc fail=[$od_n3_out]"
+fi
+rm -f "$OD_N3"
+
+# (o) own-draft-check.sh <file>: prints exactly OK<TAB>dev:inode<TAB>sha256<TAB>size
+# for this pane's own draft; every other shape exits non-zero with empty stdout.
+# The valid own draft in the same fixture is the control for each refusal.
+odc() { SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" bash "$HERE/own-draft-check.sh" "$@"; }
+OD_V="$OD_M/drafts/sender/check-valid.md"; printf 'check body\nline two\n' > "$OD_V"
+odc_ok=$(odc "$OD_V" 2>/dev/null); odc_rc=$?
+odc_exp_sum=$(shasum -a 256 < "$OD_V" 2>/dev/null | awk '{print $1}')
+odc_exp_id=$(stat -c '%d:%i' "$OD_V" 2>/dev/null || stat -f '%d:%i' "$OD_V")
+odc_exp=$(printf 'OK\t%s\t%s\t%s' "$odc_exp_id" "$odc_exp_sum" "$(wc -c < "$OD_V" | tr -d ' ')")
+odc_bad=""
+[ "$odc_rc" = 0 ] && [ "$odc_ok" = "$odc_exp" ] || odc_bad="$odc_bad [valid rc=$odc_rc out=$odc_ok expected=$odc_exp]"
+odc_refuse() {  # odc_refuse <label> <file>
+  local o r
+  o=$(odc "$2" 2>/dev/null); r=$?
+  { [ "$r" -ne 0 ] && [ -z "$o" ]; } || odc_bad="$odc_bad [$1 rc=$r out=$o]"
+  # control after each refusal: the valid own draft is still accepted
+  [ "$(odc "$OD_V" 2>/dev/null)" = "$odc_exp" ] || odc_bad="$odc_bad [$1: control broke]"
+}
+printf 'foreign\n' > "$OD_M/drafts/beta/foreign-check.md"; odc_refuse foreign "$OD_M/drafts/beta/foreign-check.md"
+ln -s "$OD_V" "$OD_M/drafts/sender/check-link.md"; odc_refuse symlink "$OD_M/drafts/sender/check-link.md"
+printf 'hard\n' > "$OD_M/drafts/sender/check-hard.md"; ln "$OD_M/drafts/sender/check-hard.md" "$OD_TMP/check-hard-other.md"
+odc_refuse hardlink "$OD_M/drafts/sender/check-hard.md"; rm -f "$OD_TMP/check-hard-other.md" "$OD_M/drafts/sender/check-hard.md"
+printf 'outside\n' > "$OD_TMP/outside-check.md"; odc_refuse outside_drafts "$OD_TMP/outside-check.md"
+printf 'x\n' > "$OD_M/drafts/sender/check-bad.sh"; odc_refuse bad_name "$OD_M/drafts/sender/check-bad.sh"
+printf 'w\n' > "$OD_M/drafts/sender/check-gw.md"; chmod 664 "$OD_M/drafts/sender/check-gw.md"; odc_refuse group_writable "$OD_M/drafts/sender/check-gw.md"
+odc_refuse missing "$OD_M/drafts/sender/does-not-exist.md"
+chmod 777 "$OD_M/drafts/sender"; odc_wd=$(odc "$OD_V" 2>/dev/null); odc_wd_rc=$?; chmod 700 "$OD_M/drafts/sender"
+{ [ "$odc_wd_rc" -ne 0 ] && [ -z "$odc_wd" ] && [ "$(odc "$OD_V" 2>/dev/null)" = "$odc_exp" ]; } || odcc_wd_bad=1
+[ -z "${odcc_wd_bad:-}" ] || odc_bad="$odc_bad [writable_dir rc=$odc_wd_rc out=$odc_wd]"
+odc_noarg=$(odc 2>/dev/null); odc_noarg_rc=$?
+{ [ "$odc_noarg_rc" -ne 0 ] && [ -z "$odc_noarg" ]; } || odc_bad="$odc_bad [no-arg rc=$odc_noarg_rc]"
+if [ -z "$odc_bad" ]; then
+  pass "own_draft_check_prints_one_ok_line_and_refuses_others"
+else
+  fail "own_draft_check_prints_one_ok_line_and_refuses_others" "$odc_bad"
+fi
+rm -f "$OD_M/drafts/beta/foreign-check.md" "$OD_M/drafts/sender/check-link.md" "$OD_TMP/outside-check.md" "$OD_M/drafts/sender/check-bad.sh" "$OD_M/drafts/sender/check-gw.md"
+
+# (p) own-draft-check.sh --consume: removes only the unchanged eligible own draft
+# (same dev:inode and sha256); edited, replaced, foreign, malformed-identity and
+# opted-out cases keep it and still exit 0. The unchanged case is the control.
+odcc_bad=""
+odcc_case() {  # odcc_case <label> <mutate-cmd> <expect kept|removed> [env assignments]
+  local label="$1" mutate="$2" expect="$3" f="$OD_M/drafts/sender/consume-$1.md" id sum o r state
+  shift 3
+  printf 'consume body\n' > "$f"
+  id=$(odc "$f" | cut -f2); sum=$(odc "$f" | cut -f3)
+  eval "$mutate"
+  o=$(env SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" "$@" bash "$HERE/own-draft-check.sh" --consume "$f" "${ODCC_ID:-$id}" "${ODCC_SUM:-$sum}" 2>&1); r=$?
+  state=removed; [ -e "$f" ] && state=kept
+  { [ "$r" = 0 ] && [ "$state" = "$expect" ]; } || odcc_bad="$odcc_bad [$label rc=$r state=$state out=$o]"
+  rm -f "$f"
+}
+odcc_case unchanged ':' removed
+odcc_case edited 'printf "more\n" >> "$f"' kept
+odcc_case replaced 'printf "consume body\n" > "$f.new"; mv -f "$f.new" "$f"' kept
+ODCC_ID="1:1" odcc_case wrong_identity ':' kept
+ODCC_SUM="$(printf '0%.0s' $(seq 1 64))" odcc_case wrong_sha ':' kept
+ODCC_ID="not-an-id" odcc_case malformed_identity ':' kept
+odcc_case keep_opt_out ':' kept SESSION_CHAT_KEEP_DRAFTS=1
+unset ODCC_ID ODCC_SUM
+# a foreign draft is never removed even with its own correct identity and digest
+printf 'foreign body\n' > "$OD_M/drafts/beta/consume-foreign.md"
+fid=$(stat -c '%d:%i' "$OD_M/drafts/beta/consume-foreign.md" 2>/dev/null || stat -f '%d:%i' "$OD_M/drafts/beta/consume-foreign.md")
+fsum=$(shasum -a 256 < "$OD_M/drafts/beta/consume-foreign.md" | awk '{print $1}')
+SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" bash "$HERE/own-draft-check.sh" --consume "$OD_M/drafts/beta/consume-foreign.md" "$fid" "$fsum" >/dev/null 2>&1
+[ -f "$OD_M/drafts/beta/consume-foreign.md" ] || odcc_bad="$odcc_bad [foreign draft removed]"
+rm -f "$OD_M/drafts/beta/consume-foreign.md"
+if [ -z "$odcc_bad" ]; then
+  pass "own_draft_check_consume_removes_only_unchanged_own_draft"
+else
+  fail "own_draft_check_consume_removes_only_unchanged_own_draft" "$odcc_bad"
+fi
+
+# (q) own-draft-check.sh --max-bytes N: the size is judged BEFORE any content is
+# hashed. A PATH shim that records every shasum/sha256sum call observes this: an
+# oversize draft exits 3 with no hash call; the same draft at a sufficient limit
+# (control) is hashed once and accepted. The limit is an exact boundary.
+OD_SHIM_Q="$OD_TMP/shim-hash"; mkdir -p "$OD_SHIM_Q"; OD_HASH_MARK="$OD_TMP/hash-calls"
+for tool in shasum sha256sum; do
+  real=$(command -v "$tool" 2>/dev/null) || continue
+  printf '#!/bin/sh\necho x >> "%s"\nexec "%s" "$@"\n' "$OD_HASH_MARK" "$real" > "$OD_SHIM_Q/$tool"; chmod 755 "$OD_SHIM_Q/$tool"
+done
+odcq() { SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" PATH="$OD_SHIM_Q:$PATH" bash "$HERE/own-draft-check.sh" "$@"; }
+OD_Q="$OD_M/drafts/sender/size-check.md"; printf 'q%.0s' $(seq 1 200) > "$OD_Q"
+odq_bad=""
+rm -f "$OD_HASH_MARK"; o=$(odcq --max-bytes 100 "$OD_Q" 2>/dev/null); r=$?
+{ [ "$r" = 3 ] && [ -z "$o" ] && [ ! -e "$OD_HASH_MARK" ]; } || odq_bad="$odq_bad [oversize rc=$r out=$o hashed=$([ -e "$OD_HASH_MARK" ] && echo yes || echo no)]"
+rm -f "$OD_HASH_MARK"; o=$(odcq --max-bytes 199 "$OD_Q" 2>/dev/null); r=$?
+{ [ "$r" = 3 ] && [ -z "$o" ] && [ ! -e "$OD_HASH_MARK" ]; } || odq_bad="$odq_bad [limit-1 rc=$r hashed=$([ -e "$OD_HASH_MARK" ] && echo yes || echo no)]"
+rm -f "$OD_HASH_MARK"; o=$(odcq --max-bytes 200 "$OD_Q" 2>/dev/null); r=$?
+odq_sum=$(shasum -a 256 < "$OD_Q" 2>/dev/null | awk '{print $1}')
+rm -f "$OD_TMP/ignore"
+{ [ "$r" = 0 ] && [ -e "$OD_HASH_MARK" ] && [ "$(printf '%s' "$o" | cut -f3)" = "$odq_sum" ] && [ "$(printf '%s' "$o" | cut -f4)" = 200 ] && [ "$(printf '%s\n' "$o" | wc -l | tr -d ' ')" = 1 ]; } \
+  || odq_bad="$odq_bad [at-limit control rc=$r out=$o]"
+o=$(odcq "$OD_Q" 2>/dev/null); r=$?
+{ [ "$r" = 0 ] && [ "$(printf '%s' "$o" | cut -f4)" = 200 ]; } || odq_bad="$odq_bad [no-limit form rc=$r]"
+for bad in 0 abc -5 ''; do
+  o=$(odcq --max-bytes "$bad" "$OD_Q" 2>/dev/null); r=$?
+  { [ "$r" = 2 ] && [ -z "$o" ]; } || odq_bad="$odq_bad [bad limit '$bad' rc=$r]"
+done
+# an ineligible file is still refused (exit 1, not 3) with the limit given; the own draft above is the control
+printf 'foreign\n' > "$OD_M/drafts/beta/q-foreign.md"
+o=$(odcq --max-bytes 1000 "$OD_M/drafts/beta/q-foreign.md" 2>/dev/null); r=$?
+{ [ "$r" = 1 ] && [ -z "$o" ]; } || odq_bad="$odq_bad [foreign with limit rc=$r]"
+rm -f "$OD_Q" "$OD_M/drafts/beta/q-foreign.md"
+if [ -z "$odq_bad" ]; then
+  pass "own_draft_check_max_bytes_refuses_before_hashing"
+else
+  fail "own_draft_check_max_bytes_refuses_before_hashing" "$odq_bad"
+fi
+
+# (r) growth DURING hashing: a hash shim appends to the draft while it hashes,
+# so the size re-check after hashing sees a change and exits 4 ("was read"),
+# distinct from the pre-hash oversize exit 3. Control: the same shim without
+# the append accepts the draft (exit 0, one OK line).
+OD_SHIM_R="$OD_TMP/shim-grow"; mkdir -p "$OD_SHIM_R"
+OD_R="$OD_M/drafts/sender/grow-check.md"; printf 'grow body\n' > "$OD_R"
+for tool in shasum sha256sum; do
+  real=$(command -v "$tool" 2>/dev/null) || continue
+  printf '#!/bin/sh\n[ -n "$OD_GROW" ] && printf "more\\n" >> "$OD_GROW"\nexec "%s" "$@"\n' "$real" > "$OD_SHIM_R/$tool"; chmod 755 "$OD_SHIM_R/$tool"
+done
+odr_bad=""
+o=$(SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" OD_GROW="$OD_R" PATH="$OD_SHIM_R:$PATH" bash "$HERE/own-draft-check.sh" --max-bytes 1000 "$OD_R" 2>"$OD_TMP/grow.err"); r=$?
+{ [ "$r" = 4 ] && [ -z "$o" ] && grep -q 'changed size' "$OD_TMP/grow.err"; } || odr_bad="$odr_bad [grow rc=$r out=$o]"
+printf 'grow body\n' > "$OD_R"
+o=$(SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" PATH="$OD_SHIM_R:$PATH" bash "$HERE/own-draft-check.sh" --max-bytes 1000 "$OD_R" 2>/dev/null); r=$?
+{ [ "$r" = 0 ] && [ "$(printf '%s' "$o" | cut -c1-3)" = "OK$(printf '\t')" ]; } || odr_bad="$odr_bad [control rc=$r out=$o]"
+rm -f "$OD_R" "$OD_TMP/grow.err"
+if [ -z "$odr_bad" ]; then
+  pass "own_draft_check_growth_during_hash_exits_4_with_control"
+else
+  fail "own_draft_check_growth_during_hash_exits_4_with_control" "$odr_bad"
+fi
 rm -rf "$OD_TMP"
 
 # --- Test 27: msg: path containing a space is parsed fully (not truncated) ---

@@ -44,7 +44,7 @@ Legal status transitions (enforced by every command):
 
 `/tasks-clean` removes tasks past `--older-than DAYS` (default 7; a bare integer is days on both providers). It removes **any status** by default; narrow with `--status done|blocked`. It is a dry run by default.
 
-- It deletes every artifact the task owns, by exact name: base prompt, review packet, ack packets, `handoffs/<id>/`, and any leftover lock.
+- It deletes every artifact the task owns, by exact name: base prompt, review packet, ack packets, verdict artifacts and notices (`prompts/<id>-verdict-<event>.md`, from the task's recorded events), `handoffs/<id>/`, and any leftover lock.
 - It keeps a task that a surviving task still lists in `depends_on`. It reports this as `kept … (referenced by …)`.
 - It sweeps aged **orphans**: handoff dirs and known-suffix prompt files with no task JSON.
 
@@ -58,7 +58,7 @@ Legal status transitions (enforced by every command):
 
 ## Concurrency
 
-Every ledger write is atomic (tmp + mv). Every read-modify-write (status transitions, history, metadata, acks, durations) runs under the per-task lock `locks/<id>.lock/`. The lock is mkdir-atomic, with a `pid` inside. `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS` sets the wait (default 10). A lock whose holder pid is dead is reclaimed. Both providers use the identical lock path, so Claude and Codex panes sharing one ledger exclude each other. The lock is never held across session-chat transport.
+Every ledger write is atomic (tmp + mv). Every read-modify-write (status transitions, history, metadata, acks, durations) runs under the per-task lock `locks/<id>.lock/`. The lock is mkdir-atomic, with a `pid` inside. `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS` sets the wait (default 10). `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536) is the size limit for a `--note-file` verdict. A lock whose holder pid is dead is reclaimed. Both providers use the identical lock path, so Claude and Codex panes sharing one ledger exclude each other. The lock is never held across session-chat transport.
 
 Known limitation: two simultaneous *reassignments of the same task* still race on the prompt file. Coordinate those serially.
 
@@ -91,10 +91,10 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
 |---|---|
 | `/task-new <name> [--meta k=v] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id, `task-<epoch>-<8 hex>` (hex from `/dev/urandom` only; creation fails closed without it, and a colliding id is refused rather than replaced). Older bare 8-hex ids stay valid. Creation takes the per-task lock, writes a private staging file `tasks/<id>.json.tmp.<6 random chars>`, refuses if the task name already exists in any form, then renames the staging file into place, so a `tasks/<id>.json` is never empty or partial. This is no-replace among scheduler writers, not a defence against another same-user process that ignores the lock. A crash can leave a staging file behind. Nothing reads or sweeps it; remove it by hand only after confirming no process holds `locks/<id>.lock`. |
 | `/task-assign <pane> <id> [--eta MIN] [--stage NAME] [--context NAME] [--reviewer PANE] [--workflow ID] [--force] <prompt>` | Dispatch the task to an executor and update the ledger. |
-| `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage\|--by-workflow\|--workflow ID]` | Read-only view. Default = active (created+assigned+review); `--pending` = created only; `--mine` = assigner, assignee, or reviewer is me. Shows OVERDUE/STALE flags. |
+| `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage\|--by-workflow\|--workflow ID]` | Read-only view. Default = active (created+assigned+review); `--pending` = created only; `--mine` = assigner, assignee, or reviewer is me. Shows OVERDUE/STALE flags and any verdict events. |
 | `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); durably acks the assigner. A dispatch-only retry reuses the original note. |
-| `/task-done <id> [--force] [note]` | Executor or reviewer calls this; records duration; durably acks the assigner. |
-| `/task-block <id> [--force] <reason>` | Executor or reviewer calls this when blocked/rejecting; reason required. |
+| `/task-done <id> [--force] [note]` / `<id> --note-file <own draft>` | Executor or reviewer calls this; records duration; durably acks the assigner. With `--note-file`, the reviewer's complete verdict is one verdict event (see the verdict section). |
+| `/task-block <id> [--force] <reason>` / `<id> --note-file <own draft>` | Executor or reviewer calls this when blocked/rejecting; reason or note file required. |
 | `/task-board` | Stage-grouped dashboard: id, name, status, assignee, age, flags, unmet deps + totals. |
 | `/tasks-clean [--older-than DAYS] [--status S] [--apply]` | Dry-run by default. Removes owned prompt/packet/handoff files too; keeps referenced prerequisites; sweeps aged orphans. |
 | `/session-scheduler:task-contract` | Opt-in verification contracts (0.7.0): pinned checks, generation-bound receipts, reviewer admission. Contracted tasks reject `--force` and route through the engine. |
@@ -151,6 +151,42 @@ is `closed-unadmitted`. Cleanup keeps contracted tasks. Every pane sharing the
 ledger needs 0.7.0 or later, because older copies can close a contracted task
 without admission. See the `task-contract` skill for roles, the spec format,
 harness behavior, and limits.
+
+## Reviewer verdicts from a note file (`--note-file`)
+
+A reviewer puts the complete verdict in the reviewer's own session-chat draft (`<messages>/drafts/<own-pane>/<name>.md`) and gives the path to the helper. Use `--note-file` instead of sending a separate `[re:]` reply to the master:
+
+```
+/task-done  <id> --note-file <own draft>                        (contracted task only: <id> --generation <N> --note-file <own draft>)
+/task-block <id> --note-file <own draft> [short summary]        (contracted task only: <id> --generation <N> --note-file <own draft>)
+```
+
+Before any change, the helper checks the draft with session-chat's `own-draft-check.sh` (run as a subprocess). It refuses a draft that is not this pane's own private regular file (peer draft, symlink, hardlink, other directory, bad name, unreadable). It also refuses a file larger than `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536; read on each call; the check uses the file size before it hashes or copies anything), a file with a NUL byte, and a file that is not valid UTF-8. An older session-chat with no `own-draft-check.sh` makes the helper refuse `--note-file` with an upgrade message before it reads the file. Inline notes still work with an older session-chat.
+
+After the checks, the helper copies the verdict to an exclusive file `prompts/<id>-verdict-<event>.md` (mode 0600) and verifies its SHA-256. `<event>` is 16 random hex characters. One atomic ledger write then records the transition and the event `meta.verdict_events[<event>]`: transition (`done` or `blocked`), actor, `route_to` (the assigner at that time), `request_msg_id`, `generation`, artifact path, `artifact_sha256`, and `notification`. The history note is a short excerpt (at most 200 bytes of the first line) plus the artifact path and SHA-256.
+
+`request_msg_id` is the transport id of the latest review request. `/task-review` reads it from the single `Message id: <hex>` line that session-chat prints for a delivered or queued dispatch. It stores `meta.review_request_msg_id`; a contracted task stores it in the engine's review step. An older session-chat prints no such line. The value is then `null` and `/task-status` shows `unknown`. The helper never guesses it.
+
+After it leaves the lock, the helper sends ONE notification to the assigner. The body starts with `[task:<id>] [event:<event>]` and the first line, then a blank line and the full verdict, then the status-check footer. The notification has no `[re:]` token, because the master never sent a request with that id. Then the helper records the outcome on that event:
+
+| `notification.state` | Meaning |
+|---|---|
+| `pending` | No outcome was recorded. A stop or crash after the transition can cause this. The notification may or may not have been sent. Treat it as unconfirmed. |
+| `delivered` | The dispatch reached the assigner. |
+| `queued` | The dispatch is in the assigner's durable inbox. This is a success. The helper does not resend or use the fallback. |
+| `inline-fallback` | The dispatch failed hard. The helper sent one inline pointer of at most `SESSION_CHAT_SEND_MAX_LEN` (default 1024) characters: `[task:<id>] [event:<event>] <first line> — full verdict recorded: task-status <id>`. A partial transport side effect can cause a duplicate pointer. |
+| `failed` | Both transports reported failure. Delivery is not confirmed (a transport can fail after a side effect). The verdict artifact is durable; the assigner reads it with `/task-status <id>`. |
+| `not-required` | The assigner is unknown or is the actor. |
+
+Rules:
+
+- `--generation <N>` with `--note-file` is valid only for a contracted task. The helper refuses it for any other task.
+- The verdict is committed before any notification. Never rerun `/task-done` or `/task-block` to repair a notification: the rerun is refused. There is no retry helper. The assigner reads the full verdict with `/task-status <id>`.
+- `/task-status <id>` shows each event (event id, request id or `unknown`, artifact path, SHA-256, notification state) and the verdict text only after the SHA-256 matches. `--all` lists one line per event. Status never writes and never reconciles a `pending` event.
+- Afterwards, the helper asks session-chat to remove the draft. It removes the draft only if it is still the same own draft that was checked (same file identity and SHA-256). Otherwise it keeps the draft and prints a NOTE. A kept draft never undoes the verdict. `SESSION_CHAT_KEEP_DRAFTS=1` keeps the draft.
+- Only the `--note-file` forms create events. An inline note keeps the lifecycle ack (`meta.last_ack`) unchanged. For a contracted task, `--note-file` also sends the notification; the notification record is kept outside the history that the admission digest covers.
+- These claims are narrow: the helper does not promise exactly-once delivery or that the assigner sees the message. A crash before the draft check or before the ledger write leaves no event and keeps the draft. A crash before the artifact is referenced can leave one unreferenced artifact file; `/tasks-clean` removes it after the task is removed or when it ages as an orphan.
+- Under the strict harness, `--note-file` is allowed only for the pane's own existing draft inside its messages grant, and only as `<id> --note-file <draft>` or `<id> --generation <N> --note-file <draft>`.
 
 ## Conventions
 

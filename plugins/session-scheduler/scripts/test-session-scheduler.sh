@@ -1689,6 +1689,829 @@ else
   fail "task_create_crash_safe_exclusive_and_concurrent" "$r5_bad"
 fi
 
+# --- Tier 1.2b-min: one complete verdict event (--note-file) ---
+# Fixture: a hybrid session-chat root. The REAL lib.sh, get-my-name.sh and
+# own-draft-check.sh are copied from the session-chat source tree next to
+# stubbed dispatch/send scripts (recording every call) and a version manifest.
+# Identity comes from SESSION_CHAT_PANE_NAME, the mailbox from
+# SESSION_CHAT_TARGET_MESSAGES_DIR. Only the reviewer's own draft is eligible.
+VD_ROOT="$(cd "$TMP" && pwd -P)/vd"; mkdir -p "$VD_ROOT"
+VD_CHAT_SRC="$HERE/../../session-chat/scripts"
+VD_HOME="$VD_ROOT/scheduler"; mkdir -p "$VD_HOME"
+VD_MSGS="$VD_ROOT/messages"; VD_LOG="$VD_ROOT/log"; mkdir -p "$VD_LOG"
+mkdir -p "$VD_MSGS/drafts/reviewer-1" "$VD_MSGS/drafts/other-1"
+chmod 700 "$VD_MSGS" "$VD_MSGS/drafts" "$VD_MSGS/drafts/reviewer-1" "$VD_MSGS/drafts/other-1"
+vd_chat_root() { # vd_chat_root <dir> [with-helper|no-helper]
+  local d="$1"
+  mkdir -p "$d/scripts" "$d/.claude-plugin"
+  printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$d/.claude-plugin/plugin.json"
+  cp "$VD_CHAT_SRC/lib.sh" "$d/scripts/" 2>/dev/null
+  # Identity stub: the real get-my-name.sh needs tmux; the real lib.sh (used by
+  # own-draft-check.sh) honours the same SESSION_CHAT_PANE_NAME.
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s" "${SESSION_CHAT_PANE_NAME:-}"' > "$d/scripts/get-my-name.sh"
+  [ "${2:-with-helper}" = with-helper ] && cp "$VD_CHAT_SRC/own-draft-check.sh" "$d/scripts/" 2>/dev/null
+  cat > "$d/scripts/dispatch-to-session.sh" <<'STUB'
+#!/usr/bin/env bash
+# Recording stub. VD_MODE: delivered | queued | queued3 | fail.
+n=$(( $(ls "$VD_LOG"/dispatch-*.md 2>/dev/null | wc -l) + 1 ))
+cp "$2" "$VD_LOG/dispatch-$n.md"; echo "$1" >> "$VD_LOG/dispatch.log"
+[ -n "${VD_MUTATE:-}" ] && printf 'edited\n' >> "$VD_MUTATE"
+if [ -n "${VD_REPLACE:-}" ]; then printf 'replaced body\n' > "$VD_REPLACE.new"; mv -f "$VD_REPLACE.new" "$VD_REPLACE"; fi
+[ -n "${VD_ERR_OUT:-}" ] && printf '%s\n' "$VD_ERR_OUT" >&2
+case "${VD_MODE:-delivered}" in
+  delivered) echo "Dispatched task to '$1'"; [ -n "${VD_ID_OUT-x}" ] && printf '%s\n' "${VD_ID_OUT-Message id: aaaaaaaaaaaaaaaa}"; exit 0 ;;
+  queued)    echo "Queued dispatch to '$1' — recipient was busy; it will arrive on their next turn."; echo "Message id: bbbbbbbbbbbbbbbb"; exit 0 ;;
+  queued3)   echo "Message id: cccccccccccccccc"; exit 3 ;;
+  *)         echo "stub hard failure" >&2; exit 1 ;;
+esac
+STUB
+  cat > "$d/scripts/send-message.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$2" >> "$VD_LOG/send.log"
+exit "${VD_SEND_RC:-0}"
+STUB
+  chmod 644 "$d/scripts"/*.sh
+}
+VD_CHAT="$VD_ROOT/chat"; vd_chat_root "$VD_CHAT" with-helper
+VD_CHAT_NOHELPER="$VD_ROOT/chat-old"; vd_chat_root "$VD_CHAT_NOHELPER" no-helper
+VD_CHAT_NOID="$VD_ROOT/chat-noid"; vd_chat_root "$VD_CHAT_NOID" with-helper
+VD_SCRIPTS="${VD_SCRIPTS:-$HERE}"
+vd() { # vd <pane> <script> args... (clean per-call environment; extra settings via env prefix on the call)
+  local pane="$1" script="$2"; shift 2
+  SESSION_SCHEDULER_HOME="$VD_HOME" SESSION_CHAT_ROOT_OVERRIDE="${VD_CHAT_USE:-$VD_CHAT}" SESSION_CHAT_PANE_NAME="$pane" \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$VD_MSGS" VD_LOG="$VD_LOG" bash "$VD_SCRIPTS/$script" "$@"
+}
+vd_task() { # vd_task [assigned|review] -> prints the id of a fresh task (assigner master-1, reviewer reviewer-1)
+  local id
+  id=$(vd master-1 task-new.sh "vd-task" --reviewer reviewer-1 2>&1 | awk '/Created task:/ {print $3}')
+  vd master-1 task-assign.sh executor-1 "$id" "do it" >/dev/null 2>&1
+  [ "${1:-assigned}" = review ] && vd executor-1 task-review.sh "$id" "sha abc" >/dev/null 2>&1
+  printf '%s' "$id"
+}
+vd_draft() { # vd_draft <pane> <name> <content> -> path
+  local f="$VD_MSGS/drafts/$1/$2"
+  printf '%s' "$3" > "$f"; printf '%s' "$f"
+}
+vd_tf() { printf '%s/tasks/%s.json' "$VD_HOME" "$1"; }
+vd_artifacts() { local n=0 f; for f in "$VD_HOME/prompts/$1"-verdict-????????????????.md; do [ -e "$f" ] && n=$((n + 1)); done; echo "$n"; }
+# shellcheck disable=SC2163  # each argument is a VAR=value assignment to export
+vd_env_export() { local a; for a in "$@"; do export "$a"; done; }
+vd_ndisp() { [ -e "$VD_LOG/dispatch.log" ] && wc -l < "$VD_LOG/dispatch.log" | tr -d ' '; return 0; }
+vd_reset_log() { rm -f "$VD_LOG"/dispatch-*.md "$VD_LOG/dispatch.log" "$VD_LOG/send.log"; }
+vd_sha() { shasum -a 256 < "$1" | awk '{print $1}'; }
+vd_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
+vd_unchanged() { # vd_unchanged <id> <status>: not transitioned, no event, no artifact, nothing sent
+  [ "$(jq -r .status "$(vd_tf "$1")")" = "$2" ] && [ "$(jq -r '(.meta.verdict_events // {}) | length' "$(vd_tf "$1")")" = 0 ] \
+    && [ "$(vd_artifacts "$1")" = 0 ] && [ ! -e "$VD_LOG/dispatch.log" ] && [ ! -e "$VD_LOG/send.log" ]
+}
+# Multi-line, non-ASCII body whose first line is far beyond the 200-byte excerpt bound.
+VD_LINE1=$(printf 'Verdict-é%.0s' $(seq 1 60))
+VD_BODY=$(printf '%s\nsecond line: $(touch %s/PWNED) `id`\n\nthird paragraph — ünïcode ✓\n' "$VD_LINE1" "$VD_ROOT")
+
+# V1-V3: ordinary done and block record ONE event atomically with the transition,
+# keep the full body in a digest-bound 0600 artifact, send ONE [task][event]
+# notification with the full body and no [re:] token, and consume the draft.
+vd_reset_log
+VD_ID=$(vd_task review)
+VD_R=$(jq -r '.meta.review_request_msg_id' "$(vd_tf "$VD_ID")")
+VD_DRAFT=$(vd_draft reviewer-1 done-1.md "$VD_BODY")
+VD_DRAFT_SHA=$(vd_sha "$VD_DRAFT")
+vd_reset_log
+vd_done_out=$(vd reviewer-1 task-done.sh "$VD_ID" --note-file "$VD_DRAFT" 2>&1); vd_done_rc=$?
+VD_F=$(vd_tf "$VD_ID")
+VD_EV=$(jq -r '.meta.verdict_events | keys[0]' "$VD_F")
+VD_ART="$VD_HOME/prompts/$VD_ID-verdict-$VD_EV.md"
+vd_hist=$(jq -r '.history[-1].note' "$VD_F")
+vd_excerpt="${vd_hist%% (verdict *}"
+vd_bad=""
+[ "$vd_done_rc" = 0 ] || vd_bad="$vd_bad [rc=$vd_done_rc out=$vd_done_out]"
+[ "$(jq -r .status "$VD_F")" = "done" ] && [ "$(jq -r '.meta.verdict_events | length' "$VD_F")" = 1 ] || vd_bad="$vd_bad [status/event count]"
+[[ "$VD_EV" =~ ^[a-f0-9]{16}$ ]] || vd_bad="$vd_bad [event id $VD_EV]"
+[ -f "$VD_ART" ] && [ "$(vd_mode "$VD_ART")" = 600 ] && [ "$(vd_sha "$VD_ART")" = "$VD_DRAFT_SHA" ] && cmp -s "$VD_ART" <(printf '%s' "$VD_BODY") \
+  || vd_bad="$vd_bad [artifact/sha/mode]"
+jq -e --arg ev "$VD_EV" --arg art "$VD_ART" --arg sha "$VD_DRAFT_SHA" --arg r "$VD_R" '
+  .meta.verdict_events[$ev] | .schema == 1 and .event_id == $ev and .transition == "done" and .actor == "reviewer-1"
+  and .route_to == "master-1" and .request_msg_id == $r and .generation == null and .artifact == $art and .artifact_sha256 == $sha
+  and (.created_at | length) > 0 and .notification.state == "delivered"' "$VD_F" >/dev/null 2>&1 || vd_bad="$vd_bad [event record: $(jq -c ".meta.verdict_events" "$VD_F")]"
+[ "$VD_R" = "aaaaaaaaaaaaaaaa" ] || vd_bad="$vd_bad [request id $VD_R]"
+# bounded excerpt (<=200 bytes, valid UTF-8, from line 1) plus the artifact pointer
+[ "${#vd_excerpt}" -gt 0 ] && [ "$(printf '%s' "$vd_excerpt" | wc -c | tr -d ' ')" -le 200 ] && printf '%s' "$vd_excerpt" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+  && [[ "$VD_LINE1" == "${vd_excerpt%...}"* ]] && [ "$vd_hist" = "$vd_excerpt (verdict $VD_ART sha256:$VD_DRAFT_SHA)" ] || vd_bad="$vd_bad [history note: $vd_hist]"
+# exactly one notification, to the assigner, with the full body; no [re:]; no inline send
+[ "$(wc -l < "$VD_LOG/dispatch.log" | tr -d ' ')" = 1 ] && [ "$(cat "$VD_LOG/dispatch.log")" = master-1 ] || vd_bad="$vd_bad [dispatch count]"
+VD_N="$VD_LOG/dispatch-1.md"
+[[ "$(head -1 "$VD_N")" == "[task:$VD_ID] [event:$VD_EV] Verdict-é"* ]] && [ -z "$(sed -n 2p "$VD_N")" ] \
+  && grep -qF 'second line: $(touch' "$VD_N" && grep -qF 'third paragraph — ünïcode ✓' "$VD_N" \
+  && grep -qF "task-status $VD_ID" "$VD_N" && ! grep -qF '[re:' "$VD_N" && [ ! -e "$VD_LOG/send.log" ] || vd_bad="$vd_bad [notification body: $(head -3 "$VD_N")]"
+[ ! -e "$VD_ROOT/PWNED" ] || vd_bad="$vd_bad [body executed]"
+# the draft was consumed after the commit
+[ ! -e "$VD_DRAFT" ] && echo "$vd_done_out" | grep -qF "Removed delivered draft" || vd_bad="$vd_bad [draft not consumed: $vd_done_out]"
+# a rerun of task-done is refused as today: no replay, no second event or notification
+vd_reset_log; VD_DRAFT2=$(vd_draft reviewer-1 done-2.md "second try")
+vd reviewer-1 task-done.sh "$VD_ID" --note-file "$VD_DRAFT2" >/dev/null 2>&1; vd_rr=$?
+{ [ "$vd_rr" != 0 ] && [ "$(jq -r '.meta.verdict_events | length' "$VD_F")" = 1 ] && [ "$(vd_artifacts "$VD_ID")" = 1 ] && [ ! -e "$VD_LOG/dispatch.log" ] && [ -f "$VD_DRAFT2" ]; } \
+  || vd_bad="$vd_bad [rerun not refused cleanly rc=$vd_rr]"
+rm -f "$VD_DRAFT2"
+if [ -z "$vd_bad" ]; then pass "verdict_note_file_done_records_event_artifact_and_one_notification"
+else fail "verdict_note_file_done_records_event_artifact_and_one_notification" "$vd_bad"; fi
+
+# task-block --note-file: same event shape (transition blocked, same route), no [re:].
+vd_reset_log
+VD_ID=$(vd_task review); vd_reset_log
+VD_DRAFT=$(vd_draft reviewer-1 block-1.md $'Rejected: missing tests\nDetail line two\n')
+vd_blk_out=$(vd reviewer-1 task-block.sh "$VD_ID" --note-file "$VD_DRAFT" 2>&1); vd_blk_rc=$?
+VD_F=$(vd_tf "$VD_ID"); VD_EV=$(jq -r '.meta.verdict_events | keys[0]' "$VD_F")
+vd_bad=""
+{ [ "$vd_blk_rc" = 0 ] && [ "$(jq -r .status "$VD_F")" = blocked ] && [ "$(jq -r '.meta.verdict_events | length' "$VD_F")" = 1 ]; } || vd_bad="$vd_bad [rc=$vd_blk_rc out=$vd_blk_out]"
+jq -e --arg ev "$VD_EV" '.meta.verdict_events[$ev] | .transition == "blocked" and .route_to == "master-1" and .notification.state == "delivered" and .request_msg_id == "aaaaaaaaaaaaaaaa"' "$VD_F" >/dev/null 2>&1 || vd_bad="$vd_bad [event]"
+[ "$(jq -r '.history[-1].note' "$VD_F")" = "Rejected: missing tests (verdict $VD_HOME/prompts/$VD_ID-verdict-$VD_EV.md sha256:$(vd_sha "$VD_HOME/prompts/$VD_ID-verdict-$VD_EV.md"))" ] || vd_bad="$vd_bad [history]"
+{ [ "$(wc -l < "$VD_LOG/dispatch.log" | tr -d ' ')" = 1 ] && [[ "$(head -1 "$VD_LOG/dispatch-1.md")" == "[task:$VD_ID] [event:$VD_EV] Rejected: missing tests" ]] \
+  && grep -qF 'Detail line two' "$VD_LOG/dispatch-1.md" && ! grep -qF '[re:' "$VD_LOG/dispatch-1.md" && [ ! -d "$VD_DRAFT" ] && [ ! -e "$VD_DRAFT" ]; } || vd_bad="$vd_bad [notification/draft]"
+# an inline note given with --note-file replaces only the history excerpt; the full file is still the body
+VD_ID=$(vd_task assigned); vd_reset_log
+VD_DRAFT=$(vd_draft reviewer-1 block-2.md $'FILE BODY first line\nmore\n')
+vd reviewer-1 task-block.sh "$VD_ID" --note-file "$VD_DRAFT" "short summary" >/dev/null 2>&1; vd_il_rc=$?
+{ [ "$vd_il_rc" = 0 ] && jq -r '.history[-1].note' "$(vd_tf "$VD_ID")" | grep -q '^short summary (verdict ' && grep -qF 'FILE BODY first line' "$VD_LOG/dispatch-1.md" && grep -qF 'more' "$VD_LOG/dispatch-1.md"; } || vd_bad="$vd_bad [inline+file rc=$vd_il_rc]"
+if [ -z "$vd_bad" ]; then pass "verdict_note_file_block_records_event_and_notification"
+else fail "verdict_note_file_block_records_event_and_notification" "$vd_bad"; fi
+
+# V3 queued: a durable queued outcome (real dispatch prints "Queued dispatch" and
+# exits 0; a defensive rc 3 is also accepted) is recorded as queued, with no
+# inline fallback and no resend. The delivered case above is the control.
+vd_bad=""
+for variant in queued queued3; do
+  VD_ID=$(vd_task review); vd_reset_log
+  VD_DRAFT=$(vd_draft reviewer-1 q-$variant.md "queued verdict ($variant)")
+  VD_MODE=$variant vd reviewer-1 task-done.sh "$VD_ID" --note-file "$VD_DRAFT" >/dev/null 2>&1; q_rc=$?
+  VD_F=$(vd_tf "$VD_ID")
+  { [ "$q_rc" = 0 ] && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$VD_F")" = queued ] \
+    && [ "$(wc -l < "$VD_LOG/dispatch.log" | tr -d ' ')" = 1 ] && [ ! -e "$VD_LOG/send.log" ] && [ ! -e "$VD_DRAFT" ]; } \
+    || vd_bad="$vd_bad [$variant rc=$q_rc state=$(jq -c '.meta.verdict_events' "$VD_F") dispatches=$(cat "$VD_LOG/dispatch.log" 2>/dev/null | wc -l) send=$([ -e "$VD_LOG/send.log" ] && echo yes)]"
+done
+if [ -z "$vd_bad" ]; then pass "verdict_notification_queued_recorded_without_fallback"
+else fail "verdict_notification_queued_recorded_without_fallback" "$vd_bad"; fi
+
+# V3 hard failure: durable dispatch fails -> ONE bounded inline pointer
+# (<= SESSION_CHAT_SEND_MAX_LEN) naming the event and the task-status recovery;
+# outcome inline-fallback. If the inline send fails too the outcome is failed and
+# the transition stays committed (partial-success warning). Delivered = control.
+vd_bad=""
+VD_ID=$(vd_task review); vd_reset_log
+VD_LONG=$(printf 'LongLine-é%.0s' $(seq 1 80))
+VD_DRAFT=$(vd_draft reviewer-1 hardfail.md "$VD_LONG"$'\nbody continues\n')
+hf_out=$(VD_MODE=fail SESSION_CHAT_SEND_MAX_LEN=300 vd reviewer-1 task-done.sh "$VD_ID" --note-file "$VD_DRAFT" 2>&1); hf_rc=$?
+VD_F=$(vd_tf "$VD_ID"); VD_EV=$(jq -r '.meta.verdict_events | keys[0]' "$VD_F")
+hf_ptr=$(cat "$VD_LOG/send.log" 2>/dev/null)
+{ [ "$hf_rc" = 0 ] && [ "$(jq -r .status "$VD_F")" = "done" ] && [ "$(jq -r ".meta.verdict_events[\"$VD_EV\"].notification.state" "$VD_F")" = inline-fallback ] \
+  && [ "$(wc -l < "$VD_LOG/send.log" | tr -d ' ')" = 1 ] && [ "$(printf '%s' "$hf_ptr" | wc -c | tr -d ' ')" -le 300 ] \
+  && [[ "$hf_ptr" == "[task:$VD_ID] [event:$VD_EV] LongLine-é"* ]] && [[ "$hf_ptr" == *" — full verdict recorded: task-status $VD_ID" ]] \
+  && ! printf '%s' "$hf_ptr" | grep -qF 'body continues' && echo "$hf_out" | grep -qi 'duplicate pointer is possible' && [ ! -e "$VD_DRAFT" ]; } \
+  || vd_bad="$vd_bad [pointer rc=$hf_rc state=$(jq -c '.meta.verdict_events' "$VD_F") ptr=$hf_ptr out=$hf_out]"
+VD_ID=$(vd_task review); vd_reset_log
+VD_DRAFT=$(vd_draft reviewer-1 hardfail2.md "both transports fail")
+hf2_out=$(VD_MODE=fail VD_SEND_RC=1 vd reviewer-1 task-done.sh "$VD_ID" --note-file "$VD_DRAFT" 2>&1); hf2_rc=$?
+VD_F=$(vd_tf "$VD_ID")
+{ [ "$hf2_rc" = 0 ] && [ "$(jq -r .status "$VD_F")" = "done" ] && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$VD_F")" = failed ] \
+  && echo "$hf2_out" | grep -q 'partial success' && echo "$hf2_out" | grep -q 'Do NOT rerun task-done'; } \
+  || vd_bad="$vd_bad [both-fail rc=$hf2_rc out=$hf2_out]"
+if [ -z "$vd_bad" ]; then pass "verdict_hard_dispatch_failure_bounded_pointer_fallback"
+else fail "verdict_hard_dispatch_failure_bounded_pointer_fallback" "$vd_bad"; fi
+
+# V2: every note-file refusal happens BEFORE any transition: the task is untouched,
+# no artifact, no notification, the draft stays. Each refusal case is followed by a
+# valid own draft on a fresh task in the same fixture (the positive control).
+vd_bad=""
+vd_refuse() { # vd_refuse <label> <path> [VAR=val ...]: run task-done --note-file on a fresh task
+  local label="$1" path="$2" id out rc; shift 2
+  id=$(vd_task assigned); vd_reset_log
+  out=$( ( vd_env_export "$@"; vd reviewer-1 task-done.sh "$id" --note-file "$path" ) 2>&1 ); rc=$?
+  VD_LAST_OUT="$out"; VD_LAST_ID="$id"; VD_LAST_RC="$rc"
+}
+vd_control() { # vd_control <label>: a valid own draft completes a fresh task in the same fixture
+  local id out rc f
+  id=$(vd_task assigned); vd_reset_log
+  f=$(vd_draft reviewer-1 "control-$1.md" "valid control for $1")
+  out=$(vd reviewer-1 task-done.sh "$id" --note-file "$f" 2>&1); rc=$?
+  { [ "$rc" = 0 ] && [ "$(jq -r .status "$(vd_tf "$id")")" = "done" ] && [ "$(vd_artifacts "$id")" = 1 ] && [ ! -e "$f" ]; } \
+    || vd_bad="$vd_bad [$1: control failed rc=$rc out=$out]"
+}
+vd_expect_refused() { # vd_expect_refused <label> [reason-regex]
+  { [ "$VD_LAST_RC" != 0 ] && vd_unchanged "$VD_LAST_ID" assigned; } \
+    || vd_bad="$vd_bad [$1: rc=$VD_LAST_RC status=$(jq -r .status "$(vd_tf "$VD_LAST_ID")") events=$(jq -c '.meta.verdict_events // {}' "$(vd_tf "$VD_LAST_ID")") artifacts=$(vd_artifacts "$VD_LAST_ID") out=$VD_LAST_OUT]"
+  if [ -n "${2:-}" ] && ! printf '%s' "$VD_LAST_OUT" | grep -qE "$2"; then vd_bad="$vd_bad [$1: reason mismatch: $VD_LAST_OUT]"; fi
+}
+# foreign pane draft
+F=$(vd_draft other-1 foreign.md "foreign body"); vd_refuse foreign "$F"; vd_expect_refused foreign 'not an eligible own draft'
+[ -f "$F" ] || vd_bad="$vd_bad [foreign draft removed]"; vd_control foreign
+# symlink to a valid own draft
+T=$(vd_draft reviewer-1 link-target.md "target body"); ln -s "$T" "$VD_MSGS/drafts/reviewer-1/link.md"
+vd_refuse symlink "$VD_MSGS/drafts/reviewer-1/link.md"; vd_expect_refused symlink 'not an eligible own draft'
+[ -f "$T" ] || vd_bad="$vd_bad [symlink target removed]"; rm -f "$VD_MSGS/drafts/reviewer-1/link.md" "$T"; vd_control symlink
+# hardlinked draft
+H=$(vd_draft reviewer-1 hard.md "hard body"); ln "$H" "$VD_ROOT/hard-other.md"
+vd_refuse hardlink "$H"; vd_expect_refused hardlink 'not an eligible own draft'
+rm -f "$H" "$VD_ROOT/hard-other.md"; vd_control hardlink
+# file outside the drafts directory, and a bad draft name
+O=$(printf 'outside body' > "$VD_ROOT/outside.md"; printf '%s' "$VD_ROOT/outside.md")
+vd_refuse outside "$O"; vd_expect_refused outside 'not an eligible own draft'; rm -f "$O"; vd_control outside
+B=$(vd_draft reviewer-1 bad-name.sh "bad name"); vd_refuse badname "$B"; vd_expect_refused badname 'not an eligible own draft'; rm -f "$B"; vd_control badname
+# unreadable draft (mode 000: the digest cannot be taken, so the check refuses)
+U=$(vd_draft reviewer-1 unreadable.md "unreadable body"); chmod 000 "$U"
+vd_refuse unreadable "$U"; vd_expect_refused unreadable; chmod 600 "$U"; rm -f "$U"; vd_control unreadable
+# oversize: the same 200-byte body is refused at a 100-byte limit and accepted at the default
+S=$(vd_draft reviewer-1 big.md "$(printf 'x%.0s' $(seq 1 200))")
+vd_refuse oversize "$S" SESSION_SCHEDULER_NOTE_MAX_BYTES=100; vd_expect_refused oversize 'limit of 100'
+[ -f "$S" ] || vd_bad="$vd_bad [oversize draft removed]"; rm -f "$S"
+S2=$(vd_draft reviewer-1 big-ok.md "$(printf 'x%.0s' $(seq 1 200))")
+id=$(vd_task assigned); vd_reset_log; vd reviewer-1 task-done.sh "$id" --note-file "$S2" >/dev/null 2>&1 || vd_bad="$vd_bad [oversize control (default limit) failed]"
+# a body exactly at the limit is accepted (boundary control)
+S3=$(vd_draft reviewer-1 edge.md "$(printf 'y%.0s' $(seq 1 100))"); id=$(vd_task assigned); vd_reset_log
+SESSION_SCHEDULER_NOTE_MAX_BYTES=100 vd reviewer-1 task-done.sh "$id" --note-file "$S3" >/dev/null 2>&1 || vd_bad="$vd_bad [exact-limit control failed]"
+# NUL byte and invalid UTF-8 (raw bytes validated by python3 -I before any shell substitution)
+N=$(vd_draft reviewer-1 nul.md ""); printf 'before\0after\n' > "$N"
+vd_refuse nul "$N"; vd_expect_refused nul 'NUL byte'; rm -f "$N"; vd_control nul
+X=$(vd_draft reviewer-1 badutf8.md ""); printf 'ok line\n\xff\xfe broken\n' > "$X"
+vd_refuse invalid_utf8 "$X"; vd_expect_refused invalid_utf8 'not valid UTF-8'; rm -f "$X"; vd_control utf8
+# empty draft
+E=$(vd_draft reviewer-1 empty.md ""); vd_refuse empty "$E"; vd_expect_refused empty 'empty'; rm -f "$E"; vd_control empty
+if [ -z "$vd_bad" ]; then pass "verdict_note_file_refusals_before_transition_each_with_control"
+else fail "verdict_note_file_refusals_before_transition_each_with_control" "$vd_bad"; fi
+
+# V2 mixed versions: an older session-chat without own-draft-check.sh refuses
+# --note-file with an upgrade message BEFORE the file is read or anything changes
+# (the draft is eligible: only the missing capability can be the reason). The
+# same draft with the current chat is the control; inline notes keep working.
+vd_bad=""
+id=$(vd_task assigned); vd_reset_log
+D=$(vd_draft reviewer-1 old-chat.md "verdict for an old chat")
+old_out=$(VD_CHAT_USE="$VD_CHAT_NOHELPER" vd reviewer-1 task-done.sh "$id" --note-file "$D" 2>&1); old_rc=$?
+{ [ "$old_rc" != 0 ] && echo "$old_out" | grep -q 'own-draft-check.sh' && echo "$old_out" | grep -qi 'newer session-chat' && echo "$old_out" | grep -q 'not read' \
+  && vd_unchanged "$id" assigned && [ -f "$D" ]; } || vd_bad="$vd_bad [old chat rc=$old_rc out=$old_out]"
+ctl_out=$(vd reviewer-1 task-done.sh "$id" --note-file "$D" 2>&1); ctl_rc=$?
+{ [ "$ctl_rc" = 0 ] && [ "$(vd_artifacts "$id")" = 1 ] && [ ! -e "$D" ]; } || vd_bad="$vd_bad [current chat control rc=$ctl_rc out=$ctl_out]"
+id=$(vd_task assigned); vd_reset_log
+VD_CHAT_USE="$VD_CHAT_NOHELPER" vd reviewer-1 task-done.sh "$id" "inline note still works" >/dev/null 2>&1; inl_rc=$?
+{ [ "$inl_rc" = 0 ] && [ "$(jq -r .status "$(vd_tf "$id")")" = "done" ] && [ "$(jq -r '(.meta.verdict_events // {}) | length' "$(vd_tf "$id")")" = 0 ]; } || vd_bad="$vd_bad [inline note with old chat rc=$inl_rc]"
+# an installed chat whose helper prints malformed output is refused before any change
+BAD_CHAT="$VD_ROOT/chat-badhelper"; vd_chat_root "$BAD_CHAT" no-helper
+for variant in 'echo "OK	1:2	abc	5"' 'printf "OK\t1:2\t%064d\t5\nextra\n" 0' 'printf "NOPE\t1:2\t%064d\t5\n" 0' 'exit 0'; do
+  printf '#!/usr/bin/env bash\n%s\n' "$variant" > "$BAD_CHAT/scripts/own-draft-check.sh"
+  id=$(vd_task assigned); vd_reset_log; D=$(vd_draft reviewer-1 bad-helper.md "body")
+  VD_CHAT_USE="$BAD_CHAT" vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1; bh_rc=$?
+  { [ "$bh_rc" != 0 ] && vd_unchanged "$id" assigned && [ -f "$D" ]; } || vd_bad="$vd_bad [malformed helper ($variant) rc=$bh_rc]"
+  rm -f "$D"
+done
+if [ -z "$vd_bad" ]; then pass "verdict_note_file_missing_or_malformed_check_helper_refuses_before_read"
+else fail "verdict_note_file_missing_or_malformed_check_helper_refuses_before_read" "$vd_bad"; fi
+
+# V4: the draft is consumed only after the commit, and only if unchanged. A draft
+# edited (or replaced) after the check, here during notification delivery, is kept
+# with a NOTE while the verdict stays committed. The unchanged case is the control.
+vd_bad=""
+for variant in edited replaced; do
+  id=$(vd_task review); vd_reset_log
+  D=$(vd_draft reviewer-1 "mut-$variant.md" "verdict $variant")
+  if [ "$variant" = edited ]; then mut_out=$(VD_MUTATE="$D" vd reviewer-1 task-done.sh "$id" --note-file "$D" 2>&1); mut_rc=$?
+  else mut_out=$(VD_REPLACE="$D" vd reviewer-1 task-done.sh "$id" --note-file "$D" 2>&1); mut_rc=$?; fi
+  { [ "$mut_rc" = 0 ] && [ -f "$D" ] && echo "$mut_out" | grep -q 'NOTE: kept draft' && [ "$(jq -r .status "$(vd_tf "$id")")" = "done" ] \
+    && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$(vd_tf "$id")")" = delivered ] \
+    && grep -qF "verdict $variant" "$VD_LOG/dispatch-1.md" && [ "$(vd_sha "$(jq -r '.meta.verdict_events | to_entries[0].value.artifact' "$(vd_tf "$id")")")" = "$(printf 'verdict %s' "$variant" | shasum -a 256 | awk '{print $1}')" ]; } \
+    || vd_bad="$vd_bad [$variant rc=$mut_rc kept=$([ -f "$D" ] && echo yes || echo no) out=$mut_out]"
+  rm -f "$D"
+done
+id=$(vd_task review); vd_reset_log; D=$(vd_draft reviewer-1 mut-control.md "verdict control")
+vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1; [ ! -e "$D" ] || vd_bad="$vd_bad [unchanged control kept]"
+# opt-out and a hard failure of nothing: SESSION_CHAT_KEEP_DRAFTS=1 keeps the draft
+id=$(vd_task review); vd_reset_log; D=$(vd_draft reviewer-1 keep-optout.md "verdict keep")
+SESSION_CHAT_KEEP_DRAFTS=1 vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1; { [ -f "$D" ] && [ "$(jq -r .status "$(vd_tf "$id")")" = "done" ]; } || vd_bad="$vd_bad [KEEP_DRAFTS opt-out]"
+rm -f "$D"
+if [ -z "$vd_bad" ]; then pass "verdict_draft_consumed_after_commit_only_when_unchanged"
+else fail "verdict_draft_consumed_after_commit_only_when_unchanged" "$vd_bad"; fi
+
+# V1: task-review records the review request id from exactly one `Message id:`
+# stdout line of the review dispatch; absent, duplicated or stderr-only ids give
+# null (unknown); never fabricated. The first case is the positive control.
+vd_bad=""
+rv_case() { # rv_case <label> <expected jq literal> [env assignments...]
+  local label="$1" expect="$2" id; shift 2
+  id=$(vd_new_for_review); vd_reset_log
+  ( vd_env_export "$@"; vd executor-1 task-review.sh "$id" "sha abc" ) >/dev/null 2>&1
+  [ "$(jq -c '.meta.review_request_msg_id' "$(vd_tf "$id")")" = "$expect" ] || vd_bad="$vd_bad [$label: got $(jq -c '.meta.review_request_msg_id' "$(vd_tf "$id")") want $expect]"
+  [ "$label" = hard_failure ] || [ "$(jq -r '.meta.review_dispatch_status' "$(vd_tf "$id")")" != null ] || vd_bad="$vd_bad [$label: dispatch not recorded]"
+}
+vd_new_for_review() { local id; id=$(vd master-1 task-new.sh "rv-task" --reviewer reviewer-1 2>&1 | awk '/Created task:/ {print $3}'); vd master-1 task-assign.sh executor-1 "$id" "do it" >/dev/null 2>&1; printf '%s' "$id"; }
+rv_case control '"aaaaaaaaaaaaaaaa"'
+rv_case queued '"bbbbbbbbbbbbbbbb"' VD_MODE=queued
+rv_case absent_older_chat null VD_ID_OUT=
+rv_case duplicate null "VD_ID_OUT=Message id: aaaaaaaaaaaaaaaa
+Message id: bbbbbbbbbbbbbbbb"
+rv_case malformed null "VD_ID_OUT=Message id: ZZZZ"
+rv_case prefix_text null "VD_ID_OUT=note: Message id: aaaaaaaaaaaaaaaa"
+rv_case stderr_only null VD_ID_OUT= "VD_ERR_OUT=Message id: aaaaaaaaaaaaaaaa"
+rv_case hard_failure null VD_MODE=fail
+# a later round replaces the request id; a failed later dispatch resets it to unknown
+id=$(vd_new_for_review); VD_MSGID=x vd executor-1 task-review.sh "$id" "round 1" >/dev/null 2>&1
+vd master-1 task-block.sh "$id" "rework" >/dev/null 2>&1; vd master-1 task-assign.sh executor-1 "$id" "again" >/dev/null 2>&1
+VD_MODE=fail vd executor-1 task-review.sh "$id" "round 2" >/dev/null 2>&1
+[ "$(jq -c '.meta.review_request_msg_id' "$(vd_tf "$id")")" = null ] || vd_bad="$vd_bad [stale request id kept after failed dispatch]"
+# with an unknown request id, the verdict event records null and task-status says unknown
+id=$(vd_new_for_review); VD_ID_OUT='' vd executor-1 task-review.sh "$id" "sha" >/dev/null 2>&1
+D=$(vd_draft reviewer-1 unknown-r.md "verdict with unknown request"); vd_reset_log
+vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1
+unk_st=$(vd master-1 task-status.sh "$id" 2>&1)
+{ [ "$(jq -c '.meta.verdict_events | to_entries[0].value.request_msg_id' "$(vd_tf "$id")")" = null ] \
+  && echo "$unk_st" | grep -q 'request: unknown'; } || vd_bad="$vd_bad [unknown request not recorded/displayed]"
+if [ -z "$vd_bad" ]; then pass "task_review_records_request_message_id_or_null"
+else fail "task_review_records_request_message_id_or_null" "$vd_bad"; fi
+
+# V3 crashes: the process is SIGKILLed at a chosen boundary by EXTERNAL
+# instrumentation (BASH_ENV loads a DEBUG trap, set -T so functions inherit it,
+# keyed on production function names and BASH_COMMAND). Each trial runs
+# task-done as the leader of its own session via python (start_new_session);
+# returncode -9 plus the marker file prove the death by SIGKILL at that
+# boundary. Trials are isolated (fresh task each).
+#   before-save     the mv that publishes the transition + event in ONE ledger write
+#   after-save      the first command after that mv, before any dispatch
+#   before-outcome  entry to verdict_record_outcome, after the dispatch ran
+VD_TRAP="$VD_ROOT/crash-trap.sh"
+cat > "$VD_TRAP" <<'TRAP'
+set -T
+__vd_after=0
+__vd_kill() {
+  local c="$BASH_COMMAND" hit=""
+  case " ${FUNCNAME[*]} " in
+    *" task_write "*)
+      if [ "$__vd_after" = 1 ]; then hit=after-save
+      else case "$c" in 'mv '*) __vd_after=1; hit=before-save ;; esac
+      fi ;;
+    *" verdict_record_outcome "*) hit=before-outcome ;;
+  esac
+  if [ -n "$hit" ] && [ "$hit" = "${VD_CRASH_AT:-}" ]; then
+    printf '%s\n' "$hit" > "$VD_MARK"
+    kill -KILL 0
+  fi
+  return 0
+}
+[ -n "${VD_CRASH_AT:-}" ] && trap '__vd_kill' DEBUG
+TRAP
+vd_crash_run() { # vd_crash_run <boundary> <id> <draft> -> prints the returncode
+  local boundary="$1" id="$2" draft="$3"
+  rm -f "$VD_ROOT/crash.mark"
+  SESSION_SCHEDULER_HOME="$VD_HOME" SESSION_CHAT_ROOT_OVERRIDE="$VD_CHAT" SESSION_CHAT_PANE_NAME=reviewer-1 \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$VD_MSGS" VD_LOG="$VD_LOG" BASH_ENV="$VD_TRAP" VD_CRASH_AT="$boundary" VD_MARK="$VD_ROOT/crash.mark" \
+    python3 -B -I -c 'import subprocess, sys
+print(subprocess.run(sys.argv[1:], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode)' \
+    bash "$VD_SCRIPTS/task-done.sh" "$id" --note-file "$draft" 2>/dev/null
+}
+vd_tree_sum() { (cd "$VD_HOME" && find . -type f -not -path './locks/*' | sort | xargs cksum 2>/dev/null | cksum); }
+vd_bad=""
+for boundary in before-save after-save before-outcome; do
+  id=$(vd_task review); vd_reset_log
+  D=$(vd_draft reviewer-1 "crash-$boundary.md" "crash verdict ($boundary)")
+  hist_before=$(jq -r '.history | length' "$(vd_tf "$id")")
+  rc=$(vd_crash_run "$boundary" "$id" "$D")
+  if [ "$rc" != -9 ] || [ "$(cat "$VD_ROOT/crash.mark" 2>/dev/null)" != "$boundary" ]; then
+    vd_bad="$vd_bad [$boundary: SIGKILL not proven rc=$rc mark=$(cat "$VD_ROOT/crash.mark" 2>/dev/null)]"; continue
+  fi
+  F=$(vd_tf "$id"); events=$(jq -r '(.meta.verdict_events // {}) | length' "$F"); disp=$(vd_ndisp)
+  case "$boundary" in
+    before-save)
+      # no transition, no event, history unchanged, nothing sent, draft kept; the
+      # orphan artifact (created before the save) is not referenced by the ledger.
+      { [ "$(jq -r .status "$F")" = review ] && [ "$events" = 0 ] && [ "$(jq -r '.history | length' "$F")" = "$hist_before" ] \
+        && [ -z "$disp" ] && [ -f "$D" ] && [ "$(vd_artifacts "$id")" = 1 ]; } || vd_bad="$vd_bad [before-save: status=$(jq -r .status "$F") events=$events disp=$disp]"
+      # recovery: the stale lock is reclaimed and a plain rerun commits exactly one event
+      vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1; rr=$?
+      { [ "$rr" = 0 ] && [ "$(jq -r '.meta.verdict_events | length' "$F")" = 1 ] && [ "$(jq -r .status "$F")" = "done" ]; } || vd_bad="$vd_bad [before-save: rerun rc=$rr]" ;;
+    after-save|before-outcome)
+      # committed transition + event, outcome never recorded: pending = unconfirmed
+      { [ "$(jq -r .status "$F")" = "done" ] && [ "$events" = 1 ] && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$F")" = pending ] \
+        && [ "$(vd_artifacts "$id")" = 1 ] && [ -f "$D" ]; } || vd_bad="$vd_bad [$boundary: state=$(jq -c '.meta.verdict_events' "$F")]"
+      if [ "$boundary" = after-save ]; then [ -z "$disp" ] || vd_bad="$vd_bad [after-save: a dispatch already ran ($disp)]"
+      else [ "$disp" = 1 ] || vd_bad="$vd_bad [before-outcome: expected exactly one dispatch before the crash, got '$disp']"; fi
+      # task-status reports it truthfully (unconfirmed) and never writes
+      before=$(vd_tree_sum); st=$(vd master-1 task-status.sh "$id" 2>&1); st_all=$(vd master-1 task-status.sh --all 2>&1); after=$(vd_tree_sum)
+      { echo "$st" | grep -q 'UNCONFIRMED' && echo "$st" | grep -q 'notification: pending' && echo "$st_all" | grep -q 'pending (unconfirmed)' && [ "$before" = "$after" ]; } \
+        || vd_bad="$vd_bad [$boundary: status view not truthful/observational: $(echo "$st" | grep -i notification)]"
+      # no replay: a rerun is refused as today; no second event, notification or kept artifact
+      vd_n0=$(vd_ndisp)
+      vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1; rr=$?
+      { [ "$rr" != 0 ] && [ "$(jq -r '.meta.verdict_events | length' "$F")" = 1 ] && [ "$(vd_artifacts "$id")" = 1 ] \
+        && [ "$(vd_ndisp)" = "$vd_n0" ] \
+        && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$F")" = pending ]; } || vd_bad="$vd_bad [$boundary: rerun rc=$rr replayed]" ;;
+  esac
+done
+# control: the same trap loaded but never armed is an ordinary delivered run
+id=$(vd_task review); vd_reset_log; D=$(vd_draft reviewer-1 crash-control.md "no crash")
+SESSION_SCHEDULER_HOME="$VD_HOME" SESSION_CHAT_ROOT_OVERRIDE="$VD_CHAT" SESSION_CHAT_PANE_NAME=reviewer-1 SESSION_CHAT_TARGET_MESSAGES_DIR="$VD_MSGS" VD_LOG="$VD_LOG" \
+  BASH_ENV="$VD_TRAP" bash "$VD_SCRIPTS/task-done.sh" "$id" --note-file "$D" >/dev/null 2>&1; nc_rc=$?
+{ [ "$nc_rc" = 0 ] && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$(vd_tf "$id")")" = delivered ] && [ ! -e "$D" ]; } || vd_bad="$vd_bad [uncrashed control rc=$nc_rc]"
+if [ -z "$vd_bad" ]; then pass "verdict_crash_boundaries_sigkill_truthful_pending_no_replay"
+else fail "verdict_crash_boundaries_sigkill_truthful_pending_no_replay" "$vd_bad"; fi
+
+# V5: task-status shows event id, request id (or unknown), artifact, SHA-256 and the
+# notification state, prints a verdict body only after the digest matches, and
+# never writes. Control: an untouched delivered event shows its body.
+vd_bad=""
+id=$(vd_task review); vd_reset_log; D=$(vd_draft reviewer-1 status-view.md $'STATUS-VIEW first line\nsecond body line\n')
+vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1
+F=$(vd_tf "$id"); ev=$(jq -r '.meta.verdict_events | keys[0]' "$F"); art="$VD_HOME/prompts/$id-verdict-$ev.md"; sha=$(vd_sha "$art")
+before=$(vd_tree_sum); st=$(vd master-1 task-status.sh "$id" 2>&1); after=$(vd_tree_sum)
+{ echo "$st" | grep -qF "event $ev: done by reviewer-1" && echo "$st" | grep -qF "request: aaaaaaaaaaaaaaaa" && echo "$st" | grep -qF "artifact: $art sha256:$sha" \
+  && echo "$st" | grep -qF "notification: delivered" && echo "$st" | grep -qF "second body line" && echo "$st" | grep -qF "SHA-256 verified" && [ "$before" = "$after" ]; } \
+  || vd_bad="$vd_bad [status view: $st]"
+all=$(vd master-1 task-status.sh --all 2>&1)
+echo "$all" | grep -qE "^  $id	$ev	done	request:aaaaaaaaaaaaaaaa	notification:delivered" || vd_bad="$vd_bad [--all event row missing]"
+printf 'tampered\n' >> "$art"
+st2=$(vd master-1 task-status.sh "$id" 2>&1)
+{ ! echo "$st2" | grep -qF "second body line" && echo "$st2" | grep -q 'body not shown'; } || vd_bad="$vd_bad [tampered artifact body was shown]"
+if [ -z "$vd_bad" ]; then pass "task_status_shows_verdict_events_observationally"
+else fail "task_status_shows_verdict_events_observationally" "$vd_bad"; fi
+
+# V7: tasks-clean removes a task's verdict artifacts (and notice) with the task,
+# keeps those of surviving tasks, sweeps only aged orphans, and is dry-run by default.
+vd_bad=""
+OLD=$(vd_task review); NEW=$(vd_task review)
+for t in "$OLD" "$NEW"; do D=$(vd_draft reviewer-1 "clean-$t.md" "clean verdict $t"); vd reviewer-1 task-done.sh "$t" --note-file "$D" >/dev/null 2>&1; done
+oev=$(jq -r '.meta.verdict_events | keys[0]' "$(vd_tf "$OLD")"); nev=$(jq -r '.meta.verdict_events | keys[0]' "$(vd_tf "$NEW")")
+jq '.updated_at = "2020-01-01T00:00:00+05:30"' "$(vd_tf "$OLD")" > "$(vd_tf "$OLD").x" && mv "$(vd_tf "$OLD").x" "$(vd_tf "$OLD")"
+P="$VD_HOME/prompts"
+touch -t 202001010000 "$P/ghost-task-verdict-0123456789abcdef.md" 2>/dev/null || : > "$P/ghost-task-verdict-0123456789abcdef.md"; touch -t 202001010000 "$P/ghost-task-verdict-0123456789abcdef.md"
+: > "$P/young-ghost-verdict-fedcba9876543210.md"
+vd master-1 tasks-clean.sh --older-than 30 > "$VD_ROOT/clean-dry.out" 2>&1
+{ [ -f "$P/$OLD-verdict-$oev.md" ] && [ -f "$P/ghost-task-verdict-0123456789abcdef.md" ] && grep -q DRY-RUN "$VD_ROOT/clean-dry.out"; } || vd_bad="$vd_bad [dry-run deleted or did not preview]"
+vd master-1 tasks-clean.sh --older-than 30 --apply > "$VD_ROOT/clean-apply.out" 2>&1
+{ [ ! -e "$(vd_tf "$OLD")" ] && [ ! -e "$P/$OLD-verdict-$oev.md" ] && [ ! -e "$P/$OLD-verdict-$oev-notice.md" ] && [ ! -e "$P/ghost-task-verdict-0123456789abcdef.md" ]; } \
+  || vd_bad="$vd_bad [aged task artifacts/orphan not removed: $(cat "$VD_ROOT/clean-apply.out")]"
+# controls: the surviving task keeps its artifacts; a young orphan is kept
+{ [ -f "$(vd_tf "$NEW")" ] && [ -f "$P/$NEW-verdict-$nev.md" ] && [ -f "$P/$NEW-verdict-$nev-notice.md" ] && [ -f "$P/young-ghost-verdict-fedcba9876543210.md" ]; } \
+  || vd_bad="$vd_bad [surviving task artifact or young orphan removed]"
+if [ -z "$vd_bad" ]; then pass "tasks_clean_removes_verdict_artifacts_with_their_task"
+else fail "tasks_clean_removes_verdict_artifacts_with_their_task" "$vd_bad"; fi
+
+# V6: contracted tasks (real engine, real Git subject) produce the same event and
+# notification, the review request id is persisted by the engine's review
+# reserve/finish, and the notification outcome write leaves the admission digest
+# intact (inspect still reports admitted; the stored history digest still matches).
+VC_REPO="$VD_ROOT/ct-repo"; mkdir -p "$VC_REPO"
+( cd "$VC_REPO" && git init -q && git config user.email fixture@example.invalid && git config user.name Fixture \
+  && printf '#!/bin/bash\nexit 0\n' > check.sh && printf 'baseline' > source && git add . && git commit -qm fixture )
+VC_SPEC="$VD_ROOT/ct-spec.json"
+jq -n --arg repo "$(cd "$VC_REPO" && pwd -P)" '{schema_version:1, repository:$repo, checks:[{id:"unit",script:"check.sh",args:[],timeout_seconds:20}], ttl_seconds:600, max_attempts:3}' > "$VC_SPEC"
+vc_task() { # vc_task [VAR=val ...] -> id of a contracted task in review (assigner master-1, executor-1, reviewer reviewer-1)
+  local id digest
+  id=$(vd master-1 task-new.sh "vc-task" --reviewer reviewer-1 2>&1 | awk '/Created task:/ {print $3}')
+  vd master-1 task-contract.sh attach "$id" --spec "$VC_SPEC" >/dev/null 2>&1
+  vd master-1 task-contract.sh assign executor-1 "$id" "implement" >/dev/null 2>&1
+  digest=$(vd master-1 task-contract.sh inspect "$id" 2>/dev/null | jq -r .spec_digest)
+  vd executor-1 task-contract.sh verify "$id" --generation 1 --spec-digest "$digest" >/dev/null 2>&1
+  ( vd_env_export "$@"; vd executor-1 task-review.sh "$id" --generation 1 "ready" ) >/dev/null 2>&1
+  printf '%s' "$id"
+}
+vc_digest_ok() { python3 -B -I -c 'import json,hashlib,sys
+d=json.load(open(sys.argv[1]))
+print(hashlib.sha256(json.dumps(d["history"],sort_keys=True,separators=(",",":")).encode()).hexdigest()==d["contract"]["admission"]["history"])' "$1"; }
+vd_bad=""
+VC_ID=$(vc_task); VC_F=$(vd_tf "$VC_ID"); vd_reset_log
+[ "$(jq -r .status "$VC_F")" = review ] && [ "$(jq -r '.meta.review_request_msg_id' "$VC_F")" = aaaaaaaaaaaaaaaa ] \
+  || vd_bad="$vd_bad [contracted review did not persist the request id: status=$(jq -r .status "$VC_F") r=$(jq -r '.meta.review_request_msg_id' "$VC_F")]"
+VC_D=$(vd_draft reviewer-1 ct-done.md $'CONTRACT verdict line one\nsecond line of the verdict\n')
+# refusals first, each leaving no event/artifact/notification and the draft in place;
+# the valid reviewer call on the SAME task afterwards is the control
+vc_refused() { # vc_refused <label> <pane> <script> args...
+  local label="$1" pane="$2" script="$3" out rc; shift 3
+  out=$(vd "$pane" "$script" "$VC_ID" "$@" 2>&1); rc=$?
+  { [ "$rc" != 0 ] && [ "$(jq -r .status "$VC_F")" = review ] && [ "$(jq -r '(.meta.verdict_events // {}) | length' "$VC_F")" = 0 ] \
+    && [ "$(vd_artifacts "$VC_ID")" = 0 ] && [ ! -e "$VD_LOG/dispatch.log" ] && [ -f "$VC_D" ]; } || vd_bad="$vd_bad [$label: rc=$rc out=$out]"
+}
+vc_refused executor_cannot_complete executor-1 task-done.sh --generation 1 --note-file "$VC_D"
+vc_refused stale_generation reviewer-1 task-done.sh --generation 2 --note-file "$VC_D"
+vc_refused missing_generation reviewer-1 task-done.sh --note-file "$VC_D"
+vc_refused force_refused reviewer-1 task-done.sh --force --generation 1 --note-file "$VC_D"
+vc_refused foreign_draft reviewer-1 task-done.sh --generation 1 --note-file "$(vd_draft other-1 ct-foreign.md "foreign")"
+VC_HIST_BEFORE=$(jq -c '.history' "$VC_F")
+vc_out=$(vd reviewer-1 task-done.sh "$VC_ID" --generation 1 --note-file "$VC_D" 2>&1); vc_rc=$?
+VC_EV=$(jq -r '(.meta.verdict_events // {}) | keys[0] // empty' "$VC_F")
+VC_ART="$VD_HOME/prompts/$VC_ID-verdict-$VC_EV.md"
+{ [ "$vc_rc" = 0 ] && [ "$(jq -r .status "$VC_F")" = "done" ] && [ -n "$VC_EV" ] && [ "$(jq -r '.meta.verdict_events | length' "$VC_F")" = 1 ]; } || vd_bad="$vd_bad [contracted done rc=$vc_rc out=$vc_out]"
+jq -e --arg ev "$VC_EV" --arg sha "$(vd_sha "$VC_ART" 2>/dev/null)" '.meta.verdict_events[$ev] | .transition == "done" and .actor == "reviewer-1" and .route_to == "master-1"
+  and .request_msg_id == "aaaaaaaaaaaaaaaa" and .generation == 1 and .artifact_sha256 == $sha and .notification.state == "delivered"' "$VC_F" >/dev/null 2>&1 \
+  || vd_bad="$vd_bad [contracted event: $(jq -c '.meta.verdict_events' "$VC_F")]"
+{ [ "$(wc -l < "$VD_LOG/dispatch.log" | tr -d ' ')" = 1 ] && [[ "$(head -1 "$VD_LOG/dispatch-1.md")" == "[task:$VC_ID] [event:$VC_EV] CONTRACT verdict line one" ]] \
+  && grep -qF 'second line of the verdict' "$VD_LOG/dispatch-1.md" && ! grep -qF '[re:' "$VD_LOG/dispatch-1.md" && [ ! -e "$VC_D" ]; } || vd_bad="$vd_bad [contracted notification/draft]"
+# admission digest: history carries the verdict note (excerpt + artifact pointer) but no notification bookkeeping,
+# the stored digest still matches AFTER the outcome write, and inspect still admits
+[ "$(jq -r '[.history[] | select(.event == "admitted")] | length' "$VC_F")" = 1 ] && [ "$(vc_digest_ok "$VC_F")" = True ] \
+  && [ "$(jq -r '.history | length' "$VC_F")" = "$(( $(printf '%s' "$VC_HIST_BEFORE" | jq 'length') + 1 ))" ] \
+  && [ "$(vd master-1 task-contract.sh inspect "$VC_ID" 2>/dev/null | jq -r .state)" = admitted ] || vd_bad="$vd_bad [admission digest changed or inspect not admitted]"
+echo "$(jq -r '.history[-1].note' "$VC_F")" | grep -q "^CONTRACT verdict line one (verdict $VC_ART sha256:" || vd_bad="$vd_bad [contracted history note]"
+# a rerun on the admitted task is refused as today (no replay), nothing more is sent
+vd_reset_log; D2=$(vd_draft reviewer-1 ct-done2.md "second"); vd reviewer-1 task-done.sh "$VC_ID" --generation 1 --note-file "$D2" >/dev/null 2>&1; rr=$?
+{ [ "$rr" != 0 ] && [ "$(jq -r '.meta.verdict_events | length' "$VC_F")" = 1 ] && [ "$(vd_artifacts "$VC_ID")" = 1 ] && [ ! -e "$VD_LOG/dispatch.log" ] && [ "$(vc_digest_ok "$VC_F")" = True ]; } || vd_bad="$vd_bad [contracted rerun replayed rc=$rr]"
+rm -f "$D2"
+# contracted block by the reviewer: same event shape (blocked); queued outcome is recorded queued
+VB_ID=$(vc_task); VB_F=$(vd_tf "$VB_ID"); vd_reset_log; VB_D=$(vd_draft reviewer-1 ct-block.md $'Contract rejection\nneeds a test\n')
+vb_out=$(VD_MODE=queued vd reviewer-1 task-block.sh "$VB_ID" --generation 1 --note-file "$VB_D" 2>&1); vb_rc=$?
+VB_EV=$(jq -r '(.meta.verdict_events // {}) | keys[0] // empty' "$VB_F")
+{ [ "$vb_rc" = 0 ] && [ "$(jq -r .status "$VB_F")" = blocked ] && [ -n "$VB_EV" ] \
+  && jq -e --arg ev "$VB_EV" '.meta.verdict_events[$ev] | .transition == "blocked" and .generation == 1 and .request_msg_id == "aaaaaaaaaaaaaaaa" and .notification.state == "queued"' "$VB_F" >/dev/null 2>&1 \
+  && [ "$(wc -l < "$VD_LOG/dispatch.log" | tr -d ' ')" = 1 ] && [ ! -e "$VD_LOG/send.log" ] && [ ! -e "$VB_D" ] && grep -qF 'needs a test' "$VD_LOG/dispatch-1.md"; } \
+  || vd_bad="$vd_bad [contracted block rc=$vb_rc out=$vb_out event=$(jq -c '.meta.verdict_events' "$VB_F")]"
+# contracted notification failure: hard dispatch failure falls back to the bounded pointer
+VF_ID=$(vc_task); VF_F=$(vd_tf "$VF_ID"); vd_reset_log; VF_D=$(vd_draft reviewer-1 ct-fail.md $'Approve despite transport trouble\nlong body\n')
+VD_MODE=fail vd reviewer-1 task-done.sh "$VF_ID" --generation 1 --note-file "$VF_D" >/dev/null 2>&1; vf_rc=$?
+{ [ "$vf_rc" = 0 ] && [ "$(jq -r .status "$VF_F")" = "done" ] && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$VF_F")" = inline-fallback ] \
+  && grep -q "full verdict recorded: task-status $VF_ID" "$VD_LOG/send.log" && [ "$(vc_digest_ok "$VF_F")" = True ]; } || vd_bad="$vd_bad [contracted fallback rc=$vf_rc]"
+# an older chat (no Message id line) leaves the contracted request id null
+VN_ID=$(vc_task VD_ID_OUT=); [ "$(jq -c '.meta.review_request_msg_id' "$(vd_tf "$VN_ID")")" = null ] || vd_bad="$vd_bad [contracted request id fabricated]"
+if [ -z "$vd_bad" ]; then pass "contracted_done_block_verdict_event_notification_and_admission_digest"
+else fail "contracted_done_block_verdict_event_notification_and_admission_digest" "$vd_bad"; fi
+
+# --- Review round 1 regressions (R1-R5, C1, C2) ---
+
+# R1: composing the notification must never delete a path it did not create. An
+# existing file, a symlink, or another task's base prompt at the notice path is
+# refused (outcome failed, no dispatch) and left untouched; an empty path (control)
+# gets a new 0600 notice and a delivered outcome.
+vr_event() { # vr_event <task-id> <event> : a task whose ledger records one event with a valid artifact
+  local id="$1" ev="$2" art="$VD_HOME/prompts/$1-verdict-$2.md" sha
+  printf 'R1 verdict body\n' > "$art"; chmod 600 "$art"; sha=$(vd_sha "$art")
+  jq -n --arg id "$id" --arg ev "$ev" --arg art "$art" --arg sha "$sha" \
+    '{id:$id, assigner:"master-1", status:"done", history:[], meta:{verdict_events:{($ev):{artifact:$art, artifact_sha256:$sha, route_to:"master-1", notification:{state:"pending"}}}}}' > "$(vd_tf "$id")"
+}
+vr_notify() { # vr_notify <task-id> <event> -> stdout outcome; the dispatch marker is $VD_ROOT/vr-dispatched
+  rm -f "$VD_ROOT/vr-dispatched"
+  SESSION_SCHEDULER_HOME="$VD_HOME" VR_MARK="$VD_ROOT/vr-dispatched" bash -c 'source "$1"; session_chat_dispatch() { : > "$VR_MARK"; echo "Dispatched task to x"; }; verdict_notify "$2" "$3"' _ "$VD_SCRIPTS/lib.sh" "$1" "$2" 2>/dev/null
+}
+vd_bad=""
+EV=1111111111111111
+# (a) pre-existing regular file
+vr_event r1-a "$EV"; NP="$VD_HOME/prompts/r1-a-verdict-$EV-notice.md"; printf 'PREEXISTING SENTINEL\n' > "$NP"
+out=$(vr_notify r1-a "$EV"); { [ "$out" = failed ] && [ "$(cat "$NP")" = "PREEXISTING SENTINEL" ] && [ ! -e "$VD_ROOT/vr-dispatched" ]; } || vd_bad="$vd_bad [regular file: out=$out content=$(cat "$NP" 2>&1)]"
+# (b) pre-existing symlink: the link and its target both survive
+vr_event r1-b "$EV"; NP="$VD_HOME/prompts/r1-b-verdict-$EV-notice.md"; printf 'VICTIM\n' > "$VD_ROOT/r1-victim.txt"; ln -s "$VD_ROOT/r1-victim.txt" "$NP"
+out=$(vr_notify r1-b "$EV"); { [ "$out" = failed ] && [ -L "$NP" ] && [ "$(cat "$VD_ROOT/r1-victim.txt")" = VICTIM ] && [ ! -e "$VD_ROOT/vr-dispatched" ]; } || vd_bad="$vd_bad [symlink: out=$out]"
+# (c) the notice path is the base prompt of another valid task
+vr_event r1-c "$EV"; OTHER="r1-c-verdict-$EV-notice"; NP="$VD_HOME/prompts/$OTHER.md"
+printf 'OTHER TASK PROMPT\n' > "$NP"; jq -n --arg id "$OTHER" '{id:$id, status:"created", history:[]}' > "$(vd_tf "$OTHER")"
+out=$(vr_notify r1-c "$EV"); { [ "$out" = failed ] && [ "$(cat "$NP")" = "OTHER TASK PROMPT" ] && [ -f "$(vd_tf "$OTHER")" ]; } || vd_bad="$vd_bad [other task prompt: out=$out]"
+# (d) a directory at the path is refused too
+vr_event r1-d "$EV"; NP="$VD_HOME/prompts/r1-d-verdict-$EV-notice.md"; mkdir "$NP"
+out=$(vr_notify r1-d "$EV"); { [ "$out" = failed ] && [ -d "$NP" ]; } || vd_bad="$vd_bad [directory: out=$out]"
+# control: an empty path gets a new private notice and a delivered outcome
+vr_event r1-e "$EV"; NP="$VD_HOME/prompts/r1-e-verdict-$EV-notice.md"
+out=$(vr_notify r1-e "$EV"); { [ "$out" = delivered ] && [ -e "$VD_ROOT/vr-dispatched" ] && [ "$(vd_mode "$NP")" = 600 ] && [ "$(head -1 "$NP")" = "[task:r1-e] [event:$EV] R1 verdict body" ]; } || vd_bad="$vd_bad [control: out=$out]"
+# the symlink/directory fixtures would make later ensure_dirs refuse this ledger
+rm -rf "$VD_HOME"/prompts/r1-* "$VD_HOME"/tasks/r1-* "$VD_ROOT/r1-victim.txt"
+if [ -z "$vd_bad" ]; then pass "verdict_notice_collision_preserves_existing_path"
+else fail "verdict_notice_collision_preserves_existing_path" "$vd_bad"; fi
+
+# R2: a new assignment generation drops the previous round's review request id in
+# the locked assignment save; recorded events keep theirs. Control: a task with no
+# prior request records null; a new review in the new generation records its own id.
+vd_bad=""
+RA=$(vc_task); RA_F=$(vd_tf "$RA"); vd_reset_log
+RA_D1=$(vd_draft reviewer-1 r2-gen1.md "generation one rejection")
+vd reviewer-1 task-block.sh "$RA" --generation 1 --note-file "$RA_D1" >/dev/null 2>&1
+vd master-1 task-contract.sh reconcile "$RA" --generation 1 --note "worker stopped; no external effects" >/dev/null 2>&1
+vd master-1 task-contract.sh assign executor-1 "$RA" "second attempt" >/dev/null 2>&1
+{ [ "$(jq -r .contract.generation "$RA_F")" = 2 ] && [ "$(jq -r .status "$RA_F")" = assigned ] && [ "$(jq -c '.meta.review_request_msg_id' "$RA_F")" = null ]; } \
+  || vd_bad="$vd_bad [assign did not clear the request id: gen=$(jq -r .contract.generation "$RA_F") r=$(jq -c '.meta.review_request_msg_id' "$RA_F")]"
+mkdir -p "$VD_MSGS/drafts/executor-1"; chmod 700 "$VD_MSGS/drafts/executor-1"
+RA_D2=$(vd_draft executor-1 r2-gen2.md "generation two block")
+vd executor-1 task-block.sh "$RA" --generation 2 --note-file "$RA_D2" >/dev/null 2>&1
+{ [ "$(jq -r '[.meta.verdict_events[]] | length' "$RA_F")" = 2 ] \
+  && [ "$(jq -c '[.meta.verdict_events[] | select(.generation == 1) | .request_msg_id]' "$RA_F")" = '["aaaaaaaaaaaaaaaa"]' ] \
+  && [ "$(jq -c '[.meta.verdict_events[] | select(.generation == 2) | .request_msg_id]' "$RA_F")" = '[null]' ]; } \
+  || vd_bad="$vd_bad [events: $(jq -c '[.meta.verdict_events[] | {generation, request_msg_id}]' "$RA_F")]"
+# a new review in generation 2 establishes its own request id
+RB=$(vc_task); RB_F=$(vd_tf "$RB")
+vd reviewer-1 task-block.sh "$RB" --generation 1 "inline rejection" >/dev/null 2>&1
+vd master-1 task-contract.sh reconcile "$RB" --generation 1 --note "worker stopped" >/dev/null 2>&1
+vd master-1 task-contract.sh assign executor-1 "$RB" "second attempt" >/dev/null 2>&1
+RB_DIGEST=$(vd master-1 task-contract.sh inspect "$RB" 2>/dev/null | jq -r .spec_digest)
+vd executor-1 task-contract.sh verify "$RB" --generation 2 --spec-digest "$RB_DIGEST" >/dev/null 2>&1
+VD_ID_OUT='Message id: dddddddddddddddd' vd executor-1 task-review.sh "$RB" --generation 2 "ready again" >/dev/null 2>&1
+RB_D=$(vd_draft reviewer-1 r2-new-review.md "approve generation two")
+vd reviewer-1 task-done.sh "$RB" --generation 2 --note-file "$RB_D" >/dev/null 2>&1
+{ [ "$(jq -r .status "$RB_F")" = "done" ] && [ "$(jq -c '[.meta.verdict_events[] | {generation, request_msg_id}]' "$RB_F")" = '[{"generation":2,"request_msg_id":"dddddddddddddddd"}]' ]; } \
+  || vd_bad="$vd_bad [new review request id: status=$(jq -r .status "$RB_F") events=$(jq -c '[.meta.verdict_events[]? | {generation, request_msg_id}]' "$RB_F")]"
+# control: an assigned contracted task that never had a request records null
+RC=$(vc_task VD_ID_OUT=''); RC_F=$(vd_tf "$RC")
+RC_D=$(vd_draft reviewer-1 r2-control.md "no prior request"); vd reviewer-1 task-block.sh "$RC" --generation 1 --note-file "$RC_D" >/dev/null 2>&1
+[ "$(jq -c '[.meta.verdict_events[]?.request_msg_id]' "$RC_F")" = '[null]' ] || vd_bad="$vd_bad [no-prior-request control]"
+if [ -z "$vd_bad" ]; then pass "contract_reassignment_clears_review_request_linkage"
+else fail "contract_reassignment_clears_review_request_linkage" "$vd_bad"; fi
+
+# R3: an oversize draft is refused on its size BEFORE any hashing. A PATH shim that
+# records every shasum/sha256sum call observes the work: none for the oversize
+# draft; the same 200-byte draft at a sufficient limit is hashed and accepted.
+vd_bad=""
+VS_SHIM="$VD_ROOT/hash-shim"; mkdir -p "$VS_SHIM"; VS_MARK="$VD_ROOT/hash-calls"
+for tool in shasum sha256sum; do
+  real=$(command -v "$tool" 2>/dev/null) || continue
+  printf '#!/bin/sh\necho x >> "%s"\nexec "%s" "$@"\n' "$VS_MARK" "$real" > "$VS_SHIM/$tool"; chmod 755 "$VS_SHIM/$tool"
+done
+S=$(vd_draft reviewer-1 r3-big.md "$(printf 'x%.0s' $(seq 1 200))"); rm -f "$VS_MARK"
+vd_refuse oversize_noread "$S" SESSION_SCHEDULER_NOTE_MAX_BYTES=100 "PATH=$VS_SHIM:$PATH"
+vd_expect_refused oversize_noread 'larger than the limit of 100'
+[ ! -e "$VS_MARK" ] || vd_bad="$vd_bad [oversize draft was hashed ($(wc -l < "$VS_MARK" | tr -d ' ') call(s))]"
+echo "$VD_LAST_OUT" | grep -q 'was not read' && vd_bad="$vd_bad [stale 'was not read' claim]"
+echo "$VD_LAST_OUT" | grep -q 'not hashed or copied' || vd_bad="$vd_bad [claim text missing]"
+[ -f "$S" ] || vd_bad="$vd_bad [draft removed]"
+rm -f "$VS_MARK"; id=$(vd_task assigned); vd_reset_log
+( export SESSION_SCHEDULER_NOTE_MAX_BYTES=200 "PATH=$VS_SHIM:$PATH"; vd reviewer-1 task-done.sh "$id" --note-file "$S" ) >/dev/null 2>&1; s_rc=$?
+{ [ "$s_rc" = 0 ] && [ -e "$VS_MARK" ] && [ "$(vd_artifacts "$id")" = 1 ] && [ ! -e "$S" ]; } || vd_bad="$vd_bad [200-byte success control rc=$s_rc hashed=$([ -e "$VS_MARK" ] && echo yes || echo no)]"
+# an older helper (missing) still refuses before any read: no hash call, task untouched
+S2=$(vd_draft reviewer-1 r3-oldchat.md "body"); rm -f "$VS_MARK"; id=$(vd_task assigned); vd_reset_log
+( export "PATH=$VS_SHIM:$PATH" VD_CHAT_USE="$VD_CHAT_NOHELPER"; vd reviewer-1 task-done.sh "$id" --note-file "$S2" ) >/dev/null 2>&1
+{ vd_unchanged "$id" assigned && [ ! -e "$VS_MARK" ] && [ -f "$S2" ]; } || vd_bad="$vd_bad [missing helper read something]"
+rm -f "$S2"
+if [ -z "$vd_bad" ]; then pass "verdict_oversize_refused_before_hashing"
+else fail "verdict_oversize_refused_before_hashing" "$vd_bad"; fi
+
+# A draft that grows WHILE it is hashed: the checker exits 4 and the scheduler
+# reports it truthfully as read-but-not-copied (never "not hashed"); the task is
+# unchanged and the draft kept. Control: the same shim without growth completes.
+vd_bad=""
+VG_SHIM="$VD_ROOT/grow-shim"; mkdir -p "$VG_SHIM"
+for tool in shasum sha256sum; do
+  real=$(command -v "$tool" 2>/dev/null) || continue
+  printf '#!/bin/sh\n[ -n "$VD_GROW" ] && printf "more\\n" >> "$VD_GROW"\nexec "%s" "$@"\n' "$real" > "$VG_SHIM/$tool"; chmod 755 "$VG_SHIM/$tool"
+done
+G=$(vd_draft reviewer-1 grow.md "growing verdict")
+vd_refuse grow_during_hash "$G" "VD_GROW=$G" "PATH=$VG_SHIM:$PATH"
+vd_expect_refused grow_during_hash 'changed while it was being checked'
+echo "$VD_LAST_OUT" | grep -q 'not hashed' && vd_bad="$vd_bad [grow case claims not hashed]"
+echo "$VD_LAST_OUT" | grep -q 'was read but not copied' || vd_bad="$vd_bad [grow case lacks read-but-not-copied text]"
+[ -f "$G" ] || vd_bad="$vd_bad [grown draft removed]"
+G2=$(vd_draft reviewer-1 grow-control.md "steady verdict"); id=$(vd_task assigned); vd_reset_log
+( export "PATH=$VG_SHIM:$PATH"; vd reviewer-1 task-done.sh "$id" --note-file "$G2" ) >/dev/null 2>&1; g_rc=$?
+{ [ "$g_rc" = 0 ] && [ "$(jq -r .status "$(vd_tf "$id")")" = "done" ] && [ "$(vd_artifacts "$id")" = 1 ]; } || vd_bad="$vd_bad [no-growth control rc=$g_rc]"
+rm -f "$G"
+if [ -z "$vd_bad" ]; then pass "verdict_growth_during_hash_reported_read_not_copied_with_control"
+else fail "verdict_growth_during_hash_reported_read_not_copied_with_control" "$vd_bad"; fi
+
+# R5: a failed notification never claims non-delivery. The stub transport writes the
+# payload (a real side effect) and THEN reports failure; status says delivery is not
+# confirmed and the artifact is durable. The delivered case is the wording control.
+vd_bad=""
+id=$(vd_task review); vd_reset_log; D=$(vd_draft reviewer-1 r5-fail.md "verdict after transport failure")
+VD_MODE=fail VD_SEND_RC=1 vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1
+[ -f "$VD_LOG/dispatch-1.md" ] && grep -qF 'verdict after transport failure' "$VD_LOG/dispatch-1.md" || vd_bad="$vd_bad [stub did not perform its side effect]"
+st=$(vd master-1 task-status.sh "$id" 2>&1)
+{ echo "$st" | grep -q 'notification: failed (delivery not confirmed' && echo "$st" | grep -q 'verdict artifact is durable' && ! echo "$st" | grep -qi 'not delivered'; } || vd_bad="$vd_bad [failed wording: $(echo "$st" | grep notification:)]"
+id=$(vd_task review); vd_reset_log; D=$(vd_draft reviewer-1 r5-ok.md "delivered verdict")
+vd reviewer-1 task-done.sh "$id" --note-file "$D" >/dev/null 2>&1
+st=$(vd master-1 task-status.sh "$id" 2>&1)
+{ echo "$st" | grep -q 'notification: delivered$' && ! echo "$st" | grep -q 'delivery not confirmed'; } || vd_bad="$vd_bad [delivered control wording: $(echo "$st" | grep notification:)]"
+if [ -z "$vd_bad" ]; then pass "task_status_failed_notification_never_claims_non_delivery"
+else fail "task_status_failed_notification_never_claims_non_delivery" "$vd_bad"; fi
+
+# C1: the bounded pointer fits its limit for every budget, the ellipsis included
+# (minimal pointer = 80 bytes; below it the composer refuses). Multibyte first
+# lines are cut on a character boundary. A line that fits is untouched (control).
+vd_bad=""
+ptr() { python3 -I "$VD_SCRIPTS/verdict-file.py" pointer --task test --event aaaaaaaaaaaaaaaa --line "$1" --max-bytes "$2" 2>/dev/null; }
+for lim in 80 81 82 83 84 85 86 87 88 91 100 120; do
+  p=$(ptr 'long long line that does not fit' "$lim"); n=$(printf '%s' "$p" | wc -c | tr -d ' ')
+  { [ -n "$p" ] && [ "$n" -le "$lim" ] && [[ "$p" == "[task:test] [event:aaaaaaaaaaaaaaaa]"* ]] && [[ "$p" == *" — full verdict recorded: task-status test" ]]; } || vd_bad="$vd_bad [limit $lim -> $n bytes: $p]"
+done
+for lim in 84 91 95 99; do
+  p=$(ptr 'éééééééééééééééé' "$lim"); n=$(printf '%s' "$p" | wc -c | tr -d ' ')
+  { [ "$n" -le "$lim" ] && printf '%s' "$p" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; } || vd_bad="$vd_bad [multibyte limit $lim -> $n bytes invalid or too long]"
+done
+p=$(ptr 'short' 200); [ "$p" = "[task:test] [event:aaaaaaaaaaaaaaaa] short — full verdict recorded: task-status test" ] || vd_bad="$vd_bad [fitting line altered: $p]"
+p=$(ptr 'x' 91); [[ "$p" == *"] x — full"* ]] || vd_bad="$vd_bad [one-char line at 91 altered: $p]"
+for lim in 79 0; do ptr 'x' "$lim" >/dev/null && vd_bad="$vd_bad [limit $lim below the minimal pointer was accepted]"; done
+if [ -z "$vd_bad" ]; then pass "verdict_pointer_ellipsis_fits_budget"
+else fail "verdict_pointer_ellipsis_fits_budget" "$vd_bad"; fi
+
+# C2: the helper itself refuses --generation with --note-file on an uncontracted
+# task (done and block), before anything is read; the plain --note-file form is the
+# control, and inline-note compatibility (the legacy form) is unchanged.
+vd_bad=""
+for script in task-done.sh task-block.sh; do
+  id=$(vd_task assigned); vd_reset_log; D=$(vd_draft reviewer-1 "c2-$script.md" "c2 verdict")
+  out=$(vd reviewer-1 "$script" "$id" --generation 1 --note-file "$D" 2>&1); rc=$?
+  { [ "$rc" != 0 ] && echo "$out" | grep -q 'applies only to a task with a verification contract' && vd_unchanged "$id" assigned && [ -f "$D" ]; } || vd_bad="$vd_bad [$script refusal rc=$rc out=$out]"
+  out=$(vd reviewer-1 "$script" "$id" --note-file "$D" 2>&1); rc=$?
+  { [ "$rc" = 0 ] && [ "$(vd_artifacts "$id")" = 1 ] && [ ! -e "$D" ]; } || vd_bad="$vd_bad [$script control rc=$rc out=$out]"
+done
+id=$(vd_task assigned); vd_reset_log
+vd reviewer-1 task-done.sh "$id" --generation 1 "legacy inline note" >/dev/null 2>&1; rc=$?
+{ [ "$rc" = 0 ] && [ "$(jq -r '.history[-1].note' "$(vd_tf "$id")")" = "--generation 1 legacy inline note" ] && [ "$(jq -r '(.meta.verdict_events // {}) | length' "$(vd_tf "$id")")" = 0 ]; } || vd_bad="$vd_bad [legacy inline form changed rc=$rc]"
+if [ -z "$vd_bad" ]; then pass "uncontracted_generation_with_note_file_refused_by_helper"
+else fail "uncontracted_generation_with_note_file_refused_by_helper" "$vd_bad"; fi
+
+# R4: contracted-path crashes. task-contract.py is Python, so the instrumentation is
+# EXTERNAL: a python3 shim earlier on PATH runs it under pycrash.py, which installs a
+# sys.setprofile hook that SIGKILLs the whole process group at a named boundary of
+# the unmodified production file (first/second Store.save call and return, entry of
+# Store.verdict_notify). The test process runs task-done/task-block as the leader of
+# its own session; returncode -9 plus the marker prove death by SIGKILL at that
+# boundary. Trials are isolated (fresh contracted task each). No production failpoint.
+VC_SHIM="$VD_ROOT/pyshim"; mkdir -p "$VC_SHIM"
+VC_REAL_PY=$(command -v python3)
+cat > "$VD_ROOT/pycrash.py" <<'PYCRASH'
+import os, runpy, signal, sys
+at = os.environ.get("VD_PYCRASH_AT", "")
+mark = os.environ.get("VD_PYMARK", "")
+saves = {"n": 0}
+def hook(frame, event, arg):
+    code = frame.f_code
+    if not code.co_filename.endswith("task-contract.py"):
+        return
+    name, hit = code.co_name, ""
+    if name == "save":
+        if event == "call":
+            saves["n"] += 1
+            hit = {1: "before-save", 2: "before-outcome"}.get(saves["n"], "")
+        elif event == "return":
+            hit = {1: "after-save", 2: "after-outcome"}.get(saves["n"], "")
+    elif name == "verdict_notify" and event == "call":
+        hit = "before-notify"
+    if hit and hit == at:
+        with open(mark, "w") as handle:
+            handle.write(hit)
+        os.killpg(os.getpgrp(), signal.SIGKILL)
+sys.argv = sys.argv[1:]
+if at:
+    sys.setprofile(hook)
+runpy.run_path(sys.argv[0], run_name="__main__")
+PYCRASH
+printf '%s\n' '#!/bin/bash' 'case "${1:-}" in' '  */task-contract.py) exec "$VC_REAL_PY" -B "$VC_PYCRASH" "$@" ;;' 'esac' 'exec "$VC_REAL_PY" "$@"' > "$VC_SHIM/python3"; chmod 755 "$VC_SHIM/python3"
+vc_crash_run() { # vc_crash_run <done|block> <boundary> <id> <draft> -> prints the returncode
+  local op="$1" boundary="$2" id="$3" draft="$4"
+  rm -f "$VD_ROOT/pycrash.mark"
+  env SESSION_SCHEDULER_HOME="$VD_HOME" SESSION_CHAT_ROOT_OVERRIDE="$VD_CHAT" SESSION_CHAT_PANE_NAME=reviewer-1 \
+    SESSION_CHAT_TARGET_MESSAGES_DIR="$VD_MSGS" VD_LOG="$VD_LOG" PATH="$VC_SHIM:$PATH" VC_REAL_PY="$VC_REAL_PY" VC_PYCRASH="$VD_ROOT/pycrash.py" \
+    VD_PYCRASH_AT="$boundary" VD_PYMARK="$VD_ROOT/pycrash.mark" \
+    "$VC_REAL_PY" -B -I -c 'import subprocess, sys
+print(subprocess.run(sys.argv[1:], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode)' \
+    bash "$VD_SCRIPTS/task-$op.sh" "$id" --generation 1 --note-file "$draft" 2>/dev/null
+}
+vd_bad=""
+for op in "done" block; do
+  for boundary in before-save after-save before-notify before-outcome after-outcome; do
+    id=$(vc_task); F=$(vd_tf "$id"); vd_reset_log
+    D=$(vd_draft reviewer-1 "ccrash-$op-$boundary.md" "contracted crash verdict ($op/$boundary)")
+    hist_before=$(jq -r '.history | length' "$F")
+    rc=$(vc_crash_run "$op" "$boundary" "$id" "$D")
+    if [ "$rc" != -9 ] || [ "$(cat "$VD_ROOT/pycrash.mark" 2>/dev/null)" != "$boundary" ]; then
+      vd_bad="$vd_bad [$op/$boundary: SIGKILL not proven rc=$rc mark=$(cat "$VD_ROOT/pycrash.mark" 2>/dev/null)]"; continue
+    fi
+    events=$(jq -r '(.meta.verdict_events // {}) | length' "$F"); disp=$(vd_ndisp)
+    want_status="done"; [ "$op" = block ] && want_status=blocked
+    if [ "$boundary" = before-save ]; then
+      # no transition, no event, no admission, history unchanged, nothing sent, draft kept
+      { [ "$(jq -r .status "$F")" = review ] && [ "$events" = 0 ] && [ "$(jq -c '.contract.admission' "$F")" = null ] \
+        && [ "$(jq -r '.history | length' "$F")" = "$hist_before" ] && [ -z "$disp" ] && [ -f "$D" ]; } \
+        || vd_bad="$vd_bad [$op/before-save: status=$(jq -r .status "$F") events=$events disp=$disp]"
+      # recovery: the dead holder's lock is reclaimed and a plain rerun commits one event
+      vd reviewer-1 "task-$op.sh" "$id" --generation 1 --note-file "$D" >/dev/null 2>&1; rr=$?
+      { [ "$rr" = 0 ] && [ "$(jq -r .status "$F")" = "$want_status" ] && [ "$(jq -r '.meta.verdict_events | length' "$F")" = 1 ]; } || vd_bad="$vd_bad [$op/before-save: rerun rc=$rr]"
+      continue
+    fi
+    # committed: transition + event consistent; the notification state reflects what was recorded
+    state=$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$F")
+    want_state=pending; want_disp=""
+    case "$boundary" in before-outcome) want_disp=1 ;; after-outcome) want_state=delivered; want_disp=1 ;; esac
+    { [ "$(jq -r .status "$F")" = "$want_status" ] && [ "$events" = 1 ] && [ "$state" = "$want_state" ] && [ "$disp" = "$want_disp" ] \
+      && [ "$(vd_artifacts "$id")" = 1 ] && [ -f "$D" ] && [ "$(jq -r '.history | length' "$F")" = "$((hist_before + 1))" ]; } \
+      || vd_bad="$vd_bad [$op/$boundary: status=$(jq -r .status "$F") events=$events state=$state disp=$disp hist=$(jq -r '.history | length' "$F")/$hist_before]"
+    jq -e --arg op "$op" '.meta.verdict_events | to_entries[0].value | .generation == 1 and .request_msg_id == "aaaaaaaaaaaaaaaa" and .route_to == "master-1" and .transition == (if $op == "done" then "done" else "blocked" end)' "$F" >/dev/null 2>&1 \
+      || vd_bad="$vd_bad [$op/$boundary: event record: $(jq -c '.meta.verdict_events' "$F")]"
+    if [ "$op" = "done" ]; then
+      # admission digest preserved and inspect still admits, whatever the notification state
+      { [ "$(vc_digest_ok "$F")" = True ] && [ "$(vd master-1 task-contract.sh inspect "$id" 2>/dev/null | jq -r .state)" = admitted ]; } || vd_bad="$vd_bad [$op/$boundary: admission digest/inspect]"
+    else
+      [ "$(jq -r .contract.reconciled "$F")" = false ] || vd_bad="$vd_bad [$op/$boundary: blocked contract state]"
+    fi
+    # task-status is truthful and observational
+    before=$(vd_tree_sum); st=$(vd master-1 task-status.sh "$id" 2>&1); after=$(vd_tree_sum)
+    if [ "$want_state" = pending ]; then
+      { echo "$st" | grep -q 'UNCONFIRMED' && echo "$st" | grep -q 'notification: pending'; } || vd_bad="$vd_bad [$op/$boundary: status does not show unconfirmed]"
+    else
+      { echo "$st" | grep -q 'notification: delivered' && ! echo "$st" | grep -q 'UNCONFIRMED'; } || vd_bad="$vd_bad [$op/$boundary: status wording after recorded outcome]"
+    fi
+    [ "$before" = "$after" ] || vd_bad="$vd_bad [$op/$boundary: task-status wrote]"
+    # no replay: the rerun is refused, nothing more is sent, event/artifact/state unchanged
+    n0=$(vd_ndisp)
+    vd reviewer-1 "task-$op.sh" "$id" --generation 1 --note-file "$D" >/dev/null 2>&1; rr=$?
+    { [ "$rr" != 0 ] && [ "$(jq -r '.meta.verdict_events | length' "$F")" = 1 ] && [ "$(vd_artifacts "$id")" = 1 ] && [ "$(vd_ndisp)" = "$n0" ] \
+      && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$F")" = "$want_state" ]; } || vd_bad="$vd_bad [$op/$boundary: rerun rc=$rr replayed]"
+    [ "$op" = block ] || [ "$(vc_digest_ok "$F")" = True ] || vd_bad="$vd_bad [$op/$boundary: digest changed by the refused rerun]"
+  done
+  # control: the same shim with the hook never armed is an ordinary delivered run
+  id=$(vc_task); F=$(vd_tf "$id"); vd_reset_log; D=$(vd_draft reviewer-1 "ccrash-$op-control.md" "no crash")
+  ( export PATH="$VC_SHIM:$PATH" VC_REAL_PY="$VC_REAL_PY" VC_PYCRASH="$VD_ROOT/pycrash.py" VD_PYCRASH_AT=; vd reviewer-1 "task-$op.sh" "$id" --generation 1 --note-file "$D" ) >/dev/null 2>&1; nc_rc=$?
+  { [ "$nc_rc" = 0 ] && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$F")" = delivered ] && [ ! -e "$D" ] \
+    && { [ "$op" = block ] || [ "$(vc_digest_ok "$F")" = True ]; }; } || vd_bad="$vd_bad [$op uncrashed control rc=$nc_rc]"
+done
+if [ -z "$vd_bad" ]; then pass "contracted_crash_boundaries_sigkill_consistent_pending_no_replay"
+else fail "contracted_crash_boundaries_sigkill_consistent_pending_no_replay" "$vd_bad"; fi
+
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -gt 0 ]; then
