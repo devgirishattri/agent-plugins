@@ -22,6 +22,18 @@ for helper in session-chat/scripts/own-draft-check.sh \
     || fail "shared verdict helper differs across providers: $helper"
 done
 
+# Walkthrough contracts and deterministic helpers are shared across providers.
+for helper in manifest.schema.json descriptor.schema.json walkthrough.py walkthrough.sh; do
+  cmp -s "$ROOT/plugins/session-walkthrough/scripts/$helper" \
+    "$ROOT/codex/plugins/session-walkthrough/scripts/$helper" \
+    || fail "walkthrough shared file differs across providers: $helper"
+done
+for directory in descriptors fixtures; do
+  diff -rq "$ROOT/plugins/session-walkthrough/scripts/$directory" \
+    "$ROOT/codex/plugins/session-walkthrough/scripts/$directory" \
+    || fail "walkthrough shared directory differs across providers: $directory"
+done
+
 # Extract one full creation record; unrelated hex in names is never an ID.
 created_task_id() {
   local ids

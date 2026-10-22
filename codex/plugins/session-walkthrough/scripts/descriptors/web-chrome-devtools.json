@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "web-chrome-devtools",
+  "platform": "web",
+  "transport": "mcp",
+  "target_kind": "origin",
+  "capabilities": { "screenshot": true, "record": false, "drive": "optional-driver" },
+  "recording": { "kinds": ["stills"], "max_duration_seconds": 180, "container": null, "codec": null, "audio": "none" },
+  "prerequisites": [
+    { "kind": "config", "name": "workspace browser block", "detail": "A session-workspace browsers entry selects the origin, port, profile and pinned chrome-devtools-mcp package" },
+    { "kind": "tool", "name": "chrome-devtools-mcp", "detail": "Configured through workspace-browser-config; screenshots are page or element captures of the selected origin" }
+  ],
+  "egress": {
+    "default": "telemetry",
+    "opt_outs": [
+      { "mechanism": "flag", "name": "--no-usage-statistics", "value": null, "status": "researched" },
+      { "mechanism": "flag", "name": "--no-performance-crux", "value": null, "status": "researched" }
+    ]
+  },
+  "disallowed": [
+    "Screencast recording until typed opt-in settings and an ffmpeg build are configured and piloted",
+    "Navigating to or capturing an origin other than the configured one",
+    "Launching a new debugging endpoint implicitly"
+  ],
+  "probe": { "kind": "none", "argv": [], "reads_only": true },
+  "support": "floor",
+  "pilot": { "recorded": false, "host": null, "detail": "No capture pilot recorded; stills route proposed, recording deferred" },
+  "notes": [
+    "The current workspace renderer emits only the pinned package and browser URL; opt-out flags need a schema and rendering change",
+    "Electron apps with an existing exposed CDP endpoint may use this route; otherwise use macos-screencapture",
+    "Driving the page is a separate optional capability, not part of capture"
+  ]
+}

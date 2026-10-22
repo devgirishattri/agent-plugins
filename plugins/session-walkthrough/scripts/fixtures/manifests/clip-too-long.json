@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "run": {
+    "id": "wt-synthetic-settings-clip",
+    "created_at": "2026-10-22T03:00:00Z",
+    "finalized_at": "2026-10-22T03:30:00Z",
+    "status": "complete",
+    "generator": {
+      "plugin": "session-walkthrough",
+      "version": "0.1.0",
+      "provider": "claude"
+    },
+    "host": {
+      "platform": "darwin",
+      "os_version": null
+    }
+  },
+  "repository": {
+    "project_id": "sample-project",
+    "head_start": "3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4a6c8e0b",
+    "head_end": "3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4a6c8e0b",
+    "branch": "main",
+    "dirty_at_end": true
+  },
+  "task": {
+    "workflow_id": "wf-synthetic",
+    "task_id": "task-1700000000-deadbeef",
+    "executor": "sample-executor",
+    "where": [
+      "app/settings"
+    ],
+    "reported_paths": [
+      "app/settings/Panel.tsx",
+      "app/settings/theme.css",
+      "lib/format.ts"
+    ]
+  },
+  "scope": {
+    "start": {
+      "captured_at": "2026-10-22T03:00:00Z",
+      "head": "3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4a6c8e0b",
+      "branch": "main",
+      "entries": [
+        {
+          "path": "app/settings/Panel.tsx",
+          "state": "modified",
+          "sha256": "74715cca82c52b0730f4df6686ff40c4a4f5981e9646881163ef4ffa37fc554f",
+          "bytes": 1820
+        },
+        {
+          "path": "app/settings/theme.css",
+          "state": "modified",
+          "sha256": "6fe2e008d6f17a9b8ff06b410e793bb875ce2f2c6d227501d9bb9f4178235c98",
+          "bytes": 640
+        }
+      ],
+      "fingerprint": "d7224aaaca03c24e8675f8b9a3dcaa57d37fe47e633120e7c6153ff3e3bc27d6",
+      "max_bytes": 8388608
+    },
+    "start_unavailable_reason": null,
+    "end": {
+      "captured_at": "2026-10-22T03:25:00Z",
+      "head": "3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4a6c8e0b",
+      "branch": "main",
+      "entries": [
+        {
+          "path": "app/settings/Panel.tsx",
+          "state": "modified",
+          "sha256": "06f89015e1219702dd777daf044fb417ea6bc20d4bcb6d95513d3a1e69c26c72",
+          "bytes": 1964
+        },
+        {
+          "path": "app/settings/theme.css",
+          "state": "modified",
+          "sha256": "93f87988125cba1a8e4198dccbca8b7482535349fea17f4553bedfcaa57c09c8",
+          "bytes": 702
+        },
+        {
+          "path": "lib/format.ts",
+          "state": "untracked",
+          "sha256": "fb42bc0f6f0e63dada6567bdabc2b75533440ea43b76df3a5e62cc9aa9090418",
+          "bytes": 410
+        },
+        {
+          "path": "app/settings-other/legacy.css",
+          "state": "untracked",
+          "sha256": "6a8ec6764f4e29c2b37ddc07bce9a55f995cd08b9f45d85b6e52f9e0f0a4110a",
+          "bytes": 88
+        }
+      ],
+      "fingerprint": "83b0d8495f99b9635fa5895be9d7f36dc79bbab3217d5cc776db7f64ee4a674e",
+      "max_bytes": 8388608
+    },
+    "committed_changes": [],
+    "changed_paths": [
+      {
+        "path": "app/settings/Panel.tsx",
+        "change": "modified",
+        "in_where": true,
+        "reported": true,
+        "attribution": "reported-and-observed"
+      },
+      {
+        "path": "app/settings/theme.css",
+        "change": "modified",
+        "in_where": true,
+        "reported": true,
+        "attribution": "reported-and-observed"
+      },
+      {
+        "path": "lib/format.ts",
+        "change": "added",
+        "in_where": false,
+        "reported": true,
+        "attribution": "reported-and-observed"
+      },
+      {
+        "path": "app/settings-other/legacy.css",
+        "change": "added",
+        "in_where": false,
+        "reported": false,
+        "attribution": "observed-only: attribution uncertain"
+      }
+    ],
+    "discrepancies": [
+      {
+        "kind": "outside-where",
+        "path": "lib/format.ts",
+        "detail": "Reported by the executor; outside the task WHERE prefix app/settings"
+      },
+      {
+        "kind": "outside-where",
+        "path": "app/settings-other/legacy.css",
+        "detail": "Observed outside the task WHERE prefix app/settings"
+      },
+      {
+        "kind": "observed-not-reported",
+        "path": "app/settings-other/legacy.css",
+        "detail": "New file observed in the shared tree; not reported by the executor"
+      },
+      {
+        "kind": "shared-tree: attribution uncertain",
+        "path": null,
+        "detail": "Two panes share this checkout; fingerprints do not prove authorship"
+      }
+    ],
+    "shared_tree": true,
+    "limitations": [
+      "Fingerprints show that paths changed; they do not prove who changed them"
+    ]
+  },
+  "target": {
+    "platform": "macos",
+    "adapter": "macos-screencapture",
+    "identity": {
+      "app_name": "Sample Settings",
+      "window_title": "Settings",
+      "bundle_id": "com.example.sample-settings"
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900,
+      "scale": 2
+    },
+    "tool_versions": {
+      "screencapture": "macOS built-in"
+    },
+    "capabilities": {
+      "observe": true,
+      "record": true,
+      "drive": "manual"
+    }
+  },
+  "build": {
+    "freshness": "verified-commit-only",
+    "receipt": {
+      "kind": "native-build",
+      "source": {
+        "revision": "3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4a6c8e0b",
+        "fingerprint": null
+      },
+      "binding": {
+        "kind": "installed",
+        "identity": {
+          "bundle_id": "com.example.sample-settings"
+        },
+        "product_sha256": "62343392ea7f196a595cc153468a664b9383480f9dcfee295c412e35356db1d3",
+        "installed_sha256": "62343392ea7f196a595cc153468a664b9383480f9dcfee295c412e35356db1d3"
+      },
+      "reference": "build/Sample Settings.app",
+      "recorded_at": "2026-10-22T03:20:00Z"
+    },
+    "unbound_paths": [
+      "app/settings-other/legacy.css",
+      "app/settings/Panel.tsx",
+      "app/settings/theme.css",
+      "lib/format.ts"
+    ],
+    "reason": "Adapter build bound the installed product to the end commit; the dirty working tree is not bound"
+  },
+  "chapters": [
+    {
+      "id": "settings-theme",
+      "title": "Settings panel dark theme",
+      "scenario": "Open Settings and toggle the dark theme; the panel re-renders with the new palette.",
+      "source_paths": [
+        "app/settings/Panel.tsx",
+        "app/settings/theme.css"
+      ],
+      "actions": [
+        "Open Settings",
+        "Toggle Dark theme"
+      ],
+      "checkpoints": [
+        "Panel background uses the dark palette",
+        "Toggle state persists after reload"
+      ],
+      "before": {
+        "asset": "before-settings",
+        "unavailable_reason": null
+      },
+      "after": {
+        "asset": "after-settings"
+      },
+      "observation": "The panel background changed from light grey to the dark blue palette; the toggle shows the on state.",
+      "assertions": [
+        {
+          "ref": "app/settings/Panel.test.tsx::renders dark theme",
+          "result": "reported-pass"
+        }
+      ],
+      "status": "demonstrated",
+      "reason": null,
+      "captured_at": "2026-10-22T03:25:00Z"
+    },
+    {
+      "id": "settings-toggle-clip",
+      "title": "Dark theme toggle interaction",
+      "scenario": "Record the toggle interaction from opening Settings to the re-rendered panel.",
+      "source_paths": [
+        "app/settings/Panel.tsx"
+      ],
+      "actions": [
+        "Open Settings",
+        "Toggle Dark theme",
+        "Wait for the panel to re-render"
+      ],
+      "checkpoints": [
+        "Transition completes without a flash of the light palette"
+      ],
+      "before": {
+        "asset": null,
+        "unavailable_reason": "Baseline window was not available before editing began"
+      },
+      "after": {
+        "asset": "clip-settings"
+      },
+      "observation": "The transition completed without a light-palette flash; the clip is a header-only synthetic stub.",
+      "assertions": [],
+      "status": "demonstrated",
+      "reason": null,
+      "captured_at": "2026-10-22T03:25:00Z"
+    }
+  ],
+  "assets": [
+    {
+      "id": "before-settings",
+      "path": "assets/before.png",
+      "media_type": "image/png",
+      "sha256": "d5c0d4ab705de740f914a76e707e9121ce3d83b3e92e497a05d84c14fed87e27",
+      "bytes": 72,
+      "recording_kind": "stills",
+      "duration_seconds": null,
+      "codec": null,
+      "frame_interval_seconds": null,
+      "captions": [],
+      "captured_at": "2026-10-22T03:00:00Z",
+      "tool": {
+        "adapter": "macos-screencapture",
+        "command": null,
+        "version": "macOS built-in"
+      },
+      "normalized_from": null,
+      "privacy_review": "synthetic-data"
+    },
+    {
+      "id": "after-settings",
+      "path": "assets/after.png",
+      "media_type": "image/png",
+      "sha256": "82ce16daa2ae5c36cdaf7bdb65c50228cc586966b140e25756dec652a8783692",
+      "bytes": 73,
+      "recording_kind": "stills",
+      "duration_seconds": null,
+      "codec": null,
+      "frame_interval_seconds": null,
+      "captions": [],
+      "captured_at": "2026-10-22T03:25:00Z",
+      "tool": {
+        "adapter": "macos-screencapture",
+        "command": null,
+        "version": "macOS built-in"
+      },
+      "normalized_from": null,
+      "privacy_review": "synthetic-data"
+    },
+    {
+      "id": "clip-settings",
+      "path": "assets/clip-stub.mp4",
+      "media_type": "video/mp4",
+      "sha256": "54bdc1b1fcb34e5b899b0b6f3b74a2d43fd02cea5782450e7e6cdc45ec13f4d2",
+      "bytes": 32,
+      "recording_kind": "continuous",
+      "duration_seconds": 240,
+      "codec": "h264",
+      "frame_interval_seconds": null,
+      "captions": [],
+      "captured_at": "2026-10-22T03:25:00Z",
+      "tool": {
+        "adapter": "macos-screencapture",
+        "command": null,
+        "version": "macOS built-in"
+      },
+      "normalized_from": null,
+      "privacy_review": "synthetic-data"
+    }
+  ],
+  "coverage": {
+    "paths": [
+      {
+        "path": "app/settings/Panel.tsx",
+        "status": "demonstrated",
+        "chapters": [
+          "settings-theme",
+          "settings-toggle-clip"
+        ],
+        "reason": null
+      },
+      {
+        "path": "app/settings/theme.css",
+        "status": "demonstrated",
+        "chapters": [
+          "settings-theme"
+        ],
+        "reason": null
+      },
+      {
+        "path": "lib/format.ts",
+        "status": "omitted: non-visual",
+        "chapters": [],
+        "reason": "Formatting helper with no rendered surface"
+      },
+      {
+        "path": "app/settings-other/legacy.css",
+        "status": "omitted: out-of-scope",
+        "chapters": [],
+        "reason": "Observed outside the task scope and not reported; not attributed to this task"
+      }
+    ],
+    "limitations": [
+      "Commit-only receipt: dirty working-tree edits are not bound by the build"
+    ]
+  },
+  "privacy": {
+    "demo_data": "synthetic",
+    "capture_scope": "window",
+    "egress": "none",
+    "notes": [
+      "Synthetic fixture; no real application was captured"
+    ]
+  }
+}

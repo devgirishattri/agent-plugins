@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "macos-screencapture",
+  "platform": "macos",
+  "transport": "cli",
+  "target_kind": "window",
+  "capabilities": { "screenshot": true, "record": true, "drive": "manual" },
+  "recording": { "kinds": ["stills", "continuous"], "max_duration_seconds": 180, "container": "mov", "codec": "h264", "audio": "none" },
+  "prerequisites": [
+    { "kind": "command", "name": "screencapture", "detail": "macOS built-in; window-scoped stills and timed video" },
+    { "kind": "permission", "name": "Screen Recording", "detail": "Granted to the host application that runs the pane, not to the pane itself; missing permission yields a black or empty capture" },
+    { "kind": "config", "name": "window selection", "detail": "A selected application window id; never the whole desktop by default" }
+  ],
+  "egress": { "default": "none", "opt_outs": [] },
+  "disallowed": [
+    "Whole-desktop capture unless the manifest privacy capture_scope says desktop and the user asked for it",
+    "Changing permission grants or triggering a grant prompt during capture",
+    "Driving the application; journeys are manual steps or a separately declared driver"
+  ],
+  "probe": { "kind": "command", "argv": ["screencapture", "-h"], "reads_only": true },
+  "support": "floor",
+  "pilot": { "recorded": false, "host": null, "detail": "No capture pilot recorded" },
+  "notes": [
+    "Recording uses the -V seconds and window options; confirm the exact flags on the pilot host before documenting them as supported",
+    "Window id lookup is a read-only step performed before capture"
+  ]
+}

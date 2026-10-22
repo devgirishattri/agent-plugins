@@ -933,6 +933,8 @@ require_tokens(
     # so that failure mode cannot come back.
     "plugins/chronos/scripts/test-chronos.sh",
     "codex/plugins/chronos/scripts/test-chronos.sh",
+    "plugins/session-walkthrough/scripts/test-session-walkthrough.sh",
+    "codex/plugins/session-walkthrough/scripts/test-session-walkthrough.sh",
 )
 
 require_tokens(

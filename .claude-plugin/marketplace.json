@@ -120,6 +120,25 @@
         "multi-agent"
       ],
       "license": "MIT"
+    },
+    {
+      "name": "session-walkthrough",
+      "description": "Local visual walkthrough reports for session changes: scoped source fingerprints, a validated provenance manifest, captured stills or short captioned clips, and a portable HTML page. Provenance only; never approval, upload, or Git authority.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Girish Attri"
+      },
+      "keywords": [
+        "walkthrough",
+        "visual-review",
+        "screenshots",
+        "video",
+        "provenance",
+        "multi-agent"
+      ],
+      "license": "MIT",
+      "source": "./plugins/session-walkthrough",
+      "category": "productivity"
     }
   ]
 }

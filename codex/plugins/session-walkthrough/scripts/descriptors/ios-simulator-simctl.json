@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "ios-simulator-simctl",
+  "platform": "ios-simulator",
+  "transport": "cli",
+  "target_kind": "simulator",
+  "capabilities": { "screenshot": true, "record": true, "drive": "optional-driver" },
+  "recording": { "kinds": ["stills", "continuous"], "max_duration_seconds": 180, "container": "mp4", "codec": "h264", "audio": "none" },
+  "prerequisites": [
+    { "kind": "tool", "name": "Xcode command line tools", "detail": "xcrun simctl io <udid> screenshot and recordVideo --codec h264" },
+    { "kind": "device", "name": "booted simulator", "detail": "One selected booted simulator UDID with the app already installed" },
+    { "kind": "config", "name": "build receipt", "detail": "A native-build receipt binds the installed product to the source; capture alone does not prove freshness" }
+  ],
+  "egress": { "default": "none", "opt_outs": [] },
+  "disallowed": [
+    "Selecting another simulator automatically when the configured one is missing",
+    "Installing or building through this descriptor; build is a separate authorized step",
+    "Physical devices"
+  ],
+  "probe": { "kind": "command", "argv": ["xcrun", "simctl", "list", "devices", "booted", "-j"], "reads_only": true },
+  "support": "floor",
+  "pilot": { "recorded": false, "host": null, "detail": "No capture pilot recorded" },
+  "notes": [
+    "Optional MobileBuildMCP adds build and UI automation; its Sentry reporting is reported default-on and must be disabled with MOBILEBUILDMCP_SENTRY_DISABLED=true before use (researched, not verified)",
+    "Stop recording by terminating only the recordVideo process this run started"
+  ]
+}

@@ -1,0 +1,335 @@
+{
+  "schema_version": 1,
+  "run_dir": "../run",
+  "note": "expect.invalid lists codes the validator must report; a valid control must report none",
+  "cases": {
+    "valid-synthetic.json": {
+      "expect": "valid",
+      "control": null
+    },
+    "valid-with-clip.json": {
+      "expect": "valid",
+      "control": null
+    },
+    "valid-hostile-text.json": {
+      "expect": "valid",
+      "control": null
+    },
+    "valid-partial-before-unavailable.json": {
+      "expect": "valid",
+      "control": null
+    },
+    "valid-head-advanced.json": {
+      "expect": "valid",
+      "control": null
+    },
+    "valid-head-advanced-empty-diff.json": {
+      "expect": "valid",
+      "control": null
+    },
+    "valid-installed-not-read-back.json": {
+      "expect": "valid",
+      "control": null
+    },
+    "valid-dirty-transitions.json": {
+      "expect": "valid",
+      "control": null
+    },
+    "schema-version-unknown.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCHEMA-VERSION"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "unknown-top-level-field.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCHEMA-SHAPE"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "path-dot-segment.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCHEMA-SHAPE"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "asset-path-traversal.json": {
+      "expect": {
+        "invalid": [
+          "WT-ASSET-PATH"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "asset-path-absolute.json": {
+      "expect": {
+        "invalid": [
+          "WT-ASSET-PATH"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "asset-sha256-mismatch.json": {
+      "expect": {
+        "invalid": [
+          "WT-ASSET-HASH"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "asset-media-extension-mismatch.json": {
+      "expect": {
+        "invalid": [
+          "WT-ASSET-MEDIA"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "still-labelled-continuous.json": {
+      "expect": {
+        "invalid": [
+          "WT-ASSET-KIND"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "clip-kind-not-offered-by-adapter.json": {
+      "expect": {
+        "invalid": [
+          "WT-ASSET-KIND-ADAPTER"
+        ]
+      },
+      "control": "valid-with-clip.json"
+    },
+    "clip-too-long.json": {
+      "expect": {
+        "invalid": [
+          "WT-ASSET-DURATION"
+        ]
+      },
+      "control": "valid-with-clip.json"
+    },
+    "caption-cue-out-of-range.json": {
+      "expect": {
+        "invalid": [
+          "WT-CAPTION-RANGE"
+        ]
+      },
+      "control": "valid-with-clip.json"
+    },
+    "coverage-missing-path.json": {
+      "expect": {
+        "invalid": [
+          "WT-COVERAGE-UNMAPPED"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "omission-without-reason.json": {
+      "expect": {
+        "invalid": [
+          "WT-COVERAGE-REASON"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "receipt-contradicted.json": {
+      "expect": {
+        "invalid": [
+          "WT-BUILD-CONTRADICTED"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "receipt-origin-mismatch.json": {
+      "expect": {
+        "invalid": [
+          "WT-RECEIPT-BINDING"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "receipt-identity-mismatch.json": {
+      "expect": {
+        "invalid": [
+          "WT-RECEIPT-BINDING"
+        ]
+      },
+      "control": "valid-with-clip.json"
+    },
+    "installed-hash-mismatch.json": {
+      "expect": {
+        "invalid": [
+          "WT-BUILD-CONTRADICTED"
+        ]
+      },
+      "control": "valid-with-clip.json"
+    },
+    "freshness-overclaimed.json": {
+      "expect": {
+        "invalid": [
+          "WT-BUILD-FRESHNESS"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "commit-only-overclaimed.json": {
+      "expect": {
+        "invalid": [
+          "WT-BUILD-FRESHNESS"
+        ]
+      },
+      "control": "valid-with-clip.json"
+    },
+    "unbound-paths-missing.json": {
+      "expect": {
+        "invalid": [
+          "WT-BUILD-UNBOUND"
+        ]
+      },
+      "control": "valid-with-clip.json"
+    },
+    "target-identity-wrong-kind.json": {
+      "expect": {
+        "invalid": [
+          "WT-TARGET-IDENTITY"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "before-null-without-reason.json": {
+      "expect": {
+        "invalid": [
+          "WT-CHAPTER-BEFORE"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "demonstrated-without-after.json": {
+      "expect": {
+        "invalid": [
+          "WT-CHAPTER-EVIDENCE"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "scope-fingerprint-mismatch.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCOPE-FINGERPRINT"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "adapter-unknown.json": {
+      "expect": {
+        "invalid": [
+          "WT-ADAPTER-UNKNOWN"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "run-status-overclaimed.json": {
+      "expect": {
+        "invalid": [
+          "WT-RUN-STATUS"
+        ]
+      },
+      "control": "valid-partial-before-unavailable.json"
+    },
+    "chapter-source-not-covered.json": {
+      "expect": {
+        "invalid": [
+          "WT-CHAPTER-SOURCE"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "scope-changed-paths-incomplete.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCOPE-CHANGED"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "where-prefix-overclaim.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCOPE-CHANGED"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "scope-discrepancy-missing.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCOPE-DISCREPANCY"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "before-unavailable-discrepancy-missing.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCOPE-START"
+        ]
+      },
+      "control": "valid-partial-before-unavailable.json"
+    },
+    "head-end-mismatch.json": {
+      "expect": {
+        "invalid": [
+          "WT-HEAD"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "committed-changes-with-equal-heads.json": {
+      "expect": {
+        "invalid": [
+          "WT-HEAD-DRIFT"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "start-only-path-claimed-deleted.json": {
+      "expect": {
+        "invalid": [
+          "WT-SCOPE-CHANGED"
+        ]
+      },
+      "control": "valid-dirty-transitions.json"
+    },
+    "target-capability-overclaim.json": {
+      "expect": {
+        "invalid": [
+          "WT-TARGET-CAPABILITIES"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "desktop-capture-without-note.json": {
+      "expect": {
+        "invalid": [
+          "WT-PRIVACY"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    },
+    "duplicate-json-key.json": {
+      "expect": {
+        "invalid": [
+          "WT-JSON-DUPLICATE-KEY"
+        ]
+      },
+      "control": "valid-synthetic.json"
+    }
+  }
+}

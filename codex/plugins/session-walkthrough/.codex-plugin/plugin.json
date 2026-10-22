@@ -1,0 +1,37 @@
+{
+  "name": "session-walkthrough",
+  "version": "0.1.0",
+  "description": "Local visual walkthrough reports for session changes: scoped source fingerprints, a validated provenance manifest, captured stills or short captioned clips, and a portable HTML page. Provenance only; never approval, upload, or Git authority.",
+  "author": {
+    "name": "Girish Attri"
+  },
+  "keywords": [
+    "walkthrough",
+    "visual-review",
+    "screenshots",
+    "video",
+    "provenance",
+    "multi-agent"
+  ],
+  "homepage": "https://github.com/devgirishattri/agent-plugins",
+  "repository": "https://github.com/devgirishattri/agent-plugins",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Session Walkthrough",
+    "shortDescription": "Create local visual walkthrough reports.",
+    "longDescription": "Validate provenance manifests, render portable local HTML reports and record source scope with explicit coverage and build-binding gaps. Capture tooling, workspace integration and platform pilots remain pending.",
+    "developerName": "Girish Attri",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ],
+    "websiteURL": "https://github.com/devgirishattri/agent-plugins",
+    "defaultPrompt": [
+      "Plan a local walkthrough of this session.",
+      "Review a walkthrough manifest against its contracts."
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

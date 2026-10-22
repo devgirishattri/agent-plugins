@@ -50,6 +50,7 @@ jobs:
           python3 scripts/ci-smoke.py bash codex/plugins/knowledge/scripts/test-docs-create.sh
           python3 scripts/ci-smoke.py bash codex/plugins/knowledge/scripts/test-context.sh
           python3 scripts/ci-smoke.py bash codex/plugins/chronos/scripts/test-chronos.sh
+          python3 scripts/ci-smoke.py bash codex/plugins/session-walkthrough/scripts/test-session-walkthrough.sh
           mkdir -p "$RUNNER_TEMP/codex-session-chat"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-chat" \
@@ -69,6 +70,7 @@ jobs:
           python3 scripts/ci-smoke.py bash plugins/session-manager/scripts/test-session-manager.sh
           python3 scripts/ci-smoke.py bash plugins/knowledge/scripts/test-docs-create.sh
           python3 scripts/ci-smoke.py bash plugins/chronos/scripts/test-chronos.sh
+          python3 scripts/ci-smoke.py bash plugins/session-walkthrough/scripts/test-session-walkthrough.sh
           mkdir -p "$RUNNER_TEMP/claude-session-chat"
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-chat" \

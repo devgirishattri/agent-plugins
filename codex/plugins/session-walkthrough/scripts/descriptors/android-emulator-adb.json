@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "android-emulator-adb",
+  "platform": "android-emulator",
+  "transport": "cli",
+  "target_kind": "emulator",
+  "capabilities": { "screenshot": true, "record": true, "drive": "optional-driver" },
+  "recording": { "kinds": ["stills", "continuous"], "max_duration_seconds": 180, "container": "mp4", "codec": "h264", "audio": "none" },
+  "prerequisites": [
+    { "kind": "tool", "name": "adb", "detail": "Android platform-tools; adb -s <serial> exec-out screencap -p and adb shell screenrecord" },
+    { "kind": "device", "name": "running emulator", "detail": "One selected emulator serial with the app already installed" },
+    { "kind": "config", "name": "build receipt", "detail": "A native-build receipt binds the installed APK to the source; capture alone does not prove freshness" }
+  ],
+  "egress": { "default": "none", "opt_outs": [] },
+  "disallowed": [
+    "Physical devices (a probe-only path may be scoped later)",
+    "Selecting another device automatically when the configured one is missing",
+    "Installing or building through this descriptor"
+  ],
+  "probe": { "kind": "command", "argv": ["adb", "devices", "-l"], "reads_only": true },
+  "support": "floor",
+  "pilot": { "recorded": false, "host": null, "detail": "No capture pilot recorded" },
+  "notes": [
+    "screenrecord stops at 180 seconds and records no audio (researched limit; confirm on the pilot host)",
+    "Pull the recording with adb pull after the recording process this run started has exited"
+  ]
+}

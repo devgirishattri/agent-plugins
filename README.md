@@ -17,6 +17,7 @@ Every plugin below ships for both providers at the same version number.
 | `knowledge` | 0.5.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.11.8 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
+| `session-walkthrough` | 0.1.0 | Validate visual provenance, record source scope, and render local walkthrough reports |
 
 This table is the fifth place a plugin version is written down, after the two
 plugin manifests and the two marketplace files. `scripts/validate-release.sh`
@@ -33,6 +34,7 @@ rather than assumed: the `session-scheduler` Claude suite passes 81/81 under 3.2
 |------------|-----------|------------------|
 | `jq` | `session-scheduler`, `session-workspace` | Hard. Both refuse to run without it. |
 | `python3`, `git` | `session-scheduler` contracts | Required for contracted verification; legacy tasks retain existing dependencies. |
+| `python3`, `git` | `session-walkthrough` | Required for validation, rendering and source snapshots; initial local verification is on macOS. |
 | `python3`, `gh` | `session-workspace` PR status | Python is required; live GitHub reads additionally require authenticated `gh`. |
 | `python3`, `bash`, `tmux`, `jq`, `git`, `rg` | Scheduler verification pilot | Required by the source-checkout runner; not an installed helper. |
 | `jq` | `chronos` | Optional. Claude falls back to hand-built JSON; the Codex build never uses jq. |
@@ -205,6 +207,40 @@ uses synthetic histories, makes no model calls, and stops its disposable daemon.
 `python3 -B scripts/test-session-deletion-live.py` verifies preview and native
 deletion without a daemon in an isolated home, including preservation of another
 project's history. The temporary-connection deletion path is verified on 0.155.0.
+
+### session-walkthrough
+
+Use `scripts/walkthrough.sh` to record source scope (`scope start` and `scope
+end`), validate a provenance manifest, and render a portable local HTML report.
+Python 3 and Git are required. The helpers keep coverage gaps, unavailable
+baselines and commit-only build bindings visible; observations are not test
+results or approval. See the [walkthrough skill](plugins/session-walkthrough/skills/session-walkthrough/SKILL.md)
+for arguments and authority boundaries.
+
+Version 0.1.0 provides deterministic local report helpers and synthetic fixtures.
+Capture tools, workspace configuration and orchestration integration remain
+pending. No web or native capture pilot has been recorded; descriptor presence
+does not establish tested target support. No hooks or automatic uploads run.
+
+`render` and `scope` write only inside a git-ignored run directory within the
+repository, refusing symlink components and unsafe destinations. They never
+edit ignore rules. Normal review uses `validate --run-dir DIR` to re-derive
+committed changes; explicit `--manifest FILE` validation is read-only fixture
+mode and trusts the supplied history. Rendering with that option still enforces
+write containment. Reports retain relative media links and inline captions;
+browser playback remains a pilot check.
+
+These environment-only settings are read per invocation; no restart is needed.
+They are output settings, not launch-inherited stores.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SESSION_WALKTHROUGH_OUTPUT_ROOT` | `.tmp/walkthroughs` | Repository-relative output root for scope runs; must be inside the repository and git-ignored |
+| `SESSION_WALKTHROUGH_FINGERPRINT_MAX_BYTES` | `8388608` | Largest file hashed into a snapshot; larger files retain an explicit omission |
+| `SESSION_WALKTHROUGH_LOCK_TIMEOUT_SECS` | `10` | Seconds to wait for the run-directory writer lock before refusing |
+
+Invalid numeric settings fall back to their defaults. Reports are retained
+until deliberately removed. Rollback disables the plugin; prior reports remain.
 
 ### chronos
 
@@ -637,7 +673,7 @@ loop handling are unchanged.
 ### Hooks and restarts
 
 `chronos`, `knowledge`, and `session-chat` register lifecycle hooks;
-`session-manager` and `session-scheduler` register none. `session-workspace`
+`session-manager`, `session-scheduler`, and `session-walkthrough` register none. `session-workspace`
 registers opt-in harness hooks: schema-v1 projects, schema-v2/v3/v4
 projects without an enabled harness, and sessions without launcher-provided
 harness identity remain true no-ops when no stale active launcher mode is

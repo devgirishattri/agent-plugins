@@ -1,0 +1,410 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/devgirishattri/agent-plugins/session-walkthrough/manifest.schema.json",
+  "title": "session-walkthrough run manifest (schema_version 1)",
+  "description": "Provenance for one walkthrough bundle under .tmp/walkthroughs/<run-id>/. Structural contract only: the cross-field rules WT-* in skills/session-walkthrough/references/manifest.md are enforced by the validator and cannot be expressed here. A valid manifest is evidence of what was captured, never approval, a test result, or Git/upload authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run", "repository", "task", "scope", "target", "build", "chapters", "assets", "coverage", "privacy"],
+  "definitions": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "git_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "semver": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "run_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{3,63}$" },
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+    "line": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\u0000-\\u001f]*$" },
+    "text": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "^[^\\u0000-\\u0008\\u000b-\\u001f]*$" },
+    "nullable_line": { "oneOf": [ { "$ref": "#/definitions/line" }, { "type": "null" } ] },
+    "nullable_text": { "oneOf": [ { "$ref": "#/definitions/text" }, { "type": "null" } ] },
+    "repo_path": {
+      "description": "Repository-relative POSIX path: no leading slash, no . or .. segment anywhere, no empty segment, no trailing slash, no control characters. Prefix matching against task.where is by whole component: 'src' covers 'src/x' but not 'src-other/x'.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!\\.(?:/|$))(?!.*/\\.(?:/|$))(?!\\.\\.(?:/|$))(?!.*/\\.\\.(?:/|$))(?!.*//)(?!.*/$)[^\\u0000-\\u001f]+$"
+    },
+    "asset_path": {
+      "description": "Flat, run-relative asset location. The extension must agree with media_type (WT-ASSET-MEDIA).",
+      "type": "string",
+      "pattern": "^assets/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\\.(png|jpg|jpeg|webp|mp4|mov|webm)$"
+    },
+    "fingerprint_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "state", "sha256", "bytes"],
+      "properties": {
+        "path": { "$ref": "#/definitions/repo_path" },
+        "state": { "enum": ["modified", "added", "deleted", "renamed", "type-changed", "untracked"] },
+        "sha256": { "oneOf": [ { "$ref": "#/definitions/sha256" }, { "type": "null" } ] },
+        "bytes": { "oneOf": [ { "type": "integer", "minimum": 0 }, { "type": "null" } ] },
+        "omitted": { "enum": ["size", "type", "unreadable", "deleted"] }
+      }
+    },
+    "scope_snapshot": {
+      "description": "Bounded fingerprint of the working tree at one moment. Hashes only; never file contents.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["captured_at", "head", "branch", "entries", "fingerprint", "max_bytes"],
+      "properties": {
+        "captured_at": { "$ref": "#/definitions/timestamp" },
+        "head": { "$ref": "#/definitions/git_sha" },
+        "branch": { "$ref": "#/definitions/nullable_line" },
+        "entries": { "type": "array", "items": { "$ref": "#/definitions/fingerprint_entry" } },
+        "fingerprint": { "$ref": "#/definitions/sha256" },
+        "max_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "caption_cue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "text"],
+      "properties": {
+        "start": { "type": "number", "minimum": 0 },
+        "end": { "type": "number", "exclusiveMinimum": 0 },
+        "text": { "$ref": "#/definitions/line" }
+      }
+    },
+    "receipt": {
+      "description": "A build receipt binds the RUNNING target (binding) to the SOURCE it was built from (source). The manifest stores observed values only; receipts never carry executable strings. Kind/binding pairing and freshness derivation are WT-RECEIPT-BINDING and WT-BUILD-FRESHNESS.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source", "binding", "reference", "recorded_at"],
+      "properties": {
+        "kind": { "enum": ["web-build-info", "native-build", "authorized-build-output"] },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["revision", "fingerprint"],
+          "properties": {
+            "revision": { "$ref": "#/definitions/git_sha" },
+            "fingerprint": { "oneOf": [ { "$ref": "#/definitions/sha256" }, { "type": "null" } ] }
+          }
+        },
+        "binding": { "oneOf": [ { "$ref": "#/definitions/binding_origin" }, { "$ref": "#/definitions/binding_installed" } ] },
+        "reference": { "$ref": "#/definitions/nullable_line" },
+        "recorded_at": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "binding_origin": {
+      "description": "The running web target served its own build info from a declared, bounded path on the selected origin.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "origin", "path"],
+      "properties": {
+        "kind": { "const": "origin" },
+        "origin": { "type": "string", "pattern": "^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$" },
+        "path": { "type": "string", "pattern": "^/[^\\u0000-\\u001f ?#]{0,200}$" }
+      }
+    },
+    "binding_installed": {
+      "description": "The product the adapter built (product_sha256) and the product read back from the selected installed target (installed_sha256). A null installed hash means the running product was not read back.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "identity", "product_sha256", "installed_sha256"],
+      "properties": {
+        "kind": { "const": "installed" },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "udid": { "$ref": "#/definitions/identifier" },
+            "device": { "$ref": "#/definitions/line" },
+            "bundle_id": { "$ref": "#/definitions/line" }
+          }
+        },
+        "product_sha256": { "$ref": "#/definitions/sha256" },
+        "installed_sha256": { "oneOf": [ { "$ref": "#/definitions/sha256" }, { "type": "null" } ] }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "created_at", "finalized_at", "status", "generator", "host"],
+      "properties": {
+        "id": { "$ref": "#/definitions/run_id" },
+        "created_at": { "$ref": "#/definitions/timestamp" },
+        "finalized_at": { "oneOf": [ { "$ref": "#/definitions/timestamp" }, { "type": "null" } ] },
+        "status": { "enum": ["complete", "partial", "failed", "cancelled"] },
+        "generator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["plugin", "version", "provider"],
+          "properties": {
+            "plugin": { "const": "session-walkthrough" },
+            "version": { "$ref": "#/definitions/semver" },
+            "provider": { "enum": ["claude", "codex", "standalone"] }
+          }
+        },
+        "host": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["platform", "os_version"],
+          "properties": {
+            "platform": { "enum": ["darwin", "linux", "windows"] },
+            "os_version": { "$ref": "#/definitions/nullable_line" }
+          }
+        }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "head_start", "head_end", "branch", "dirty_at_end"],
+      "properties": {
+        "project_id": { "$ref": "#/definitions/identifier" },
+        "head_start": { "oneOf": [ { "$ref": "#/definitions/git_sha" }, { "type": "null" } ] },
+        "head_end": { "$ref": "#/definitions/git_sha" },
+        "branch": { "$ref": "#/definitions/nullable_line" },
+        "dirty_at_end": { "type": "boolean" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow_id", "task_id", "executor", "where", "reported_paths"],
+      "properties": {
+        "workflow_id": { "oneOf": [ { "$ref": "#/definitions/identifier" }, { "type": "null" } ] },
+        "task_id": { "oneOf": [ { "$ref": "#/definitions/identifier" }, { "type": "null" } ] },
+        "executor": { "oneOf": [ { "$ref": "#/definitions/identifier" }, { "type": "null" } ] },
+        "where": { "type": "array", "items": { "$ref": "#/definitions/repo_path" } },
+        "reported_paths": { "type": "array", "items": { "$ref": "#/definitions/repo_path" } }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "start_unavailable_reason", "end", "committed_changes", "changed_paths", "discrepancies", "shared_tree", "limitations"],
+      "properties": {
+        "start": { "oneOf": [ { "$ref": "#/definitions/scope_snapshot" }, { "type": "null" } ] },
+        "start_unavailable_reason": { "$ref": "#/definitions/nullable_line" },
+        "end": { "$ref": "#/definitions/scope_snapshot" },
+        "committed_changes": {
+          "description": "Paths changed by commits between start.head and end.head (git diff --name-status). Empty when the heads are equal or there is no start snapshot. See WT-HEAD-DRIFT.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "change"],
+            "properties": {
+              "path": { "$ref": "#/definitions/repo_path" },
+              "change": { "enum": ["modified", "added", "deleted", "renamed", "type-changed"] }
+            }
+          }
+        },
+        "changed_paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "change", "in_where", "reported", "attribution"],
+            "properties": {
+              "path": { "$ref": "#/definitions/repo_path" },
+              "change": { "enum": ["modified", "added", "deleted", "renamed", "type-changed", "unknown"] },
+              "in_where": { "type": "boolean" },
+              "reported": { "type": "boolean" },
+              "attribution": { "enum": ["reported-and-observed", "observed-only: attribution uncertain", "before unavailable"] }
+            }
+          }
+        },
+        "discrepancies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "path", "detail"],
+            "properties": {
+              "kind": { "enum": ["outside-where", "observed-not-reported", "reported-not-observed", "before-unavailable", "fingerprint-omitted", "shared-tree: attribution uncertain"] },
+              "path": { "oneOf": [ { "$ref": "#/definitions/repo_path" }, { "type": "null" } ] },
+              "detail": { "$ref": "#/definitions/line" }
+            }
+          }
+        },
+        "shared_tree": { "type": "boolean" },
+        "limitations": { "type": "array", "items": { "$ref": "#/definitions/line" } }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "adapter", "identity", "viewport", "tool_versions", "capabilities"],
+      "properties": {
+        "platform": { "enum": ["web", "macos", "ios-simulator", "android-emulator", "electron"] },
+        "adapter": { "$ref": "#/definitions/identifier" },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "origin": { "type": "string", "pattern": "^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$" },
+            "bundle_id": { "$ref": "#/definitions/line" },
+            "app_name": { "$ref": "#/definitions/line" },
+            "window_title": { "$ref": "#/definitions/line" },
+            "device": { "$ref": "#/definitions/line" },
+            "udid": { "$ref": "#/definitions/identifier" }
+          }
+        },
+        "viewport": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["width", "height", "scale"],
+              "properties": {
+                "width": { "type": "integer", "minimum": 1 },
+                "height": { "type": "integer", "minimum": 1 },
+                "scale": { "type": "number", "minimum": 1 }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "tool_versions": { "type": "object", "additionalProperties": { "$ref": "#/definitions/line" } },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["observe", "record", "drive"],
+          "properties": {
+            "observe": { "type": "boolean" },
+            "record": { "type": "boolean" },
+            "drive": { "enum": ["none", "optional-driver", "manual"] }
+          }
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["freshness", "receipt", "unbound_paths", "reason"],
+      "properties": {
+        "freshness": { "enum": ["verified", "verified-commit-only", "unverified", "contradicted"] },
+        "receipt": { "oneOf": [ { "$ref": "#/definitions/receipt" }, { "type": "null" } ] },
+        "unbound_paths": {
+          "description": "Derived, not free text: working-tree paths whose bytes the receipt does not bind (every dirty path for verified-commit-only; omitted fingerprint entries for verified). See WT-BUILD-UNBOUND.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/repo_path" }
+        },
+        "reason": { "$ref": "#/definitions/line" }
+      }
+    },
+    "chapters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "scenario", "source_paths", "actions", "checkpoints", "before", "after", "observation", "assertions", "status", "reason", "captured_at"],
+        "properties": {
+          "id": { "$ref": "#/definitions/identifier" },
+          "title": { "$ref": "#/definitions/line" },
+          "scenario": { "$ref": "#/definitions/text" },
+          "source_paths": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/repo_path" } },
+          "actions": { "type": "array", "items": { "$ref": "#/definitions/line" } },
+          "checkpoints": { "type": "array", "items": { "$ref": "#/definitions/line" } },
+          "before": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["asset", "unavailable_reason"],
+            "properties": {
+              "asset": { "oneOf": [ { "$ref": "#/definitions/identifier" }, { "type": "null" } ] },
+              "unavailable_reason": { "$ref": "#/definitions/nullable_line" }
+            }
+          },
+          "after": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["asset"],
+            "properties": {
+              "asset": { "oneOf": [ { "$ref": "#/definitions/identifier" }, { "type": "null" } ] }
+            }
+          },
+          "observation": { "$ref": "#/definitions/nullable_text" },
+          "assertions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ref", "result"],
+              "properties": {
+                "ref": { "$ref": "#/definitions/line" },
+                "result": { "enum": ["reported-pass", "reported-fail", "not-run"] }
+              }
+            }
+          },
+          "status": { "enum": ["demonstrated", "failed", "skipped"] },
+          "reason": { "$ref": "#/definitions/nullable_line" },
+          "captured_at": { "oneOf": [ { "$ref": "#/definitions/timestamp" }, { "type": "null" } ] }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "media_type", "sha256", "bytes", "recording_kind", "duration_seconds", "codec", "frame_interval_seconds", "captions", "captured_at", "tool", "normalized_from", "privacy_review"],
+        "properties": {
+          "id": { "$ref": "#/definitions/identifier" },
+          "path": { "$ref": "#/definitions/asset_path" },
+          "media_type": { "enum": ["image/png", "image/jpeg", "image/webp", "video/mp4", "video/quicktime", "video/webm"] },
+          "sha256": { "$ref": "#/definitions/sha256" },
+          "bytes": { "type": "integer", "minimum": 1 },
+          "recording_kind": { "enum": ["stills", "continuous", "frame-sampled"] },
+          "duration_seconds": { "oneOf": [ { "type": "number", "exclusiveMinimum": 0, "maximum": 180 }, { "type": "null" } ] },
+          "codec": { "$ref": "#/definitions/nullable_line" },
+          "frame_interval_seconds": { "oneOf": [ { "type": "number", "exclusiveMinimum": 0 }, { "type": "null" } ] },
+          "captions": { "type": "array", "items": { "$ref": "#/definitions/caption_cue" } },
+          "captured_at": { "$ref": "#/definitions/timestamp" },
+          "tool": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["adapter", "command", "version"],
+            "properties": {
+              "adapter": { "$ref": "#/definitions/identifier" },
+              "command": { "$ref": "#/definitions/nullable_line" },
+              "version": { "$ref": "#/definitions/nullable_line" }
+            }
+          },
+          "normalized_from": { "oneOf": [ { "$ref": "#/definitions/identifier" }, { "type": "null" } ] },
+          "privacy_review": { "enum": ["synthetic-data", "reviewed", "unreviewed"] }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paths", "limitations"],
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "status", "chapters", "reason"],
+            "properties": {
+              "path": { "$ref": "#/definitions/repo_path" },
+              "status": { "enum": ["demonstrated", "omitted: non-visual", "omitted: out-of-scope", "omitted: unobserved", "failed", "skipped"] },
+              "chapters": { "type": "array", "items": { "$ref": "#/definitions/identifier" } },
+              "reason": { "$ref": "#/definitions/nullable_line" }
+            }
+          }
+        },
+        "limitations": { "type": "array", "items": { "$ref": "#/definitions/line" } }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["demo_data", "capture_scope", "egress", "notes"],
+      "properties": {
+        "demo_data": { "enum": ["synthetic", "reviewed", "unknown"] },
+        "capture_scope": { "enum": ["window", "app", "device", "origin", "desktop"] },
+        "egress": { "enum": ["none", "opt-out-configured", "unknown"] },
+        "notes": { "type": "array", "items": { "$ref": "#/definitions/line" } }
+      }
+    }
+  }
+}
