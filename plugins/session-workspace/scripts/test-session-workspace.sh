@@ -4413,11 +4413,11 @@ fi
 
 echo
 echo "-----------------------------------------------"
-# v5 cross-session isolation and optional-adapter regressions (synthetic only).
+# v5 cross-session isolation and removed-Jev migration regressions (synthetic only).
 if python3 -B "$HERE/test-environments.py"; then
-  pass "schema v5 environments and optional Jev regressions"
+  pass "schema v5 environments and removed-Jev migration regressions"
 else
-  fail "schema v5 environments and optional Jev regressions" "see unittest output"
+  fail "schema v5 environments and removed-Jev migration regressions" "see unittest output"
 fi
 
 # Tier 1.3a hook diagnostics (registry completeness, DIAG protocol, adapter tests).

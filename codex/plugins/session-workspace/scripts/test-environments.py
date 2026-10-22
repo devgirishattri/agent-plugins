@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Synthetic v5 regressions; no paid calls, real agent launches or user stores."""
-import argparse
 import copy
 import io
 import importlib.util
@@ -50,7 +49,7 @@ class Environments(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='wv5-', dir='/tmp')
         self.root = Path(self.tmp.name).resolve()
-        for d in ['component-a', 'component-b', 'control-web', 'control-vue3', '.agent-workspace', '.tmp/scheduler/tasks', '.tmp/messages', '.tmp/integrations']:
+        for d in ['component-a', 'component-b', 'control-web', 'control-vue3', '.agent-workspace', '.tmp/scheduler/tasks', '.tmp/messages']:
             (self.root/d).mkdir(parents=True)
         self.cfg = config()
         self.path = self.root/'.agent-workspace/workspace.json'
@@ -502,89 +501,32 @@ class Environments(unittest.TestCase):
         self.cfg['browsers'][1]['port']=19222;self.write()
         self.assertNotEqual(self.run_script('workspace-plan','--json').returncode,0)
 
-    def test_jev_off_and_removal(self):
-        self.cfg['integrations']={'jev':{'enabled':False,'credential_file':'missing/key'}};self.write()
+    def removed_form_message(self, mutate):
+        """Plan and validate must both reject a removed form with the migration message."""
         self.plan()
-        r=self.run_script('workspace-jev','--packet','does-not-exist','--sanitized')
-        self.assertEqual(json.loads(r.stdout)['status'],'disabled')
-        del self.cfg['integrations'];self.write();self.plan()
-        self.assertEqual(json.loads(self.run_script('workspace-jev','--status').stdout)['status'],'disabled')
+        validated=self.run_script('validate-config','--json')
+        self.assertEqual(validated.returncode,0,validated.stderr+validated.stdout)
+        mutate();self.write()
+        for name in ['workspace-plan','validate-config']:
+            r=self.run_script(name,'--json')
+            self.assertNotEqual(r.returncode,0,name+' accepted a removed form')
+            self.assertIn('removed in session-workspace 0.12.0',r.stdout+r.stderr,name)
+        return self.run_script('workspace-plan','--json')
 
-    def test_jev_mock_and_budget(self):
-        j=module('jev_v5','jev-adapter.py')
-        self.cfg['integrations']={'jev':{'enabled':True,'credential_file':'.key','mode':'advisory'}}
-        self.cfg['harness']={'enabled':False}
-        del self.cfg['orchestration']
-        for e in self.cfg['environments']: del e['orchestrator']
-        for session in self.cfg['sessions']:
-            session['panes']=[p for p in session['panes'] if p['name'] not in ('web-master','vue3-master')]
-        self.cfg['stores']['pin'].append('integrations');self.write()
-        subprocess.run(['git','init','-q',str(self.root)],check=True)
-        (self.root/'.gitignore').write_text('.key\n')
-        (self.root/'.key').write_text('synthetic-test-key');(self.root/'.key').chmod(0o600)
-        packet=self.root/'packet.json';packet.write_text(json.dumps(dict(surface='chat',current_observation='No pane named worker',background='')))
-        args=argparse.Namespace(config=str(self.path),environment=None,status=False,packet=str(packet),sanitized=True)
-        catalog=json.loads((HERE/'jev-catalog.json').read_text())
-        response={'model':j.MODEL,'answers':{'guide':{'type':'choice','choice':'missing_target','confidence':1,'probabilities':{k:float(k=='missing_target') for k in catalog}}},'usage':{'input_tokens':200}}
-        env=dict(ENV,SESSION_WORKSPACE_INTEGRATIONS_HOME=str(self.root/'.tmp/integrations'),SESSION_WORKSPACE_JEV_MAX_REQUESTS='1')
-        calls=[]
-        def send(body,key,timeout):calls.append(body);return response
-        with patch.dict(os.environ,env,clear=True):
-            out=j.evaluate(args,sender=send)
-            self.assertEqual(out['category'],'missing_target')
-            self.assertEqual(j.evaluate(args,sender=send)['reason_code'],'already_attempted')
-            packet.write_text(json.dumps(dict(surface='chat',current_observation='Another report',background='')))
-            self.assertEqual(j.evaluate(args,sender=send)['status'],'budget_exhausted')
-        self.assertEqual(len(calls),1)
-        self.assertNotIn('synthetic-test-key',(self.root/'.tmp/integrations/jev-budget.jsonl').read_text())
-        response['answers']['guide']['probabilities']['missing_target']=float('nan')
-        with self.assertRaises(ValueError):j.answer(response,catalog)
+    def test_removed_integrations_rejected(self):
+        r=self.removed_form_message(lambda:self.cfg.update(integrations={'jev':{'enabled':False}}))
+        self.assertIn('integrations (Jev) was removed in session-workspace 0.12.0; delete it from the config',r.stdout+r.stderr)
+        self.cfg.pop('integrations');self.write();self.plan()
 
-    def test_jev_disabled_zero_io(self):
-        j=module('jev_off_v5','jev-adapter.py')
-        args=argparse.Namespace(config=None,environment=None,status=False,packet='absent',sanitized=True)
-        with patch.object(j,'safe_file',side_effect=AssertionError('file read')), patch.object(j,'ledger',side_effect=AssertionError('store read')):
-            out=j.evaluate(args,planner=lambda _: {'integrations':{'jev':{'enabled':False}}},sender=lambda *_: self.fail('network call'))
-            self.assertEqual(out['status'],'disabled')
-        # Adapter removal is an explicit unavailable result, never a core import failure.
-        wrapper=self.root/'workspace-jev.sh';wrapper.write_text((HERE/'workspace-jev.sh').read_text())
-        r=subprocess.run(['bash',str(wrapper),'--status'],capture_output=True,text=True)
-        self.assertEqual(json.loads(r.stdout)['reason_code'],'adapter_removed')
-        self.plan()
+    def test_removed_environment_jev_rejected(self):
+        r=self.removed_form_message(lambda:self.cfg['environments'][0].update(jev=True))
+        self.assertIn('environments[].jev was removed in session-workspace 0.12.0; delete it from the config',r.stdout+r.stderr)
+        del self.cfg['environments'][0]['jev'];self.write();self.plan()
 
-    def test_credential_safety(self):
-        j=module('jev_key_v5','jev-adapter.py')
-        key=self.root/'key';key.write_text('synthetic');key.chmod(0o600)
-        self.assertEqual(j.safe_file(key,self.root,100,True),'synthetic')
-        key.chmod(0o644)
-        with self.assertRaises(ValueError):j.safe_file(key,self.root,100,True)
-        key.chmod(0o600)
-        alias=self.root/'alias';alias.symlink_to(key)
-        with self.assertRaises((OSError,ValueError)):j.safe_file(alias,self.root,100,True)
-        alias.unlink();os.link(key,alias)
-        with self.assertRaises(ValueError):j.safe_file(key,self.root,100,True)
-
-    def test_jev_failure_and_disable_during_request(self):
-        j=module('jev_failure_v5','jev-adapter.py')
-        (self.root/'key').write_text('synthetic');(self.root/'key').chmod(0o600)
-        subprocess.run(['git','init','-q',str(self.root)],check=True)
-        (self.root/'.gitignore').write_text('key\n')
-        packet=self.root/'packet.json';packet.write_text(json.dumps(dict(surface='chat',current_observation='No accessible named worker',background='')))
-        p={'project':{'root':str(self.root)},'integrations':{'jev':{'enabled':True,'credential_file':'key','mode':'advisory'}},'integration_store':str(self.root/'.tmp/integrations')}
-        args=argparse.Namespace(config=None,environment=None,status=False,packet=str(packet),sanitized=True)
-        catalog=json.loads((HERE/'jev-catalog.json').read_text())
-        response={'model':j.MODEL,'answers':{'guide':{'type':'choice','choice':'missing_target','confidence':1,'probabilities':{k:float(k=='missing_target') for k in catalog}}},'usage':{'input_tokens':100}}
-        env=dict(ENV,SESSION_WORKSPACE_INTEGRATIONS_HOME=p['integration_store'],SESSION_WORKSPACE_JEV_MAX_REQUESTS='2')
-        def failure(*_):raise TimeoutError()
-        with patch.dict(os.environ,env,clear=True):
-            self.assertEqual(j.evaluate(args,planner=lambda _:p,sender=failure)['status'],'unavailable')
-            packet.write_text(json.dumps(dict(surface='chat',current_observation='New report',background='')))
-            def disable(*_):
-                p['integrations']['jev']['enabled']=False
-                return response
-            self.assertEqual(j.evaluate(args,planner=lambda _:p,sender=disable)['reason_code'],'stale_result')
-            self.assertEqual(j.evaluate(args,planner=lambda _:p,sender=lambda *_:self.fail('sent after off'))['status'],'disabled')
-        self.assertEqual(len((self.root/'.tmp/integrations/jev-budget.jsonl').read_text().splitlines()),2)
+    def test_removed_integrations_pin_rejected(self):
+        r=self.removed_form_message(lambda:self.cfg['stores'].setdefault('pin',[]).append('integrations'))
+        self.assertIn('"integrations" in stores.pin was removed in session-workspace 0.12.0; delete it from the config',r.stdout+r.stderr)
+        self.cfg['stores']['pin'].remove('integrations');self.write();self.plan()
 
     def test_service_port_owner_control(self):
         probe=module('port_owner_v5',os.environ.get('SERVICE_PORTS_TEST_MODULE','service-ports.py'))

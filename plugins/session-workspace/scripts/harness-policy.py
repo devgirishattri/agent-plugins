@@ -2312,7 +2312,6 @@ def memory_write(ctx: Context, script: str, args: List[str]) -> None:
 
 
 WORKSPACE_VERB_SCRIPT = {
-    "jev": "workspace-jev.sh",
     "plan": "workspace-plan.sh",
     "status": "workspace-status.sh",
     "doctor": "workspace-doctor.sh",
@@ -2384,34 +2383,6 @@ def workspace_browser_config(ctx: Context, script: str, args: List[str]) -> None
     workspace_args(ctx, script, args, ("--apply", "--json"), allow_target=False, value_flags=("--provider", "--browser"))
 
 
-def jev_command(ctx: Context, script: str, args: List[str]) -> None:
-    if ctx.semantic_role != "orchestrator":
-        raise PolicyFailure("coordination.write", "diagnostic inference is coordinator-only")
-    remaining = list(args)
-    environment = ""
-    seen = set()
-    while remaining:
-        flag = remaining.pop(0)
-        if flag in seen:
-            raise PolicyFailure("helper.argv", "duplicate Jev option")
-        seen.add(flag)
-        if flag in {"--status", "--sanitized"}:
-            continue
-        if flag not in {"--config", "--environment", "--packet"} or not remaining:
-            raise PolicyFailure("helper.argv", "unknown Jev option")
-        value = remaining.pop(0)
-        if flag == "--config" and candidate_path(value, ctx.pane_cwd) != ctx.config_path:
-            raise PolicyFailure("helper.argv", "Jev config must be this workspace")
-        if flag == "--environment":
-            if not LABEL_RE.fullmatch(value):
-                raise PolicyFailure("helper.argv", "invalid environment")
-            environment = value
-        if flag == "--packet":
-            literal_file(ctx, value, "sanitized diagnostic packet")
-    if ctx.environment and environment != ctx.environment:
-        raise PolicyFailure("routing.scope", "Jev environment must match local scope")
-
-
 def environment_command(ctx: Context, script: str, args: List[str]) -> None:
     if not args or args[0] not in {"plan", "status", "start", "stop", "restart", "reconcile"}:
         raise PolicyFailure("helper.argv", "environment helper requires a lifecycle verb")
@@ -2429,7 +2400,7 @@ def environment_command(ctx: Context, script: str, args: List[str]) -> None:
 
 
 def workspace_dispatcher(ctx: Context, script: str, args: List[str]) -> None:
-    if "--environment" in args and args and args[0] != "jev":
+    if "--environment" in args:
         environment_command(ctx, script, args)
         return
     if args == ["--contract"]:
@@ -2523,7 +2494,6 @@ HELPERS = {
         "validate-config.sh": ("oer", workspace_read),
         "workspace.sh": ("oer", workspace_dispatcher),
         "workspace-environment.sh": ("oer", environment_command),
-        "workspace-jev.sh": ("o", jev_command),
         "workspace-start.sh": ("o", workspace_start),
         "workspace-stop.sh": ("o", workspace_stop),
         "workspace-restart.sh": ("o", workspace_restart),

@@ -123,11 +123,6 @@ if [ "$(printf '%s' "$PLAN_JSON" | jq -r '.schema_version')" = "5" ] && [ "$NO_S
   printf '%s' "$PLAN_JSON" | python3 "$HERE/service-ports.py" "$TARGET" || exit 1
 fi
 
-if printf '%s' "$PLAN_JSON" | jq -e '.integrations.jev.enabled == true and .integration_store != null' >/dev/null; then
-  integration_store="$(printf '%s' "$PLAN_JSON" | jq -r '.integration_store')"
-  (umask 077; mkdir -p "$integration_store") || exit 1
-fi
-
 declare -a BROWSER_PORTS=()
 while IFS= read -r browser_json; do
   BROWSER_SESSION_ID="$(printf '%s' "$browser_json" | jq -r '.session_id')"

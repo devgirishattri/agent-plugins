@@ -270,30 +270,8 @@
           {
             "not": {
               "required": [
-                "integrations"
-              ]
-            }
-          },
-          {
-            "not": {
-              "required": [
                 "browsers"
               ]
-            }
-          },
-          {
-            "properties": {
-              "stores": {
-                "properties": {
-                  "pin": {
-                    "items": {
-                      "not": {
-                        "const": "integrations"
-                      }
-                    }
-                  }
-                }
-              }
             }
           }
         ]
@@ -712,8 +690,7 @@
             "enum": [
               "messages",
               "scheduler",
-              "contexts",
-              "integrations"
+              "contexts"
             ]
           },
           "uniqueItems": true
@@ -1094,39 +1071,6 @@
           },
           "orchestrator": {
             "type": "string"
-          },
-          "jev": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    "integrations": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "jev": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "enabled"
-          ],
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "mode": {
-              "enum": [
-                "shadow",
-                "advisory"
-              ]
-            },
-            "credential_file": {
-              "type": "string"
-            },
-            "model": {
-              "const": "jev-1.13.0"
-            }
           }
         }
       }

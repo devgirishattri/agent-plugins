@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.18 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.6 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.11.8 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.12.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.1.0 | Validate visual provenance, record source scope, and render local walkthrough reports |
 
@@ -1179,12 +1179,8 @@ them. In mixed topologies, a root-scoped master can message a confined master, b
 the confined master cannot reply directly; use the unbound root as relay when one
 exists. See the shared-root template's adjacent `workspace-shared-root.md` notes.
 
-Jev is an optional, explicitly invoked diagnostic guide helper, disabled by default
-and removable without changing the ordinary workflow. It is never a permission or
-review gate. `SESSION_WORKSPACE_JEV_MAX_REQUESTS` defaults to 0 (no paid calls),
-accepts 0–10000 and caps cumulative attempts for the workspace integration store.
-`SESSION_WORKSPACE_JEV_TIMEOUT_MS` defaults to 5000 (range 1–15000, no retries).
-Configure tunables through launcher env groups; the optional `integrations` store
-is pinned as `SESSION_WORKSPACE_INTEGRATIONS_HOME`. Credential/data/removal and
-accounting rules are in the environment contract; no production-workload benefit
-is claimed from synthetic diagnostic evaluation.
+Session-workspace 0.12.0 removes the optional Jev integration. Before upgrading,
+remove top-level `integrations`, each environment's `jev` field, and `integrations`
+from `stores.pin` in schema-v5 configurations. Validation rejects these removed
+fields with a migration diagnostic. Environment grouping and `--environment`
+remain supported.

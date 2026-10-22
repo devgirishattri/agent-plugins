@@ -250,7 +250,6 @@ coordination_var_name() {
     messages) echo "SESSION_CHAT_TARGET_MESSAGES_DIR" ;;
     scheduler) echo "SESSION_SCHEDULER_HOME" ;;
     contexts) echo "SESSION_CONTEXT_HOME" ;;
-    integrations) echo "SESSION_WORKSPACE_INTEGRATIONS_HOME" ;;
   esac
 }
 

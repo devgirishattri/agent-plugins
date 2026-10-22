@@ -41,15 +41,12 @@ shift || true
 
 # Environment grouping keeps the original config path/identity intact.
 for argument in "$@"; do
-  if [ "$argument" = "--environment" ] && [ "$VERB" != "jev" ]; then
+  if [ "$argument" = "--environment" ]; then
     exec bash "$HERE/workspace-environment.sh" "$VERB" "$@"
   fi
 done
 
 case "$VERB" in
-  jev)
-    exec bash "$HERE/workspace-jev.sh" "$@"
-    ;;
   plan)
     exec bash "$HERE/workspace-plan.sh" "$@"
     ;;

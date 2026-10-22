@@ -80,5 +80,4 @@ cannot close tasks. For target AGENTS.md and read-only Git evidence, locals requ
 executor/reviewer reports instead of running queries outside their control cwd;
 reviewers independently verify executor evidence. Bind every packet/approval to
 target, repository, task and diff revision.
-Read `../session-workspace/references/environments.md` before grouped lifecycle or
-Jev use. Jev advice never satisfies a review or user confirmation.
+Read `../session-workspace/references/environments.md` before grouped lifecycle use.

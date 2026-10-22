@@ -14,10 +14,30 @@ def pane_runtime(cfg, pane):
     return pane.get('runtime', cfg['roles'][pane['role']]['runtime'])
 
 
+REMOVED = 'was removed in session-workspace 0.12.0; delete it from the config'
+
+
+def removed_features(cfg):
+    """Report removed Jev configuration forms so old configs fail with a migration message."""
+    found = []
+    if 'integrations' in cfg:
+        found.append('integrations (Jev) ' + REMOVED)
+    envs = cfg.get('environments')
+    if isinstance(envs, list) and any(isinstance(e, dict) and 'jev' in e for e in envs):
+        found.append('environments[].jev ' + REMOVED)
+    pin = cfg.get('stores', {}).get('pin') if isinstance(cfg.get('stores'), dict) else None
+    if isinstance(pin, list) and 'integrations' in pin:
+        found.append('"integrations" in stores.pin ' + REMOVED)
+    return found
+
+
 def validate(cfg, root):
     def require(ok, message):
         if not ok:
             raise ValueError(message)
+
+    removed = removed_features(cfg)
+    require(not removed, '; '.join(removed))
 
     def shape(value, allowed, required, label):
         require(isinstance(value, dict), label + ' must be an object')
@@ -34,7 +54,7 @@ def validate(cfg, root):
     require(all(isinstance(name, str) for name in declared) and len(declared) == len(set(declared)), 'environment orchestrator requires a unique pane')
     seen_ids, seen_sessions, seen_roots, coordinators, control_roots = set(), set(), [], set(), []
     for e in envs:
-        shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator', 'jev'], ['id', 'cwd', 'development', 'services'], 'environment')
+        shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator'], ['id', 'cwd', 'development', 'services'], 'environment')
         require(isinstance(e['id'], str) and re.fullmatch(r'[a-z0-9][a-z0-9-]*', e['id']), 'invalid environment id')
         require(e['id'] != 'root' and e['id'] not in seen_ids, 'reserved or duplicate environment id')
         seen_ids.add(e['id'])
@@ -43,7 +63,6 @@ def validate(cfg, root):
         require(cwd.is_dir() and cwd != root and inside(cwd, root), 'environment cwd must be a distinct contained directory')
         require(not any(inside(cwd, r) or inside(r, cwd) for r in seen_roots), 'environment roots overlap')
         seen_roots.append(cwd)
-        require('jev' not in e or type(e['jev']) is bool, 'environment jev must be boolean')
         selected = []
         for kind in ['development', 'services']:
             ids = e[kind]
@@ -114,19 +133,6 @@ def validate(cfg, root):
     require(len(all_ports) == len(set(all_ports)), 'v5 service and browser ports must be unique')
     if envs and cfg.get('orchestration', {}).get('enabled'):
         require(all(any(e['cwd'] == t['cwd'] for e in envs) for t in cfg['orchestration']['targets']), 'orchestration targets must exactly bind an environment cwd')
-    integrations = cfg.get('integrations', {})
-    shape(integrations, ['jev'], [], 'integrations')
-    if 'jev' in integrations:
-        j = integrations['jev']
-        shape(j, ['enabled', 'mode', 'credential_file', 'model'], ['enabled'], 'integrations.jev')
-        require(type(j['enabled']) is bool, 'jev.enabled must be boolean')
-        require(j.get('mode', 'shadow') in ['shadow', 'advisory'], 'invalid Jev mode')
-        require(j.get('model', 'jev-1.13.0') == 'jev-1.13.0', 'Jev model must be pinned to the evaluated version')
-        if 'credential_file' in j:
-            f = j['credential_file']
-            require(isinstance(f, str) and bool(f) and not Path(f).is_absolute() and '..' not in Path(f).parts, 'credential_file must be a relative contained reference')
-        # No path probing: off must not inspect credentials. Enabled availability
-        # is checked by the optional adapter, never by workspace startup.
 
 
 if __name__ == '__main__':

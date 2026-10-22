@@ -89,7 +89,7 @@ def target_cwd_valid:
   and test("\\A[A-Za-z0-9][A-Za-z0-9._/-]*\\z")
   and (contains("..") | not)
   and (endswith("/") | not);
-def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_HOME", "SESSION_CONTEXT_HOME", "SESSION_WORKSPACE_INTEGRATIONS_HOME"];
+def coordination_vars: ["SESSION_CHAT_TARGET_MESSAGES_DIR", "SESSION_SCHEDULER_HOME", "SESSION_CONTEXT_HOME"];
 def harness_engine_vars: [
   "SESSION_WORKSPACE_CONFIG",
   "SESSION_WORKSPACE_PROJECT_ROOT",
@@ -111,7 +111,7 @@ def harness_engine_vars: [
 
   # ---- structural: unknown/missing keys, one call per object shape ----
   (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) then
-     chk(.; (["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser", "harness"] + (if (.schema_version == 4 or .schema_version == 5) then ["orchestration"] else [] end) + (if .schema_version == 5 then ["environments", "integrations", "browsers"] else [] end)); ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
+     chk(.; (["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser", "harness"] + (if (.schema_version == 4 or .schema_version == 5) then ["orchestration"] else [] end) + (if .schema_version == 5 then ["environments", "browsers"] else [] end)); ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
    else
      chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
    end),
@@ -553,7 +553,7 @@ def harness_engine_vars: [
     else empty end),
 
   # ---- stores.pin: known stores only, no duplicates ----
-  (.schema_version as $v | (.stores.pin // [])[] | select(. != "messages" and . != "scheduler" and . != "contexts" and (. != "integrations" or $v != 5)) |
+  ((.stores.pin // [])[] | select(. != "messages" and . != "scheduler" and . != "contexts") |
     "stores.pin contains an unknown store: " + .),
   ((.stores.pin // []) as $pin | if ($pin | unique | length) != ($pin | length) then "stores.pin must not contain duplicates" else empty end),
 

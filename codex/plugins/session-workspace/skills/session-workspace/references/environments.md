@@ -57,7 +57,7 @@ these are tool policies, not OS isolation or complete Codex path containment.
 
 The launcher pins `SESSION_WORKSPACE_SCOPE_JSON`. Never repair/export identity
 manually. Changing repository/session/coordinator bindings requires restarting
-affected sessions; Jev feature toggles are excluded from this scope identity.
+affected sessions.
 
 
 ## Root-scoped environment orchestrators
@@ -121,8 +121,7 @@ queries themselves. This replaces direct target inspection in the generic
 lifecycle instructions. Reviewers independently verify executor evidence.
 Context snapshots should use environment-prefixed names and
 structured repository bindings; verify handoffs before resuming in a repository.
-Memory retains existing shared/per-pane topology. No knowledge data goes to Jev;
-no new memory system, scheduler state machine or chat transport is introduced.
+Memory retains existing shared/per-pane topology. No new memory system, scheduler state machine or chat transport is introduced.
 
 ## Services and browsers
 
@@ -147,70 +146,15 @@ profile does not, doctor emits INFO with a manual copy command. Stop Chrome firs
 the command excludes `sessions/` to avoid copying a destination back into itself.
 Doctor never moves data or changes the selected profile.
 
-## Optional removable Jev
+## Removed Jev integration
 
-The guide-only helper is explicit, never called by lifecycle, hooks, policy,
-scheduler, chat or recall. Diagnostic synthetic results are promising; workload
-benefit is unproven. The failed acceptance-criterion checker is excluded. No
-collection, remediation, retries, command generation or authorization is automated.
-
-```json
-{"integrations":{"jev":{"enabled":false,"mode":"shadow",
-  "model":"jev-1.13.0","credential_file":".agent-workspace/jev.local.key"}}}
-```
-
-Absent/false performs no credential, packet, budget-store or network reads. A
-credential is a gitignored owner-owned mode-0600 regular file containing one raw
-key, never JSON/argv/messages or generic pane secret delivery. Enabled but missing
-credentials/adapter/API/store or corrupt accounting returns unconfigured or unavailable and leaves
-ordinary work intact. `workspace.sh jev --status` reads configuration only;
-`ready_unverified` does not prove account access. Plan/status/doctor are non-billable.
-
-For explicit evaluation, pin `integrations` in `stores.pin`, use an env group with
-`pin_to_session: true`, and configure non-secret inherited tunables:
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `SESSION_WORKSPACE_JEV_MAX_REQUESTS` | `0` | Cumulative workspace-store request ceiling, 0–10000; zero prevents paid calls |
-| `SESSION_WORKSPACE_JEV_TIMEOUT_MS` | `5000` | Single-request timeout, 1–15000 ms; no retries |
-
-The launcher supplies `SESSION_WORKSPACE_INTEGRATIONS_HOME` and creates the pinned
-operational directory only when enabled. Helpers consume it and never derive/export
-a replacement. Env-group changes require restart; the feature switch is read each
-call. Calls with `--environment` additionally require that environment's `jev: true`.
-Local coordinators must select their own environment. Root may call without an
-environment for workspace diagnostics; only the global enabled switch gates that
-case. Global off always wins.
-
-Only with explicit sanitized-input authorization and a spending ceiling, invoke:
-
-```text
-bash <PLUGIN_ROOT>/scripts/workspace-jev.sh --environment web --packet <absolute-packet.json> --sanitized
-```
-
-The packet has only string fields `surface` (`chat`, `context`, `workspace`,
-`harness`), `current_observation`, `background`; max 4096 bytes. Remove identifiers,
-secrets and unrelated content manually. Screening is not an anonymization guarantee.
-Stage packets inside the workspace root; locals should use their control directory.
-Symlink traversal is rejected. Active harness callers must be coordinators; locals select their own environment
-and a readable packet. Fixed HTTPS transport refuses proxies and redirects. Enabling
-configuration does not authorize genuine log uploads.
-
-`shadow` returns usage/provenance without a guide; `advisory` can return an existing
-skill identifier or unknown at the fixed evaluated 0.9 selected-probability cutoff.
-Both spend budget. Locked/fsynced reservations precede transmission; every attempt,
-including timeout/failure, permanently consumes a slot and a conservative 65536-token
-allowance. This is a request bound, not an invoice guarantee. The ledger holds only
-digests/reservations, no payload/key. Identical packet/config revisions are not
-retried. No cache is used. Preserve accounting across restart/re-enable; never remove
-it to reset the ceiling. Late results from a changed configuration are discarded;
-an already transmitted request cannot be unsent.
-
-To remove: disable, remove `integrations.jev`, environment Jev flags and the credential
-reference, then optionally remove the dedicated credential. Preserve accounting and
-experiment evidence. No SDK/background service needs uninstalling. Adapter/catalog
-are isolated from core; missing adapter reports unavailable. No tasks or approvals
-require model output.
+Session-workspace 0.12.0 removed the optional Jev diagnostic helper. A v5 config
+that still has top-level `integrations`, `environments[].jev`, or `"integrations"`
+in `stores.pin` fails validation with a message that names the removed field.
+Migration needs only config edits: remove `integrations`, `environments[].jev`,
+and the `integrations` store pin. Revoke any Jev credential at the provider
+first. Delete the local copy only with separate authorization. Keep the existing
+paid-call accounting and evidence records.
 
 ## Migration / rollback
 
@@ -218,7 +162,7 @@ Upgrade both providers before opting into v5; old releases reject it. Keep the o
 config, create required directories, inspect plan, start selected environments.
 Never migrate in-flight approvals to a different repository. Roll back by stopping
 only introduced sessions, restoring old config and restarting affected identities.
-Removing Jev requires no workspace-plugin downgrade or task-store migration.
+Jev removal in 0.12.0 needs only the config edit above, and no task-store migration.
 
 To merge two v4 configs that share one root, follow these steps. Merge the sessions
 and keep the pane names. Choose one project id and `stores.base`. Add the environments

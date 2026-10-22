@@ -51,7 +51,6 @@ def coordination_var_name(store):
   if store == "messages" then "SESSION_CHAT_TARGET_MESSAGES_DIR"
   elif store == "scheduler" then "SESSION_SCHEDULER_HOME"
   elif store == "contexts" then "SESSION_CONTEXT_HOME"
-  elif store == "integrations" then "SESSION_WORKSPACE_INTEGRATIONS_HOME"
   else empty end;
 
 . as $cfg
@@ -97,8 +96,6 @@ def coordination_var_name(store):
   config_path: $config_path,
   secret_keys_by_role: ($cfg | secret_keys_by_role),
   environments: ($cfg.environments // []),
-  integrations: ($cfg.integrations // {}),
-  integration_store: (if ($pin | index("integrations")) != null then store_path($store_base; $store_overrides; "integrations") else null end),
   project: {
     id: $pid,
     display_name: ($cfg.project.display_name // $pid),
@@ -143,7 +140,7 @@ def coordination_var_name(store):
               role: $p.role,
               secret_keys: ($cfg | secret_keys_for_role($p.role)),
               scope: (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then {
-                environments: ($cfg.environments | map(del(.jev))),
+                environments: $cfg.environments,
                 environment: ([$cfg.environments[] | select((.development + .services) | index($s.id)) | .id][0] // null),
                 root_orchestrator: ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name | select(. as $n | [$cfg.environments[].orchestrator] | index($n) | not)][0] // null)
               } else null end),
@@ -244,7 +241,7 @@ def coordination_var_name(store):
 } else {} end))
 
 | if $cfg.schema_version != 5 then
-    del(.schema_version, .environments, .integrations, .integration_store, .browsers)
+    del(.schema_version, .environments, .browsers)
     | .sessions |= map(.panes |= map(del(.scope)))
     | if (.orchestration.active // false) then .orchestration.targets |= map(del(.environment, .orchestrator)) else . end
   else . end

@@ -552,7 +552,7 @@ When `orchestration.enabled` is true, use the `workspace-orchestrator` skill
 - `workspace-plan`, `workspace-status`, and `workspace-doctor` are
   mutation-free. Run them freely to check state.
 
-## Schema v5: independent environments and optional diagnostics
+## Schema v5: independent environments
 
 Read [references/environments.md](references/environments.md) for these topics:
 
@@ -560,18 +560,10 @@ Read [references/environments.md](references/environments.md) for these topics:
 - optional local orchestrators
 - scoped routing/tasks
 - multiple browser bindings
-- the fully optional removable Jev diagnostic helper
 
 Versions 1–4 retain their single-orchestrator contract. V5 pins scope identity
-at launch. Never export it manually. Jev stays off unless configured. Jev
-supplies no approvals.
+at launch. Never export it manually.
 
-New inherited operational tunables:
-
-- `SESSION_WORKSPACE_JEV_MAX_REQUESTS`: default 0, cumulative 0–10000 request ceiling.
-- `SESSION_WORKSPACE_JEV_TIMEOUT_MS`: default 5000, range 1–15000.
-
-The optional pinned `integrations` store is launch-inherited as
-`SESSION_WORKSPACE_INTEGRATIONS_HOME`. The reference holds the full data,
-credential, fallback and removal contracts. Do not upload logs merely because
-Jev is enabled.
+Session-workspace 0.12.0 removed the optional Jev diagnostic helper. A v5 config
+that still has `integrations`, `environments[].jev`, or `"integrations"` in
+`stores.pin` fails validation. Delete those fields to migrate.
