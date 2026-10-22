@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/devgirishattri/agent-plugins/session-workspace/workspace.schema.json",
   "title": "session-workspace configuration",
-  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape mirrors validate-config.sh, which is authoritative. Schema version 1 remains workspace-only, version 2 adds the strict-v1 harness, version 3 adds optional typed guard packs, and version 4 adds the closed reviewed-git-v1 orchestration profile. No guard or orchestration field accepts arbitrary scripts, regexes, prompts, shell fragments, or permission-widening escape hatches. Version 5 adds explicit environment ownership, scoped coordinators and an optional removable diagnostic capability.",
+  "description": "Schema for .agent-workspace/workspace.json (documentation/contract reference). Structural shape mirrors validate-config.sh, which is authoritative. Schema version 1 remains workspace-only, version 2 adds the strict-v1 harness, version 3 adds optional typed guard packs, and version 4 adds the closed reviewed-git-v1 orchestration profile. No guard or orchestration field accepts arbitrary scripts, regexes, prompts, shell fragments, or permission-widening escape hatches. Version 5 adds explicit environment ownership and scoped coordinators.",
   "type": "object",
   "required": [
     "schema_version",
