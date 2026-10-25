@@ -12,10 +12,10 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.7.11 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.18 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.6 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.5.7 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.12.1 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-chat` | 0.17.19 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.7 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `knowledge` | 0.5.8 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-workspace` | 0.12.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.1.0 | Validate visual provenance, record source scope, and render local walkthrough reports |
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generic schema-v3/v4 lifecycle reminders. The inactive path is deliberately
+# Generic schema-v3+ lifecycle reminders. The inactive path is deliberately
 # pure bash and silent because UserPromptSubmit runs on every turn.
 set -uo pipefail
 

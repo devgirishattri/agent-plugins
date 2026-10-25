@@ -1,6 +1,6 @@
 ---
 name: workspace-orchestrator
-description: Coordinate a schema-v4 session-workspace reviewed Git lifecycle across orchestrator, executor, and reviewer panes. Use for workspace status, plan review, executor dispatch, post-execution review, commit, push, deploy, selftest, prompt preview, or when replacing equivalent project-local orchestration commands.
+description: Coordinate a schema-v4/v5 session-workspace reviewed Git lifecycle across orchestrator, executor, and reviewer panes. Use for workspace status, plan review, executor dispatch, post-execution review, commit, push, deploy, selftest, prompt preview, or when replacing equivalent project-local orchestration commands.
 ---
 
 # Workspace Orchestrator

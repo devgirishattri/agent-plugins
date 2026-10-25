@@ -104,13 +104,13 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
 
 ```json
 {
-  "id": "abcd1234",
+  "id": "task-1767225600-abcd1234",
   "name": "task name",
   "status": "created|assigned|review|done|blocked",
   "stage": "plan|dispatch|execute|audit|push|... or null",
   "assigner": "orchestrator-pane-name",
   "assignee": "executor-pane-name|null",
-  "prompt_file": "/path/to/scheduler/prompts/abcd1234.md|null",
+  "prompt_file": "/path/to/scheduler/prompts/task-1767225600-abcd1234.md|null",
   "reviewer": "reviewer-pane-name|null",
   "depends_on": ["task-id", "..."],
   "created_at": "ISO-8601",

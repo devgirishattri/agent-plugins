@@ -1,5 +1,5 @@
 ---
-description: Coordinate the schema-v4 reviewed Git lifecycle (status/plan/dispatch/review/commit/push/deploy) across configured executor/reviewer panes
+description: Coordinate the schema-v4/v5 reviewed Git lifecycle (status/plan/dispatch/review/commit/push/deploy) across configured executor/reviewer panes
 argument-hint: "<intent, e.g. 'status', 'plan review for <target>: <task>', 'authorize push for <target>'>"
 allowed-tools: Bash(bash:*)
 ---

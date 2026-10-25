@@ -5,12 +5,10 @@ description: Understand the knowledge plugin's full taxonomy (docs, memory, cont
 
 # Knowledge
 
-`knowledge` is ONE cohesive, internally modular plugin for durable project knowledge. It covers three areas:
+`knowledge` is the plugin for durable project knowledge. It covers three areas:
 - documentation workflows
 - context snapshots
 - a native memory module for `.agents/memory/`: consolidation, promotion, deterministic search and recall, an explicit-link backlink graph, and a read-only cross-store doctor
-
-Every command lives under this one plugin. You do not need to reason about cross-plugin composition.
 
 ## The taxonomy: three stores, one question each
 
@@ -42,7 +40,7 @@ Knowledge should be reusable for future work. It is not a transcript archive.
 
 ## Which command, when
 
-This table only routes. Argument shapes and per-command detail are in `references/commands.md`. Load that file when you need exact arguments or ranking rules. Public names are unchanged. Every entry is `/knowledge:<name>` on Claude and `$knowledge:<name>` on Codex.
+This table only routes. Argument shapes and per-command detail are in `references/commands.md`. Load that file when you need exact arguments or ranking rules. Every entry is `/knowledge:<name>` on Claude and `$knowledge:<name>` on Codex.
 
 | Need | Reach for | Writes? |
 |---|---|---|
@@ -52,7 +50,7 @@ This table only routes. Argument shapes and per-command detail are in `reference
 | Resume, list, diff, search, share, remove snapshots | `context-load`, `context-list`, `context-diff`, `context-search`, `context-share`, `context-remove` | remove only, confirmed |
 | Verify a handoff's recorded evidence | `context-verify <name> --repository-id <id>` | no |
 | Bootstrap a memory store | `init` | creates the store, user-run |
-| Store health / why recall is empty | `doctor`, narrower `lint` | no (`lint --fix` writes) |
+| Store health / why recall is empty | `doctor`, narrower `lint` | no |
 | Find a slug or ranked memory matches | `search` (memory only), `find` (docs + memory + context) | no |
 | Prior knowledge before acting | `recall <query>` — slug citations + snippets, untrusted framing | no |
 | Link structure of memories | `graph neighbors\|reverse\|orphans\|components` | no |
@@ -77,7 +75,7 @@ Three write boundaries exist. Each has its own stated role rule. There is no uni
 - **Context.** Context coordination writes are **reviewer-ALLOWED**, per the coordination-state exception of the multi-agent baseline. Session hand-off state is fleet-coordination data. It is not a durable knowledge store.
 - **Docs.** `docs-create` and its explicitly invoked TODO/ISSUES maintenance are gated by the `docs-write.sh` reviewer-role preflight (described below). The refusal is **workflow-level**. The skill hard-requires the preflight. It is not a technical funnel like `memory-write.sh`, because docs edits are direct model edits.
 
-`doctor`, `search`, `recall`, and `graph` are read-only. They run anywhere, including reviewer panes. `lint` is also read-only, except `lint --fix`. `memory-write.sh` performs the repairs of `lint --fix`, so they inherit its reviewer-role refusal (exit 6).
+`doctor`, `search`, `recall`, `graph`, and `lint` are read-only. They run anywhere, including reviewer panes.
 
 ## Automatic recall and capture
 

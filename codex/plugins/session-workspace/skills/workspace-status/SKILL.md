@@ -5,8 +5,8 @@ description: "Show current session-workspace lifecycle state. Use when the user 
 
 # workspace-status
 
-When this skill is invoked, do not add a preamble or narrate the plan. Run
-the relevant script directly, then return only the formatted result.
+When this skill is invoked, run the script below and report its result,
+leading with the outcome.
 
 Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it
 is the directory two levels above this `SKILL.md`. Use that absolute path;
@@ -27,9 +27,8 @@ Status is read-only. It validates config and reads tmux state, but does not
 create sessions, write state files, repair panes, or kill anything. For each
 planned pane it reports session existence/managed status, pane id, role,
 runtime, configured model, cwd, foreground process, and health (`missing`,
-`dead`, `healthy`, or `unmanaged-occupant`). The current script filters
-unmatched targets to an empty result rather than erroring; use
-`workspace-plan TARGET` first when strict target validation matters.
+`dead`, `healthy`, or `unmanaged-occupant`). An unknown target fails with
+an error that lists the known session ids.
 
 For schema-v5 `--environment ID` selection, invoke the installed dispatcher as
 `bash <PLUGIN_ROOT>/scripts/workspace.sh status --environment ID [flags]`

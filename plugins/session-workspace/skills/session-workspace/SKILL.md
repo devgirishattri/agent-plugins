@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install), its opt-in strict-v1 multi-agent harness (harness-status/harness-doctor, the PreToolUse role policy), and schema-v4 reviewed Git orchestration. Use this before invoking any /session-workspace:workspace-* or /session-workspace:harness-* command (including /session-workspace:workspace-orchestrator) so you understand the config model, the real flags, the safety gates, and the provider-neutral coordination boundary.
+description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install), its opt-in strict-v1 multi-agent harness (harness-status/harness-doctor, the PreToolUse role policy), and schema-v4/v5 reviewed Git orchestration. Use this before invoking any /session-workspace:workspace-* or /session-workspace:harness-* command (including /session-workspace:workspace-orchestrator) so you understand the config model, the real flags, the safety gates, and the provider-neutral coordination boundary.
 ---
 
 # session-workspace: config-driven tmux workspace engine
@@ -37,7 +37,7 @@ planning, runtime argv/env construction, and create/adopt/reconcile/stop/restart
 
 A project opts in by creating `.agent-workspace/workspace.json`. Set
 `schema_version: 1`, `2` for the optional harness, `3` for shared guard packs,
-or `4` for reviewed orchestration. The config describes:
+`4` for reviewed orchestration, or `5` for independent environments. The config describes:
 
 - `project` — id/display name/root
 - `runtimes` — named launch profiles (e.g. `claude`, `codex`), replacing any
@@ -61,14 +61,14 @@ or `4` for reviewed orchestration. The config describes:
     single pane that receives the Chrome argv. A one-pane session can omit it.
   - Only the selected pane reports DevTools readiness. Siblings keep their own
     `command`/`port`.
-- `harness` (schema v2/v3/v4) — opt-in strict-v1 role policy: `enabled`,
+- `harness` (schema v2–v5) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
-  `gates`, plus optional schema-v3/v4 `guards`.
+  `gates`, plus optional schema-v3–v5 `guards`.
   - Absent or `enabled: false` is a true no-op for panes whose launcher mode
     is empty.
   - A pane launched under audit/enforce keeps that mode. It blocks as drift
     until restarted.
-- `orchestration` (schema v4 only) — optional closed `reviewed-git-v1`
+- `orchestration` (schema v4 or v5) — optional closed `reviewed-git-v1`
   targets. A target binds a safe child cwd to its configured executor/reviewer
   pair, named remote, work/release branches, and fixed merge strategy. It
   accepts no commands, scripts, prompts, regexes, or custom gate bypasses.
@@ -83,7 +83,7 @@ enforces it in two ways:
 
 ### Secret delivery
 
-From 0.8.0, `secrets.allow` accepts strings and closed objects with required
+`secrets.allow` accepts strings and closed objects with required
 `key` and `roles` fields, for example
 `["SHARED_TOKEN", {"key":"MCP_TOKEN","roles":["master"]}]`.
 
@@ -162,7 +162,7 @@ plain `tmux set-environment` on purpose. That path is for coordination vars a
 hand-made pane should also inherit. Secrets are excluded from it by
 construction.
 
-## The opt-in harness (schema v2/v3/v4)
+## The opt-in harness (schema v2–v5)
 
 With `harness.enabled: true`, the engine's `PreToolUse` hook enforces an
 **immutable strict-v1 floor**. The floor is keyed on the per-pane identity the
@@ -179,8 +179,6 @@ when a user hits them.
   containing the pane with `/session-workspace:workspace-restart <session-id>`.
 
 ### Draft staging (reviewer, executor, environment-scoped coordinator)
-
-From 0.7.1:
 
 - Condition: the validated plan grants this pane's role `messages`. The path
   comes from the plan, never from inherited `SESSION_*` env.
@@ -200,16 +198,14 @@ From 0.7.1:
   - any patch that also touches another path
 - No grant means no staging exception (fail closed).
 - An executor's ordinary checkout writes are not a substitute staging contract.
-- The root orchestrator's authority over store and transport files is unchanged.
+- The root orchestrator keeps its authority over store and transport files.
 - Arbitrary executor shell commands (outside the single literal read grammar)
   must not name a granted messages store, even one nested in their cwd. The
   same holds for confined-coordinator shell commands.
 - Reviewer safe reads and an executor's single safe read of a store in its cwd
-  are unchanged.
-- Portable guidance: read dispatch files with `Read` or a trusted helper.
-- Earlier releases let reviewers write any top-level `.md`/`.txt` in the
-  store. That also reached other panes' pending dispatch files. This is
-  removed, and downgrading restores it.
+  remain allowed.
+- Read dispatch files with the literal read command in "Message reads"
+  below, or with a trusted helper. Claude's native `Read` is not portable to Codex.
 
 ### Reviewer
 
@@ -273,7 +269,7 @@ up to 16 files/directories.
 - Omitted/empty paths keep old behavior.
 - Limit: hooks are not an atomic filesystem sandbox against racing same-uid swaps.
 
-### Message reads (0.10.0)
+### Message reads
 
 Executors and reviewers can read a complete delivered message addressed to or
 sent by their validated pane. They can also read an existing own draft. Use the
@@ -289,7 +285,7 @@ existing single literal non-Git read grammar.
   this pane at one end.
 - Ambiguous or removed peers fail closed.
 - No environment override grants reads.
-- Reviewers lose broad message-store and ungranted provider-inbox access.
+- Reviewers have no broad message-store or ungranted provider-inbox access.
 - Peer files, queue/archive/ledger state and message-store workdirs are denied.
 - Recursive reads from ancestors of the store (`rg`, `find`, `du`, recursive
   `grep`, `ls -R`) are denied. Name explicit safe subdirectories, not glob
@@ -297,9 +293,6 @@ existing single literal non-Git read grammar.
 - Own-draft native writes and coordinator behavior are unchanged.
 - Limit: Claude native Read remains ungated. These operand checks do not
   isolate arbitrary program internals or concurrent same-user filesystem changes.
-- Upgrade: update session-chat to 0.17.13 and workspace to 0.10.0, then
-  restart panes. No schema/store migration.
-- Rollback restores the executor read failure and broader reviewer access.
 
 ### Executor
 
@@ -330,9 +323,9 @@ Shell reads:
 - Limit (known): that floor checks operands, not recursive traversal or
   inherited tool configuration.
 
-Version additions:
+Installed plugin and skill reads:
 
-- From 0.7.1, executors can also read files in the selected installed
+- Executors can also read files in the selected installed
   `girishattri-plugins` plugin version. Use the same single-command read
   grammar. No `read_paths` is needed.
   - Readable as data: skills, commands, references, and scripts.
@@ -340,9 +333,7 @@ Version additions:
   - This grants no cache writes, cache workdirs, execution, unselected-version
     reads, or store access.
   - Confined orchestrator shell behavior is unchanged.
-  - No config migration is needed. Update the plugin and restart affected agents.
-  - Downgrading restores the earlier executor cache-read restriction.
-- From 0.7.3, reviewers and executors can also read provider-installed skill
+- Reviewers and executors can also read provider-installed skill
   documentation. Use the same single literal, non-`git` read grammar.
   - Codex system skills: `<codex-home>/skills/.system/<skill>/`, only while
     the system-skills marker exists.
@@ -352,7 +343,7 @@ Version additions:
     symlink or hidden components (except `.system`).
   - Denied: workdirs, helper operands, writes, execution, other provider-home content.
   - Limit (known): skills from non-`girishattri-plugins` marketplace plugins stay denied.
-- From 0.7.4, the engine path-checks these for reviewer reads, executor
+- The engine path-checks these for reviewer reads, executor
   containment, and orchestrator child writes:
   - paths attached to short options (`-f/x`, `-o/x`, `-uo/x`)
   - every operand after `--`
@@ -361,8 +352,6 @@ Version additions:
   - Other commands are checked conservatively. Pass unusual in-scope values as
     separate arguments.
   - Reviewers never get `sort` output options.
-  - No config migration. Restart agents after updating.
-  - Downgrading restores the 0.7.3 gap.
 
 ### Orchestrator
 
@@ -370,7 +359,7 @@ Version additions:
 - It routes only to its configured executor/reviewer panes.
 - `broadcast` is not available under strict-v1.
 
-#### From 0.9.0: `gh` rules
+#### `gh` rules
 
 Root and confined orchestrators deny direct remote-mutating `gh` commands
 (`orchestrator.gh_mutation`). The denial applies even without a child
@@ -394,7 +383,7 @@ filesystem operand. Route mutations to the executor.
 - Where remote mutations must be impossible, scope the orchestrator pane's
   GitHub token (per-role secret visibility).
 
-### From 0.11.1: implicit memory capture
+### Implicit memory capture
 
 Orchestrators and executors can run the knowledge `memory-auto-capture.sh`
 helper (implicit inbox-only `remember`). Reviewers are denied.
@@ -405,7 +394,7 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
 - The writer, not the policy, enforces evidence presence, provenance stamping,
   and the pending caps.
 - Each `--staged` file must pass normal literal-file containment.
-- Knowledge 0.5 implicit capture needs this release under strict-v1.
+- Knowledge 0.5 implicit capture needs session-workspace 0.11.1 or later under strict-v1.
 - If an older harness refuses capture, that is a compatibility limit. It is not
   permission to bypass the refusal. Update and restart agents, then retry.
 
@@ -442,7 +431,7 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
 
 ### Guards and diagnostics
 
-- In schema v3/v4, optional `harness.guards` centralize orchestrator protected
+- In schema v3–v5, optional `harness.guards` centralize orchestrator protected
   files, child-directory hops, generic lifecycle reminders, and bounded Stop
   health warnings.
 - Guard changes require a workspace restart, because their canonical JSON is
@@ -454,7 +443,7 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
   new session-workspace hook hashes. Do this before you rely on lifecycle/Stop output.
 - When something is unexpectedly blocked, run `/session-workspace:harness-doctor` first.
 
-### Denial diagnostics (`DIAG` line, 0.11.7)
+### Denial diagnostics (`DIAG` line)
 
 - On every `BLOCKED` denial (enforce policy denial or integrity failure), the hook
   writes one more stderr line after it: `DIAG ` followed by one-line JSON.
@@ -477,10 +466,10 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
   code and the `BLOCKED` line decide that. A missing `DIAG` line does not show success.
 - Keep every `DIAG` line you see. Do not reduce several lines to one.
 
-### Quoted literal paths and inert note text (0.11.7)
+### Quoted literal paths and inert note text
 
 - A quoted or backslash-escaped path that contains `*`, `?`, `{`, `}`, or `[`
-  is now read as a literal path. Example: `cat 'src/app/(x)/[id]/page.tsx'`.
+  is read as a literal path. Example: `cat 'src/app/(x)/[id]/page.tsx'`.
   Containment and symlink checks are the same as for any other path.
 - An unquoted `*`, `?`, `{`, or `[` is still refused (`path.dynamic`). So is a
   glob-bearing path with a `..` part. So is a `$` or backtick inside a token the
@@ -515,14 +504,11 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
 - Helper operands (chat, scheduler, and the other reviewed helpers) never get this
   change.
 - A task note or reason (`task-done.sh`, `task-block.sh`, `task-review.sh`) and a
-  `send-message.sh` message body may now contain the text `/plugins/cache/`. Flags,
+  `send-message.sh` message body may contain the text `/plugins/cache/`. Flags,
   their values, task ids, targets, prompt-file operands, and `--note-file`
   operands may not. A line break in any argument is still refused.
-- No config migration. Update the plugin and restart affected agents. This release
-  ships with scheduler 0.7.6. To roll back, install the previous release:
-  session-workspace 0.11.5 (and session-scheduler 0.7.5, commit 69041bb).
 
-## Reviewed orchestration (schema v4)
+## Reviewed orchestration (schema v4/v5)
 
 When `orchestration.enabled` is true, use the `workspace-orchestrator` skill
 (`/session-workspace:workspace-orchestrator`).

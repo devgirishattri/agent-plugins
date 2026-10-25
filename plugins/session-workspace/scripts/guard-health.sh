@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Schema-v3/v4 Stop diagnostics. Feature-off/unlaunched sessions exit before jq
+# Schema-v3+ Stop diagnostics. Feature-off/unlaunched sessions exit before jq
 # or Python so this global plugin hook is free for non-adopters.
 set -uo pipefail
 

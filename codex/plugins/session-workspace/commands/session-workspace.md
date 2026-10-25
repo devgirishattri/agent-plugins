@@ -23,7 +23,7 @@ description: Overview of session-workspace lifecycle and the opt-in strict-v1 ro
    validates config, renders dry-run plans, starts/stops/reconciles managed
    tmux sessions and panes, builds Claude/Codex argv, pins non-secret
    coordination env, and runs a read-only doctor.
-   Schema-v2/v3/v4 projects may explicitly enable a shared, fail-closed
+   Schema-v2–v5 projects may explicitly enable a shared, fail-closed
    `strict-v1` harness. Schema v1 remains unchanged and harness-inactive.
 
 4. Summarize the available lifecycle commands for the user:
@@ -80,7 +80,7 @@ description: Overview of session-workspace lifecycle and the opt-in strict-v1 ro
      `exec_command` call's optional per-call `workdir` from the hook payload;
      therefore do not present Codex enforce mode as complete path containment
      or recommend switching from audit solely on that claim.
-     Schema v3/v4 may add typed shared guard packs. Schema v4 may also add the
+     Schema v3–v5 may add typed shared guard packs. Schema v4 and v5 may also add the
      closed `reviewed-git-v1` orchestration profile, which binds child targets
      to exact executor/reviewer pairs and coordinates the reviewed
      plan/dispatch/audit/commit/push/deploy lifecycle through the workspace

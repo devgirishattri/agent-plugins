@@ -310,7 +310,7 @@ _env_pin_mark() {
 #   ENV_ROLE_NAME           role bound to this pane
 #   ENV_PANE_CWD            resolved pane cwd from the plan
 #   ENV_HARNESS_MODE        audit/enforce when active, empty when inactive
-#   ENV_GUARDS_JSON         canonical guards JSON when schema-v3/v4 configured,
+#   ENV_GUARDS_JSON         canonical guards JSON when schema-v3+ configured,
 #                           empty otherwise
 _env_build_map() {
   local i n

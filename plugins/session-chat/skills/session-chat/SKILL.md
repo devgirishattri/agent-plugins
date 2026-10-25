@@ -133,7 +133,7 @@ Condition: a session-workspace strict-v1 harness is active and you are a child p
      - `SESSION_CHAT_KEEP_DRAFTS=1` in the launch environment keeps every draft.
    - **Hard failure** (`ERROR:` and non-zero exit, including an unreadable draft): nothing is sent and the draft is kept. Fix the named cause, and retry with the same file.
 
-Drafts that predate this behavior, or that the transport kept, are not swept automatically. Cleanup of leftovers is an explicit user request. The root orchestrator's existing authority over store files is unchanged.
+Leftover drafts, including ones the transport kept, are not swept automatically. Cleanup of leftovers is an explicit user request. The root orchestrator keeps its authority over store files.
 
 ### One complete packet per reply
 
@@ -150,7 +150,7 @@ In `auto` mode the incoming hook inlines at most `SESSION_CHAT_DISPATCH_INLINE_M
 - `notify` offers none.
 - Incoming-mode consent rules are unchanged.
 
-With session-workspace 0.10.0, reviewer and executor panes can run that command verbatim. The transport saves every dispatch at the top of the validated messages grant as `<epoch>-<pid>-<id>-<sender>-to-<recipient>.md`. A read is allowed only when all of these hold:
+With session-workspace 0.10.0 or later, reviewer and executor panes can run that command verbatim. The transport saves every dispatch at the top of the validated messages grant as `<epoch>-<pid>-<id>-<sender>-to-<recipient>.md`. A read is allowed only when all of these hold:
 
 - the filename's endpoints resolve to exactly one pair of validated plan panes, with this pane as sender or recipient;
 - the file is a private (no group/other bits), owned, single-link regular file directly in the grant, reached with no symlink component or `..` traversal;
@@ -167,7 +167,7 @@ These are denied:
 - tool workdirs inside the store
 - recursive reads from an ancestor of the store (`rg`, `find`, `du`, recursive `grep`, `ls -R`, including the implicit cwd). Name explicit subdirectories outside the store instead.
 
-Reviewers no longer get the broad store reads they had before 0.10.0. Writes remain limited to your own drafts through the native write tool. strict-v1 does not gate Claude's native `Read` tool. So the command above is the portable path for both providers.
+Reviewers have no broad store reads. Writes remain limited to your own drafts through the native write tool. strict-v1 does not gate Claude's native `Read` tool. So the command above is the portable path for both providers.
 
 ## Priorities and TTL
 

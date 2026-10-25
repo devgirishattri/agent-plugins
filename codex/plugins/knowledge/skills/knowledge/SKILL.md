@@ -5,12 +5,10 @@ description: Choose the right knowledge command for project docs, durable memory
 
 # Knowledge
 
-`knowledge` is ONE cohesive, internally modular plugin for durable project
-knowledge: documentation workflows, context snapshots, and a native memory
-module for `.agents/memory/` — consolidation, promotion, deterministic
-search/recall, an explicit-link backlink graph, and a read-only cross-store
-doctor. Every command lives under this one plugin; there is no cross-plugin
-composition to reason about.
+`knowledge` is the plugin for durable project knowledge. It covers documentation
+workflows, context snapshots, and a native memory module for `.agents/memory/`.
+The memory module provides consolidation, promotion, deterministic search and recall,
+an explicit-link backlink graph, and a read-only cross-store doctor.
 
 ## The taxonomy: three stores, one question each
 
@@ -93,10 +91,8 @@ universal funnel or one universal rule:
   hard-requires the preflight; it is not a technical funnel like
   `memory-write.sh`, since docs edits are direct model edits).
 
-`doctor`/`search`/`recall`/`graph` are read-only and run anywhere,
-including reviewer panes; `lint` is read-only too EXCEPT `lint --fix`, whose
-repairs are delegated to `memory-write.sh` and therefore inherit its
-reviewer-role refusal (exit 6).
+`doctor`, `search`, `recall`, `graph`, and `lint` are read-only.
+They run anywhere, including reviewer panes.
 
 ## Automatic recall and capture
 

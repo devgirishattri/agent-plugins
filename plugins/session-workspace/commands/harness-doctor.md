@@ -1,5 +1,5 @@
 ---
-description: Read-only health check for the opt-in session-workspace harness — config validity, activation, hook registration, schema-v3/v4 guards, python3 runtime, and live identity match
+description: Read-only health check for the opt-in session-workspace harness — config validity, activation, hook registration, schema-v3–v5 guards, python3 runtime, and live identity match
 argument-hint: "[--config PATH] [--json]"
 allowed-tools: Bash(bash:*)
 ---
@@ -18,9 +18,9 @@ Each check reports `OK`, `INFO`, `WARN`, or `ERROR`. The command exits non-zero 
 
 The checks:
 
-- `config.validation` — the workspace config validates and a plan resolves. Schema v1 through v4 all pass.
+- `config.validation` — the workspace config validates and a plan resolves. Schema v1 through v5 all pass.
   - A v1 config has no harness.
-  - A v3/v4 config without `harness.guards` behaves exactly like v2.
+  - A v3–v5 config without `harness.guards` behaves exactly like v2.
   - A v4 config without `orchestration` behaves exactly like v3.
 - `harness.activation` — `OK` when `harness.enabled: true`. `INFO` when inactive.
   - When inactive, the hook is a no-op for panes launched with an empty harness mode.
@@ -29,12 +29,12 @@ The checks:
   - It does NOT validate the exact matchers, script targets, or arguments/options.
   - It does NOT verify that the provider has loaded and trusted the hooks. A pane cannot verify that.
   - Codex trusts each hook entry by hash. A plugin upgrade that adds or changes entries needs those hashes re-accepted.
-- `guards.configuration` — `OK` when the validated plan exposes schema-v3/v4 `harness.guards` packs. `INFO` when none are configured.
-  - The lifecycle and Stop guard hooks are silent no-ops unless two conditions hold. The pane was launched with a guarded v3/v4 config (`SESSION_WORKSPACE_GUARDS_JSON` present). The matching feature flag is on.
+- `guards.configuration` — `OK` when the validated plan exposes schema-v3–v5 `harness.guards` packs. `INFO` when none are configured.
+  - The lifecycle and Stop guard hooks are silent no-ops unless two conditions hold. The pane was launched with a guarded v3–v5 config (`SESSION_WORKSPACE_GUARDS_JSON` present). The matching feature flag is on.
   - Stop workspace-health diagnostics emit only from the configured orchestrator pane.
 - `runtime.python3` — required only while a harness is active. An active harness without `python3` fails closed: every gated tool call is blocked.
 - `identity.env` — whether this process inherits engine identity. `INFO` when none. `OK` when all five core variables are present. `ERROR` when only some are.
-  - `identity.live` checks harness mode and guarded-v3/v4 identity separately.
+  - `identity.live` checks harness mode and guarded-v3–v5 identity separately.
   - An active policy blocks a partial core identity.
 - `identity.alias` — `SESSION_CHAT_PANE_NAME` / `KNOWLEDGE_PANE_NAME` agree with `SESSION_WORKSPACE_PANE_NAME`. A disagreement is `ERROR`.
   - An *active* policy blocks a disagreement.

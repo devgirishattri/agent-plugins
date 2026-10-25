@@ -1,4 +1,4 @@
-# Claude permission guidance for coordination commands (H9)
+# Claude permission guidance for coordination commands
 
 Status: guidance, conditional until tested in your own project. This page
 ships no permission rule and changes no setting.

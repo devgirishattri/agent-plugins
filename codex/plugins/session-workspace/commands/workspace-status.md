@@ -26,6 +26,4 @@ argument-hint: "[TARGET|all] [--config PATH] [--json]"
    - For each planned pane it reports session existence/managed status, pane id,
      role, runtime, configured model, cwd, foreground process, and health
      (`missing`, `dead`, `healthy`, or `unmanaged-occupant`).
-   - The current script filters unmatched targets to an empty result rather than
-     erroring; use `workspace-plan TARGET` first when you need strict target
-     validation.
+   - An unknown target fails with an error that lists the known session ids.

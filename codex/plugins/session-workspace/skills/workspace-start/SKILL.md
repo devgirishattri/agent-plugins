@@ -5,8 +5,8 @@ description: "Bring up session-workspace sessions/panes/agents/services. Use whe
 
 # workspace-start
 
-When this skill is invoked, do not add a preamble or narrate the plan. Run
-the relevant script directly, then return only the formatted result.
+When this skill is invoked, run the script below and report its result,
+leading with the outcome.
 
 Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it
 is the directory two levels above this `SKILL.md`. Use that absolute path;

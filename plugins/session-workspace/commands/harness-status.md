@@ -1,5 +1,5 @@
 ---
-description: Show the opt-in session-workspace harness state (mode, profile, roles, gates, schema-v3/v4 guards) and whether this pane's engine identity matches the validated plan
+description: Show the opt-in session-workspace harness state (mode, profile, roles, gates, schema-v3–v5 guards) and whether this pane's engine identity matches the validated plan
 argument-hint: "[--config PATH] [--json]"
 allowed-tools: Bash(bash:*)
 ---
@@ -14,9 +14,9 @@ Lead with the result. Add text only for errors or the follow-ups below. Report t
 
 `harness-status` is **read-only**. It validates the config, computes the normalized plan, and reports the harness block. The block is either `inactive` (schema v1, no `harness`, or `enabled: false`) or `active`. An `active` block shows its `mode` (`audit` | `enforce`), `profile` (`strict-v1`), semantic `roles`, and `gates`.
 
-A `guards:` line follows. It shows the schema-v3/v4 `harness.guards` packs as canonical JSON, or `none (schema-v2-compatible behavior)`.
+A `guards:` line follows. It shows the schema-v3–v5 `harness.guards` packs as canonical JSON, or `none (schema-v2-compatible behavior)`.
 
-The `identity:` line reads this pane's engine-owned environment. The variables are `SESSION_WORKSPACE_CONFIG`, `_PROJECT_ROOT`, `_PANE_NAME`, `_ROLE`, `_PANE_CWD`, and `_HARNESS_MODE`. A guarded schema-v3/v4 launch adds `_GUARDS_JSON`, which must equal the validated `harness.guards` exactly. The line shows one of these values:
+The `identity:` line reads this pane's engine-owned environment. The variables are `SESSION_WORKSPACE_CONFIG`, `_PROJECT_ROOT`, `_PANE_NAME`, `_ROLE`, `_PANE_CWD`, and `_HARNESS_MODE`. A guarded schema-v3–v5 launch adds `_GUARDS_JSON`, which must equal the validated `harness.guards` exactly. The line shows one of these values:
 
 - `not present` — `workspace-start` did not launch this process. The PreToolUse hook is a no-op here.
 - `MATCH` — identity agrees with the validated plan. An active harness enforces the strict-v1 floor for the shown role.

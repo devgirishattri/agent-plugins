@@ -13,7 +13,7 @@ Inputs (all engine-owned, emitted per pane by adapters.sh / lifecycle.sh):
   SESSION_WORKSPACE_ROLE          this pane's configured role name
   SESSION_WORKSPACE_PANE_CWD      this pane's resolved cwd
   SESSION_WORKSPACE_HARNESS_MODE  audit|enforce when active, empty when inactive
-  SESSION_WORKSPACE_GUARDS_JSON   canonical schema-v3/v4 guard pack JSON, when configured
+  SESSION_WORKSPACE_GUARDS_JSON   canonical schema-v3+ guard pack JSON, when configured
   SESSION_WORKSPACE_READ_PATHS_JSON canonical reviewer shell-read grants, when configured
 
 Hook mode reads one JSON event (Claude- or Codex-shaped) from stdin:

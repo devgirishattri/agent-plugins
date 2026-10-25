@@ -5,8 +5,8 @@ description: "Bring up session-workspace sessions/panes/agents/services. Use whe
 
 # workspace-start
 
-When this skill is invoked, do not add a preamble or narrate the plan. Run
-the relevant script directly, then return only the formatted result.
+When this skill is invoked, run the script below and report its result,
+leading with the outcome.
 
 Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it
 is the directory two levels above this `SKILL.md`. Use that absolute path;
@@ -48,9 +48,9 @@ Safety gates:
 
 A same-named tmux session with no managed marker is also refused without
 `--adopt --confirmed`. Preview session-level adoption with
-`$session-workspace:workspace-reconcile TARGET --adopt --confirmed`, then
+`/session-workspace:workspace-reconcile TARGET --adopt --confirmed`, then
 apply it with
-`$session-workspace:workspace-reconcile TARGET --apply --adopt --confirmed`.
+`/session-workspace:workspace-reconcile TARGET --apply --adopt --confirmed`.
 Dry-run adoption mutates nothing.
 
 On a fully successful run, attach is controlled by `behavior.attach`:

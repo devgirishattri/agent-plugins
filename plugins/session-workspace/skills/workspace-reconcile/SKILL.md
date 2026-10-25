@@ -1,12 +1,12 @@
 ---
 name: workspace-reconcile
-description: "Reconcile drifted tmux state against config; the only sanctioned path for adopting unmanaged panes. Use when the user asks to reconcile, repair, or adopt workspace panes."
+description: "Reconcile drifted tmux state against config; recommended preview-first path for adopting unmanaged panes. Use when the user asks to reconcile, repair, or adopt workspace panes."
 ---
 
 # workspace-reconcile
 
-When this skill is invoked, do not add a preamble or narrate the plan. Run
-the relevant script directly, then return only the formatted result.
+When this skill is invoked, run the script below and report its result,
+leading with the outcome.
 
 Resolve `PLUGIN_ROOT` from this selected skill's installed source path: it
 is the directory two levels above this `SKILL.md`. Use that absolute path;

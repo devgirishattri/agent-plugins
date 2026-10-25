@@ -41,7 +41,7 @@ Lead with the result. Add text only for errors or the follow-ups below.
      and does this pane's engine identity match the validated plan
    - `/session-workspace:harness-doctor` — read-only harness health (config, activation, hook
      registration, python3, live identity)
-   - `/session-workspace:workspace-orchestrator` — schema-v4 reviewed Git
+   - `/session-workspace:workspace-orchestrator` — schema-v4/v5 reviewed Git
      lifecycle (status/plan/dispatch/review/commit/push/deploy) across the
      configured executor/reviewer pairs. It runs only from the configured
      orchestrator pane.
@@ -56,7 +56,7 @@ Lead with the result. Add text only for errors or the follow-ups below.
    - Secrets reach exactly one pane's process environment through a
      private, single-use, mode-0600 file. They never travel through
      `send-keys`, argv, or tmux session/pane metadata.
-   - With `schema_version: 2`, `3`, or `4` and `harness.enabled: true`, a `PreToolUse`
+   - With `schema_version` `2` through `5` and `harness.enabled: true`, a `PreToolUse`
      hook enforces the strict-v1 role floor:
      - the reviewer is read-only
      - the executor is confined to its checkout
@@ -69,10 +69,10 @@ Lead with the result. Add text only for errors or the follow-ups below.
      closed in both modes. To recover, restart the pane's configured session via
      `/session-workspace:workspace-restart <session-id>`. This kills and
      recreates all of that session's configured panes.
-   - Schema v3/v4 may add typed `harness.guards` for shared protected-file and
+   - Schema v3–v5 may add typed `harness.guards` for shared protected-file and
      child-chdir denials, generic lifecycle reminders, and bounded Stop
      health diagnostics. Guard changes require `workspace restart`.
-   - Schema v4 may add a closed `orchestration` block (`reviewed-git-v1`).
+   - Schema v4 and v5 may add a closed `orchestration` block (`reviewed-git-v1`).
      It holds declarative targets. Each target binds a child cwd to its
      executor/reviewer pair, a named remote, and distinct work/release refs.
      It allows no commands, scripts, regexes, prompts, or gate bypasses.

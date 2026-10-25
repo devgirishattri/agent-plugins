@@ -83,6 +83,7 @@ Tunables (environment):
 - `KNOWLEDGE_AUTO_CAPTURE_LIMIT`: maximum accepted per pass (default 3).
 - `KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING`: skip when the inbox has `>=` this many candidates (default 20).
 - `KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES`: per-candidate byte cap (default 4096).
+- `KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT`: maximum pending auto-capture candidates per originating session (default 5). The writer enforces it.
 
 There is no `KNOWLEDGE_AUTO_CAPTURE` env gate and no default command hook.
 

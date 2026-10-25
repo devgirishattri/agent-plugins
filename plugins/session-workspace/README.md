@@ -47,7 +47,7 @@ the CLI contract string both entry points use for their compatibility check.
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
 | `harness-status` | `harness-status [--config PATH] [--json]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates/guards) and whether this pane's engine identity matches the validated plan. |
-| `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3/v4 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
+| `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3–v5 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
 
 `TARGET` is a `sessions[].id` from the config, or `all` (the default).
 `--json` output on `plan`/`status`/`doctor` is produced from the same
@@ -144,7 +144,7 @@ when a key the pane's role is entitled to isn't present in the file or the calle
 caller's environment wins): `"fail"` aborts
 that pane's launch outright; `"warn"` starts the pane without it.
 
-## Harness, guard packs, and reviewed orchestration (opt-in, schemas v2/v3/v4)
+## Harness, guard packs, and reviewed orchestration (opt-in, schemas v2–v5)
 
 `schema_version: 2` adds one optional, typed `harness` block that turns the
 workspace into a fail-closed multi-agent harness: one **orchestrator** pane,
@@ -168,7 +168,7 @@ command, script, regex, prompt fragment, custom gate, or permission bypass.
 
 **Activation is explicit.** The hook is a true no-op — no Python is even
 spawned — for: a session with no `SESSION_WORKSPACE_CONFIG` (not launched
-by this engine), a schema-v1 config, a v2/v3/v4 config with no `harness` block,
+by this engine), a schema-v1 config, a v2–v5 config with no `harness` block,
 and `harness.enabled: false` (which must then carry no `mode`/`profile`/
 `roles`/`gates`/`guards` siblings) — provided the pane's launcher mode
 (`SESSION_WORKSPACE_HARNESS_MODE`) is empty. A pane launched while the
@@ -180,7 +180,7 @@ restarted. Only `enabled: true` with `mode` (`audit` | `enforce`),
 ### Per-pane engine identity
 
 Every pane the engine launches receives six base **engine-owned** variables;
-a guarded schema-v3/v4 launch receives `SESSION_WORKSPACE_GUARDS_JSON` as a
+a guarded schema-v3–v5 launch receives `SESSION_WORKSPACE_GUARDS_JSON` as a
 seventh. They live in the pane's own process environment — never mirrored into the tmux
 session env, never settable from `env.groups`/`pane_name_aliases` (both are
 validation errors) — and `workspace-plan` lists their names:
@@ -193,7 +193,7 @@ validation errors) — and `workspace-plan` lists their names:
 | `SESSION_WORKSPACE_ROLE` | the pane's configured role name |
 | `SESSION_WORKSPACE_PANE_CWD` | the pane's resolved cwd |
 | `SESSION_WORKSPACE_HARNESS_MODE` | `audit` or `enforce` when active; empty for v1, no `harness`, or `enabled: false` |
-| `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3/v4 launch; absent for v1/v2 and v3/v4 without guards |
+| `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3–v5 launch; absent for v1/v2 and v3–v5 without guards |
 | `SESSION_WORKSPACE_READ_PATHS_JSON` | canonical `[{path, kind}]` for a reviewer or executor with `read_paths`; exported empty for every other pane so an inherited value is cleared |
 
 The policy cross-checks this identity against the validated config on every
@@ -229,14 +229,14 @@ health/lifecycle packs only add non-blocking context. Today they provide:
   local branches, report the neutral fact that `release` is ahead of `base`.
 
 The lifecycle/health wrappers exit silently before jq/Python when the guarded
-v3/v4 launcher identity is absent or the feature is off. Lifecycle reminders use
+v3–v5 launcher identity is absent or the feature is off. Lifecycle reminders use
 event-specific `hookSpecificOutput.additionalContext` JSON on both providers.
 Stop checks are bounded, skip non-git roots and absent refs, and never block
 stopping.
 
 ### Schema-v4 reviewed Git orchestration
 
-`orchestration` (schema v4 only, requires `harness.enabled: true` with
+`orchestration` (schema v4 or v5, requires `harness.enabled: true` with
 `profile: strict-v1` and `stores.pin` including `messages` + `scheduler`)
 declares the fixed `reviewed-git-v1` profile plus one or more targets:
 
@@ -697,7 +697,7 @@ byte-compare decisions. Both Claude-shaped (`tool_name`/`tool_input`, string
 `command`) and Codex-shaped (`shell`/`apply_patch`, argv-list or `bash -lc`
 commands, `workdir`, JSON-string `tool_input`) payloads are understood.
 
-For guarded schema-v3/v4 launches, the same manifest also registers generic
+For guarded schema-v3–v5 launches, the same manifest also registers generic
 `SessionStart`/`UserPromptSubmit` reminders and the non-blocking Stop health
 check. Claude and Codex health output is a top-level `systemMessage` JSON
 object; Codex rejects non-empty plain-text Stop stdout. Codex trusts each hook entry by hash, so upgrading to a
@@ -1158,12 +1158,12 @@ hand-added pane in that session present itself as a different pane.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `harness.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires `mode`, `profile`, `roles`, and `gates`; schema-v3/v4 `guards` remain optional. |
+| `harness.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires `mode`, `profile`, `roles`, and `gates`; schema-v3–v5 `guards` remain optional. |
 | `harness.mode` | enum: `audit`, `enforce` | when enabled | `audit` reports would-be policy denials on stderr without blocking; `enforce` blocks (exit 2). Integrity failures block in both. |
 | `harness.profile` | const `strict-v1` | when enabled | The only profile. No other value is accepted. |
 | `harness.roles.orchestrator` / `.executor` / `.reviewer` | string (a `roles` key) | when enabled | Exactly these three keys; three distinct existing role names; none may be `service` or use the built-in `shell` runtime. |
 | `harness.gates.plan_review_ttl_minutes` / `.audit_ttl_minutes` | integer 1–1440 | when enabled | Exactly these two keys. Freshness windows for plan review and audit (reserved for the scheduler integration; validated now so they are stable config). |
-| `harness.guards.protected_files.profile` | const `credentials-lockfiles-v1` | v3/v4, if pack exists | Generic protected credential/lockfile basenames; orchestrator Edit-family only. |
+| `harness.guards.protected_files.profile` | const `credentials-lockfiles-v1` | v3–v5, if pack exists | Generic protected credential/lockfile basenames; orchestrator Edit-family only. |
 | `harness.guards.protected_files.extra_basenames` | unique exact-basename array | no | Additive names matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`; no slash or glob. |
 | `harness.guards.orchestrator.deny_child_chdir` | boolean | no | Deny orchestrator process-directory hops into child roots. |
 | `harness.guards.lifecycle.session_reminder` / `.prompt_reminder` | boolean | no | Generic SessionStart/UserPromptSubmit routing reminders. |
@@ -1176,7 +1176,7 @@ the orchestrator role; every executor pane declares a non-`.` `cwd` that
 does not resolve to the project root and has exactly one reviewer pane with
 the identical `cwd`; every reviewer pane pairs with exactly one executor.
 
-### `orchestration` (optional, schema v4 only)
+### `orchestration` (optional, schema v4 or v5)
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|

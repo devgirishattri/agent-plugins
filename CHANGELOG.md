@@ -1,5 +1,26 @@
 # Changelog
 
+## session-workspace 0.7.1–0.11.7 — release notes moved from SKILL.md
+
+Upgrade and rollback notes that lived in `skills/session-workspace/SKILL.md`.
+The 0.10.0 notes are already recorded below. Add release dates from the
+release commits.
+
+- 0.7.1: reviewer writes are limited to the pane's own drafts directory.
+  Earlier releases let reviewers write any top-level `.md`/`.txt` in the
+  messages store. That reached other panes' pending dispatch files.
+  Downgrading restores it.
+- 0.7.1: executors may read the selected installed plugin version. No config
+  migration; update the plugin and restart affected agents. Downgrading
+  restores the earlier executor cache-read restriction.
+- 0.7.4: path checks for attached short options, operands after `--`, and
+  redirection targets. No config migration; restart agents after updating.
+  Downgrading restores the 0.7.3 gap.
+- 0.11.7: quoted literal paths and inert note text. No config migration;
+  update the plugin and restart affected agents. Ships with scheduler 0.7.6.
+  To roll back, install session-workspace 0.11.5 (and session-scheduler 0.7.5,
+  commit 69041bb).
+
 ## session-workspace 0.10.0 — 2026-09-28
 
 - Executors and reviewers may read complete delivered messages addressed to or

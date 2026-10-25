@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: When and how to use session-workspace lifecycle commands, its strict-v1 multi-agent harness, and schema-v4 reviewed Git orchestration. Use before workspace/harness commands or workspace-orchestrator so you understand the config model, safety gates, and provider-neutral coordination boundary.
+description: When and how to use session-workspace lifecycle commands, its strict-v1 multi-agent harness, and schema-v4/v5 reviewed Git orchestration. Use before workspace/harness commands or workspace-orchestrator so you understand the config model, safety gates, and provider-neutral coordination boundary.
 ---
 
 # session-workspace: config-driven tmux workspace engine
@@ -14,8 +14,7 @@ An older installed harness refusing capture is a compatibility limitation, not
 permission to bypass it. Update/restart the configured harness before retrying.
 
 `session-workspace` is a shared engine that replaces hand-maintained
-per-project `workspace.sh` launchers. Instead of six near-identical scripts
-drifting independently, one engine reads a versioned, project-local
+per-project `workspace.sh` launchers. The engine reads a versioned, project-local
 `.agent-workspace/workspace.json` config and drives tmux session/window/pane
 lifecycle from it.
 
@@ -51,7 +50,7 @@ is not a scaffold.
 
 A project opts in by creating `.agent-workspace/workspace.json`. Set
 `schema_version: 1`, `2` for the optional harness, `3` for shared guard packs,
-or `4` for reviewed orchestration. The config describes:
+`4` for reviewed orchestration, or `5` for independent environments. The config describes:
 
 - `project` — id/display name/root
 - `runtimes` — named launch profiles (e.g. `claude`, `codex`), replacing any
@@ -75,14 +74,14 @@ or `4` for reviewed orchestration. The config describes:
     single pane that receives the Chrome argv. A one-pane session can omit it.
   - Only the selected pane reports DevTools readiness. Siblings keep their own
     `command`/`port`.
-- `harness` (schema v2/v3/v4) — opt-in strict-v1 role policy: `enabled`,
+- `harness` (schema v2–v5) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
-  `gates`, plus optional schema-v3/v4 `guards`.
+  `gates`, plus optional schema-v3–v5 `guards`.
   - Absent or `enabled: false` is a true no-op for panes whose launcher mode
     is empty.
   - A pane launched under audit/enforce keeps that mode. It blocks as drift
     until restarted.
-- `orchestration` (schema v4 only) — optional closed `reviewed-git-v1`
+- `orchestration` (schema v4 or v5) — optional closed `reviewed-git-v1`
   targets. A target binds a safe child cwd to its configured executor/reviewer
   pair, named remote, work/release branches, and fixed merge strategy. It
   accepts no commands, scripts, prompts, regexes, or custom gate bypasses.
@@ -97,7 +96,7 @@ enforces it in two ways:
 
 ### Secret delivery
 
-From 0.8.0, `secrets.allow` accepts strings and closed objects with required
+`secrets.allow` accepts strings and closed objects with required
 `key` and `roles` fields, for example
 `["SHARED_TOKEN", {"key":"MCP_TOKEN","roles":["master"]}]`.
 
@@ -176,7 +175,7 @@ plain `tmux set-environment` on purpose. That path is for coordination vars a
 hand-made pane should also inherit. Secrets are excluded from it by
 construction.
 
-## The opt-in harness (schema v2/v3/v4)
+## The opt-in harness (schema v2–v5)
 
 With `harness.enabled: true`, the engine's `PreToolUse` hook enforces an
 **immutable strict-v1 floor**. The floor is keyed on the per-pane identity the
@@ -241,7 +240,7 @@ other panes and stop remain usable. Launch refuses unavailable read paths.
 Omitted/empty paths keep old behavior.
 Hooks are not an atomic filesystem sandbox against racing same-uid swaps.
 
-### Message reads (0.10.0)
+### Message reads
 
 Executors and reviewers may read a complete
 delivered message addressed to or sent by their validated pane, or an existing
@@ -253,16 +252,13 @@ and have no symlink component or `..` traversal. Parse the generated
 `<epoch>-<pid>-<id>-<sender>-to-<recipient>.md` name against all validated
 pane names; exactly one endpoint pair must match, with this pane at one end.
 Ambiguous or removed peers fail closed. No environment override grants reads.
-Reviewers lose broad message-store and ungranted provider-inbox access.
+Reviewers have no broad message-store or ungranted provider-inbox access.
 Peer files, queue/archive/ledger state and message-store workdirs are denied.
 Recursive reads from ancestors of the store (`rg`, `find`, `du`, recursive
 `grep`, `ls -R`) are denied; name explicit safe subdirectories, not glob
 exclusions. Own-draft native writes and coordinator behavior are unchanged.
 Claude native Read remains ungated; these operand checks do not isolate
 arbitrary program internals or concurrent same-user filesystem changes.
-Update session-chat to 0.17.13 and workspace to 0.10.0, then restart panes.
-No schema/store migration. Rollback restores the executor read failure and
-broader reviewer access.
 
 ### Executor
 
@@ -270,17 +266,15 @@ For executors, explicit per-pane `read_paths` also permit single literal shell
 reads using the reviewer read-command restrictions above. Executor tool workdirs
 must remain inside its checkout; use relative or absolute operands for shared
 docs. Grants never permit writes or composed shell commands outside the checkout.
-From 0.7.1, executors can also read files in the selected `girishattri-plugins`
+Executors can also read files in the selected `girishattri-plugins`
 version using the same restricted single-command grammar, without `read_paths`.
 This includes skills, commands, references, and scripts as data. Use separate
 `cat <absolute-path>` calls or `rg --no-config`; it grants no cache writes,
 cache workdirs, execution, unselected-version reads, or extra store access.
-This cache-read exception does not change confined orchestrator shell reads. No configuration migration
-is required; update the plugin and restart affected agents. Downgrading restores
-the earlier executor cache-read restriction without changing stores.
-From 0.7.3, reviewers and executors can also read provider-installed skill
-documentation with the same single literal, non-`git` read grammar: Codex
-system skills (`<codex-home>/skills/.system/<skill>/`, only while the
+This cache-read exception does not change confined orchestrator shell reads.
+Reviewers and executors can also read provider-installed skill
+documentation with the same single literal, non-`git` read grammar.
+This includes Codex system skills (`<codex-home>/skills/.system/<skill>/`, only while the
 system-skills marker exists) and user skills (`<codex-home>/skills/<skill>/`,
 `<claude-home>/skills/<skill>/`) whose directory holds a regular `SKILL.md`.
 Files must be regular, single-link, inside that skill directory, with no
@@ -301,7 +295,7 @@ An orchestrator cannot edit or run mutating commands against a child
 checkout; routes only to its configured executor/reviewer panes;
 `broadcast` is not available under strict-v1.
 
-- From **0.9.0**, root and confined orchestrators also deny direct remote-mutating
+- Root and confined orchestrators also deny direct remote-mutating
   `gh` commands even without a child filesystem operand. Route mutations to the
   executor. Reviewed reads are `run list/view` (including logs),
   `pr list/view/diff/checks`, `workflow list/view`, `release list/view` with an
@@ -337,7 +331,7 @@ checkout; routes only to its configured executor/reviewer panes;
   must be impossible. Unclassified MCP calls retain their existing limits.
 ### Rules for every role
 
-- From 0.7.4, shared shell path checks include attached short-option values
+- Shared shell path checks include attached short-option values
   and literal operands after `--`, including through accepted wrappers.
   Known `grep`/`rg` pattern and `sort` key/separator values remain data;
   unknown short options receive conservative path checks. Reviewers cannot
@@ -402,7 +396,7 @@ guidance adds no permission rule or executable capability.
 
 ### Guards and diagnostics
 
-- In schema v3/v4, optional `harness.guards` centralize orchestrator protected
+- In schema v3–v5, optional `harness.guards` centralize orchestrator protected
   files, child-directory hops, generic lifecycle reminders, and bounded Stop
   health warnings.
 - Guard changes require a workspace restart, because their canonical JSON is
@@ -414,7 +408,7 @@ guidance adds no permission rule or executable capability.
   new session-workspace hook hashes before relying on lifecycle/Stop output.
 - Run `/harness-doctor` first when something is unexpectedly blocked.
 
-### Denial diagnostics (`DIAG` line, 0.11.7)
+### Denial diagnostics (`DIAG` line)
 
 - On every `BLOCKED` denial (enforce policy denial or integrity failure), the hook
   writes one more stderr line after it: `DIAG ` followed by one-line JSON.
@@ -437,10 +431,10 @@ guidance adds no permission rule or executable capability.
   code and the `BLOCKED` line decide that. A missing `DIAG` line does not show success.
 - Keep every `DIAG` line you see. Do not reduce several lines to one.
 
-### Quoted literal paths and inert note text (0.11.7)
+### Quoted literal paths and inert note text
 
 - A quoted or backslash-escaped path that contains `*`, `?`, `{`, `}`, or `[`
-  is now read as a literal path. Example: `cat 'src/app/(x)/[id]/page.tsx'`.
+  is read as a literal path. Example: `cat 'src/app/(x)/[id]/page.tsx'`.
   Containment and symlink checks are the same as for any other path.
 - An unquoted `*`, `?`, `{`, or `[` is still refused (`path.dynamic`). So is a
   glob-bearing path with a `..` part. So is a `$` or backtick inside a token the
@@ -475,14 +469,11 @@ guidance adds no permission rule or executable capability.
 - Helper operands (chat, scheduler, and the other reviewed helpers) never get this
   change.
 - A task note or reason (`task-done.sh`, `task-block.sh`, `task-review.sh`) and a
-  `send-message.sh` message body may now contain the text `/plugins/cache/`. Flags,
+  `send-message.sh` message body may contain the text `/plugins/cache/`. Flags,
   their values, task ids, targets, prompt-file operands, and `--note-file`
   operands may not. A line break in any argument is still refused.
-- No config migration. Update the plugin and restart affected agents. This release
-  ships with scheduler 0.7.6. To roll back, install the previous release:
-  session-workspace 0.11.5 (and session-scheduler 0.7.5, commit 69041bb).
 
-## Reviewed orchestration (schema v4)
+## Reviewed orchestration (schema v4/v5)
 
 When `orchestration.enabled` is true, use
 `$session-workspace:workspace-orchestrator`. The normalized workspace plan is

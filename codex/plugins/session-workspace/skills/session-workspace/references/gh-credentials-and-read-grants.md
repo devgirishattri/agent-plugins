@@ -4,7 +4,7 @@ This is guidance for project owners who configure executor and reviewer panes.
 It adds no grant, permission or config of its own. Some points below are owner
 requirements rather than checks the harness enforces; each section says which.
 
-## Choose each pane's gh credential at launch (H3)
+## Choose each pane's gh credential at launch
 
 Owner requirements:
 
@@ -32,7 +32,7 @@ Limits:
 - Reviewer access to gh is not enabled by this page. A restricted reviewer gh
   grammar is planned separately.
 
-## `read_paths` grant reading, not running (H7)
+## `read_paths` grant reading, not running
 
 Enforced by strict-v1: a pane's `read_paths` (see the main skill, "Read
 grants") lets that pane read the listed files and directories, and does not
