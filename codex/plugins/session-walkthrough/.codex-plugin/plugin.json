@@ -1,6 +1,6 @@
 {
   "name": "session-walkthrough",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local visual walkthrough reports for session changes: scoped source fingerprints, a validated provenance manifest, captured stills or short captioned clips, and a portable HTML page. Provenance only; never approval, upload, or Git authority.",
   "author": {
     "name": "Girish Attri"

@@ -156,20 +156,10 @@ To undo a dismissal, run `memory-write.sh restore
 never deletes. Purge (below) is the only deletion path, and it does not touch the
 dismissed archive.
 
-**Rollback.** Downgrading below knowledge 0.3.30 leaves `.inbox/.dismissed/`
-intact but no longer consulted: an older capture can re-queue identical
-content as pending, and older listings ignore the archive. Nothing in the
-archive is lost. Restore wanted candidates before downgrading. If an older
-capture creates both pending and archived copies, the upgraded writer refuses
-the collision; preserve both for inspection and an explicitly approved
-resolution rather than attempting restore/re-dismiss blindly.
-
-**Downgrade compatibility (0.5.0).** Every new candidate — manual ones too —
-carries writer-assigned `origin_session` / `origin_pane`, and can carry
-`evidence`. A pre-0.5.0 reader rejects those keys. Therefore new-format inbox
-candidates are NOT transparently readable after a downgrade. Before you
-downgrade, consolidate, dismiss, or back up the pending inbox. Candidates written
-before 0.5.0 stay valid under 0.5.0 with unchanged ids.
+**Downgrade.** Before you install an older knowledge release, consolidate,
+dismiss, or back up the pending inbox. Restore dismissed candidates you want
+pending only on explicit user request. Older releases cannot read new-format
+candidates or the dismissed archive. Details: `../knowledge/references/compatibility.md`.
 
 ### Purging candidates
 

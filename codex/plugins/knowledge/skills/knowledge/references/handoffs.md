@@ -60,14 +60,14 @@ Record only observations that the session actually has. For unfinished work, lea
 ## Compatibility and stable updates
 
 - New `--handoff --handoff-data` writes produce `handoff_version: 2`.
-- Supplying data upgrades an existing v1 handoff. The upgrade preserves its original `created` and its existing `expires`, unless `--expires` replaces the latter. `updated` advances as before.
+- Supplying data upgrades an existing v1 handoff. The upgrade preserves its original `created` and its existing `expires`, unless `--expires` replaces the latter. `updated` is set to the time of the write.
 - An existing v2 handoff that you update without `--handoff-data` keeps its scope and item values. The helper canonicalizes their JSON formatting.
 - With replacement data, all previous item IDs must still be present. Mark an abandoned item `cancelled` instead of omitting it. Summary, status, evidence, and scoped paths can change. Repository identity cannot change. Use another handoff name for a different repository.
-- Legacy direct helper calls without data still create v1 handoffs. Existing plain snapshots and v1 handoffs remain readable. There is no bulk migration.
-- A plain save against an existing handoff still refuses. Unknown existing handoff versions and malformed v2 data also refuse, before archival or overwrite.
-- The existing history limit, timestamp handling, expiry policy, and top-level ticket-citation scheme continue to apply. Expiry never deletes anything.
+- Legacy direct helper calls without data create v1 handoffs. Existing plain snapshots and v1 handoffs remain readable. There is no bulk migration.
+- A plain save against an existing handoff refuses. Unknown existing handoff versions and malformed v2 data also refuse, before archival or overwrite.
+- The existing history limit, timestamp handling, expiry policy, and top-level ticket-citation scheme apply. Expiry never deletes anything.
 
-Work-item IDs belong to a handoff. They do not create or update tracker entries. Top-level `tickets:` continues to hold tracker pointers separately. When you regenerate a handoff, retain the ticket references that the next session still needs.
+Work-item IDs belong to a handoff. They do not create or update tracker entries. Top-level `tickets:` holds tracker pointers separately. When you regenerate a handoff, retain the ticket references that the next session still needs.
 
 ## Stored representation and diagnosis
 

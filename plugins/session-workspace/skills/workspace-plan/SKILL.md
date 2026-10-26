@@ -33,4 +33,4 @@ For schema-v5 `--environment ID` selection, invoke the installed dispatcher as
 instead of the direct session script. Optional `--services` or `--development`
 limits the group; no positional session or `--all` may accompany it. Read
 `../session-workspace/references/environments.md` for scope and partial-failure
-behavior. Existing stop confirmation requirements still apply.
+behavior.

@@ -63,7 +63,7 @@ silently (never breaks or stalls a session).
 
   **Which value to use.** On Claude, if `autoMemoryDirectory` points at this
   store the harness already loads `MEMORY.md` every session, so `1` injects a
-  verbatim duplicate index (~691 tokens paid twice) — prefer `prompt`, which
+  verbatim duplicate index (its tokens are paid twice) — prefer `prompt`, which
   keeps the per-turn recall nothing else provides. Codex has no equivalent
   setting, so `1` is correct there.
 

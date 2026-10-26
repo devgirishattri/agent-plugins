@@ -49,7 +49,7 @@ codec and any failure reason. Original formats may be kept.
 Xcode tools or `adb` where listed and never implies UI driving. A target is
 supported only when its descriptor's `pilot.recorded` is true. That entry names
 the host and the recorded outcome. No pilot has been recorded for any
-descriptor in this version.
+descriptor yet.
 
 Explicitly outside the first pilot: physical iOS and Android devices (Android
 may get a probe-only path later), Windows and Linux native apps, and browser

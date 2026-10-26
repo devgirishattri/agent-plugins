@@ -30,9 +30,9 @@ stay pending by default. Ordinary explicit consolidation retains its full-inbox
 scope. Show evidence and origin when reviewing candidates; attribution is not
 authorization and does not establish truth.
 
-**Compatibility:** pre-0.5.0 readers reject candidate `origin_session`,
-`origin_pane`, and `evidence` fields. Before downgrading, consolidate, dismiss,
-or back up pending candidates. New-format candidates do not support transparent rollback.
+**Downgrade.** Before you install an older knowledge release, consolidate,
+dismiss, or back up the pending inbox. Older releases cannot read new-format
+candidates. Details: `../knowledge/references/compatibility.md`.
 
 ## 0. Invocation discipline (read this first)
 

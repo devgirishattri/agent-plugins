@@ -52,7 +52,7 @@ Direct rows end in `(matched: term(field,field);term2(field))`. This is the scor
 
 ### Which value to use
 
-- On Claude, `autoMemoryDirectory` can point at this store. The harness then already loads `MEMORY.md` every session. In that case `1` injects a verbatim duplicate index (about 691 tokens, paid twice). Prefer `prompt`. It keeps the per-turn recall that nothing else provides.
+- On Claude, `autoMemoryDirectory` can point at this store. The harness then already loads `MEMORY.md` every session. In that case `1` injects a verbatim duplicate index, so its tokens are paid twice. Prefer `prompt`. It keeps the per-turn recall that nothing else provides.
 - Codex has no equivalent setting. `1` is correct there.
 
 ## `KNOWLEDGE_CONSOLIDATE_NUDGE=1`

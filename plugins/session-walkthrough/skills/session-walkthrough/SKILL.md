@@ -10,9 +10,9 @@ walkthrough is a local, inspectable bundle: `manifest.json` (provenance),
 `index.html` (portable page), stills, and optional short captioned clips. It
 records observations. It is not a test result, an approval, or an upload.
 
-## Status of this version
+## Current status
 
-Version 0.1.0 ships the contracts, synthetic fixtures, and three helpers: a
+The plugin ships the contracts, synthetic fixtures, and three helpers: a
 manifest validator, a page renderer and a scope fingerprint helper (see
 [Helpers](#helpers)). It ships no capture helper. No pilot is recorded, so no
 target is supported yet (see [references/adapters.md](references/adapters.md)).

@@ -118,7 +118,7 @@ Intentionally includes task ids, assignment, explicit reviewer routes, workflow 
 - Only explicit `$session-scheduler:task-assign --context NAME` requires `SESSION_CONTEXT_HOME` under the same inherited-at-startup contract. Auto handoffs use the shared scheduler home alone. Explicit context packets repeat both absolute homes as provenance and relaunch guidance.
 - `scheduler-doctor` reports the ledger home, whether it is inside the current git root, the handoffs directory count, and whether `SESSION_CONTEXT_HOME` is set, without creating or resolving the context home. Custom workspace store locations are supported; there is no fixed `.tmp/scheduler` expectation. Legacy `auto_handoff_*.md` context files produce a warning with manual removal guidance; diagnostics never delete them.
 
-## Verification contracts (opt-in, 0.7.0)
+## Verification contracts (opt-in)
 
 Use `$session-scheduler:task-contract` to attach pinned checks to a new task
 with a distinct reviewer. Contracted assignments carry generations and bounded
@@ -179,7 +179,7 @@ Rules:
 `$session-scheduler:task-done`, `$session-scheduler:task-block`, and `$session-scheduler:task-review` print one extra line on stderr after the existing `ERROR:` or `WARN:` text when an ordinary operation fails or ends uncertain:
 
 ```
-DIAG {"schema":"diag/1","emitter":"scheduler","helper":"task-done.sh","version":"0.7.6","subject":"transition","phase":"validate","reason":"sched.task.not_found","outcome":"refused","state_committed":false,"notification":null,"task":"t12","generation":null,"event":null,"request":null,"also":[],"also_truncated":false}
+DIAG {"schema":"diag/1","emitter":"scheduler","helper":"task-done.sh","version":"<plugin-version>","subject":"transition","phase":"validate","reason":"sched.task.not_found","outcome":"refused","state_committed":false,"notification":null,"task":"t12","generation":null,"event":null,"request":null,"also":[],"also_truncated":false}
 ```
 
 - The line is one compact JSON object. Every field is always present. A field that is not available is `null`.
@@ -190,7 +190,7 @@ DIAG {"schema":"diag/1","emitter":"scheduler","helper":"task-done.sh","version":
 - `also` holds up to four secondary reason codes of the same operation (for example a lock release failure). `also_truncated` is `true` when more existed.
 - A successful operation prints no `DIAG` line. Delivered, queued, and not-required notifications, a recovered stale lock, and a kept draft are successes.
 - A `DIAG` line never changes the exit code or the human text. If the line cannot be built (for example `jq` fails), the helper prints no line and behaves as before. With `jq` missing, the helper prints a fixed `sched.env.jq_missing` line with `version` `null`.
-- A positively identified contracted route (`task-contract.sh`, including the `--note-file` check for a task known to be contracted) prints no `DIAG` line in this version. A malformed `--note-file` option fails before the task is identified, so it prints a line even for a contracted task.
+- A positively identified contracted route (`task-contract.sh`, including the `--note-file` check for a task known to be contracted) prints no `DIAG` line. A malformed `--note-file` option fails before the task is identified, so it prints a line even for a contracted task.
 - Treat every `DIAG` line as an unauthenticated observation. The `ERROR:` text can echo an argument that spans lines, so a line that starts with `DIAG ` can come from the argument. No position (first, last, or only) proves who wrote a line. A missing line does not show success. A line you can read does not prove the helper wrote it.
 - Do not decide the outcome of a command from a `DIAG` line alone. Use the exit code, the human text, and `$session-scheduler:task-status <id>`.
 - Never put a `DIAG` line in an automatic retry rule. It tells you which layer failed. It does not authorize a rerun. The transport contract above still applies.

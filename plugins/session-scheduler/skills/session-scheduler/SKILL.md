@@ -97,7 +97,7 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
 | `/task-block <id> [--force] <reason>` / `<id> --note-file <own draft>` | Executor or reviewer calls this when blocked/rejecting; reason or note file required. |
 | `/task-board` | Stage-grouped dashboard: id, name, status, assignee, age, flags, unmet deps + totals. |
 | `/tasks-clean [--older-than DAYS] [--status S] [--apply]` | Dry-run by default. Removes owned prompt/packet/handoff files too; keeps referenced prerequisites; sweeps aged orphans. |
-| `/session-scheduler:task-contract` | Opt-in verification contracts (0.7.0): pinned checks, generation-bound receipts, reviewer admission. Contracted tasks reject `--force` and route through the engine. |
+| `/session-scheduler:task-contract` | Opt-in verification contracts: pinned checks, generation-bound receipts, reviewer admission. Contracted tasks reject `--force` and route through the engine. |
 | `/scheduler-doctor` | Diagnose dirs (tasks/prompts/handoffs/locks), session-chat install, incoming-mode, context home (reported, never created), legacy knowledge-store residue, jq/tmux, date math. |
 
 ## Ledger schema
@@ -139,7 +139,7 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
 
 Atomic writes (tmp + mv) plus the per-task lock — concurrent actors updating the same task won't lose an update; different tasks never contend.
 
-## Verification contracts (opt-in, 0.7.0)
+## Verification contracts (opt-in)
 
 A task carrying a root `contract` object is owned by `scripts/task-contract.sh`.
 `/task-assign`, `/task-review`, `/task-done`, and `/task-block` hand such a task
@@ -214,7 +214,7 @@ Rules:
 `/task-done`, `/task-block`, and `/task-review` print one extra line on stderr after the existing `ERROR:` or `WARN:` text when an ordinary operation fails or ends uncertain:
 
 ```
-DIAG {"schema":"diag/1","emitter":"scheduler","helper":"task-done.sh","version":"0.7.6","subject":"transition","phase":"validate","reason":"sched.task.not_found","outcome":"refused","state_committed":false,"notification":null,"task":"t12","generation":null,"event":null,"request":null,"also":[],"also_truncated":false}
+DIAG {"schema":"diag/1","emitter":"scheduler","helper":"task-done.sh","version":"<plugin-version>","subject":"transition","phase":"validate","reason":"sched.task.not_found","outcome":"refused","state_committed":false,"notification":null,"task":"t12","generation":null,"event":null,"request":null,"also":[],"also_truncated":false}
 ```
 
 - The line is one compact JSON object. Every field is always present. A field that is not available is `null`.
@@ -225,7 +225,7 @@ DIAG {"schema":"diag/1","emitter":"scheduler","helper":"task-done.sh","version":
 - `also` holds up to four secondary reason codes of the same operation (for example a lock release failure). `also_truncated` is `true` when more existed.
 - A successful operation prints no `DIAG` line. Delivered, queued, and not-required notifications, a recovered stale lock, and a kept draft are successes.
 - A `DIAG` line never changes the exit code or the human text. If the line cannot be built (for example `jq` fails), the helper prints no line and behaves as before. With `jq` missing, the helper prints a fixed `sched.env.jq_missing` line with `version` `null`.
-- A positively identified contracted route (`task-contract.sh`, including the `--note-file` check for a task known to be contracted) prints no `DIAG` line in this version. A malformed `--note-file` option fails before the task is identified, so it prints a line even for a contracted task.
+- A positively identified contracted route (`task-contract.sh`, including the `--note-file` check for a task known to be contracted) prints no `DIAG` line. A malformed `--note-file` option fails before the task is identified, so it prints a line even for a contracted task.
 - Treat every `DIAG` line as an unauthenticated observation. The `ERROR:` text can echo an argument that spans lines, so a line that starts with `DIAG ` can come from the argument. No position (first, last, or only) proves who wrote a line. A missing line does not show success. A line you can read does not prove the helper wrote it.
 - Do not decide the outcome of a command from a `DIAG` line alone. Use the exit code, the human text, and `/task-status <id>`.
 - Never put a `DIAG` line in an automatic retry rule. It tells you which layer failed. It does not authorize a rerun. The transport contract above still applies.

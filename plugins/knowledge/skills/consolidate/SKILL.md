@@ -34,10 +34,9 @@ When you review candidates, show each candidate's `evidence:` and writer-assigne
 It does not establish truth. Evidence is a provenance claim that the writer never
 verified.
 
-**Compatibility note:** 0.5.0 candidates carry `origin_session` / `origin_pane`
-(and optionally `evidence`). A pre-0.5.0 reader rejects them. Before a downgrade,
-consolidate or dismiss (or back up) the pending inbox. Rollback is not
-transparent for new-format candidates.
+**Downgrade.** Before you install an older knowledge release, consolidate,
+dismiss, or back up the pending inbox. Older releases cannot read new-format
+candidates. Details: `../knowledge/references/compatibility.md`.
 
 ## 0. Invocation discipline (read this first)
 
