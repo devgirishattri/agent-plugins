@@ -400,16 +400,52 @@ ensure_dirs() {
   return 1
 }
 
-# Non-reentrant, cross-provider task transaction lock. Never hold over transport.
+# Claim, stale-lock takeover and release helpers. Bodies are IDENTICAL to the
+# Claude scheduler lib (byte-for-byte; test-scheduler-locks.py checks), so both
+# providers share one lock protocol on a shared ledger directory.
+#
+# None of them trusts mkdir as a test-and-set. uutils mkdir (Rust coreutils,
+# Ubuntu's default coreutils since 25.10) through 0.10.0 exits 0 when another
+# process creates the directory between its existence check and its own
+# mkdir(2). Two acquirers could then both hold one lock, which failed
+# test_mixed_provider_contention on ubuntu-latest CI with two holders, and with
+# a lock stranded by a second holder that exited. The real claim is the
+# exclusive create (O_EXCL, via noclobber) of a file inside the directory.
+#
+# _scheduler_claim_lock <lock-path>: publish $$ as the holder of a lock
+# directory this process just created (or believes it did). 0 = claimed;
+# 1 = another acquirer published first, or the directory vanished, so keep
+# waiting; 2 = the pid file cannot be written (the empty directory is removed).
+_scheduler_claim_lock() {
+  local path="$1"
+  ( set -o noclobber; printf '%s\n' "$$" > "$path/pid" ) 2>/dev/null && return 0
+  if [ -e "$path/pid" ] || [ -L "$path/pid" ] || [ ! -d "$path" ]; then
+    return 1
+  fi
+  rmdir "$path" 2>/dev/null || true
+  return 2
+}
+
+# _scheduler_reclaim_lock <lock-path> <expected-dead-pid> -> 0 only on a
+# successful takeover. It is a subshell anchored with `cd -P` to the lock
+# directory's real inode: the release path renames the whole directory away,
+# so a waiter that is mid-reclaim keeps operating on the OLD generation (its
+# marker, its pid file) and can never create, read, or remove anything in a
+# NEW generation that appears at the same path. `$$` inside the subshell is
+# still the caller's pid, so the recorded holder is correct. The reclaim
+# marker serializes reclaimers of one generation. It is an exclusively created
+# file, so any existing entry named reclaim blocks it, including the directory
+# marker that earlier releases of this protocol create with mkdir.
 _scheduler_reclaim_lock() (
   # Keep every access on this directory generation, even if release renames it.
   local path="$1" expected="$2" result=1
   [ ! -L "$path" ] && cd -P "$path" 2>/dev/null || return 1
-  mkdir reclaim 2>/dev/null || return 1
+  set -o noclobber
+  { : > reclaim; } 2>/dev/null || return 1
   if [ "$(cat pid 2>/dev/null)" = "$expected" ]; then
-    printf '%s\n' "$$" > pid 2>/dev/null && result=0
+    printf '%s\n' "$$" >| pid 2>/dev/null && result=0
   fi
-  rmdir reclaim 2>/dev/null || true
+  rm -f reclaim 2>/dev/null || true
   return "$result"
 )
 
@@ -427,14 +463,27 @@ _scheduler_release_lock() {
   rm -rf "$retired"
 }
 
+# Non-reentrant, cross-provider task transaction lock. Never hold over transport.
 acquire_task_lock() {
-  local id="$1" path holder diagnostic start timeout
+  local id="$1" path holder diagnostic start timeout claim
   validate_task_id "$id" || return 1
   path="$LOCKS_DIR/$id.lock"
   timeout="${SESSION_SCHEDULER_LOCK_TIMEOUT_SECS:-10}"
   [[ "$timeout" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid lock timeout: $timeout" >&2; return 1; }
   start=$(now_epoch)
-  while ! mkdir -m 700 "$path" 2>/dev/null; do
+  while :; do
+    # mkdir success alone does not prove ownership; the pid claim does.
+    if mkdir -m 700 "$path" 2>/dev/null; then
+      claim=0; _scheduler_claim_lock "$path" || claim=$?
+      case "$claim" in
+        0) return 0 ;;
+        2)
+          echo "ERROR: could not record holder pid in $path." >&2
+          _sched_diag_note sched.lock.holder_unwritable
+          return 1
+          ;;
+      esac
+    fi
     if [ -L "$path" ] || [ ! -d "$path" ] || [ ! -O "$path" ]; then
       # The previous holder may have released between mkdir and inspection.
       [ ! -e "$path" ] && [ ! -L "$path" ] && continue
@@ -455,11 +504,6 @@ acquire_task_lock() {
     fi
     sleep 0.05
   done
-  if ! printf '%s\n' "$$" > "$path/pid"; then
-    rmdir "$path" 2>/dev/null || true
-    _sched_diag_note sched.lock.holder_unwritable
-    return 1
-  fi
 }
 
 release_task_lock() {
