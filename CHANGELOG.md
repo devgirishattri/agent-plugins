@@ -1,5 +1,27 @@
 # Changelog
 
+## session-chat 0.17.20 — 2026-11-02
+
+- Send and queue locks no longer treat a successful `mkdir` as ownership.
+  uutils mkdir (Rust coreutils, the default on Ubuntu 25.10 and later) through
+  0.10.0 exits 0 when it loses the race to create a directory, so two senders
+  could hold one lock at once. The holder now claims the lock by creating its
+  pid file exclusively (O_EXCL).
+- A stale lock (holder process gone) is taken over in place under an
+  exclusively created reclaim marker, instead of being deleted. Deleting it
+  could remove a lock that another sender claimed after the waiter read the old
+  pid, which gave the lock two holders on any coreutils. It happened most
+  often when a sender released and exited while a waiter was checking it. A
+  release now renames the whole lock directory away, so the lock path never
+  shows a directory with no holder.
+- A lock whose pid file cannot be written now fails the send with an error,
+  instead of being held with no pid. On Codex, a lock released while a sender
+  checks it is no longer refused as unsafe.
+- Same protocol as the session-scheduler task locks. A recipient's queue lock
+  is shared by Claude and Codex senders, and a 0.17.19 sender can still
+  double-acquire it, so update both providers together. No store migration;
+  restart affected panes after updating.
+
 ## session-walkthrough 0.2.0 — 2026-11-02
 
 - **Live tour mode, now the default.** "Walk me through", "walkthrough",
