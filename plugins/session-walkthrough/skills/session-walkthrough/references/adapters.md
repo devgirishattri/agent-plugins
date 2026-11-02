@@ -45,6 +45,15 @@ codec and any failure reason. Original formats may be kept.
 | `ios-simulator-simctl` | ios-simulator | `xcrun simctl io` screenshot and `recordVideo --codec h264` | floor | not recorded |
 | `android-emulator-adb` | android-emulator | `adb` screencap and `screenrecord` | floor | not recorded |
 
+On the web route, element-scoped `take_screenshot` (by uid) crops the wrong
+rectangle whenever `devicePixelRatio` is not 1, that is, browser zoom other
+than 100% (0.75 and 0.667 were observed). Take viewport screenshots and check
+element geometry with `getBoundingClientRect()` through `evaluate_script`. For
+phone layouts use `emulate`, never `resize_page`, and reset it afterwards.
+
+These descriptors serve the recorded bundle only. The live tour (see
+[live-tour.md](live-tour.md)) captures nothing.
+
 "Floor" means no capture dependency beyond platform tooling. It still requires
 Xcode tools or `adb` where listed and never implies UI driving. A target is
 supported only when its descriptor's `pilot.recorded` is true. That entry names
