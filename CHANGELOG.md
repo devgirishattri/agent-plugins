@@ -1,5 +1,35 @@
 # Changelog
 
+## session-walkthrough 0.2.0 — 2026-11-02
+
+- **Live tour mode, now the default.** "Walk me through", "walkthrough",
+  "tour", "show me the changes" and `/session-walkthrough` run a live,
+  self-driven overlay tour in the already-running managed browser. The
+  recorded bundle runs only on explicit request ("recorded walkthrough",
+  "evidence bundle", "manifest"). The skill description and SKILL.md routing
+  say so.
+- New `scripts/tour/overlay.js`: a dependency-free overlay injected through
+  chrome-devtools `evaluate_script`. It provides a highlight ring, a card of at
+  most 350px placed beside the target without covering it, keyboard and
+  accessibility support, setup/poll/actions/watch steps, sessionStorage reload
+  recovery, an optional setInterval guard and SPA navigation hook, and a Close
+  that leaves no residue.
+- New `references/live-tour.md`: authority, runtime contract, step shape,
+  authoring guidance and procedure (fresh tab, `emulate` not `resize_page`,
+  geometry checks not element-scoped screenshots, GET-only dry run, hand-over).
+- New walkable example `examples/live-tour/`: a synthetic demo page and a
+  nine-step tour, runnable through chrome-devtools or locally with
+  `demo.html?manual=1`.
+- New `node:test` suite (`scripts/tour/tests/`) for placement math,
+  navigation, cleanup, reload restore, the setInterval guard and the demo
+  fixture. The plugin suite runs it, so `node` is now needed to run the
+  plugin tests.
+- Bundle mode: the 0.1.x contracts are unchanged and no pilot is recorded.
+  The docs now warn that element-scoped screenshots crop wrongly when
+  `devicePixelRatio` is not 1.
+- No migration. Update the plugin; the next walkthrough request uses the live
+  tour. To roll back, install session-walkthrough 0.1.1.
+
 ## session-workspace 0.7.1–0.11.7 — release notes moved from SKILL.md
 
 Upgrade and rollback notes that lived in `skills/session-workspace/SKILL.md`.

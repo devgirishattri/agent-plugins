@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order ORD-1042 (synthetic demo)</title>
+<!--
+  session-walkthrough live tour demo. Static and synthetic: no network, no
+  framework, no real records. Every name and figure below is invented.
+  Open it plainly and inject the overlay (README, way a), or add ?manual=1 to
+  load the overlay and the demo tour with script tags (README, way b).
+-->
+<style>
+  :root { color-scheme: light; --line: #d7dde5; --muted: #5b6676; --accent: #2563eb; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #18212d; background: #f4f6f9; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header h1 { margin: 0; font-size: 20px; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 24px 80px; display: grid; gap: 20px; }
+  main > *, form > * { min-width: 0; }
+  form { display: grid; gap: 20px; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  section h2 { margin: 0 0 10px; font-size: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+  label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  input, select, textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; min-width: 200px; color: inherit; background: #fff; }
+  textarea { min-height: 60px; width: 100%; }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: #f8fafc; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .menu-wrap { position: relative; }
+  #order-menu-button { font-size: 20px; line-height: 1; padding: 4px 10px; }
+  #order-menu { position: absolute; right: 0; top: calc(100% + 4px); min-width: 250px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.14); padding: 6px 0; margin: 0; list-style: none; z-index: 10; }
+  #order-menu[hidden] { display: none; }
+  #order-menu li { padding: 0; }
+  #order-menu button { width: 100%; text-align: left; border: 0; border-radius: 0; background: none; padding: 8px 14px; }
+  #order-menu button:not(:disabled):hover { background: #eef2f7; }
+  .menu-reason { display: block; padding: 0 14px 8px; font-size: 12px; color: #9a3412; }
+  .menu-reason[hidden] { display: none; }
+  .badge-new { font-size: 11px; color: #fff; background: #16a34a; border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+  #dirty-banner { background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  #dirty-banner[hidden] { display: none; }
+  #associations-panel { border-style: dashed; }
+  .loading { color: var(--muted); font-style: italic; }
+  #ticket-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
+  #ticket-list li { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; display: flex; justify-content: space-between; }
+  .status-open { color: #b45309; } .status-closed { color: #15803d; }
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+  #line-items-table { border-collapse: collapse; width: 1800px; font-size: 13px; }
+  #line-items-table th, #line-items-table td { border-bottom: 1px solid var(--line); padding: 6px 10px; text-align: left; white-space: nowrap; }
+  #line-items-table th { background: #f1f5f9; }
+  #refresh-status { font-size: 12px; color: var(--muted); }
+  .modal { position: fixed; inset: 0; background: rgba(15,23,42,.35); display: grid; place-items: center; z-index: 20; }
+  .modal[hidden] { display: none; }
+  .modal > div { background: #fff; border-radius: 10px; padding: 18px; max-width: 360px; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+<header id="order-header">
+  <div>
+    <h1>Order ORD-1042</h1>
+    <div class="meta">Synthetic demo data · signed in as <strong id="session-role">member</strong> · <span id="refresh-status">Auto-refresh in 20s</span></div>
+  </div>
+  <div class="row">
+    <a href="#orders" id="back-link">Back to orders</a>
+    <button type="button" id="admin-refund" hidden>Refund order</button>
+    <div class="menu-wrap">
+      <button type="button" id="order-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="order-menu" title="Order actions">&#8942;</button>
+      <ul id="order-menu" role="menu" hidden>
+        <li role="none"><button type="button" role="menuitem">Duplicate order</button></li>
+        <li role="none"><button type="button" role="menuitem">Print packing slip</button></li>
+        <li role="none" id="action-create-ticket-row">
+          <button type="button" role="menuitem" id="action-create-ticket">Create Ticket<span class="badge-new">new</span></button>
+          <span class="menu-reason" id="create-ticket-reason" hidden>Save or discard your changes first.</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+</header>
+
+<main>
+  <form id="order-form" autocomplete="off">
+    <section>
+      <h2>Order details</h2>
+      <p id="dirty-banner" hidden>Unsaved changes. Save or discard them before creating a ticket.</p>
+      <div class="row">
+        <label>Status
+          <select name="status" id="field-status">
+            <option value="draft">Draft</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="shipped">Shipped</option>
+          </select>
+        </label>
+        <label>Delivery window
+          <select name="window" id="field-window">
+            <option value="am">Morning</option>
+            <option value="pm">Afternoon</option>
+          </select>
+        </label>
+      </div>
+      <p><label>Notes<textarea name="notes" id="field-notes"></textarea></label></p>
+      <div class="row">
+        <button type="submit" class="primary" id="save-button">Save</button>
+        <button type="button" id="discard-button">Discard</button>
+        <span id="save-state" class="meta"></span>
+      </div>
+    </section>
+
+    <section id="associations-panel">
+      <h2>Associations</h2>
+      <div id="associations-body"><p class="loading">Associations load when the panel opens.</p></div>
+    </section>
+  </form>
+
+  <section id="ticket-panel">
+    <h2>Tickets</h2>
+    <label>Show
+      <select id="ticket-filter">
+        <option value="all">All tickets</option>
+        <option value="open">Open only</option>
+        <option value="closed">Closed only</option>
+      </select>
+    </label>
+    <ul id="ticket-list"></ul>
+    <p id="ticket-count" class="meta"></p>
+  </section>
+
+  <section id="line-items">
+    <h2>Line items</h2>
+    <div class="table-scroll"><table id="line-items-table"><thead></thead><tbody></tbody></table></div>
+  </section>
+</main>
+
+<div class="modal" id="leave-guard" hidden role="alertdialog" aria-labelledby="leave-guard-title">
+  <div>
+    <p id="leave-guard-title"><strong>You have unsaved changes.</strong> Leave this order anyway?</p>
+    <div class="row"><button type="button" id="leave-stay" class="primary">Stay</button><button type="button" id="leave-discard">Discard and leave</button></div>
+  </div>
+</div>
+
+<footer>Everything on this page is invented for the session-walkthrough live tour demo.</footer>
+
+<script>
+(function () {
+  'use strict';
+  var COMPANIES = ['Bluefin Outfitters (sample)', 'Cedar & Pine Co. (sample)', 'Harbor Lantern Ltd (sample)'];
+  var TICKETS = [
+    { id: 'TCK-301', title: 'Carton arrived dented', status: 'open' },
+    { id: 'TCK-302', title: 'Invoice address typo', status: 'closed' },
+    { id: 'TCK-303', title: 'Missing assembly guide', status: 'open' },
+    { id: 'TCK-304', title: 'Delivery window change', status: 'closed' },
+    { id: 'TCK-305', title: 'Colour swatch request', status: 'open' }
+  ];
+  var COLUMNS = ['SKU', 'Item', 'Colour', 'Size', 'Qty', 'Unit', 'Discount', 'Tax', 'Warehouse', 'Bin', 'Lot', 'Ship by', 'Carrier', 'Weight', 'Line total'];
+  var ITEMS = [
+    ['SKU-1001', 'Trail lantern', 'Amber', 'M', 2, 24.5, '0%', '8%', 'East', 'B-12', 'L-77', '2026-11-09', 'Ground', '1.2 kg'],
+    ['SKU-1002', 'Camp stool', 'Slate', 'L', 4, 18, '5%', '8%', 'East', 'C-03', 'L-81', '2026-11-09', 'Ground', '3.6 kg'],
+    ['SKU-1003', 'Water flask', 'Teal', 'S', 6, 9.75, '0%', '8%', 'West', 'A-40', 'L-19', '2026-11-10', 'Express', '1.8 kg']
+  ];
+
+  var data = { status: 'confirmed', window: 'am', notes: '', company: '', revision: 1, savedAt: null };
+  var form = document.getElementById('order-form');
+  var menu = document.getElementById('order-menu');
+  var menuButton = document.getElementById('order-menu-button');
+  var createTicket = document.getElementById('action-create-ticket');
+  var createReason = document.getElementById('create-ticket-reason');
+  var associationsLoaded = false;
+  var associationsTimer = null;
+  var refreshTimer = null;
+  var countdown = 20;
+  var dirty = false;
+
+  function $(id) { return document.getElementById(id); }
+
+  function values() {
+    var company = $('company-field');
+    return {
+      status: $('field-status').value,
+      window: $('field-window').value,
+      notes: $('field-notes').value,
+      company: company ? company.value : data.company
+    };
+  }
+
+  function updateDirty() {
+    var v = values();
+    dirty = v.status !== data.status || v.window !== data.window || v.notes !== data.notes || v.company !== data.company;
+    $('dirty-banner').hidden = !dirty;
+    createTicket.disabled = dirty;
+    createReason.hidden = !dirty;
+  }
+
+  function loadForm() {
+    $('field-status').value = data.status;
+    $('field-window').value = data.window;
+    $('field-notes').value = data.notes;
+    var company = $('company-field');
+    if (company) company.value = data.company;
+    updateDirty();
+  }
+
+  function renderTickets() {
+    var filter = $('ticket-filter').value;
+    var list = $('ticket-list');
+    while (list.firstChild) list.removeChild(list.firstChild);
+    var shown = TICKETS.filter(function (t) { return filter === 'all' || t.status === filter; });
+    shown.forEach(function (t) {
+      var li = document.createElement('li');
+      li.setAttribute('data-ticket', t.id);
+      var left = document.createElement('span');
+      left.textContent = t.id + ' · ' + t.title;
+      var right = document.createElement('span');
+      right.className = 'status-' + t.status;
+      right.textContent = t.status;
+      li.appendChild(left);
+      li.appendChild(right);
+      list.appendChild(li);
+    });
+    $('ticket-count').textContent = 'Showing ' + shown.length + ' of ' + TICKETS.length + ' tickets.';
+  }
+
+  function renderLineItems() {
+    var table = $('line-items-table');
+    var head = document.createElement('thead');
+    var tr = document.createElement('tr');
+    COLUMNS.forEach(function (c) { var th = document.createElement('th'); th.textContent = c; tr.appendChild(th); });
+    head.appendChild(tr);
+    var body = document.createElement('tbody');
+    ITEMS.forEach(function (row) {
+      var r = document.createElement('tr');
+      var total = (row[4] * row[5]).toFixed(2);
+      row.concat([total]).forEach(function (cell) { var td = document.createElement('td'); td.textContent = String(cell); r.appendChild(td); });
+      body.appendChild(r);
+    });
+    table.replaceChild(head, table.tHead);
+    table.replaceChild(body, table.tBodies[0]);
+  }
+
+  // The Associations panel loads its Company field after a delay, like a lazy request.
+  function loadAssociations() {
+    if (associationsLoaded || associationsTimer) return;
+    associationsTimer = setTimeout(function () {
+      associationsTimer = null;
+      associationsLoaded = true;
+      var body = $('associations-body');
+      while (body.firstChild) body.removeChild(body.firstChild);
+      var label = document.createElement('label');
+      label.textContent = 'Company';
+      var select = document.createElement('select');
+      select.id = 'company-field';
+      select.name = 'company';
+      var none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'No company';
+      select.appendChild(none);
+      COMPANIES.forEach(function (c) { var o = document.createElement('option'); o.value = c; o.textContent = c; select.appendChild(o); });
+      select.value = data.company;
+      label.appendChild(select);
+      body.appendChild(label);
+    }, 1200);
+  }
+
+  function openMenu() {
+    menu.hidden = false;
+    menuButton.setAttribute('aria-expanded', 'true');
+  }
+  function closeMenu() {
+    menu.hidden = true;
+    menuButton.setAttribute('aria-expanded', 'false');
+  }
+
+  // Mock auto-reload: every 20 seconds the page "reloads" its data, which
+  // closes menus and re-creates the list and table nodes.
+  function autoRefreshTick() {
+    countdown -= 1;
+    if (countdown <= 0) {
+      countdown = 20;
+      closeMenu();
+      renderTickets();
+      renderLineItems();
+    }
+    $('refresh-status').textContent = 'Auto-refresh in ' + countdown + 's';
+  }
+  function restartAutoRefresh() {
+    if (refreshTimer !== null) clearInterval(refreshTimer);
+    refreshTimer = setInterval(autoRefreshTick, 1000);
+  }
+
+  function save() {
+    var v = values();
+    $('save-state').textContent = 'Saving…';
+    $('save-button').disabled = true;
+    setTimeout(function () {
+      data.status = v.status; data.window = v.window; data.notes = v.notes; data.company = v.company;
+      data.revision += 1;
+      data.savedAt = new Date().toISOString();
+      $('save-state').textContent = 'Saved (revision ' + data.revision + ')';
+      $('save-button').disabled = false;
+      updateDirty();
+    }, 600);
+  }
+
+  form.addEventListener('input', updateDirty);
+  form.addEventListener('change', updateDirty);
+  form.addEventListener('submit', function (event) { event.preventDefault(); save(); });
+  $('discard-button').addEventListener('click', loadForm);
+  menuButton.addEventListener('click', function (event) {
+    event.stopPropagation();
+    if (menu.hidden) openMenu(); else closeMenu();
+  });
+  document.addEventListener('click', function (event) {
+    if (!menu.hidden && !menu.contains(event.target)) closeMenu();
+  });
+  document.addEventListener('keydown', function (event) { if (event.key === 'Escape') closeMenu(); });
+  createTicket.addEventListener('click', function () {
+    closeMenu();
+    $('save-state').textContent = 'A real app would open the ticket form here.';
+  });
+  $('ticket-filter').addEventListener('change', renderTickets);
+  $('back-link').addEventListener('click', function (event) {
+    event.preventDefault();
+    if (dirty) $('leave-guard').hidden = false;
+  });
+  $('leave-stay').addEventListener('click', function () { $('leave-guard').hidden = true; });
+  $('leave-discard').addEventListener('click', function () { $('leave-guard').hidden = true; loadForm(); });
+
+  renderTickets();
+  renderLineItems();
+  loadForm();
+  restartAutoRefresh();
+
+  // Adapter surface for tours: the page's own methods, as a framework
+  // component would expose them (for Vue 2, through el.__vue__).
+  window.demoApp = {
+    data: data,
+    role: 'member',
+    isDirty: function () { return dirty; },
+    openMenu: openMenu,
+    closeMenu: closeMenu,
+    loadAssociations: loadAssociations,
+    restartAutoRefresh: restartAutoRefresh,
+    ticketCounts: function () {
+      var shown = document.querySelectorAll('#ticket-list li').length;
+      return { shown: shown, total: TICKETS.length };
+    }
+  };
+
+  // Way (b): ?manual=1 loads the overlay and the demo tour with script tags.
+  if (/[?&]manual=1\b/.test(location.search)) {
+    ['../../scripts/tour/overlay.js', 'demo-tour.js'].reduce(function (previous, src) {
+      return previous.then(function () {
+        return new Promise(function (resolve, reject) {
+          var s = document.createElement('script');
+          s.src = src;
+          s.onload = resolve;
+          s.onerror = function () { reject(new Error('could not load ' + src)); };
+          document.body.appendChild(s);
+        });
+      });
+    }, Promise.resolve()).catch(function (error) {
+      $('save-state').textContent = String(error.message);
+    });
+  }
+})();
+</script>
+</body>
+</html>

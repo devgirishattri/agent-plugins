@@ -1,12 +1,13 @@
 {
   "name": "session-walkthrough",
-  "version": "0.1.1",
-  "description": "Local visual walkthrough reports for session changes: scoped source fingerprints, a validated provenance manifest, captured stills or short captioned clips, and a portable HTML page. Provenance only; never approval, upload, or Git authority.",
+  "version": "0.2.0",
+  "description": "Live, self-driven walkthrough tours of session changes in the running browser, plus recorded walkthrough bundles on request: scoped source fingerprints, a validated provenance manifest and a portable HTML page. Read-mostly; never approval, upload, save or Git authority.",
   "author": {
     "name": "Girish Attri"
   },
   "keywords": [
     "walkthrough",
+    "tour",
     "visual-review",
     "screenshots",
     "video",
@@ -19,8 +20,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Session Walkthrough",
-    "shortDescription": "Create local visual walkthrough reports.",
-    "longDescription": "Validate provenance manifests, render portable local HTML reports and record source scope with explicit coverage and build-binding gaps. Capture tooling, workspace integration and platform pilots remain pending.",
+    "shortDescription": "Walk users through session changes with a live in-browser tour.",
+    "longDescription": "Run a live, self-driven overlay tour of a session's changes in the already-running managed browser: each step highlights a changed element and quotes the request line it covers. On explicit request, validate provenance manifests, render portable local HTML reports and record source scope. Capture tooling, workspace integration and platform pilots for the recorded bundle remain pending.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": [
@@ -28,8 +29,8 @@
     ],
     "websiteURL": "https://github.com/devgirishattri/agent-plugins",
     "defaultPrompt": [
-      "Plan a local walkthrough of this session.",
-      "Review a walkthrough manifest against its contracts."
+      "Walk me through the changes from this session.",
+      "Review a recorded walkthrough manifest against its contracts."
     ],
     "brandColor": "#2563EB",
     "screenshots": []
