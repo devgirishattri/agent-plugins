@@ -1,5 +1,19 @@
 # Changelog
 
+## session-scheduler 0.7.9 — 2026-11-02
+
+- Per-task locks no longer treat a successful `mkdir` as ownership. uutils
+  mkdir (Rust coreutils, Ubuntu's default coreutils since 25.10) through
+  0.10.0 exits 0 when it loses the race to create a directory, so two writers
+  could hold one task lock at once. The holder now claims the lock by creating
+  its pid file exclusively (O_EXCL), and the stale-lock reclaim marker is an
+  exclusively created file instead of a directory. Both providers share the
+  change.
+- Mixed versions interoperate: a 0.7.8 reclaim marker (a directory) still
+  blocks a 0.7.9 reclaimer, and the reverse. A 0.7.8 pane on a uutils host
+  can still double-acquire, so update both providers together. No store
+  migration; restart affected panes after updating.
+
 ## session-workspace 0.7.1–0.11.7 — release notes moved from SKILL.md
 
 Upgrade and rollback notes that lived in `skills/session-workspace/SKILL.md`.
