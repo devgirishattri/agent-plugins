@@ -14,12 +14,8 @@ class LockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="scheduler-lock-contention-") as directory:
             env = {k: v for k, v in os.environ.items()
                    if not k.startswith(("SESSION_", "KNOWLEDGE_", "TMUX"))}
-            # Twelve writers poll one lock with no fairness, so on a loaded CI
-            # runner one of them can lose every race for 10s and time out even
-            # though the lock works. A generous timeout keeps this a
-            # mutual-exclusion test; the timeout path is covered by run_case.
             env.update(SESSION_SCHEDULER_HOME=directory,
-                       SESSION_SCHEDULER_LOCK_TIMEOUT_SECS="60")
+                       SESSION_SCHEDULER_LOCK_TIMEOUT_SECS="10")
             root = Path(directory)
             (root / "locks").mkdir()
             (root / "count").write_text("0\n")
@@ -46,7 +42,7 @@ done
                 processes.append(subprocess.Popen(["bash", "-c", script, "mixed-lock-test", str(library), provider],
                                                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
             try:
-                results = [(p, p.communicate(timeout=120)) for p in processes]
+                results = [(p, p.communicate(timeout=20)) for p in processes]
                 for p, (stdout, stderr) in results:
                     self.assertEqual(p.returncode, 0, stdout + stderr)
                 self.assertEqual((root / "count").read_text().strip(), "36")
