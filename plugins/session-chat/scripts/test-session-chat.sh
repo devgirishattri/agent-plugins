@@ -1113,43 +1113,86 @@ fi
 # --- Test 29: failed emit (closed stdout) retains the row AND leaves recent,
 #     reply-correlation, and archive state untouched; a normal retry then
 #     surfaces the exact body, drains the row, and records all three. Fixture is
-#     a queued SEND carrying a [re:<id>] marker so reply-correlation is real. ---
-CS_HOME=$(mktemp -d); CS_MSGS="$CS_HOME/.claude/messages"; mkdir -p "$CS_MSGS/queue"
+#     a queued SEND carrying a [re:<id>] marker so reply-correlation is real.
+#     The hook is started straight from this shell, never through `env` or
+#     another wrapper: a Rust `env` (uutils coreutils, the default on Ubuntu
+#     25.10 and later) reopens a closed fd 0-2 as /dev/null before it execs, so
+#     the "failed" emit would succeed into /dev/null. The case runs twice: with
+#     the system PATH, and with a model of that `env` first on PATH, so a GNU or
+#     BSD host catches a wrapper that comes back. ---
 PLUGROOT="$(cd "$HERE/.." && pwd)"
-(
-  source "$HERE/lib.sh"; export MESSAGES_DIR="$CS_MSGS"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
-  enqueue_message me cs1 send peer "[re:deadbeef01] ACK-BODY" "$CS_MSGS"
-  mark_message_ready me cs1 "$CS_MSGS"
-)
-run_detect_cs() {
-  printf '{"hook_event_name":"Stop"}' | env HOME="$CS_HOME" TMUX="fake,0,0" \
-    CLAUDE_PLUGIN_ROOT="$PLUGROOT" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto \
-    bash "$HERE/detect-incoming-message.sh"
+CS_MODEL=$(mktemp -d)
+cat > "$CS_MODEL/env" <<'PY'
+#!/usr/bin/env python3
+# Model of uutils env: the Rust runtime reopens a closed fd 0-2 as /dev/null
+# before main() runs, then env execs the command with those fds.
+import os, sys
+for fd in (0, 1, 2):
+    try:
+        os.fstat(fd)
+    except OSError:
+        null = os.open(os.devnull, os.O_RDWR)
+        if null != fd:
+            os.dup2(null, fd)
+            os.close(null)
+        os.set_inheritable(fd, True)
+os.execv("/usr/bin/env", ["env"] + sys.argv[1:])
+PY
+chmod +x "$CS_MODEL/env"
+closed_stdout_case() {
+  local name="$1" path="$2"
+  local cs_home cs_msgs input fail_rc retry_out
+  local cs_rows recent_fail reply_fail arch_fail cs_rows_after recent_ok reply_ok arch_ok
+  cs_home=$(mktemp -d); cs_msgs="$cs_home/.claude/messages"; mkdir -p "$cs_msgs/queue"
+  (
+    source "$HERE/lib.sh"; export MESSAGES_DIR="$cs_msgs"; export SESSION_CHAT_QUEUE_RECOVERY_GRACE_MS=0
+    enqueue_message me cs1 send peer "[re:deadbeef01] ACK-BODY" "$cs_msgs"
+    mark_message_ready me cs1 "$cs_msgs"
+  )
+  input="$cs_home/stop.json"
+  printf '{"hook_event_name":"Stop"}' > "$input"
+  run_detect_cs() {
+    PATH="$path" HOME="$cs_home" TMUX="fake,0,0" CLAUDE_PLUGIN_ROOT="$PLUGROOT" \
+      SESSION_CHAT_PANE_NAME=me SESSION_CHAT_INCOMING_MODE=auto \
+      bash "$HERE/detect-incoming-message.sh" < "$input"
+  }
+  qcnt() { awk "/cs1/{c++} END{print c+0}" "$1" 2>/dev/null || echo 0; }
+  reply_cnt() { awk "/deadbeef01/{c++} END{print c+0}" "$cs_msgs/replies-log.tsv" 2>/dev/null || echo 0; }
+  arch_cnt() { find "$cs_msgs/archive" -type f -exec grep -l 'cs1' {} + 2>/dev/null | wc -l | tr -d ' '; }
+  # (1) failed emit — closed stdout: the hook exits non-zero; row retained;
+  #     recent/reply/archive all untouched. An exit 0 here means the hook never
+  #     saw a closed stdout, so the state counts below would not test anything.
+  run_detect_cs >&- 2>/dev/null; fail_rc=$?
+  cs_rows=$(qcnt "$cs_msgs/queue/me.tsv")
+  recent_fail=$(qcnt "$cs_msgs/queue/.recent-me.tsv")
+  reply_fail=$(reply_cnt)
+  arch_fail=$(arch_cnt)
+  # (2) normal retry — stdout open: exact body surfaces; row drains; recent + reply
+  #     + archive now recorded.
+  retry_out=$(run_detect_cs)
+  cs_rows_after=$(qcnt "$cs_msgs/queue/me.tsv")
+  recent_ok=$(qcnt "$cs_msgs/queue/.recent-me.tsv")
+  reply_ok=$(reply_cnt)
+  arch_ok=$(arch_cnt)
+  if [ "$fail_rc" != "0" ] && [ "$cs_rows" = "1" ] && [ "$recent_fail" = "0" ] && [ "$reply_fail" = "0" ] && [ "$arch_fail" = "0" ] \
+     && echo "$retry_out" | grep -q "ACK-BODY" && [ "$cs_rows_after" = "0" ] \
+     && [ "$recent_ok" -ge 1 ] && [ "$reply_ok" -ge 1 ] && [ "$arch_ok" -ge 1 ]; then
+    pass "$name"
+  else
+    fail "$name" "emit_rc=$fail_rc rows=$cs_rows recent_fail=$recent_fail reply_fail=$reply_fail arch_fail=$arch_fail rows_after=$cs_rows_after recent_ok=$recent_ok reply_ok=$reply_ok arch_ok=$arch_ok body=$(echo "$retry_out" | grep -c ACK-BODY)"
+  fi
+  rm -rf "$cs_home"
 }
-qcnt() { awk "/cs1/{c++} END{print c+0}" "$1" 2>/dev/null || echo 0; }
-reply_cnt() { awk "/deadbeef01/{c++} END{print c+0}" "$CS_MSGS/replies-log.tsv" 2>/dev/null || echo 0; }
-arch_cnt() { find "$CS_MSGS/archive" -type f -exec grep -l 'cs1' {} + 2>/dev/null | wc -l | tr -d ' '; }
-# (1) failed emit — closed stdout: row retained; recent/reply/archive all untouched.
-run_detect_cs >&- 2>/dev/null || true
-cs_rows=$(qcnt "$CS_MSGS/queue/me.tsv")
-recent_fail=$(qcnt "$CS_MSGS/queue/.recent-me.tsv")
-reply_fail=$(reply_cnt)
-arch_fail=$(arch_cnt)
-# (2) normal retry — stdout open: exact body surfaces; row drains; recent + reply
-#     + archive now recorded.
-retry_out=$(run_detect_cs)
-cs_rows_after=$(qcnt "$CS_MSGS/queue/me.tsv")
-recent_ok=$(qcnt "$CS_MSGS/queue/.recent-me.tsv")
-reply_ok=$(reply_cnt)
-arch_ok=$(arch_cnt)
-if [ "$cs_rows" = "1" ] && [ "$recent_fail" = "0" ] && [ "$reply_fail" = "0" ] && [ "$arch_fail" = "0" ] \
-   && echo "$retry_out" | grep -q "ACK-BODY" && [ "$cs_rows_after" = "0" ] \
-   && [ "$recent_ok" -ge 1 ] && [ "$reply_ok" -ge 1 ] && [ "$arch_ok" -ge 1 ]; then
-  pass "closed_stdout_retains_then_retry_drains"
+closed_stdout_case "closed_stdout_retains_then_retry_drains" "$PATH"
+# Control: the model must really hand a closed stdout on as /dev/null, or the
+# second case proves nothing.
+cs_model_out=$( { PATH="$CS_MODEL:$PATH" env bash -c 'if { true >&1; } 2>/dev/null; then echo REOPENED >&2; else echo CLOSED >&2; fi' >&-; } 2>&1 )
+if [ "$cs_model_out" = "REOPENED" ]; then
+  closed_stdout_case "closed_stdout_retains_then_retry_drains_with_stdio_reopening_env" "$CS_MODEL:$PATH"
 else
-  fail "closed_stdout_retains_then_retry_drains" "rows=$cs_rows recent_fail=$recent_fail reply_fail=$reply_fail arch_fail=$arch_fail rows_after=$cs_rows_after recent_ok=$recent_ok reply_ok=$reply_ok arch_ok=$arch_ok body=$(echo "$retry_out" | grep -c ACK-BODY)"
+  fail "closed_stdout_retains_then_retry_drains_with_stdio_reopening_env" "env model did not reopen a closed stdout: $cs_model_out"
 fi
-rm -rf "$CS_HOME"
+rm -rf "$CS_MODEL"
 
 # --- Test 30: a symlinked messages ROOT makes dispatch files untrusted ---
 SL_HOME=$(mktemp -d); mkdir -p "$SL_HOME/.claude" "$SL_HOME/real-msgs"
