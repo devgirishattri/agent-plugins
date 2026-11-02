@@ -17,7 +17,7 @@ Every plugin below ships for both providers at the same version number.
 | `knowledge` | 0.5.9 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.12.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
-| `session-walkthrough` | 0.1.1 | Validate visual provenance, record source scope, and render local walkthrough reports |
+| `session-walkthrough` | 0.2.0 | Walk users through session changes with a live in-browser overlay tour; on request, validate visual provenance and render recorded walkthrough reports |
 
 This table is the fifth place a plugin version is written down, after the two
 plugin manifests and the two marketplace files. `scripts/validate-release.sh`
@@ -35,6 +35,7 @@ rather than assumed: the `session-scheduler` Claude suite passes 81/81 under 3.2
 | `jq` | `session-scheduler`, `session-workspace` | Hard. Both refuse to run without it. |
 | `python3`, `git` | `session-scheduler` contracts | Required for contracted verification; legacy tasks retain existing dependencies. |
 | `python3`, `git` | `session-walkthrough` | Required for validation, rendering and source snapshots; initial local verification is on macOS. |
+| `node` | `session-walkthrough` tests | Required to run the live tour overlay tests (`node:test`, no packages). The tour itself runs in the browser. |
 | `python3`, `gh` | `session-workspace` PR status | Python is required; live GitHub reads additionally require authenticated `gh`. |
 | `python3`, `bash`, `tmux`, `jq`, `git`, `rg` | Scheduler verification pilot | Required by the source-checkout runner; not an installed helper. |
 | `jq` | `chronos` | Optional. Claude falls back to hand-built JSON; the Codex build never uses jq. |
@@ -210,6 +211,19 @@ project's history. The temporary-connection deletion path is verified on 0.155.0
 
 ### session-walkthrough
 
+A walkthrough request ("walk me through the change", "show me the changes",
+`/session-walkthrough`) runs a live tour. The orchestrating agent injects
+`scripts/tour/overlay.js` and a tour definition into the already-running
+managed browser through chrome-devtools `evaluate_script`. Each step highlights
+a new or changed element and quotes the request line it covers, or labels a
+design decision. The tour is read-mostly: steps only set controls, the user
+does any real save, and Close removes every trace. See the
+[live tour reference](plugins/session-walkthrough/skills/session-walkthrough/references/live-tour.md)
+and the walkable [example](plugins/session-walkthrough/examples/live-tour/README.md),
+a synthetic demo page with a nine-step tour.
+
+The recorded bundle is used only on explicit request ("recorded walkthrough",
+"evidence bundle", "manifest").
 Use `scripts/walkthrough.sh` to record source scope (`scope start` and `scope
 end`), validate a provenance manifest, and render a portable local HTML report.
 Python 3 and Git are required. The helpers keep coverage gaps, unavailable
@@ -217,7 +231,7 @@ baselines and commit-only build bindings visible; observations are not test
 results or approval. See the [walkthrough skill](plugins/session-walkthrough/skills/session-walkthrough/SKILL.md)
 for arguments and authority boundaries.
 
-Version 0.1.0 provides deterministic local report helpers and synthetic fixtures.
+The bundle mode provides deterministic local report helpers and synthetic fixtures.
 Capture tools, workspace configuration and orchestration integration remain
 pending. No web or native capture pilot has been recorded; descriptor presence
 does not establish tested target support. No hooks or automatic uploads run.
