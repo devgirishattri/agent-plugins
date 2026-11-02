@@ -2060,7 +2060,8 @@ apply_results "static checks" < <(python3 -B "$TMPROOT/check-static.py" "$HERE/w
 # node test counts as one check here; a missing node is a failure, not a skip.
 TOUR_TESTS="$HERE/tour/tests/overlay.test.js"
 if command -v node >/dev/null 2>&1; then
-	TOUR_OUT=$(node --test "$TOUR_TESTS" 2>&1)
+	# Pin the TAP reporter: node picks the spec reporter in some environments (CI).
+	TOUR_OUT=$(node --test --test-reporter=tap "$TOUR_TESTS" 2>&1)
 	TOUR_RC=$?
 	TOUR_PASS=$(printf '%s\n' "$TOUR_OUT" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p' | tail -n 1)
 	TOUR_FAIL=$(printf '%s\n' "$TOUR_OUT" | sed -n 's/^# fail \([0-9][0-9]*\)$/\1/p' | tail -n 1)
