@@ -298,7 +298,7 @@ PROMPTS_DIR="$SCHEDULER_DIR/prompts"
 # subdirectory: handoffs/<id>/<nonce>.md. They never touch the knowledge context
 # store. tasks-clean sweeps them with the task.
 HANDOFFS_DIR="$SCHEDULER_DIR/handoffs"
-# Per-task mutation locks: locks/<id>.lock/ (mkdir-atomic, pid inside). Kept
+# Per-task mutation locks: locks/<id>.lock/ (pid file claimed with O_EXCL). Kept
 # OUTSIDE the vetted tasks/ and prompts/ subtrees because ensure_dirs fails
 # closed on entries that vanish mid-traversal — exactly what a transient lock
 # directory does. Both providers use this identical path, so cross-provider
@@ -749,8 +749,9 @@ task_exists() {
 # Ledger writes are atomic per file (tmp + mv), but a status transition is a
 # read-modify-write: two actors updating the SAME task concurrently (an
 # orchestrator reassigning while a reviewer marks done) could otherwise lose
-# one update. mkdir is the atomic acquire; the holder pid lives inside so a
-# lock abandoned by a dead process is reclaimed, while a live holder (kill -0
+# one update. The lock is a directory; the exclusive create of its pid file is
+# the atomic acquire (see _scheduler_claim_lock), and the holder pid inside lets
+# a lock abandoned by a dead process be reclaimed, while a live holder (kill -0
 # succeeds, or fails with EPERM) is respected. Non-reentrant: a caller that
 # already holds the lock must use the *_unlocked mutators.
 task_lock_path() {
@@ -767,26 +768,52 @@ _sched_pid_alive() {
   ps -p "$pid" >/dev/null 2>&1
 }
 
-# Stale-lock takeover and release helpers. Bodies are IDENTICAL to the Codex
-# scheduler lib (byte-for-byte), so both providers share one lock protocol on
-# a shared ledger directory.
+# Claim, stale-lock takeover and release helpers. Bodies are IDENTICAL to the
+# Codex scheduler lib (byte-for-byte; test-scheduler-locks.py checks), so both
+# providers share one lock protocol on a shared ledger directory.
 #
+# None of them trusts mkdir as a test-and-set. uutils mkdir (Rust coreutils,
+# Ubuntu's default coreutils since 25.10) through 0.10.0 exits 0 when another
+# process creates the directory between its existence check and its own
+# mkdir(2). Two acquirers could then both hold one lock, which failed
+# test_mixed_provider_contention on ubuntu-latest CI with two holders, and with
+# a lock stranded by a second holder that exited. The real claim is the
+# exclusive create (O_EXCL, via noclobber) of a file inside the directory.
+#
+# _scheduler_claim_lock <lock-path>: publish $$ as the holder of a lock
+# directory this process just created (or believes it did). 0 = claimed;
+# 1 = another acquirer published first, or the directory vanished, so keep
+# waiting; 2 = the pid file cannot be written (the empty directory is removed).
+_scheduler_claim_lock() {
+  local path="$1"
+  ( set -o noclobber; printf '%s\n' "$$" > "$path/pid" ) 2>/dev/null && return 0
+  if [ -e "$path/pid" ] || [ -L "$path/pid" ] || [ ! -d "$path" ]; then
+    return 1
+  fi
+  rmdir "$path" 2>/dev/null || true
+  return 2
+}
+
 # _scheduler_reclaim_lock <lock-path> <expected-dead-pid> -> 0 only on a
 # successful takeover. It is a subshell anchored with `cd -P` to the lock
 # directory's real inode: the release path renames the whole directory away,
 # so a waiter that is mid-reclaim keeps operating on the OLD generation (its
 # marker, its pid file) and can never create, read, or remove anything in a
 # NEW generation that appears at the same path. `$$` inside the subshell is
-# still the caller's pid, so the recorded holder is correct.
+# still the caller's pid, so the recorded holder is correct. The reclaim
+# marker serializes reclaimers of one generation. It is an exclusively created
+# file, so any existing entry named reclaim blocks it, including the directory
+# marker that earlier releases of this protocol create with mkdir.
 _scheduler_reclaim_lock() (
   # Keep every access on this directory generation, even if release renames it.
   local path="$1" expected="$2" result=1
   [ ! -L "$path" ] && cd -P "$path" 2>/dev/null || return 1
-  mkdir reclaim 2>/dev/null || return 1
+  set -o noclobber
+  { : > reclaim; } 2>/dev/null || return 1
   if [ "$(cat pid 2>/dev/null)" = "$expected" ]; then
-    printf '%s\n' "$$" > pid 2>/dev/null && result=0
+    printf '%s\n' "$$" >| pid 2>/dev/null && result=0
   fi
-  rmdir reclaim 2>/dev/null || true
+  rm -f reclaim 2>/dev/null || true
   return "$result"
 )
 
@@ -813,20 +840,23 @@ _scheduler_release_lock() {
 }
 
 task_lock() {
-  local id="$1" lock deadline holder timeout
+  local id="$1" lock deadline holder timeout claim
   lock=$(task_lock_path "$id")
   timeout="${SESSION_SCHEDULER_LOCK_TIMEOUT_SECS:-10}"
   [[ "$timeout" =~ ^[0-9]+$ ]] || timeout=10
   deadline=$(( $(epoch_now) + timeout ))
   while :; do
+    # mkdir success alone does not prove ownership; the pid claim does.
     if mkdir "$lock" 2>/dev/null; then
-      if ! printf '%s\n' "$$" > "$lock/pid" 2>/dev/null; then
-        rmdir "$lock" 2>/dev/null
-        echo "ERROR: could not record holder pid in $lock." >&2
-        _sched_diag_note sched.lock.holder_unwritable
-        return 1
-      fi
-      return 0
+      claim=0; _scheduler_claim_lock "$lock" || claim=$?
+      case "$claim" in
+        0) return 0 ;;
+        2)
+          echo "ERROR: could not record holder pid in $lock." >&2
+          _sched_diag_note sched.lock.holder_unwritable
+          return 1
+          ;;
+      esac
     fi
     if [ -L "$lock" ] || { [ -e "$lock" ] && { [ ! -d "$lock" ] || [ ! -O "$lock" ]; }; }; then
       # The holder may have released between the stat calls above; retry
