@@ -584,6 +584,88 @@ per_send_budget_ms() {
   printf '%s\n' "$(( (retries + 1) * verify_ms + 1500 ))"
 }
 
+# --- Per-target send lock and per-recipient queue lock ---
+# The lock is a directory; the exclusive create of its pid file is the atomic
+# acquire (see _session_chat_claim_lock). Stale locks (owner PID gone) are
+# taken over in place, and a release renames the whole directory away.
+
+# Claim, stale-lock takeover and release helpers. Bodies are IDENTICAL in the
+# Claude and Codex libs (scripts/test-session-chat-locks.py checks), because a
+# sender of either runtime can take a recipient's queue lock. The protocol is
+# the one session-scheduler uses for its task locks.
+#
+# None of them trusts mkdir as a test-and-set. uutils mkdir (Rust coreutils,
+# the default on Ubuntu 25.10 and later) through 0.10.0 exits 0 when another
+# process creates the directory between its existence check and its own
+# mkdir(2), so two senders could both hold one lock. The claim is the
+# exclusive create (O_EXCL, via noclobber) of the pid file inside it.
+#
+# _session_chat_claim_lock <lock-dir>: publish $$ as the holder of a lock
+# directory this process just created, or believes it did. 0 = claimed;
+# 1 = another acquirer published first, or the directory vanished, so keep
+# waiting; 2 = the pid file cannot be written (the empty directory is removed).
+# A directory can lack a pid file for a moment: a new generation whose creator
+# has not claimed it yet, or a lock an older release is deleting pid file
+# first. The second attempt claims that directory or sees it gone.
+_session_chat_claim_lock() {
+  local path="$1" _
+  for _ in 1 2; do
+    ( set -o noclobber; printf '%s\n' "$$" > "$path/pid" ) 2>/dev/null && return 0
+    if [ -e "$path/pid" ] || [ -L "$path/pid" ] || [ ! -d "$path" ]; then
+      return 1
+    fi
+  done
+  rmdir "$path" 2>/dev/null || true
+  return 2
+}
+
+# _session_chat_reclaim_lock <lock-dir> <expected-dead-pid> -> 0 only on a
+# successful takeover. A stale lock is taken over in place, never deleted:
+# between a waiter reading a dead pid and acting on it, that holder's lock can
+# be released and claimed again by another sender, and deleting the directory
+# then would give the lock two holders. The takeover re-reads the pid under an
+# exclusively created reclaim marker, so of several waiters that saw the same
+# dead pid only one succeeds, and none touches a newer holder's lock. It runs
+# in a subshell anchored with `cd -P` to the directory's inode, so a release
+# that renames the directory away leaves it operating on the old generation.
+# `$$` inside the subshell is still the caller's pid.
+_session_chat_reclaim_lock() (
+  # Keep every access on this directory generation, even if release renames it.
+  local path="$1" expected="$2" result=1
+  [ ! -L "$path" ] && cd -P "$path" 2>/dev/null || return 1
+  set -o noclobber
+  { : > reclaim; } 2>/dev/null || return 1
+  if [ "$(cat pid 2>/dev/null)" = "$expected" ]; then
+    printf '%s\n' "$$" >| pid 2>/dev/null && result=0
+  fi
+  rm -f reclaim 2>/dev/null || true
+  return "$result"
+)
+
+# _session_chat_release_lock <lock-dir>: release a lock THIS process holds
+# (pid file == $$) with ONE atomic rename of the whole directory into a
+# private retirement directory beside it, then delete that copy. The pid file
+# stays in place until the rename, so no waiter sees the lock path as a
+# directory without a holder, and an in-flight reclaim marker leaves with the
+# directory instead of making an rmdir fail and stranding the lock.
+_session_chat_release_lock() {
+  local path="$1" retired
+  [ ! -L "$path" ] && [ ! -L "$path/pid" ] || return 1
+  [ "$(cat "$path/pid" 2>/dev/null)" = "$$" ] || return 1
+  retired=$(mktemp -d "$(dirname "$path")/.release.XXXXXXXX") || return 1
+  # The destination does not exist, so this is a rename of the directory.
+  if ! mv "$path" "$retired/lock" 2>/dev/null; then
+    rmdir "$retired" 2>/dev/null || true
+    return 1
+  fi
+  rm -rf "$retired"
+}
+
+# A symlink, a non-directory, or a directory another user owns.
+_send_lock_entry_unsafe() {
+  [ -L "$1" ] || { [ -e "$1" ] && { [ ! -d "$1" ] || [ ! -O "$1" ]; }; }
+}
+
 acquire_send_lock() {
   local lock_dir="$1"
   local pane_id="$2"
@@ -595,27 +677,35 @@ acquire_send_lock() {
   fi
   local elapsed=0
   local last_owner=""
-  local pid
+  local pid claim
 
   local lock_parent
   lock_parent=$(dirname "$lock_dir")
   _require_private_message_dir "$lock_parent" || return 1
-  if [ -L "$lock_dir" ] || { [ -e "$lock_dir" ] && { [ ! -d "$lock_dir" ] || [ ! -O "$lock_dir" ]; }; }; then
+  # A holder can release between these tests, and a lock that vanished after
+  # -e fails -d. Refuse only an entry that is unsafe on a second look too.
+  if _send_lock_entry_unsafe "$lock_dir" && _send_lock_entry_unsafe "$lock_dir"; then
     echo "ERROR: Refusing unsafe send lock: $lock_dir" >&2
     return 1
   fi
   while [ "$elapsed" -lt "$timeout_ms" ]; do
+    # mkdir success alone does not prove ownership; the pid claim does.
     if mkdir "$lock_dir" 2>/dev/null; then
-      printf '%s\n' "$$" > "$lock_dir/pid"
-      return 0
+      claim=0; _session_chat_claim_lock "$lock_dir" || claim=$?
+      case "$claim" in
+        0) return 0 ;;
+        2)
+          echo "ERROR: could not record the send-lock holder pid in $lock_dir." >&2
+          return 1
+          ;;
+      esac
     fi
 
     pid=""
     [ -f "$lock_dir/pid" ] && pid=$(cat "$lock_dir/pid" 2>/dev/null || true)
     if [ -n "$pid" ] && ! process_is_alive "$pid"; then
-      rm -f "$lock_dir/pid"
-      rmdir "$lock_dir" 2>/dev/null || true
-      continue
+      # Stale holder: take it over in place (see _session_chat_reclaim_lock).
+      _session_chat_reclaim_lock "$lock_dir" "$pid" && return 0
     fi
 
     # Holder changed => the queue is moving; reset patience so legitimate
@@ -636,8 +726,10 @@ acquire_send_lock() {
 
 release_send_lock() {
   local lock_dir="$1"
-  rm -f "$lock_dir/pid" 2>/dev/null || true
-  rmdir "$lock_dir" 2>/dev/null || true
+  # Best effort, as callers expect: a lock this process cannot release keeps
+  # its pid, which goes stale when the process exits, and the next sender
+  # takes it over.
+  _session_chat_release_lock "$lock_dir" || true
 }
 
 # --- Durable per-recipient inbox (delivery fallback) ---
