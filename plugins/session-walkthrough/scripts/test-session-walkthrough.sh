@@ -17,6 +17,10 @@
 # mode re-derives the committed history (section 13b), and render and scope
 # read and re-check only while they hold the run lock (section 12d).
 #
+# Section 15 runs the live tour overlay's node:test suite (each node test counts
+# as one check) and checks that the skill routes walkthrough requests to the
+# live tour.
+#
 # Accumulating, not fail-fast: every check runs and the suite reports
 # "<passed> passed, <failed> failed".
 set -uo pipefail
@@ -2050,6 +2054,50 @@ print("DONE")
 PY
 apply_results "static checks" < <(python3 -B "$TMPROOT/check-static.py" "$HERE/walkthrough.py" "$PLUGIN/skills/session-walkthrough/SKILL.md")
 
+
+# --- 15. live tour mode: overlay runtime, demo fixture and skill routing ---------
+# The overlay is plain JavaScript checked with node:test (no dependencies). Each
+# node test counts as one check here; a missing node is a failure, not a skip.
+TOUR_TESTS="$HERE/tour/tests/overlay.test.js"
+if command -v node >/dev/null 2>&1; then
+	# Pin the TAP reporter: node picks the spec reporter in some environments (CI).
+	TOUR_OUT=$(node --test --test-reporter=tap "$TOUR_TESTS" 2>&1)
+	TOUR_RC=$?
+	TOUR_PASS=$(printf '%s\n' "$TOUR_OUT" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p' | tail -n 1)
+	TOUR_FAIL=$(printf '%s\n' "$TOUR_OUT" | sed -n 's/^# fail \([0-9][0-9]*\)$/\1/p' | tail -n 1)
+	if [ -n "$TOUR_PASS" ] && [ "$TOUR_PASS" -gt 0 ]; then PASS=$((PASS + TOUR_PASS)); else fail "overlay node tests reported no passes" "$(printf '%s' "$TOUR_OUT" | tail -n 5)"; fi
+	if [ "${TOUR_FAIL:-1}" != "0" ] || [ "$TOUR_RC" -ne 0 ]; then
+		fail "overlay node tests: ${TOUR_FAIL:-unknown} failed (exit $TOUR_RC)" "$(printf '%s\n' "$TOUR_OUT" | grep -E '^not ok' | head -n 5)"
+	fi
+else
+	fail "node is required for the live tour overlay tests"
+fi
+for shipped in "$HERE/tour/overlay.js" "$PLUGIN/examples/live-tour/demo.html" "$PLUGIN/examples/live-tour/demo-tour.js" \
+	"$PLUGIN/examples/live-tour/README.md" "$PLUGIN/skills/session-walkthrough/references/live-tour.md"; do
+	if [ -f "$shipped" ]; then pass; else fail "live tour file is shipped: ${shipped#"$PLUGIN"/}"; fi
+done
+out=$(python3 - "$PLUGIN/skills/session-walkthrough/SKILL.md" "$PLUGIN/skills/session-walkthrough/references/live-tour.md" <<'PY'
+import re, sys
+skill = open(sys.argv[1], encoding="utf-8").read()
+tour = open(sys.argv[2], encoding="utf-8").read()
+problems = []
+description = re.search(r"^description:(.*)$", skill, re.M).group(1).lower()
+for word in ("walkthrough", "live", "tour", "recorded", "bundle"):
+    if word not in description:
+        problems.append("description lacks %r" % word)
+for heading in ("## Modes", "## Live tour", "## Recorded bundle"):
+    if heading not in skill:
+        problems.append("SKILL.md lacks %s" % heading)
+for phrase in ('"walk me through"', '"recorded walkthrough"', '"evidence bundle"', "references/live-tour.md", "devicePixelRatio", "emulate", "resize_page"):
+    if phrase not in skill:
+        problems.append("SKILL.md lacks %s" % phrase)
+for phrase in ("evaluate_script", "getBoundingClientRect", "sessionStorage", "setInterval", "Design decision", "Not shown", "__vue__", "resize_page", "new_page"):
+    if phrase not in tour:
+        problems.append("live-tour.md lacks %s" % phrase)
+print("\n".join(problems))
+PY
+)
+check "SKILL.md routes walkthrough requests to the live tour and documents both modes" "" "$out"
 
 printf 'session-walkthrough tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

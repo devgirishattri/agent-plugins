@@ -28,11 +28,20 @@ for helper in manifest.schema.json descriptor.schema.json walkthrough.py walkthr
     "$ROOT/codex/plugins/session-walkthrough/scripts/$helper" \
     || fail "walkthrough shared file differs across providers: $helper"
 done
-for directory in descriptors fixtures; do
+for directory in descriptors fixtures tour; do
   diff -rq "$ROOT/plugins/session-walkthrough/scripts/$directory" \
     "$ROOT/codex/plugins/session-walkthrough/scripts/$directory" \
     || fail "walkthrough shared directory differs across providers: $directory"
 done
+# The live tour example and references are provider-neutral too.
+diff -rq "$ROOT/plugins/session-walkthrough/examples" "$ROOT/codex/plugins/session-walkthrough/examples" \
+  || fail "walkthrough examples differ across providers"
+diff -rq "$ROOT/plugins/session-walkthrough/skills/session-walkthrough/references" \
+  "$ROOT/codex/plugins/session-walkthrough/skills/session-walkthrough/references" \
+  || fail "walkthrough references differ across providers"
+cmp -s "$ROOT/plugins/session-walkthrough/scripts/test-session-walkthrough.sh" \
+  "$ROOT/codex/plugins/session-walkthrough/scripts/test-session-walkthrough.sh" \
+  || fail "walkthrough suite differs across providers"
 
 # Extract one full creation record; unrelated hex in names is never an ID.
 created_task_id() {
