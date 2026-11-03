@@ -48,7 +48,8 @@ This is how an agent runs a tour on a real app.
 
 4. Dry-run: for each step `i` from 0 to 8, call
    `async () => SessionWalkthroughTour.goTo(i)` and check that the returned
-   `overlaps` is false and `targetRect` matches the element. Step 7 (index 6)
+   `styles` is `adopted`, `overlaps` is false and `targetRect` matches the
+   element. Step 7 (index 6)
    reports `missing: true` with the admin-only reason. That is expected.
 5. Return to the start with `goTo(0)` and hand over.
 
@@ -59,8 +60,8 @@ To test recovery, reload the tab and run:
 ```
 
 The tour returns at the step it was on. Close (button, × or Esc) removes every
-trace: run `() => [document.getElementById('session-walkthrough-tour-root'), sessionStorage.length, typeof SessionWalkthroughTour]`
-and expect `[null, 0, "undefined"]`.
+trace: run `() => [document.getElementById('session-walkthrough-tour-root'), sessionStorage.length, typeof SessionWalkthroughTour, document.adoptedStyleSheets.length]`
+and expect `[null, 0, "undefined", 0]`.
 
 To check 67% zoom, set the browser zoom to 67% (`devicePixelRatio` about
 0.667) and repeat the dry run. For a phone layout use `emulate` with a mobile

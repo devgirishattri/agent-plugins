@@ -585,3 +585,173 @@ test('runtime: an invalid tour is refused before anything is added to the page',
   assert.equal(after.nodeCount, before.nodeCount);
   assert.deepEqual(after.storageKeys, []);
 });
+
+// ---------------------------------------------------------------------------
+// Pages found in the field: strict CSP, animated targets, re-created nodes
+// ---------------------------------------------------------------------------
+
+// Constructed stylesheets, as browsers provide them.
+function withSheets(win) {
+  win.CSSStyleSheet = class {
+    replaceSync(text) { this.text = text; }
+  };
+  win.document.adoptedStyleSheets = [];
+  return win;
+}
+
+test('styles: a constructed stylesheet is adopted instead of an inline <style>, and Close removes only it', async () => {
+  const win = withSheets(createWindow());
+  pageWith(win, RECTS);
+  const pageSheet = new win.CSSStyleSheet();
+  win.document.adoptedStyleSheets = [pageSheet];
+  const c = api.start(simpleTour(), { window: win });
+  const st = await c.ready();
+  assert.equal(st.styles, 'adopted');
+  assert.equal(win.document.getElementById(api.STYLE_ID), null, 'no inline <style>, which style-src would block');
+  assert.equal(win.document.adoptedStyleSheets.length, 2);
+  const mine = win.document.adoptedStyleSheets[1];
+  assert.equal(mine[api.SHEET_MARK], true);
+  assert.match(mine.text, /#session-walkthrough-tour-root/);
+
+  // An app that assigns adoptedStyleSheets wholesale gets ours back on the next placement.
+  win.document.adoptedStyleSheets = [pageSheet];
+  await c.goTo(1);
+  assert.ok(win.document.adoptedStyleSheets.includes(mine));
+
+  c.close();
+  assert.deepEqual(win.document.adoptedStyleSheets, [pageSheet], 'the page sheet stays, ours is gone');
+});
+
+test('styles: re-injection drops a lost instance\'s stylesheet', async () => {
+  const win = withSheets(createWindow());
+  pageWith(win, RECTS);
+  const first = api.start(simpleTour(), { window: win });
+  await first.ready();
+  delete win[api.CONTROLLER_KEY]; // the old controller is unreachable
+  const second = api.start(simpleTour(), { window: win });
+  await second.ready();
+  assert.equal(win.document.adoptedStyleSheets.length, 1);
+  second.close();
+  assert.equal(win.document.adoptedStyleSheets.length, 0);
+});
+
+test('styles: without constructed stylesheets the <style> fallback carries the page nonce', async () => {
+  const win = createWindow();
+  pageWith(win, RECTS);
+  const script = win.document.createElement('script');
+  script.setAttribute('nonce', '');
+  script.nonce = 'abc123';
+  win.document.head.appendChild(script);
+  const c = api.start(simpleTour(), { window: win });
+  const st = await c.ready();
+  assert.equal(st.styles, 'element');
+  assert.equal(win.document.getElementById(api.STYLE_ID).nonce, 'abc123');
+  c.close();
+  assert.equal(win.document.getElementById(api.STYLE_ID), null);
+});
+
+test('styles: status reports a stylesheet the page blocked', async () => {
+  const win = createWindow();
+  pageWith(win, RECTS);
+  win.getComputedStyle = () => ({ position: 'static', overflowX: 'visible', overflowY: 'visible' });
+  const c = api.start(simpleTour(), { window: win });
+  assert.equal((await c.ready()).styles, 'blocked');
+  c.close();
+});
+
+test('isAnimating sees finite transitions on the element or an ancestor, not endless ones', () => {
+  const win = createWindow();
+  const els = pageWith(win, { menu: { left: 0, top: 0, width: 10, height: 10 } });
+  const row = win.document.createElement('li');
+  els.menu.appendChild(row);
+  const anim = (target, endTime, playState) => ({ playState: playState || 'running', effect: { target, getComputedTiming: () => ({ endTime }) } });
+  win.document.getAnimations = () => [anim(els.menu, 300)];
+  assert.equal(api.isAnimating(win.document, row), true, 'a transition on the parent menu');
+  win.document.getAnimations = () => [anim(els.menu, 300, 'finished')];
+  assert.equal(api.isAnimating(win.document, row), false);
+  win.document.getAnimations = () => [anim(row, Infinity)];
+  assert.equal(api.isAnimating(win.document, row), false, 'an endless pulse never blocks the step');
+  win.document.getAnimations = () => [anim(win.document.createElement('div'), 300)];
+  assert.equal(api.isAnimating(win.document, row), false, 'unrelated element');
+  delete win.document.getAnimations;
+  assert.equal(api.isAnimating(win.document, row), false);
+  assert.equal(api.sameRect({ left: 0, top: 0, width: 10, height: 10 }, { left: 0.2, top: 0, width: 10, height: 10.3 }), true);
+  assert.equal(api.sameRect({ left: 0, top: 0, width: 10, height: 10 }, { left: 0, top: 0, width: 10, height: 12 }), false);
+});
+
+test('runtime: a target that is still opening is measured after it settles', async () => {
+  const win = createWindow();
+  const t0 = Date.now();
+  // A menu row that grows from 4px to 40px over 200ms, like a scaleY transition.
+  pageWith(win, { row: () => {
+    const p = Math.min(1, (Date.now() - t0) / 200);
+    return { left: 900, top: 60 + 36 * p, width: 220, height: 4 + 36 * p };
+  } });
+  const c = api.start(() => ({ id: 'anim', steps: [{ id: 'r', title: 'Row', quote: 'q', target: '#row' }] }), { window: win });
+  const st = await c.ready();
+  assert.ok(Date.now() - t0 >= 200, 'waited for the transition');
+  assert.equal(st.targetRect.height, 40);
+  assert.equal(st.targetRect.top, 96);
+  const ring = win.document.querySelector('.swt-ring');
+  assert.equal(parseFloat(ring.style.height), 48, 'ring drawn around the settled rectangle (40 + 2 * 4 padding)');
+  assert.equal(st.overlaps, false);
+  c.close();
+});
+
+test('runtime: settling gives up after settleTimeout on a target that never stops moving', async () => {
+  const win = createWindow();
+  pageWith(win, { drift: () => ({ left: 100, top: 100 + (Date.now() % 1000), width: 50, height: 20 }) });
+  const t0 = Date.now();
+  const c = api.start(() => ({ id: 'drift', options: { settleTimeout: 120 }, steps: [{ id: 'd', title: 'D', quote: 'q', target: '#drift' }] }), { window: win });
+  const st = await c.ready();
+  assert.ok(Date.now() - t0 < 1000);
+  assert.equal(st.missing, false);
+  c.close();
+});
+
+test('runtime: a re-created target is followed after a DOM change, without a scroll', async () => {
+  const win = createWindow();
+  const observers = [];
+  win.MutationObserver = class {
+    constructor(cb) { this.cb = cb; this.active = false; observers.push(this); }
+    observe(target, options) { this.active = true; this.target = target; this.options = options; }
+    disconnect() { this.active = false; }
+    fire(records) { if (this.active) this.cb(records); }
+  };
+  const els = pageWith(win, { table: { left: 100, top: 300, width: 800, height: 120 } });
+  const c = api.start(() => ({ id: 'rerender', steps: [{ id: 't', title: 'T', quote: 'q', target: '#table' }] }), { window: win });
+  await c.ready();
+  assert.equal(observers.length, 1);
+  assert.equal(observers[0].target, win.document.body);
+  assert.equal(observers[0].options.subtree, true);
+
+  // The framework replaces the node: same id, taller.
+  els.table.remove();
+  const fresh = win.document.createElement('div');
+  fresh.setAttribute('id', 'table');
+  fresh.rect = { left: 100, top: 300, width: 800, height: 160 };
+  win.document.body.appendChild(fresh);
+  assert.equal(c.status().targetRect.height, 160, 'status re-queries a detached target');
+
+  // Our own ring and card updates are ignored; a page change re-places.
+  const ring = win.document.querySelector('.swt-ring');
+  observers[0].fire([{ target: ring }]);
+  await new Promise((r) => setTimeout(r, 10));
+  observers[0].fire([{ target: win.document.body }]);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(parseFloat(ring.style.height), 168);
+  c.close();
+  assert.equal(observers[0].active, false, 'Close disconnects the observer');
+});
+
+test('runtime: a transition that ends re-places the ring', async () => {
+  const win = createWindow();
+  const els = pageWith(win, RECTS);
+  const c = api.start(simpleTour(), { window: win });
+  await c.ready();
+  els.a.rect = { left: 100, top: 140, width: 200, height: 40 };
+  win.document.body.dispatchEvent(new FakeEvent('transitionend', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(parseFloat(win.document.querySelector('.swt-ring').style.top), 136);
+  c.close();
+});
