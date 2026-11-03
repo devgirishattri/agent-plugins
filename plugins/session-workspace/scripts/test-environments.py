@@ -329,6 +329,22 @@ class Environments(unittest.TestCase):
                 p.validate_bash(ctx, 'cat /outside/selected-plugin/SKILL.md', {})
             self.assertEqual(caught.exception.rule, 'executor.containment')
 
+    def test_role_floor_probe_for_every_pane(self):
+        # Each pane resolves its own floor (confined for control-directory
+        # coordinators) and every built-in case is decided as expected.
+        expected = {'root': 'orchestrator', 'web-master': 'confined_orchestrator', 'web-executor': 'executor', 'web-reviewer': 'reviewer'}
+        for name, key in expected.items():
+            p, _, env = self.context(name)
+            with patch.dict(os.environ, env, clear=True):
+                floor, probe = p.floor_document(), p.probe_document()
+            self.assertEqual((floor['current'], probe['floor']), (key, key), name)
+            self.assertTrue(probe['ran'] and probe['cases'], name)
+            self.assertEqual([c for c in probe['cases'] if not c['ok']], [], name)
+        status = self.run_script('harness-status')
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertIn('\n  master (confined) -> containment (', status.stdout)
+        self.assertIn('\n  master -> child_write (', status.stdout)
+
     def test_orchestrator_gh_role_and_file_boundaries(self):
         for name in ('root', 'web-master'):
             p, ctx, env = self.context(name)

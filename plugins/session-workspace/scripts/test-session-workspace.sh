@@ -741,6 +741,131 @@ if printf '%s' "$HS_MISMATCH" | grep -q "^identity: MISMATCH  pane=harness-sampl
 else
   fail "harness-status: a forged role reports MISMATCH (human renderer)" "$HS_MISMATCH"
 fi
+
+echo "== harness-status: strict-v1 role floor and optional guard packs =="
+# hs_as PANE ROLE CWD CONFIG HARNESS_SCRIPTS_DIR [args...]: harness-status
+# inside one launched pane identity (enforce mode, schema v2, no guards).
+hs_as() {
+  local pane="$1" role="$2" cwd="$3" config="$4" dir="$5"
+  shift 5
+  env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME -u SESSION_WORKSPACE_GUARDS_JSON \
+    -u SESSION_WORKSPACE_SCOPE_JSON -u SESSION_WORKSPACE_READ_PATHS_JSON \
+    SESSION_WORKSPACE_CONFIG="$config" SESSION_WORKSPACE_PROJECT_ROOT="$(dirname "$config")" \
+    SESSION_WORKSPACE_PANE_NAME="$pane" SESSION_WORKSPACE_ROLE="$role" \
+    SESSION_WORKSPACE_PANE_CWD="$cwd" SESSION_WORKSPACE_HARNESS_MODE=enforce \
+    bash "$dir/harness-status.sh" --config "$config" "$@"
+}
+HS_FLOOR_HEAD='^floor (strict-v1, not configurable):$'
+HS_FLOOR_REVIEWER="^  reviewer -> readonly (edit family denied, except this pane's own message drafts \\[12 edit tools\\]; shell default-deny except allowlisted reads \\["
+HS_FLOOR_EXECUTOR='^  executor -> containment (edit family and path operands confined to the pane checkout \['
+HS_FLOOR_MASTER='^  master -> child_write (no edit or mutating shell against a child checkout), push (no git push), gh ('
+HS_FLOOR_ALL='^  all roles -> helpers (selected installed version only, reviewed argv, gated by role \['
+HS_FLOOR_CASES=(
+  "master|harness-sample-master|$HARNESS_FIX_ROOT|$HS_FLOOR_MASTER"
+  "executor|harness-sample-component-executor|$HARNESS_FIX_ROOT/component-a|$HS_FLOOR_EXECUTOR"
+  "reviewer|harness-sample-component-reviewer|$HARNESS_FIX_ROOT/component-a|$HS_FLOOR_REVIEWER"
+)
+for hs_case in "${HS_FLOOR_CASES[@]}"; do
+  IFS='|' read -r hs_role hs_pane hs_cwd hs_line <<<"$hs_case"
+  HS_ROLE_OUT="$(hs_as "$hs_pane" "$hs_role" "$hs_cwd" "$HARNESS_CFG_ABS" "$HERE" 2>&1)"
+  HS_ROLE_LINES="$(printf '%s\n' "$HS_ROLE_OUT" | grep -c -e "$HS_FLOOR_REVIEWER" -e "$HS_FLOOR_EXECUTOR" -e "$HS_FLOOR_MASTER")"
+  if printf '%s\n' "$HS_ROLE_OUT" | grep -q "$HS_FLOOR_HEAD" \
+    && printf '%s\n' "$HS_ROLE_OUT" | grep -q "$hs_line" \
+    && [ "$HS_ROLE_LINES" = 1 ] \
+    && printf '%s\n' "$HS_ROLE_OUT" | grep -q "$HS_FLOOR_ALL" \
+    && printf '%s\n' "$HS_ROLE_OUT" | grep -qx 'optional guard packs: none (schema-v2-compatible behavior)' \
+    && ! printf '%s\n' "$HS_ROLE_OUT" | grep -q '^guards:' \
+    && [ "$(printf '%s\n' "$HS_ROLE_OUT" | grep -n "$HS_FLOOR_HEAD" | cut -d: -f1)" -lt "$(printf '%s\n' "$HS_ROLE_OUT" | grep -n '^optional guard packs:' | cut -d: -f1)" ]; then
+    pass "harness-status ($hs_role pane): prints only that role's floor, before the renamed optional guard packs line"
+  else
+    fail "harness-status ($hs_role pane): prints only that role's floor, before the renamed optional guard packs line" "$HS_ROLE_OUT"
+  fi
+  HS_ROLE_JSON="$(hs_as "$hs_pane" "$hs_role" "$hs_cwd" "$HARNESS_CFG_ABS" "$HERE" --json 2>&1)"
+  if printf '%s' "$HS_ROLE_JSON" | jq -e --arg name "$hs_role" '
+      .floor.profile == "strict-v1" and .floor.configurable == false and .floor.view == "pane"
+      and (.floor.roles | length) == 1 and .floor.roles[0].name == $name
+      and (.floor.roles[0].floors | length) > 0 and (.floor.all.floors | length) > 0
+      and has("guards") and .guards == null and .probe == null' >/dev/null 2>&1; then
+    pass "harness-status --json ($hs_role pane): floor object for the resolved role; guards kept for compatibility"
+  else
+    fail "harness-status --json ($hs_role pane): floor object for the resolved role; guards kept for compatibility" "$HS_ROLE_JSON"
+  fi
+  HS_PROBE_OUT="$(hs_as "$hs_pane" "$hs_role" "$hs_cwd" "$HARNESS_CFG_ABS" "$HERE" --probe 2>&1)"
+  HS_PROBE_RC=$?
+  if [ "$HS_PROBE_RC" -eq 0 ] && printf '%s\n' "$HS_PROBE_OUT" | grep -q "^probe (decides this pane's floor cases, runs nothing): .* cases, all as expected$" \
+    && printf '%s\n' "$HS_PROBE_OUT" | grep -q '^  deny   ' && printf '%s\n' "$HS_PROBE_OUT" | grep -q '^  allow  ' \
+    && ! printf '%s\n' "$HS_PROBE_OUT" | grep -q 'UNEXPECTED'; then
+    pass "harness-status --probe ($hs_role pane): every built-in floor case is decided as expected"
+  else
+    fail "harness-status --probe ($hs_role pane): every built-in floor case is decided as expected" "rc=$HS_PROBE_RC $HS_PROBE_OUT"
+  fi
+done
+HS_ALL_OUT="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/harness-status.sh" --config "$HARNESS_CFG_ABS" --probe 2>&1)"
+HS_ALL_RC=$?
+if [ "$HS_ALL_RC" -eq 0 ] && printf '%s\n' "$HS_ALL_OUT" | grep -q "$HS_FLOOR_REVIEWER" && printf '%s\n' "$HS_ALL_OUT" | grep -q "$HS_FLOOR_EXECUTOR" \
+  && printf '%s\n' "$HS_ALL_OUT" | grep -q "$HS_FLOOR_MASTER" && printf '%s\n' "$HS_ALL_OUT" | grep -q "$HS_FLOOR_ALL" \
+  && ! printf '%s\n' "$HS_ALL_OUT" | grep -q '(confined) ->' \
+  && printf '%s\n' "$HS_ALL_OUT" | grep -qx 'probe: not run (harness is not active in this process)'; then
+  pass "harness-status without a pane identity: floor for every role; --probe reports not run"
+else
+  fail "harness-status without a pane identity: floor for every role; --probe reports not run" "rc=$HS_ALL_RC $HS_ALL_OUT"
+fi
+HS_V3_OUT="$(env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME SESSION_WORKSPACE_CONFIG="$V3_ROOT/harness-v3.json" SESSION_WORKSPACE_PROJECT_ROOT="$V3_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-master SESSION_WORKSPACE_ROLE=master SESSION_WORKSPACE_PANE_CWD="$V3_ROOT" \
+  SESSION_WORKSPACE_HARNESS_MODE=enforce SESSION_WORKSPACE_GUARDS_JSON="$V3_GUARDS" \
+  bash "$HERE/harness-status.sh" --config "$V3_ROOT/harness-v3.json" 2>&1)"
+HS_V3_PACKS="$(printf '%s\n' "$HS_V3_OUT" | sed -n 's/^optional guard packs: //p' | jq -cS . 2>/dev/null)"
+if [ "$HS_V3_PACKS" = "$V3_GUARDS" ] && printf '%s\n' "$HS_V3_OUT" | grep -q "$HS_FLOOR_MASTER" \
+  && ! printf '%s\n' "$HS_V3_OUT" | grep -q '^guards:'; then
+  pass "harness-status (schema v3 guards): packs print as optional guard packs, after the master floor"
+else
+  fail "harness-status (schema v3 guards): packs print as optional guard packs, after the master floor" "$HS_V3_OUT"
+fi
+# The floor is rendered from harness-policy.py's own tables: an edited table
+# changes the printed floor, and enforcement that stops denying fails --probe.
+HS_DRIFT="$TMPROOT/floor-drift-scripts"
+mkdir -p "$HS_DRIFT"
+cp -p "$HERE"/*.sh "$HERE"/*.jq "$HERE"/*.py "$HS_DRIFT"/
+python3 - "$HS_DRIFT/harness-policy.py" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+edits = [
+    ('    "jq",\n    "ls",\n', '    "ls",\n'),
+    ('("push", "no git push", ("orchestrator.push",), ())', '("push", "no git push to any remote", ("orchestrator.push",), ())'),
+]
+for old, new in edits:
+    assert text.count(old) == 1, old
+    text = text.replace(old, new)
+open(path, "w", encoding="utf-8").write(text)
+PY
+HS_DRIFT_OUT="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HS_DRIFT/harness-status.sh" --config "$HARNESS_CFG_ABS" 2>&1)"
+HS_DRIFT_JSON="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HS_DRIFT/harness-status.sh" --config "$HARNESS_CFG_ABS" --json 2>&1)"
+HS_BASE_READS="$(printf '%s\n' "$HS_ALL_OUT" | grep -o 'allowlisted reads \[[0-9]* read commands' | grep -o '[0-9]*')"
+if printf '%s\n' "$HS_DRIFT_OUT" | grep -q "push (no git push to any remote)" \
+  && printf '%s\n' "$HS_DRIFT_OUT" | grep -q "allowlisted reads \[$((HS_BASE_READS - 1)) read commands" \
+  && printf '%s' "$HS_DRIFT_JSON" | jq -e '[.floor.roles[] | select(.name == "reviewer") | .floors[].clauses[].tables.READ_COMMANDS // empty | index("jq")] == [null]' >/dev/null 2>&1; then
+  pass "harness-status: editing a policy table (READ_COMMANDS, ROLE_FLOOR) changes the printed floor"
+else
+  fail "harness-status: editing a policy table (READ_COMMANDS, ROLE_FLOOR) changes the printed floor" "base=$HS_BASE_READS $HS_DRIFT_OUT"
+fi
+python3 - "$HS_DRIFT/harness-policy.py" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+old = '                raise PolicyFailure("orchestrator.push", "orchestrator cannot run git push; route it to the owning executor")\n'
+assert text.count(old) == 1
+text = text.replace(old, '                pass  # simulated drift: push is no longer denied\n')
+open(path, "w", encoding="utf-8").write(text)
+PY
+HS_DRIFT_PROBE="$(hs_as harness-sample-master master "$HARNESS_FIX_ROOT" "$HARNESS_CFG_ABS" "$HS_DRIFT" --probe 2>&1)"
+HS_DRIFT_RC=$?
+if [ "$HS_DRIFT_RC" -eq 1 ] && printf '%s\n' "$HS_DRIFT_PROBE" | grep -q '1 NOT as expected$' \
+  && printf '%s\n' "$HS_DRIFT_PROBE" | grep -q '^  UNEXPECTED allow allow (expected deny orchestrator.push): git push'; then
+  pass "harness-status --probe: a floor rule that stops denying is reported UNEXPECTED with exit 1"
+else
+  fail "harness-status --probe: a floor rule that stops denying is reported UNEXPECTED with exit 1" "rc=$HS_DRIFT_RC $HS_DRIFT_PROBE"
+fi
 HD_OUT="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HERE/workspace.sh" harness-doctor --config "$HARNESS_BASE" 2>&1)"
 HD_RC=$?
 if [ "$HD_RC" -eq 0 ] && printf '%s' "$HD_OUT" | grep -q "\[OK\] harness.activation" && printf '%s' "$HD_OUT" | grep -q "\[OK\] hook.registration" && printf '%s' "$HD_OUT" | grep -q "\[INFO\] identity.live"; then
