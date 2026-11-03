@@ -1,6 +1,6 @@
 ---
 name: harness-status
-description: "Show whether the session-workspace strict-v1 harness is active and whether the current pane identity matches its validated config. Use for harness activation, role, mode, and identity status."
+description: "Show whether the session-workspace strict-v1 harness is active, the role floor it enforces, and whether the current pane identity matches its validated config. Use for harness activation, role floor, mode, and identity status."
 ---
 
 # harness-status
@@ -20,10 +20,18 @@ Flags:
 
 - `--config PATH` selects a workspace config instead of discovery.
 - `--json` emits the normalized status object.
+- `--probe` decides this pane's built-in floor cases. It runs no command and
+  writes no file, and it exits 1 when a case is not decided as expected.
 
 The command reports activation, audit/enforce mode, the immutable `strict-v1`
 profile, semantic roles, gate TTLs, and live identity matching. It is strictly
 read-only.
+
+The `floor (strict-v1, not configurable):` lines are the role floor, generated
+from `harness-policy.py`'s own tables, for this pane's role or for every role.
+The `optional guard packs:` line lists only the configured `harness.guards`
+packs, which add to the floor. "No packs" never means that reviewer read-only
+or executor containment is off. Report every `UNEXPECTED` probe line verbatim.
 
 Interpret `identity:` as follows: `not present` is expected outside a
 workspace-launched pane; `MATCH` is complete and alias-consistent; `PARTIAL`
