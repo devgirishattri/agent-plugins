@@ -1,5 +1,29 @@
 # Changelog
 
+## session-workspace 0.12.4 — 2026-11-03
+
+- strict-v1 accepts the documented operands of the knowledge docs
+  validators: `validate-links.sh [docs-directory]`,
+  `check-todos.sh [docs-directory]` and
+  `check-freshness.sh [docs-directory] [days-threshold]`. Before, the policy
+  table gave all three a no-argument grammar, so an agent could check only the
+  pane's whole cwd. A scoped pass such as
+  `validate-links.sh <workspace>/docs/decisions` failed with
+  `[helper.argv]: validate-links.sh accepts no arguments`.
+- The directory must be literal and must resolve, symlinks included, to an
+  existing directory inside the pane's own cwd: the workspace root for the
+  orchestrator, the pane's checkout for executors and reviewers. A relative
+  directory resolves against that cwd. The policy refuses a directory outside
+  that scope, any `..` component, a symlink that points outside, a file, a
+  second directory, a glob or `~`, and a value that starts with `-` (the
+  validators pass it to `find`, which reads `-delete` as an expression). The
+  freshness threshold is an integer from 1 to 3650.
+- The other helper rules do not change: one literal `bash` segment, no shell
+  composition or expansion, no extra arguments, and only the selected
+  installed helper version.
+- No config migration; update the plugin and restart affected agents.
+  Downgrading to 0.12.3 restores the no-argument rule.
+
 ## session-walkthrough 0.2.1 — 2026-11-03
 
 - **Strict Content Security Policy.** A `style-src` without `'unsafe-inline'`,
