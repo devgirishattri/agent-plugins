@@ -124,7 +124,7 @@
     {
       "name": "session-walkthrough",
       "description": "Live, self-driven walkthrough tours of session changes in the running browser, plus recorded walkthrough bundles on request: scoped source fingerprints, a validated provenance manifest and a portable HTML page. Read-mostly; never approval, upload, save or Git authority.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "Girish Attri"
       },
