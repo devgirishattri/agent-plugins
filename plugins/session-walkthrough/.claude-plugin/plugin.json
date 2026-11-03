@@ -1,11 +1,11 @@
 {
   "name": "session-walkthrough",
-  "version": "0.2.1",
-  "description": "Live, self-driven walkthrough tours of session changes in the running browser, plus recorded walkthrough bundles on request: scoped source fingerprints, a validated provenance manifest and a portable HTML page. Read-mostly; never approval, upload, save or Git authority.",
+  "version": "0.3.0",
+  "description": "Live, self-driven walkthrough tours of session changes in the already-running browser: an overlay highlights each changed element and quotes the request line it covers. Read-mostly; never approval, upload, save or Git authority.",
   "author": {
     "name": "Girish Attri"
   },
-  "keywords": ["walkthrough", "visual-review", "screenshots", "video", "provenance", "multi-agent"],
+  "keywords": ["walkthrough", "tour", "visual-review", "multi-agent"],
   "homepage": "https://github.com/devgirishattri/agent-plugins",
   "repository": "https://github.com/devgirishattri/agent-plugins",
   "license": "MIT"

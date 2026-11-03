@@ -22,18 +22,9 @@ for helper in session-chat/scripts/own-draft-check.sh \
     || fail "shared verdict helper differs across providers: $helper"
 done
 
-# Walkthrough contracts and deterministic helpers are shared across providers.
-for helper in manifest.schema.json descriptor.schema.json walkthrough.py walkthrough.sh; do
-  cmp -s "$ROOT/plugins/session-walkthrough/scripts/$helper" \
-    "$ROOT/codex/plugins/session-walkthrough/scripts/$helper" \
-    || fail "walkthrough shared file differs across providers: $helper"
-done
-for directory in descriptors fixtures tour; do
-  diff -rq "$ROOT/plugins/session-walkthrough/scripts/$directory" \
-    "$ROOT/codex/plugins/session-walkthrough/scripts/$directory" \
-    || fail "walkthrough shared directory differs across providers: $directory"
-done
-# The live tour example and references are provider-neutral too.
+# The live tour overlay, its example and its reference are shared across providers.
+diff -rq "$ROOT/plugins/session-walkthrough/scripts/tour" "$ROOT/codex/plugins/session-walkthrough/scripts/tour" \
+  || fail "walkthrough tour overlay differs across providers"
 diff -rq "$ROOT/plugins/session-walkthrough/examples" "$ROOT/codex/plugins/session-walkthrough/examples" \
   || fail "walkthrough examples differ across providers"
 diff -rq "$ROOT/plugins/session-walkthrough/skills/session-walkthrough/references" \
