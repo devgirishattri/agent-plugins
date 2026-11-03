@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Tracked commit-msg hook: refuse a commit whose message has a Co-Authored-By
+# or Claude-Session line. Enable it once per clone:
+#   git config core.hooksPath .githooks
+# CI runs the same check (scripts/check-commit-trailers.sh) on every pull
+# request and push to main, so a commit made with --no-verify still fails there.
+
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+exec bash "$here/../scripts/check-commit-trailers.sh" --message-file "$1"
