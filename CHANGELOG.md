@@ -1,5 +1,27 @@
 # Changelog
 
+## knowledge 0.5.11 — 2026-11-03
+
+- `validate-links.sh` now decodes a percent-encoded markdown link target before
+  it looks for the file. A link target is a URL, so a space in a file name is
+  written `%20`, for example the target `../api/1.2%20List%20Items.md`. Before,
+  the validator looked for the literal name `1.2%20List%20Items.md` and reported
+  the link BROKEN although `../api/1.2 List Items.md` exists.
+- Each `%HH` escape decodes to its byte: `%25` is a literal percent sign, and
+  UTF-8 escapes such as `%C3%A9` resolve. A `%` without two hex digits after it
+  stays as it is, so a link to `50%off.md` still resolves. A link written with
+  a plain space still passes.
+- A BROKEN line still shows the link as written. Its "expected at" path is now
+  the decoded path, so it names the file that was looked for.
+- `**Related**:` header references are plain file names in backticks, not URLs,
+  and are not decoded.
+- The Claude and Codex copies of `validate-links.sh` had drifted. They are now
+  byte-identical, and `scripts/test-provider-parity.sh` fails if they differ
+  again. Both copies now ignore spaces between `(` and the link target, as
+  Markdown does; before, only the Codex copy did.
+- `doctor` runs the same validator, so its `docs-links` warnings change in the
+  same way. No migration.
+
 ## session-walkthrough 0.3.0 — 2026-11-03
 
 - **Recorded bundle removed. The live tour is the only mode.** Every
