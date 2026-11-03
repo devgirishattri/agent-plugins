@@ -988,6 +988,10 @@ codex/
 scripts/
   validate-release.sh           # Pre-publish metadata and parity validation
   test-provider-parity.sh       # Cross-provider scheduler/context parity test
+  check-commit-trailers.sh      # Rejects Co-Authored-By/Claude-Session lines
+
+.githooks/commit-msg            # Same check for local commits (core.hooksPath)
+.claude/settings.json           # Claude Code project settings: no attribution
 
 .github/workflows/validate.yml  # CI: release validation, per-plugin smoke
                                 # tests for both providers, and shellcheck
@@ -1056,6 +1060,22 @@ These checks do not themselves enable repository merge protection.
   only when every shard succeeds, and `validate-release.sh` fails if a shard is
   missing from that gate. A new push to a pull request cancels the pull
   request's older run. Runs on `main` are never cancelled.
+- Commits carry no `Co-Authored-By` or `Claude-Session` line anywhere in the
+  message. The `commit-trailers` CI job runs `scripts/check-commit-trailers.sh`
+  on every commit a pull request adds and every commit pushed to `main`, and
+  `validate-release` needs it, so a pull request whose commits carry such a
+  line cannot merge. It matches any line that starts with either key, indented
+  or not, because squash messages copy commit bodies: their trailers end up
+  mid-message, where git's trailer parser does not look, and `git merge
+  --squash` indents them. For local commits, enable the tracked hook once per
+  clone with `git config core.hooksPath .githooks`; that setting replaces
+  `.git/hooks` for the clone. The tracked `.claude/settings.json` turns off
+  Claude Code's commit trailer, pull request attribution line and session link
+  (`attribution.commit`, `attribution.pr`, `attribution.sessionUrl`).
+- Write squash merge messages by hand. The pull request run never sees the
+  squash message, and GitHub's default copies every commit body and adds a
+  `Co-authored-by` line for each commit author other than the merger. The run
+  on `main` checks the squash commit, but only after it has landed.
 - `claude plugin validate <path>` checks a single plugin or marketplace manifest
   against the Claude schema, which is a faster inner-loop check than a full
   release validation.
