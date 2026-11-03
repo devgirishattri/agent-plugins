@@ -71,6 +71,51 @@ end
 puts "OK: command YAML frontmatter is valid"
 RUBY
 
+# CI runs the release suites as parallel shard jobs behind one gating job named
+# validate-release. A shard missing from that job's needs would still run, but
+# its failure would no longer block a merge. Every job other than the
+# standalone checks is a shard and must be gated.
+ruby <<'RUBY'
+require "yaml"
+
+path = ".github/workflows/validate.yml"
+jobs = YAML.safe_load(File.read(path, encoding: "UTF-8"), permitted_classes: [], aliases: false).fetch("jobs")
+standalone = %w[native-session-metadata shellcheck actionlint zizmor]
+
+gate_problems = lambda do |all_jobs|
+  gates = all_jobs.select { |_, job| job["name"] == "validate-release" }
+  next ["expected exactly one job named validate-release, found #{gates.length}"] unless gates.length == 1
+  gate_id, gate = gates.first
+  shards = all_jobs.keys - standalone - [gate_id]
+  needs = Array(gate["needs"])
+  problems = []
+  problems << "no shard jobs" if shards.empty?
+  missing = shards - needs
+  problems << "validate-release does not need shard(s) #{missing.join(', ')}" unless missing.empty?
+  extra = needs - shards
+  problems << "validate-release needs non-shard job(s) #{extra.join(', ')}" unless extra.empty?
+  unless gate["if"].to_s.gsub(/\s+/, "") == "${{!cancelled()}}"
+    problems << "validate-release must run after a failed shard (if: ${{ !cancelled() }})"
+  end
+  problems
+end
+
+problems = gate_problems.call(jobs)
+abort("ERROR: #{path}: #{problems.join('; ')}") unless problems.empty?
+
+# Executable evidence that the gate check can fail: drop a shard from needs,
+# then drop the run-after-failure condition.
+gate_id = jobs.find { |_, job| job["name"] == "validate-release" }.first
+dropped = Marshal.load(Marshal.dump(jobs))
+dropped[gate_id]["needs"] = Array(dropped[gate_id]["needs"]).drop(1)
+abort("ERROR: gate check accepted a shard missing from needs") if gate_problems.call(dropped).empty?
+unconditional = Marshal.load(Marshal.dump(jobs))
+unconditional[gate_id].delete("if")
+abort("ERROR: gate check accepted a gate that is skipped after a failed shard") if gate_problems.call(unconditional).empty?
+
+puts "OK: validate-release gates all #{Array(jobs[gate_id]["needs"]).length} CI shard jobs"
+RUBY
+
 while IFS= read -r shell_file; do
   bash -n "$shell_file"
 done < <(find plugins codex/plugins scripts -type f -name '*.sh' | sort)
