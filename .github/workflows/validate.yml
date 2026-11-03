@@ -8,10 +8,24 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels that pull request's older run, so a
+# superseded commit stops holding runners. Pushes to main group by commit and
+# are never cancelled: every main commit gets a full run.
+concurrency:
+  group: validate-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# validate-release runs as parallel shards, one runner each. Every suite still
+# runs on every pull request and every push to main; the shards only split the
+# list. The validate-release job below passes only when every shard
+# succeeded, so it remains the single check that gates a merge. The slowest
+# shard (the Claude session-scheduler suite) sets the wall time.
+
 jobs:
   native-session-metadata:
     name: native-session-metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -25,9 +39,10 @@ jobs:
       - name: Test native deletion without a daemon
         run: python3 -B scripts/test-session-deletion-live.py
 
-  validate:
-    name: validate-release
+  release-checks:
+    name: release-checks
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -45,6 +60,89 @@ jobs:
           python3 -B scripts/test-context-locks.py
           python3 -B scripts/test-session-chat-locks.py
 
+      - name: Run cross-provider scheduler/context parity test
+        run: |
+          mkdir -p "$RUNNER_TEMP/provider-parity"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/provider-parity" \
+            bash scripts/test-provider-parity.sh
+          bash scripts/test-session-workspace-policy-parity.sh
+
+  smoke-claude-scheduler:
+    name: smoke-claude-scheduler
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq tmux ripgrep ruby
+
+      - name: Run Claude session-scheduler smoke tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/claude-session-scheduler"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-scheduler" \
+            python3 scripts/ci-smoke.py bash plugins/session-scheduler/scripts/test-session-scheduler.sh
+
+  smoke-claude-workspace:
+    name: smoke-claude-workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq tmux ripgrep ruby
+
+      - name: Run Claude session-workspace smoke tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/claude-session-workspace"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-workspace" \
+            python3 scripts/ci-smoke.py bash plugins/session-workspace/scripts/test-session-workspace.sh
+
+      - name: Run Claude harness-policy tests
+        run: python3 scripts/ci-smoke.py bash plugins/session-workspace/scripts/test-harness-policy.sh
+
+  smoke-codex-workspace:
+    name: smoke-codex-workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq tmux ripgrep ruby
+
+      - name: Run Codex session-workspace smoke tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-session-workspace"
+          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
+            TMUX_TMPDIR="$RUNNER_TEMP/codex-session-workspace" \
+            python3 scripts/ci-smoke.py bash codex/plugins/session-workspace/scripts/test-session-workspace.sh
+
+      - name: Run Codex harness-policy tests
+        run: python3 scripts/ci-smoke.py bash codex/plugins/session-workspace/scripts/test-harness-policy.sh
+
+  smoke-plugins:
+    name: smoke-plugins
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq tmux ripgrep ruby
+
       - name: Run Codex plugin smoke tests
         run: |
           python3 scripts/ci-smoke.py bash codex/plugins/session-manager/scripts/test-session-manager.sh
@@ -60,11 +158,6 @@ jobs:
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-scheduler" \
             python3 scripts/ci-smoke.py bash codex/plugins/session-scheduler/scripts/test-session-scheduler.sh
-          mkdir -p "$RUNNER_TEMP/codex-session-workspace"
-          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
-            TMUX_TMPDIR="$RUNNER_TEMP/codex-session-workspace" \
-            python3 scripts/ci-smoke.py bash codex/plugins/session-workspace/scripts/test-session-workspace.sh
-          python3 scripts/ci-smoke.py bash codex/plugins/session-workspace/scripts/test-harness-policy.sh
 
       - name: Run Claude parity smoke tests
         run: |
@@ -80,23 +173,18 @@ jobs:
           env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
             TMUX_TMPDIR="$RUNNER_TEMP/claude-context" \
             python3 scripts/ci-smoke.py bash plugins/knowledge/scripts/test-context.sh
-          mkdir -p "$RUNNER_TEMP/claude-session-scheduler"
-          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
-            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-scheduler" \
-            python3 scripts/ci-smoke.py bash plugins/session-scheduler/scripts/test-session-scheduler.sh
-          mkdir -p "$RUNNER_TEMP/claude-session-workspace"
-          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
-            TMUX_TMPDIR="$RUNNER_TEMP/claude-session-workspace" \
-            python3 scripts/ci-smoke.py bash plugins/session-workspace/scripts/test-session-workspace.sh
-          python3 scripts/ci-smoke.py bash plugins/session-workspace/scripts/test-harness-policy.sh
 
-      - name: Run cross-provider scheduler/context parity test
-        run: |
-          mkdir -p "$RUNNER_TEMP/provider-parity"
-          env -u TMUX -u TMUX_PANE -u SESSION_CHAT_INCOMING_MODE \
-            TMUX_TMPDIR="$RUNNER_TEMP/provider-parity" \
-            bash scripts/test-provider-parity.sh
-          bash scripts/test-session-workspace-policy-parity.sh
+  knowledge-evals:
+    name: knowledge-evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq tmux ripgrep ruby
 
       - name: Validate unified knowledge search
         run: |
@@ -128,9 +216,32 @@ jobs:
           bash codex/plugins/knowledge/scripts/test-doctor.sh
           bash plugins/knowledge/scripts/test-doctor.sh
 
+  validate:
+    name: validate-release
+    needs:
+      - release-checks
+      - smoke-claude-scheduler
+      - smoke-claude-workspace
+      - smoke-codex-workspace
+      - smoke-plugins
+      - knowledge-evals
+    # Run after a failed shard too, so this check reports failure instead of
+    # being skipped. A cancelled run (superseded push) reports nothing.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every validate-release shard to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          printf '%s\n' "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          printf '%s\n' "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
