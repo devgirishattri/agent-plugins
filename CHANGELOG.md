@@ -17,7 +17,7 @@
   ring stayed on the old rectangle and `status()` reported no target until the
   next scroll. Placement now follows page DOM changes and the end of CSS
   transitions and animations, and `status()` queries a detached target again.
-- **Tours never discard the user's edits.** In agent trials, two of three
+- **Tours never discard the user's edits.** In agent trials, four of five
   generated tours reset the whole form from `onClose` or a step's `setup`,
   which would also drop edits the user made during the tour. The docs now
   forbid that, document `onClose` (undo only what the tour set), and put
