@@ -245,23 +245,28 @@ wait "$ls_holder_pid" && ok || fail "lock holder exited nonzero"
 wait "$ls_save_pid" && ok || fail "blocked save did not complete after the writer lock was released"
 [ -f "$LOCK_SERIAL_STORE/lockprobe.md" ] && ok || fail "blocked save produced no snapshot after release"
 
-# A stale observer may briefly claim the current generation before discovering
-# its token changed. The owner release path waits for that transient claim to be
-# dropped instead of failing or spinning without a bound.
+# A waiter's .reclaim marker can sit in the held lock while the owner releases
+# (a file now, a directory from 0.5.9). The release renames the whole lock
+# directory, marker included, so the lock path never shows a directory with no
+# holder and no lock or quarantine is left behind.
 RELEASE_CLAIM_STORE="$TMP/release-claim-contexts"
 mkdir -m 700 "$RELEASE_CLAIM_STORE"
 if ! bash -c '
   source "$1"
   root="$2"
-  acquire_context_store_lock "$root" || exit 1
-  mkdir -m 700 "$root/.knowledge-context.lock/.reclaim"
-  (sleep 0.1; rmdir "$root/.knowledge-context.lock/.reclaim") &
-  dropper=$!
-  release_context_store_lock || exit 1
-  wait "$dropper" || exit 1
-  [ ! -e "$root/.knowledge-context.lock" ]
+  for marker in file dir; do
+    acquire_context_store_lock "$root" || exit 1
+    if [ "$marker" = file ]; then
+      : > "$root/.knowledge-context.lock/.reclaim"
+    else
+      mkdir -m 700 "$root/.knowledge-context.lock/.reclaim"
+    fi
+    release_context_store_lock || exit 2
+    [ ! -e "$root/.knowledge-context.lock" ] || exit 3
+    [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".knowledge-context-stale.*" -print -quit)" ] || exit 4
+  done
 ' _ "$SCRIPT_DIR/lib.sh" "$RELEASE_CLAIM_STORE"; then
-  fail "writer release did not wait for a transient generation claim"
+  fail "writer release with an in-flight reclaim marker failed or left residue"
 fi
 
 # A kill -9-style stale writer lock is reclaimed only after its recorded PID
@@ -289,41 +294,25 @@ SESSION_CONTEXT_HOME="$STALE_STORE" bash -c '
 [ -z "$(find "$STALE_STORE" -mindepth 1 -maxdepth 1 -name '.knowledge-context-stale.*' -print -quit 2>/dev/null)" ] \
   && ok || fail "in-store stale-lock quarantine was left behind"
 
-# ABA regression: a waiter may observe a dead generation, get descheduled while
-# that pathname turns over, then resume against a new live writer. The exact old
-# lock+PID token must NOT authorize quarantining the replacement generation.
+# A waiter may read a dead holder's pid, get descheduled while the lock turns
+# over, then resume against a new live holder. Its in-place takeover must fail
+# and leave the new holder's lock alone.
 ABA_STORE="$TMP/aba-contexts"
 mkdir -m 700 "$ABA_STORE"
 if ! bash -c '
   source "$1"
   root="$2"
-  mkdir -m 700 "$root/.knowledge-context.lock"
   dead_pid=999999
   while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
-  printf "%s\n" "$dead_pid" > "$root/.knowledge-context.lock/pid"
-  chmod 600 "$root/.knowledge-context.lock/pid"
-  old_token=$(_context_lock_generation_token "$root") || exit 1
-
-  rm -f "$root/.knowledge-context.lock/pid"
-  rmdir "$root/.knowledge-context.lock"
-  mkdir -m 700 "$root/.knowledge-context.lock"
-  printf "%s\n" "$$" > "$root/.knowledge-context.lock/pid"
-  chmod 600 "$root/.knowledge-context.lock/pid"
-  new_token=$(_context_lock_generation_token "$root") || exit 1
-  [ "$new_token" != "$old_token" ] || exit 1
-
-  if _context_quarantine_lock_generation "$root" "$old_token" dead; then
-    exit 1
-  else
-    rc=$?
-  fi
-  [ "$rc" -eq 2 ] || exit 1
-  [ "$(_context_lock_generation_token "$root")" = "$new_token" ] || exit 1
-  [ ! -e "$root/.knowledge-context.lock/.reclaim" ] || exit 1
-  [ -z "$(find "${root}.knowledge-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] || exit 1
-  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".knowledge-context-stale.*" -print -quit 2>/dev/null)" ] || exit 1
+  acquire_context_store_lock "$root" || exit 1
+  if _context_reclaim_lock "$root/.knowledge-context.lock" "$dead_pid"; then exit 2; fi
+  [ "$(sed -n "1p" "$root/.knowledge-context.lock/pid")" = "$$" ] || exit 3
+  [ ! -e "$root/.knowledge-context.lock/.reclaim" ] || exit 4
+  release_context_store_lock || exit 5
+  [ ! -e "$root/.knowledge-context.lock" ] || exit 6
+  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".knowledge-context-stale.*" -print -quit 2>/dev/null)" ] || exit 7
 ' _ "$SCRIPT_DIR/lib.sh" "$ABA_STORE"; then
-  fail "stale generation token quarantined a replacement writer lock"
+  fail "a takeover for a dead pid changed a live holder's lock"
 fi
 
 # Exact-root sandbox regression: with write access to ONLY the store itself
