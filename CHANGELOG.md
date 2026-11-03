@@ -1,5 +1,64 @@
 # Changelog
 
+## session-workspace 0.12.7 — 2026-11-03
+
+Security fix for the strict-v1 reviewer read-only floor, the orchestrator
+child-write floor and the executor inline-code floor. Update both providers
+together and restart agents.
+
+- Reviewers could create or overwrite a file in their checkout with `uniq`.
+  POSIX `uniq [input [output]]` writes its second operand, and nothing checked
+  it, so `uniq package.json src/b.txt` or `uniq README.md notes.txt` passed.
+  A `uniq` with a second operand is now refused as `reviewer.uniq`. Operands
+  are counted the way BSD getopt reads them, so the macOS form
+  `uniq README.md -c`, which writes a file named `-c`, is refused too.
+  `uniq FILE` with options and stdin forms stay allowed.
+- Every other `READ_COMMANDS` entry was audited for an operand or option that
+  writes, executes or loads hidden operands, for GNU and BSD variants. The
+  result is recorded next to the table in `harness-policy.py`. Gaps closed:
+  `file -C`/`--compile` (writes `NAME.mgc`, `reviewer.file`); `date -s`,
+  `--set` and a non-`+FORMAT` operand (set the clock, `reviewer.date`);
+  `file -f`/`--files-from` and `shasum`/`cksum -c`/`--check` (read the files
+  a list names, `reviewer.file_list`). No write or exec form was found in
+  `cut`, `diff` (GNU diffutils has no `--output`), `du`, `jq`, `nl`, `stat`,
+  `tr`, `realpath`, `printf` or the rest of the table.
+- Reviewers could destroy reflog history: `git reflog` was allowed with any
+  subcommand. Only bare `git reflog [options]`, `show`, `list` and `exists`
+  are allowed now. `expire`, `delete`, `drop` (Git 2.50) and any other word
+  after `reflog` are refused as `reviewer.git`; name a ref with
+  `git reflog show REF`.
+- The orchestrator's child-write floor treated every allowlisted read command
+  as a read. `uniq a child/out`, `find child -delete`/`-exec`,
+  `rg --pre PROG ... child`, `file -C` inside a child and
+  `git -C child reflog expire` now count as child mutations
+  (`orchestrator.child_write`); a confined orchestrator's
+  `git reflog expire` is `orchestrator.git`.
+- Executors could pass `executor.inline_code` with attached or clustered
+  interpreter options, because only the exact tokens `-c`, `-e`, `--eval` and
+  `-r` were matched: `python3 -c"..."`, `python3 -Bc`, `node --eval=...`,
+  `node -p`/`--print`, `perl -e'...'`, `perl -E`, `perl -lne`, `ruby -e'...'`,
+  `ruby -ne`, `php -r'...'`, `php -nr`. Each interpreter's options are now
+  read with its own grammar up to the script operand, including
+  `--eval=`/`--print=`, `perl -M'code'`, `php -B/-R/-E/--run`, `node --import`
+  or `--require` of a `data:` URL, and versioned binaries (`python3.12`,
+  `perl5.36`, `pypy3`, `nodejs`). The exact tokens are still refused anywhere
+  in the command, and the shell branch is unchanged. Running a script file
+  stays allowed, and script arguments such as `node server.js -p 3000` are
+  not read as interpreter options.
+- The diagnostics registry adds `hook.reviewer.uniq`, `hook.reviewer.file`
+  and `hook.reviewer.date` for the DIAG line of the new denials.
+- `harness-status --probe` decides the new cases: reviewer `uniq` with one
+  and two operands, `git reflog` and `git reflog expire`/`delete`, `file -C`
+  and `date -s`; executor `python3 -c"print(1)"`, `node --eval=1` and a script
+  run; orchestrator `uniq` into a child.
+- Not covered by the inline-code floor, unchanged: a program fed to an
+  interpreter on stdin, and an interpreter behind a prefix the policy does not
+  unwrap (`timeout`, `nice`).
+- Tests: one case per gap with an allowed control next to it. With
+  `HARNESS_TEST_BASELINE_POLICY` pointing at a released `harness-policy.py`
+  (inside a copy of its scripts directory), each gap case also asserts that
+  the release allowed it.
+- No config migration.
 ## session-workspace 0.12.6 — 2026-11-03
 
 - **Single service panes on demand.** `workspace start SESSION --pane NAME`
