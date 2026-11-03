@@ -6,9 +6,8 @@ overlay highlights each new or changed element and explains it in a small card.
 The user clicks through it at their own pace.
 
 This is the default meaning of "walk me through", "walkthrough", "tour" and
-"show me the changes". It is not a screenshot bundle and not a static
-screenshot page. The recorded bundle is a separate mode, used only on explicit
-request (see [manifest.md](manifest.md)).
+"show me the changes". It is not a set of screenshots, a recording or a
+static screenshot page.
 
 ## Authority
 
