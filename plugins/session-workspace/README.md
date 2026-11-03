@@ -454,7 +454,12 @@ role floor is off. The floor:
   0.12.7 also attached and clustered forms such as `python3 -c"..."`,
   `python3 -Bc`, `perl -lne`, `ruby -e'...'`, `php -nr`, `node -p`,
   `--eval=`/`--print=`, `perl -E`, `php -B/-R/-E`, a `data:` URL module
-  load, and versioned binaries such as `python3.12`), and any
+  load, and versioned binaries such as `python3.12`; from 0.12.8 also a
+  program on stdin, from a pipe, heredoc, here-string, `<` redirect or `-`
+  (`echo code | python3`, `bash <<EOF`, `node <<<'...'`, `bash -s`), the same
+  forms behind a launch prefix (`timeout`, `nice`, `stdbuf`, `ionice`,
+  `setsid`, `taskset`, `chrt`, shell keywords such as `then`/`do`/`!`, and
+  `find -exec`), and a command on the next line of a multi-line command), and any
   sandbox/approval-escape flag are refused. Outbound
   coordination may only target
   the orchestrator; direct `tmux send-keys`/`paste-buffer`/... and copied or
@@ -867,9 +872,17 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   `rg --pre`, `uniq` with an output operand and `git reflog expire` counted
   as reads, so a root orchestrator's child-root floor did not catch them.
   From 0.12.7 they count as mutations.
-- The executor inline-code floor reads the interpreter's own argv. It does
-  not see a program fed on stdin (`python3 < script`, a pipe or a heredoc)
-  or one launched behind a prefix it does not unwrap (`timeout`, `nice`).
+- The executor inline-code floor reads the interpreter's own argv. Until
+  0.12.8 it did not see a program fed on stdin (`python3 < script`, a pipe
+  or a heredoc), one launched behind a prefix it did not unwrap (`timeout`,
+  `nice`), or a command on a later line of a multi-line command. From 0.12.8
+  an interpreter or shell with no script operand counts as reading its
+  program from stdin; version, help and info runs (`python3 --version`,
+  `node -v`, `php -m`) and `python3 -m MODULE` stay allowed. It still does
+  not unwrap task-runner launchers (`uv run`, `poetry run`, `npx`,
+  `bundle exec`, `npm exec`), `flock`, `watch`, `strace` or `script`, and it
+  covers only the shells and interpreters in its tables (not `awk`, `deno`,
+  `bun`, `lua` or `Rscript`).
 - Codex `PreToolUse` carries no per-call `exec_command` workdir (only the
   turn's top-level `cwd`), so executor/reviewer shell containment on Codex
   is incomplete for commands that set their own workdir; see "The hook".

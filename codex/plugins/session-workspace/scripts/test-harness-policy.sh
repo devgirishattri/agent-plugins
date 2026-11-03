@@ -1532,6 +1532,101 @@ gap_case "inline: php --run= is denied" executor "$(bash_payload "php --run='ech
 as_exec "inline: bash running a script file is allowed (shell branch unchanged)" "$(bash_payload 'bash tool.sh')" '.decision == "allow"'
 rm -f "$CHILD/src/uniq-existing.txt"
 
+echo "== 0.12.8 executor inline code on stdin, behind launch prefixes, on a later line =="
+# Same gap_case controls as 0.12.7, against their own baseline: set
+# HARNESS_TEST_BASELINE_POLICY_0127 to the 0.12.7 harness-policy.py (inside a
+# copy of its scripts directory) to assert that 0.12.7 allowed each case.
+BASELINE_POLICY_0125="$BASELINE_POLICY"
+BASELINE_POLICY="${HARNESS_TEST_BASELINE_POLICY_0127:-}"
+[ -n "$BASELINE_POLICY" ] || echo "  (baseline controls skipped: set HARNESS_TEST_BASELINE_POLICY_0127 to the 0.12.7 harness-policy.py)"
+NL=$'\n'
+TAB=$'\t'
+# Program on stdin: a pipe, heredoc, here-string, < redirect, - or -s.
+gap_case "stdin: python3 reading a pipe is denied" executor "$(bash_payload "echo 'import os' | python3")" "$INL"
+gap_case "stdin: python3 - reading a heredoc is denied" executor "$(bash_payload "python3 - <<'EOF'${NL}import os${NL}EOF")" "$INL"
+gap_case "stdin: python3 reading a heredoc with no operand is denied" executor "$(bash_payload "python3 <<'EOF'${NL}import os${NL}EOF")" "$INL"
+gap_case "stdin: python3 reading a <<- heredoc is denied" executor "$(bash_payload "python3 <<-EOF${NL}${TAB}import os${NL}${TAB}EOF")" "$INL"
+gap_case "stdin: node reading a here-string is denied" executor "$(bash_payload "node <<<'process.exit()'")" "$INL"
+gap_case "stdin: python3 reading a < redirect is denied" executor "$(bash_payload 'python3 < tool.py')" "$INL"
+gap_case "stdin: python3 - is denied" executor "$(bash_payload 'cat tool.py | python3 -')" "$INL"
+gap_case "stdin: python3 -- with no script is denied" executor "$(bash_payload 'cat tool.py | python3 -u --')" "$INL"
+gap_case "stdin: perl reading a pipe is denied" executor "$(bash_payload 'cat tool.pl | perl -w')" "$INL"
+gap_case "stdin: ruby - is denied" executor "$(bash_payload 'cat tool.rb | ruby -')" "$INL"
+gap_case "stdin: php reading a < redirect is denied" executor "$(bash_payload 'php < tool.php')" "$INL"
+gap_case "stdin: versioned python3.12 reading a pipe is denied" executor "$(bash_payload 'cat tool.py | python3.12')" "$INL"
+gap_case "stdin: bash reading a pipe is denied" executor "$(bash_payload 'echo ls | bash')" "$INL"
+gap_case "stdin: bash reading a heredoc is denied" executor "$(bash_payload "bash <<'EOF'${NL}ls${NL}EOF")" "$INL"
+gap_case "stdin: sh -s is denied" executor "$(bash_payload 'cat tool.sh | sh -s')" "$INL"
+gap_case "stdin: bash -eu with no script is denied" executor "$(bash_payload 'cat tool.sh | bash -eu')" "$INL"
+gap_case "stdin: zsh - is denied" executor "$(bash_payload 'cat tool.sh | zsh -')" "$INL"
+gap_case "stdin: ruby -v with another option reads stdin and is denied" executor "$(bash_payload 'cat tool.rb | ruby -v -w')" "$INL"
+gap_case "stdin: bash -ox takes pipefail as the -o value, so no script is denied" executor "$(bash_payload 'cat tool.sh | bash -ox pipefail')" "$INL"
+gap_case "inline: fish --command= is denied" executor "$(bash_payload 'fish --command=ls')" "$INL"
+gap_case "inline: fish -C init command is denied" executor "$(bash_payload "fish -C 'ls' tool.fish")" "$INL"
+as_exec "stdin control: python3 script with a < redirect input is allowed" "$(bash_payload 'python3 tool.py < input.txt')" '.decision == "allow"'
+as_exec "stdin control: a pipe into a python3 script is allowed" "$(bash_payload 'cat input.txt | python3 tool.py')" '.decision == "allow"'
+as_exec "stdin control: a heredoc into a python3 script is allowed" "$(bash_payload "python3 tool.py <<'EOF'${NL}input${NL}EOF")" '.decision == "allow"'
+as_exec "stdin control: python3 --version is allowed" "$(bash_payload 'python3 --version')" '.decision == "allow"'
+as_exec "stdin control: python3 -V is allowed" "$(bash_payload 'python3 -V')" '.decision == "allow"'
+as_exec "stdin control: node -v is allowed" "$(bash_payload 'node -v')" '.decision == "allow"'
+as_exec "stdin control: node --test is allowed" "$(bash_payload 'node --test')" '.decision == "allow"'
+as_exec "stdin control: ruby -v alone is allowed" "$(bash_payload 'ruby -v')" '.decision == "allow"'
+as_exec "stdin control: node --test with options is allowed" "$(bash_payload 'node --test --test-reporter spec')" '.decision == "allow"'
+as_exec "stdin control: php -S built-in server is allowed" "$(bash_payload 'php -S localhost:8000 -t public')" '.decision == "allow"'
+as_exec "stdin control: bash -ox pipefail script is allowed" "$(bash_payload 'bash -ox pipefail tool.sh')" '.decision == "allow"'
+as_exec "stdin control: perl -v is allowed" "$(bash_payload 'perl -v')" '.decision == "allow"'
+as_exec "stdin control: ruby --version is allowed" "$(bash_payload 'ruby --version')" '.decision == "allow"'
+as_exec "stdin control: php -m is allowed" "$(bash_payload 'php -m')" '.decision == "allow"'
+as_exec "stdin control: php -f script is allowed" "$(bash_payload 'php -f tool.php')" '.decision == "allow"'
+as_exec "stdin control: bash --version is allowed" "$(bash_payload 'bash --version')" '.decision == "allow"'
+as_exec "stdin control: bash -euo pipefail script is allowed" "$(bash_payload 'bash -euo pipefail tool.sh')" '.decision == "allow"'
+as_exec "stdin control: bash -- script is allowed" "$(bash_payload 'bash -- tool.sh')" '.decision == "allow"'
+as_exec "stdin control: a heredoc into cat is data" "$(bash_payload "cat > notes.md <<'EOF'${NL}python3 -c 'print(1)'${NL}EOF")" '.decision == "allow"'
+# Launch prefixes: unwrapped, then the same checks.
+gap_case "wrapper: timeout python3 -c is denied" executor "$(bash_payload "timeout 5 python3 -c 'print(1)'")" "$INL"
+gap_case "wrapper: timeout -s KILL -k 1 bash -c is denied" executor "$(bash_payload 'timeout -s KILL -k 1 5 bash -c true')" "$INL"
+gap_case "wrapper: timeout --signal= python3 attached -c is denied" executor "$(bash_payload 'timeout --signal=TERM 5 python3 -c"print(1)"')" "$INL"
+gap_case "wrapper: nice python3 -c is denied" executor "$(bash_payload 'nice python3 -c 1')" "$INL"
+gap_case "wrapper: nice -n 5 node -e is denied" executor "$(bash_payload 'nice -n 5 node -e 1')" "$INL"
+gap_case "wrapper: obsolete nice -10 perl -e is denied" executor "$(bash_payload 'nice -10 perl -e 1')" "$INL"
+gap_case "wrapper: stdbuf -oL ruby -e is denied" executor "$(bash_payload 'stdbuf -oL ruby -e 1')" "$INL"
+gap_case "wrapper: ionice -c3 php -r is denied" executor "$(bash_payload "ionice -c3 php -r 'echo 1;'")" "$INL"
+gap_case "wrapper: setsid -f python3 -c is denied" executor "$(bash_payload 'setsid -f python3 -c 1')" "$INL"
+gap_case "wrapper: taskset -c 0 python3 -c is denied" executor "$(bash_payload 'taskset -c 0 python3 -c 1')" "$INL"
+gap_case "wrapper: chrt -f 10 bash -c is denied" executor "$(bash_payload 'chrt -f 10 bash -c ls')" "$INL"
+gap_case "wrapper: nested timeout nice env python3 -c is denied" executor "$(bash_payload 'timeout 5 nice env python3 -c 1')" "$INL"
+gap_case "wrapper: time timeout python3 -c is denied" executor "$(bash_payload 'time timeout 5 python3 -c 1')" "$INL"
+gap_case "wrapper: an unknown timeout option still finds python3 -c" executor "$(bash_payload 'timeout --unknown 5 python3 -c 1')" "$INL"
+gap_case "wrapper: timeout python3 reading a pipe is denied" executor "$(bash_payload 'cat tool.py | timeout 5 python3')" "$INL"
+gap_case "wrapper: then python3 -c is denied" executor "$(bash_payload 'if true; then python3 -c 1; fi')" "$INL"
+gap_case "wrapper: do bash -c is denied" executor "$(bash_payload 'while false; do bash -c ls; done')" "$INL"
+gap_case "wrapper: ! python3 -c is denied" executor "$(bash_payload '! python3 -c 1')" "$INL"
+gap_case "wrapper: find -exec python3 -c is denied" executor "$(bash_payload 'find . -name x -exec python3 -c 1 \;')" "$INL"
+gap_case "wrapper: find -execdir bash -c is denied" executor "$(bash_payload 'find . -execdir bash -c ls \;')" "$INL"
+as_exec "wrapper control: env python3 -c was already denied" "$(bash_payload 'env python3 -c 1')" "$INL"
+as_exec "wrapper control: command python3 -c was already denied" "$(bash_payload 'command python3 -c 1')" "$INL"
+as_exec "wrapper control: exec python3 -c was already denied" "$(bash_payload 'exec python3 -c 1')" "$INL"
+as_exec "wrapper control: nohup python3 -c was already denied" "$(bash_payload 'nohup python3 -c 1')" "$INL"
+as_exec "wrapper control: timeout python3 script is allowed" "$(bash_payload 'timeout 5 python3 tool.py')" '.decision == "allow"'
+as_exec "wrapper control: timeout -k 1 make is allowed" "$(bash_payload 'timeout -k 1 60 make test')" '.decision == "allow"'
+as_exec "wrapper control: nice -n 5 python3 script is allowed" "$(bash_payload 'nice -n 5 python3 tool.py')" '.decision == "allow"'
+as_exec "wrapper control: stdbuf -oL node script is allowed" "$(bash_payload 'stdbuf -oL node server.js -p 3000')" '.decision == "allow"'
+as_exec "wrapper control: timeout python3 -m module is allowed" "$(bash_payload 'timeout 60 python3 -m pytest -q')" '.decision == "allow"'
+as_exec "wrapper control: then python3 script is allowed" "$(bash_payload 'if true; then python3 tool.py; fi')" '.decision == "allow"'
+as_exec "wrapper control: find -exec grep is allowed" "$(bash_payload 'find . -name x -exec grep -l y \;')" '.decision == "allow"'
+as_exec "wrapper control: timeout sudo is still shell.privilege" "$(bash_payload 'timeout 5 sudo python3 tool.py')" '.decision == "deny" and .rule == "shell.privilege"'
+# A newline ends a command; parse_shell alone folded it into the first one.
+gap_case "newline: python3 -c on the second line is denied" executor "$(bash_payload "ls${NL}python3 -c 1")" "$INL"
+gap_case "newline: python3 -c after a heredoc is denied" executor "$(bash_payload "cat <<'EOF'${NL}text${NL}EOF${NL}python3 -c 1")" "$INL"
+gap_case "newline: a heredoc opener inside a comment hides nothing" executor "$(bash_payload "ls # <<X${NL}python3 -c 1${NL}X")" "$INL"
+gap_case "newline: a privilege wrapper on the second line is shell.privilege" executor "$(bash_payload "ls${NL}sudo ls")" '.decision == "deny" and .rule == "shell.privilege"'
+as_exec "newline control: two plain commands on two lines are allowed" "$(bash_payload "ls${NL}ls -la")" '.decision == "allow"'
+as_exec "newline control: a backslash-newline continuation is allowed" "$(bash_payload "ls \\${NL} -la")" '.decision == "allow"'
+as_exec "newline control: a newline inside quotes is one argument" "$(bash_payload "echo 'a${NL}python3 -c 1'")" '.decision == "allow"'
+as_exec "newline control: a <<- heredoc body into a file is data" "$(bash_payload "cat > notes.md <<-'EOF'${NL}${TAB}python3 -c 1${NL}${TAB}EOF${NL}ls")" '.decision == "allow"'
+as_exec "newline control: an escape on the second line still escapes containment" "$(bash_payload "ls${NL}cat ../component-b/x")" '.decision == "deny" and .rule == "executor.containment"'
+BASELINE_POLICY="$BASELINE_POLICY_0125"
+
 echo "== role floor report (--floor-json / --probe-json) =="
 # report_policy ROLE PANE CWD CONFIG MODE FLAG [extra env...]: a read-only
 # report mode in one pane identity. Reads no stdin.
