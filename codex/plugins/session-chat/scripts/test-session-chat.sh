@@ -876,6 +876,173 @@ RECOVERED_DRAFT=$(printf '%s' '{}' | \
 assert_contains "queued-own-draft-body" "$RECOVERED_DRAFT"
 assert_contains "queued-second-line" "$RECOVERED_DRAFT"
 
+# Submit verification: a pasted line can land in an agent's input line and
+# never be submitted. Codex buffers fast input as a paste burst and turns an
+# Enter inside the burst into a newline, so `send-keys Enter` succeeding proved
+# nothing. A fake composer TUI stands in for the agent: it draws a prompt glyph
+# at column 0, echoes submitted prompts into a transcript ABOVE the composer
+# with the same glyph (as Codex and Claude Code both do), and logs every Enter.
+SV_DIR="$TEST_HOME/submit"
+mkdir -p "$SV_DIR"
+cat > "$SV_DIR/fake-composer.sh" <<'FAKE'
+#!/usr/bin/env bash
+# fake-composer.sh <log> <mode> <glyph>
+#   submit         every Enter submits
+#   swallow-first  the first Enter becomes a newline (paste burst), later ones submit
+#   never          every Enter becomes a newline
+# Log lines: ENTER, NEWLINE, SUBMIT <text>.
+log="$1"; mode="$2"; glyph="$3"
+stty raw -echo 2>/dev/null
+buf=""; transcript=""; enters=0
+render() {
+  local rule="" body
+  [ "$glyph" = "❯" ] && rule="────────────────────"$'\r\n'
+  body="${buf//$'\n'/$'\r\n'  }"
+  printf '\033[H\033[2J%s\r\n%s%s %s\r\n%s\r\n  fake footer · ? for shortcuts' "$transcript" "$rule" "$glyph" "$body" "$rule"
+}
+render
+while IFS= read -r -n1 -d '' ch; do
+  case "$ch" in
+    $'\r'|$'\n')
+      enters=$((enters + 1)); echo ENTER >> "$log"
+      if [ "$mode" = never ] || { [ "$mode" = swallow-first ] && [ "$enters" -eq 1 ]; }; then
+        buf+=$'\n'; echo NEWLINE >> "$log"
+      else
+        sub="${buf%$'\n'}"; sub="${sub//$'\n'/ }"
+        echo "SUBMIT $sub" >> "$log"
+        transcript+="$glyph $sub"$'\r\n'
+        buf=""
+      fi
+      ;;
+    $'\003') exit 0 ;;
+    $'\025') buf="" ;;
+    $'\001'|$'\005'|$'\013') ;;
+    *) buf+="$ch" ;;
+  esac
+  render
+done
+FAKE
+sv_pane() { # sv_pane <name> <mode> <glyph> -> pane id of a fresh fake composer named <name>
+  : > "$SV_DIR/$1.log"
+  local p
+  p=$(tmux new-window -d -t "$SESSION" -n "$1" -P -F '#{pane_id}' "bash '$SV_DIR/fake-composer.sh' '$SV_DIR/$1.log' '$2' '$3'")
+  tmux set-option -p -t "$p" @name "$1"
+  local i=0
+  until tmux capture-pane -t "$p" -p | grep -q 'fake footer'; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "fake composer $1 did not start"; sleep 0.05
+  done
+  printf '%s\n' "$p"
+}
+sv_count() { grep -c -- "^$2" "$SV_DIR/$1.log" || true; }
+printf 'line one\nline two\n' > "$SV_DIR/prompt.txt"
+sv_dispatch() { # sv_dispatch <target> [env...] -> wrapper output then "RC=<rc>"
+  local target="$1" rc=0 out
+  shift
+  out=$(run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=3000 "$@" \
+    bash "$SCRIPT_DIR/dispatch-to-session.sh" "$target" "$SV_DIR/prompt.txt" 2>&1) || rc=$?
+  printf '%s\nRC=%s\n' "$out" "$rc"
+}
+sv_id() { printf '%s\n' "$1" | sed -n 's/^Message id: //p'; }
+
+# A pane that swallows the first Enter gets exactly one extra Enter and is
+# submitted; the line is pasted once and its durable copy is cleared.
+SV_A=$(sv_pane sv-swallow swallow-first '›')
+SV_OUT=$(sv_dispatch sv-swallow)
+SV_ID=$(sv_id "$SV_OUT")
+assert_contains "Dispatched task to 'sv-swallow'" "$SV_OUT"
+assert_contains "RC=0" "$SV_OUT"
+[ "$(sv_count sv-swallow ENTER)" = 2 ] && ok || fail "swallowed Enter: expected 2 Enters, log=$(cat "$SV_DIR/sv-swallow.log")"
+[ "$(sv_count sv-swallow SUBMIT)" = 1 ] && ok || fail "swallowed Enter: expected 1 submit"
+[ "$(grep '^SUBMIT ' "$SV_DIR/sv-swallow.log" | grep -o '\[from:' | wc -l | tr -d ' ')" = 1 ] && ok || fail "swallowed Enter: message pasted twice"
+grep '^SUBMIT ' "$SV_DIR/sv-swallow.log" | grep -F "full task id:$SV_ID" >/dev/null && ok || fail "swallowed Enter: submit missing the payload tail"
+assert_file_not_contains "$TEST_HOME/messages/queue/sv-swallow.tsv" "$SV_ID"
+
+# A pane that never submits: two Enters only, exit 4 (not success), the text
+# stays staged once, the durable copy stays queued, the sent log says
+# unsubmitted, and the message id is still printed.
+SV_B=$(sv_pane sv-never never '›')
+SV_OUT=$(sv_dispatch sv-never)
+SV_ID=$(sv_id "$SV_OUT")
+assert_contains "Unsubmitted dispatch to 'sv-never'" "$SV_OUT"
+assert_contains "was not submitted after one extra Enter" "$SV_OUT"
+assert_contains "RC=4" "$SV_OUT"
+[ -n "$SV_ID" ] && ok || fail "unsubmitted dispatch printed no message id"
+[ "$(sv_count sv-never ENTER)" = 2 ] && ok || fail "never-submits: expected exactly 2 Enters, log=$(cat "$SV_DIR/sv-never.log")"
+[ "$(sv_count sv-never SUBMIT)" = 0 ] && ok || fail "never-submits: unexpected submit"
+[ "$(tmux capture-pane -J -t "$SV_B" -p | grep -o '\[from:' | wc -l | tr -d ' ')" = 1 ] && ok || fail "never-submits: staged text pasted twice"
+assert_file_contains "$TEST_HOME/messages/queue/sv-never.tsv" "$SV_ID"
+awk -F'\t' -v id="$SV_ID" '$2 == id && $6 == "unsubmitted"' "$TEST_HOME/messages/sent-log.tsv" | grep . >/dev/null \
+  && ok || fail "sent log did not record the unsubmitted delivery"
+
+# pane-health: the staged pane is UNSUBMITTED (unsubmitted input), not ok.
+# Control: the submitted pane's transcript still shows its [from:...] line and
+# it stays ok, so the check reads the composer, not the whole screen.
+SV_PH=$(run_as_sender bash "$SCRIPT_DIR/pane-health.sh" sv-never)
+printf '%s\n' "$SV_PH" | awk -F'\t' '$1 == "sv-never" && $3 == "UNSUBMITTED"' | grep . >/dev/null \
+  && ok || fail "pane-health did not report UNSUBMITTED: $SV_PH"
+assert_contains "UNSUBMITTED = unsubmitted input" "$SV_PH"
+SV_PH=$(run_as_sender bash "$SCRIPT_DIR/pane-health.sh" sv-swallow)
+printf '%s\n' "$SV_PH" | awk -F'\t' '$1 == "sv-swallow" && $3 == "ok"' | grep . >/dev/null \
+  && ok || fail "pane-health flagged a submitted pane: $SV_PH"
+tmux capture-pane -t "$SV_A" -p | grep -F '› [from:sender-test' >/dev/null && ok || fail "control pane lost its transcript line"
+
+# Claude Code layout (❯ between rules): a pane that submits on the first Enter
+# gets exactly one Enter, so its behaviour is unchanged.
+sv_pane sv-claude submit '❯' >/dev/null
+SV_OUT=$(sv_dispatch sv-claude)
+assert_contains "RC=0" "$SV_OUT"
+[ "$(sv_count sv-claude ENTER)" = 1 ] && ok || fail "Claude layout: expected one Enter, log=$(cat "$SV_DIR/sv-claude.log")"
+
+# SESSION_CHAT_SUBMIT_VERIFY_MS=0 turns the check off: one Enter, exit 0.
+sv_pane sv-off never '›' >/dev/null
+SV_OUT=$(sv_dispatch sv-off SESSION_CHAT_SUBMIT_VERIFY_MS=0)
+assert_contains "RC=0" "$SV_OUT"
+[ "$(sv_count sv-off ENTER)" = 1 ] && ok || fail "verify off: expected one Enter"
+
+# A payload that reaches the pane in two pieces: the header (with its
+# id:<uid>) first, the tail 400 ms later. Enter must wait for the tail; firing
+# on the header's copy of the marker submitted the header alone.
+sv_pane sv-split submit '›' >/dev/null
+SV_OUT=$(run_as_sender env SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_VERIFY_TIMEOUT_MS=3000 bash -c '
+  tmux() {
+    if [ "$1" = send-keys ] && [ "$4" = -l ]; then
+      local t="${@: -1}" head
+      head="${t%%] *}] "
+      command tmux send-keys -t "$3" -l -- "$head" || return 1
+      ( sleep 0.4; command tmux send-keys -t "$3" -l -- "${t#"$head"}" ) &
+      return 0
+    fi
+    command tmux "$@"
+  }
+  export -f tmux
+  bash "$1" sv-split "$2"
+' split "$SCRIPT_DIR/dispatch-to-session.sh" "$SV_DIR/prompt.txt" 2>&1)
+SV_ID=$(sv_id "$SV_OUT")
+[ "$(sv_count sv-split SUBMIT)" = 1 ] && ok || fail "split delivery: expected one submit, log=$(cat "$SV_DIR/sv-split.log")"
+grep '^SUBMIT ' "$SV_DIR/sv-split.log" | grep -F "full task id:$SV_ID" >/dev/null && ok \
+  || fail "split delivery: Enter fired before the payload tail, log=$(cat "$SV_DIR/sv-split.log")"
+
+# Composer reads: transcript copies above the composer never count, and a
+# wrapped marker still matches.
+SV_G=$(CODEX_HOME="$TEST_HOME" bash -c '
+  source "$0"
+  tmux() { printf "%s\n" "$SV_SCREEN"; }
+  SV_SCREEN=$'"'"'› [from:a pane:%1 id:00112233aabbccdd] old\n• done\n\n› Ask anything\n\n  footer'"'"'
+  composer_holds x id:00112233aabbccdd; echo "transcript_only=$?"
+  composer_staged_id x >/dev/null; echo "staged_transcript_only=$?"
+  SV_SCREEN=$'"'"'• done\n\n› [from:a pane:%1 msg:/tmp/x y.md id:00112233aabbccdd] dispatch (2 lines) — read msg file for full task id:0011\n  2233aabbccdd\n\n  footer'"'"'
+  composer_holds x id:00112233aabbccdd; echo "wrapped=$?"
+  echo "staged_id=$(composer_staged_id x)"
+  SV_SCREEN=$'"'"'$ ls\nfile'"'"'
+  composer_holds x id:00112233aabbccdd; echo "no_composer=$?"
+' "$SCRIPT_DIR/lib.sh")
+for want in transcript_only=1 staged_transcript_only=1 wrapped=0 staged_id=00112233aabbccdd no_composer=2; do
+  printf '%s\n' "$SV_G" | grep -x "$want" >/dev/null && ok || fail "composer read: expected $want, got: $SV_G"
+done
+for w in sv-swallow sv-never sv-claude sv-off sv-split; do
+  tmux kill-window -t "$SESSION:$w" 2>/dev/null || true
+done
+
 python3 -B "$SCRIPT_DIR/test-dispatch-read.py" && ok || fail "20 KB dispatch read integration failed"
 
 echo "session-chat smoke tests: $ASSERTIONS passed, 0 failed"

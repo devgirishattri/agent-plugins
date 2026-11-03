@@ -22,7 +22,7 @@ and `-`. Follow the canonical skill for envelope and conflict behavior.
    `.txt` filename. Other sessions may use a separately created temporary
    directory. Preserve the verbatim body as data; never interpolate it into shell
    source. Dispatch using the installed `dispatch-to-session.sh` helper.
-   After delivered or durable queued success, the transport consumes eligible
+   After a delivered, durable queued or unsubmitted result, the transport consumes eligible
    own-pane drafts unless `SESSION_CHAT_KEEP_DRAFTS=1`. Do not delete retained
    drafts or resend successful messages. Preserve drafts after hard failure.
    Outside that namespace, remove your temporary file with `apply_patch` after
@@ -35,3 +35,4 @@ and `-`. Follow the canonical skill for envelope and conflict behavior.
 7. If there is an error about no name, suggest `$session-chat:whoami <name>`.
 8. For duplicate names, suggest `$session-chat:whoami <name>` in one pane.
 9. If a live timeout is followed by `Queued dispatch ...`, report durable queued success and do not retry. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` only when immediate live delivery matters. Retry only a hard failure that did not queue, after fixing its cause.
+10. If the output is `Unsubmitted dispatch ...` (exit `4`), report it as **not** delivered: the notification sits unsubmitted in the recipient's input line and its durable copy stays queued. Do not re-dispatch. Ask the user to press Enter in that pane, then run `$session-chat:pane-health <target>`.

@@ -50,11 +50,14 @@ The `id:` field is a unique verification marker. It is repeated at the tail so i
 `send_text` (used by both ops) does the following before returning success:
 
 1. Pastes the literal message into the recipient pane (no Enter yet).
-2. Polls `tmux capture-pane` (last 200 lines) for the unique `id:` marker or a newly-created `[Pasted text #N]` placeholder, up to `SESSION_CHAT_VERIFY_TIMEOUT_MS` (default 4000ms).
-3. On success: presses Enter, waits `SESSION_CHAT_SETTLE_MS` (default 300ms), returns 0.
-4. On timeout: sends a line-edit clear sequence (`C-e C-u`, `C-a C-k`, `C-e C-u`) to clear the partial paste from the recipient's prompt, returns 1.
+2. Polls `tmux capture-pane` (last 200 lines) until both the unique `id:` marker and the end of the line are visible, or a newly-created `[Pasted text #N]` placeholder appears, up to `SESSION_CHAT_VERIFY_TIMEOUT_MS` (default 4000ms). Waiting for the end matters: a line that reaches the TUI in two pieces shows the header's `id:` before the tail arrives.
+3. Presses Enter. When the line sits in a composer it recognizes (Codex `›`, Claude Code `❯`), it then checks for up to `SESSION_CHAT_SUBMIT_VERIFY_MS` (default 1000ms) that the composer no longer holds the line. A transcript copy of the message above the composer does not count.
+4. If the line is still staged, it waits `SESSION_CHAT_SUBMIT_RETRY_DELAY_MS` (default 250ms) and presses Enter **once** more. It never pastes again, because that would stage a second copy. Codex treats fast input as a paste burst and turns an Enter that arrives inside the burst into a newline, which is how a line ends up staged.
+5. On success: waits `SESSION_CHAT_SETTLE_MS` (default 300ms) and returns 0.
+6. On a verify timeout: sends a line-edit clear sequence (`C-e C-u`, `C-a C-k`, `C-e C-u`) to clear the partial paste from the recipient's prompt, and retries or queues.
+7. Still staged after the extra Enter: returns the **unsubmitted** status. The line is left in the recipient's input, its durable copy stays queued, and `/pane-health` shows the pane as `UNSUBMITTED`.
 
-A failed send **does not leave junk in the recipient's prompt**. If you see "did not land within Xms," the recipient was likely busy in an approval gate or rendering a long TUI frame.
+A send that never landed **does not leave junk in the recipient's prompt**. If you see "did not land within Xms," the recipient was likely busy in an approval gate or rendering a long TUI frame. An unsubmitted send is different: its line is visible in the recipient's input on purpose, so one Enter there submits it.
 
 ## Durable delivery & orchestrator fan-in
 
@@ -69,8 +72,9 @@ Each runtime drains only its own dir. An exported `SESSION_CHAT_TARGET_MESSAGES_
 |---|---|---|---|
 | Lands | The message appears in the recipient's prompt now. The durable copy is removed (no duplicate). | 0 | Now |
 | Fails (recipient mid-generation or in an approval gate) | **"Queued … will arrive on their next turn"** | **0** | On the next turn, or when the current turn ends |
+| Lands but is never submitted, even after one extra Enter | **"Unsubmitted …"** | **4** | When someone presses Enter in that pane, or on its next turn from the durable copy. An idle recipient has no next turn by itself. |
 
-The internal send/dispatch function returns code 3 for the queued path. At the boundary, the public `/send` and `/dispatch` wrappers translate that to a normal success exit.
+The internal send/dispatch function returns code 3 for the queued path. At the boundary, the public `/send` and `/dispatch` wrappers translate that to a normal success exit. The unsubmitted path returns 4 and the wrappers exit 4: it is not success, even though the durable copy keeps the message from being lost.
 
 A queued message surfaces through two hooks:
 
@@ -190,6 +194,8 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 |---|---|---|
 | `SESSION_CHAT_VERIFY_TIMEOUT_MS` | 4000 | Max wait per attempt for paste to land in recipient pane. |
 | `SESSION_CHAT_SETTLE_MS` | 300 | Settle window after Enter so back-to-back sends don't race. |
+| `SESSION_CHAT_SUBMIT_VERIFY_MS` | 1000 | How long to wait, after each Enter, for the recipient's composer to stop holding the line. `0` turns the submit check off. |
+| `SESSION_CHAT_SUBMIT_RETRY_DELAY_MS` | 250 | Pause before the single extra Enter, so a Codex paste burst has closed. |
 | `SESSION_CHAT_SEND_MAX_LEN` | 1024 | Max length for `/send` payload before forcing `/dispatch`. |
 | `SESSION_CHAT_SEND_RETRIES` | 2 | Retry count after a verify timeout (total attempts = retries + 1). |
 | `SESSION_CHAT_RETRY_BACKOFF_MS` | 200 | Linear backoff base between retries (200ms, 400ms, …). |
@@ -207,7 +213,7 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 - `/broadcast [--all] [--match GLOB] <text>` — fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `/send` per pane.
 - `/reply <pane> <message-id> <message>` — reply to a received message, auto-correlated: prepends the `[re:<id>]` token and picks `/send` (short) or `/dispatch` (long/multiline) for you. Use this instead of hand-typing `[re:<id>]`.
 - `/check-replies [--pending] [--since MIN] [--task TASK_ID]` — which sent messages have a correlated reply (via the leading `[re:<id>]` token) and which are still `unconfirmed`, with each reply marked `verified`, `replied (recipient-unknown)` or `unexpected`. This reflects reply **correlation only**, not the recipient's task progress or liveness. An `unconfirmed` row does not mean the pane is stuck. Use `/pane-health` to check liveness.
-- `/pane-health [name] [--all]` — liveness, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them.
+- `/pane-health [name] [--all]` — liveness, unsubmitted input, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them, and `UNSUBMITTED` panes whose input line holds a session-chat message that was never submitted.
 - `/message-search <pattern> [--days N] [--peer NAME]` — search the message archive plus full dispatch bodies. The archive holds every sent and surfaced incoming message as a 200-char excerpt. Retention is 30 days via `SESSION_CHAT_ARCHIVE_RETENTION_DAYS`.
 - `/incoming-mode` — show or set `SESSION_CHAT_INCOMING_MODE` (prints an `export` line to `eval`).
 - `/messages-list` — read-only inventory of dispatch files under `${SESSION_CHAT_TARGET_MESSAGES_DIR:-${CLAUDE_HOME:-~/.claude}/messages}`.
@@ -222,6 +228,7 @@ Report the helper's result line as printed. These words describe transport statu
 | `Sent to` | `/send` pasted the message into the recipient pane live. | 0 | None. |
 | `Dispatched task to` | `/dispatch` wrote the task file and pasted the notification line into the recipient pane live. | 0 | None. |
 | `Queued` (`Queued to …` from `/send`, `Queued dispatch to …` from `/dispatch`) | The live paste did not land. The message is in the recipient's durable inbox for its next turn. | 0 | Do not retry or resend. |
+| `Unsubmitted` (`Unsubmitted to …` from `/send`, `Unsubmitted dispatch to …` from `/dispatch`) | The line landed in the recipient's input but its TUI did not submit it, even after one extra Enter. The line stays there, and the durable copy stays queued. | 4 | Do not resend: that duplicates the message. Press Enter in that pane (`tmux send-keys -t <pane> Enter`), then confirm with `/pane-health <name>`. |
 | `ERROR:` | The helper failed and the message names the cause. Examples: no pane name, unknown or duplicate target, a payload that is too long or has newlines, an unsafe messages dir, an unsafe dispatch file. | Non-zero | Do not assume delivery. Fix the named cause. Then retry. |
 
 ## Common failure modes
@@ -231,6 +238,7 @@ Report the helper's result line as printed. These words describe transport statu
 - **"No pane named X"** — run `/panes all` to see registered names across tmux sessions. The recipient might not have run `/whoami`.
 - **"Multiple panes named X"** — duplicate names exist; rename one with `/whoami` in that pane.
 - **"did not land within Xms after N attempts"** — the recipient stayed busy through all retries. The message is **not lost**. It is in the recipient's durable inbox and surfaces on their next turn (the sender reports "Queued …"). To make more sends land *live*, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
+- **"landed in the recipient's input line but was not submitted"** — the recipient's TUI kept the line staged through two Enters. The message is **not lost**: it is in the input line and in the durable inbox. `/pane-health` shows `UNSUBMITTED`. Press Enter in that pane once. Do not resend.
 - **"could not acquire send-lock"** — another sender is targeting the same pane. It resolves when that sender finishes. Raise `SESSION_CHAT_LOCK_TIMEOUT_MS` if you need to wait longer.
 - **Dispatch lands but recipient never acts** — the recipient is in `INCOMING_MODE=notify` (default). It was told not to read the file. Run `/incoming-mode auto` (or `assist`) in the recipient's shell.
 

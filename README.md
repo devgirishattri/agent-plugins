@@ -12,7 +12,7 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.7.11 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.20 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-chat` | 0.17.21 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.9 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.10 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.12.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
@@ -602,8 +602,9 @@ stem starts with an ASCII letter/digit, contains only ASCII letters/digits,
 `.`, `_`, or `-`, and is at most 128 characters. Resolve the grant and identity
 from the validated workspace plan; inherited variables cannot grant access.
 Use the installed dispatch helper with `--reply-to` for replies. It creates a
-separate transport copy. After delivered or durable queued success, session-chat
-consumes eligible unchanged own-pane drafts unless `SESSION_CHAT_KEEP_DRAFTS=1`.
+separate transport copy. After a delivered, durable queued, or unsubmitted
+result (exit 4, whose durable copy stays queued), session-chat consumes eligible
+unchanged own-pane drafts unless `SESSION_CHAT_KEEP_DRAFTS=1`.
 Failed reads and hard transport failures retain the source. Changed or ineligible
 files remain intact. Do not delete a retained draft or resend a successful
 packet because cleanup kept its source.
@@ -721,6 +722,8 @@ or reload the session. Command-scoped exports affect only that invocation.
 | `SESSION_CHAT_INCOMING_MODE` | `notify` | Controls receiver behavior: `notify`, `assist`, `auto`, or `off`. Orchestration normally uses `auto` or `assist`. |
 | `SESSION_CHAT_VERIFY_TIMEOUT_MS` | `4000` | Maximum marker-verification wait for each live-send attempt. |
 | `SESSION_CHAT_SETTLE_MS` | `300` | Delay after Enter before another sender may use the target pane. |
+| `SESSION_CHAT_SUBMIT_VERIFY_MS` | `1000` | After Enter, how long to wait for the recipient's input line to clear. If the text is still staged, one extra Enter follows and is checked for the same window; still staged means exit 4 (unsubmitted) with the durable copy queued. `0` turns the check off. |
+| `SESSION_CHAT_SUBMIT_RETRY_DELAY_MS` | `250` | Pause before that single extra Enter, so a paste burst in the recipient's TUI can end first. |
 | `SESSION_CHAT_SEND_MAX_LEN` | `1024` | Maximum single-line payload length for `send`; use `dispatch` for larger or multiline content. |
 | `SESSION_CHAT_SEND_RETRIES` | `2` | Retries after live marker-verification timeouts; total attempts are retries plus one. |
 | `SESSION_CHAT_RETRY_BACKOFF_MS` | `200` | Linear retry-backoff base in milliseconds. |

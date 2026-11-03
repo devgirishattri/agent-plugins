@@ -23,10 +23,11 @@ Run:
 bash "$PLUGIN_ROOT/scripts/broadcast-message.sh" [--all] [--match "<glob>"] "<message>"
 ```
 
-Present the per-target TSV results (`sent`/`queued`/`failed` per pane) as a short table, then the summary line.
+Present the per-target TSV results (`sent`/`queued`/`unsubmitted`/`failed` per pane) as a short table, then the summary line.
 If the script returns non-zero because a sandbox denied the tmux socket, relay
 that error and rerun the whole script escalated/approved; do not reinterpret it
 as an unnamed sender or an empty target set.
 If a target failed, suggest `$session-chat:pane-health <name>` to diagnose it.
+If a target is `unsubmitted`, its line sits unsubmitted in that pane's input: do not resend; ask the user to press Enter in that pane.
 If this pane has no name, suggest `$session-chat:whoami <name>`.
 If no panes matched, suggest `$session-chat:panes`.

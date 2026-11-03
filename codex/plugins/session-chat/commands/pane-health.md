@@ -1,5 +1,5 @@
 ---
-description: Check liveness, message backlog, and lock state of named tmux panes
+description: Check liveness, unsubmitted input, message backlog, and lock state of named tmux panes
 argument-hint: "[name] [--all]"
 ---
 
@@ -22,5 +22,6 @@ argument-hint: "[name] [--all]"
 6. Flag a Location that does not match the intended repo/worktree before dispatch.
 7. `DEAD` means the pane's process exited — sends to it will queue forever; the user should restart it or remove the pane.
 8. `DUPLICATE` means two panes share a name; rename one with `$session-chat:whoami` in that pane.
-9. Backlog `ready/total` > 0 means messages are waiting for that pane's next turn; if it stays non-zero the pane may be stuck.
-10. `STALE(pid)` send-lock means a crashed sender left a lock behind; it is reclaimed automatically on the next send.
+9. `UNSUBMITTED` means unsubmitted input: a session-chat message sits in that pane's input line and its agent never submitted it. Ask the user to press Enter in that pane (`tmux send-keys -t <pane> Enter`). Do not resend: its durable copy is still queued.
+10. Backlog `ready/total` > 0 means messages are waiting for that pane's next turn; if it stays non-zero the pane may be stuck.
+11. `STALE(pid)` send-lock means a crashed sender left a lock behind; it is reclaimed automatically on the next send.

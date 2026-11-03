@@ -61,7 +61,7 @@ shell call and use a native tool to write the file there.
    bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" [--priority high] [--ttl <minutes>] [--reply-to <incoming-id>] [--task <task-id>] "<target>" "<draft-path>"
    ```
 
-3. After delivered or durable queued success, the transport removes eligible
+3. After a delivered, durable queued or unsubmitted result, the transport removes eligible
    own-pane drafts and reports `Removed delivered draft: <path>`.
    Do not delete a retained draft yourself or resend a successful message.
    `SESSION_CHAT_KEEP_DRAFTS=1` opts out of consumption.
@@ -78,7 +78,8 @@ If the target is not found, suggest `$session-chat:panes`. If this pane has no n
 Relay the script's `Dispatched task ...` or `Queued dispatch ...` result accurately. For either successful result, mention that the recipient must use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to read and act on the task; default `notify` only reports that a dispatch arrived.
 If the output reports multiple panes named the same target, tell the user to rename one pane with `$session-chat:whoami <name>`.
 If a live timeout is followed by `Queued dispatch ...`, report durable queued success and do not retry. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` only when immediate live delivery matters. Retry only a hard failure that did not queue, after fixing its cause.
+If the output is `Unsubmitted dispatch ...` (exit `4`), report it as **not** delivered: the notification sits unsubmitted in the recipient's input line and its durable copy stays queued. Do not re-dispatch. Ask the user to press Enter in that pane, then run `$session-chat:pane-health <target>`.
 
-After delivered or durably queued success, the helper prints
+After a delivered, durably queued or unsubmitted result, the helper prints
 `Message id: <hex>` with the transport ID. Hard failures print no ID.
 The scheduler can record this ID as the review request linkage.
