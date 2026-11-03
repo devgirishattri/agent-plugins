@@ -23,6 +23,9 @@ unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# KNOWLEDGE_DOCS_TEST_CODEX_VALIDATE_LINKS selects another validate-links.sh,
+# for example an original copy from `git show`, to run the same assertions.
+VALIDATE_LINKS="${KNOWLEDGE_DOCS_TEST_CODEX_VALIDATE_LINKS:-$SCRIPT_DIR/validate-links.sh}"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/knowledge-docs-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -42,15 +45,55 @@ mkdir -p "$TMP/docs"
 printf '# A\n\nSee [B](B.md).\n' > "$TMP/docs/A.md"
 printf '# B\n\nAll good.\n' > "$TMP/docs/B.md"
 
-bash "$SCRIPT_DIR/validate-links.sh" "$TMP/docs" > "$TMP/links-pass.out"
+bash "$VALIDATE_LINKS" "$TMP/docs" > "$TMP/links-pass.out"
 bash "$SCRIPT_DIR/check-todos.sh" "$TMP/docs" > "$TMP/todos-pass.out"
 (cd "$TMP" && bash "$SCRIPT_DIR/check-freshness.sh" docs 30) > "$TMP/freshness.out"
 
 printf '# Broken\n\nSee [missing](MISSING.md).\n' > "$TMP/docs/BROKEN.md"
-if bash "$SCRIPT_DIR/validate-links.sh" "$TMP/docs" > "$TMP/links-fail.out" 2>&1; then
+if bash "$VALIDATE_LINKS" "$TMP/docs" > "$TMP/links-fail.out" 2>&1; then
   fail "validate-links accepted a missing target"
 fi
 grep -Fq 'MISSING.md' "$TMP/links-fail.out" && ok || fail "broken-link output omitted target"
+
+# A markdown link target is a URL, so a space or a literal percent sign in a
+# file name is written %20 or %25. validate-links decodes the target before it
+# looks for the file, and a BROKEN line names the decoded path.
+# enc_docs <case> <link as written> [name of the file that exists in api/]
+enc_docs() {
+  local d="$TMP/enc/$1/docs"
+  mkdir -p "$d/guide" "$d/api"
+  printf '# Guide\n\nSee [the item](%s).\n' "$2" > "$d/guide/index.md"
+  if [ -n "${3:-}" ]; then printf '# Item\n' > "$d/api/$3"; fi
+  printf '%s' "$d"
+}
+links_valid() {  # <what> <docs dir>
+  local out rc=0
+  out=$(bash "$VALIDATE_LINKS" "$2" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "All doc cross-references valid." ] \
+    && ok || fail "validate-links rejected $1 (rc=$rc out=$out)"
+}
+
+links_valid "a %20 link to an existing file with a space" \
+  "$(enc_docs pct20 '../api/1.2%20List%20Items.md' '1.2 List Items.md')"
+links_valid "a %25 link to an existing file with a literal percent" \
+  "$(enc_docs pct25 '../api/100%25%20done.md' '100% done.md')"
+links_valid "a plain-space link to an existing file" \
+  "$(enc_docs plain '../api/1.2 List Items.md' '1.2 List Items.md')"
+links_valid "a bare % that is not an escape" \
+  "$(enc_docs bare '../api/50%off.md' '50%off.md')"
+# Markdown allows spaces between "(" and the link target.
+links_valid "a link with a space before the target" \
+  "$(enc_docs lead ' ../api/item.md' 'item.md')"
+
+# Control: a %20 link to a file that does not exist is still BROKEN, and the
+# line shows the link as written and the decoded expected path.
+enc_missing="$(enc_docs missing '../api/1.2%20Missing%20Item.md')"
+enc_rc=0
+bash "$VALIDATE_LINKS" "$enc_missing" > "$TMP/links-enc-missing.out" 2>&1 || enc_rc=$?
+[ "$enc_rc" -eq 1 ] && ok || fail "validate-links accepted a %20 link to a missing file (rc=$enc_rc)"
+grep -qxF "BROKEN: $enc_missing/guide/index.md -> ../api/1.2%20Missing%20Item.md (expected at $enc_missing/guide/../api/1.2 Missing Item.md)" \
+  "$TMP/links-enc-missing.out" \
+  && ok || fail "BROKEN line does not show the decoded expected path: $(cat "$TMP/links-enc-missing.out")"
 
 printf '# Work\n\nTODO: move this.\n' > "$TMP/docs/WORK.md"
 if bash "$SCRIPT_DIR/check-todos.sh" "$TMP/docs" > "$TMP/todos-fail.out" 2>&1; then

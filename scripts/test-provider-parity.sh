@@ -34,6 +34,11 @@ cmp -s "$ROOT/plugins/session-walkthrough/scripts/test-session-walkthrough.sh" \
   "$ROOT/codex/plugins/session-walkthrough/scripts/test-session-walkthrough.sh" \
   || fail "walkthrough suite differs across providers"
 
+# The knowledge link validator has no provider-specific behavior.
+cmp -s "$ROOT/plugins/knowledge/scripts/validate-links.sh" \
+  "$ROOT/codex/plugins/knowledge/scripts/validate-links.sh" \
+  || fail "knowledge validate-links.sh differs across providers"
+
 # Extract one full creation record; unrelated hex in names is never an ID.
 created_task_id() {
   local ids
