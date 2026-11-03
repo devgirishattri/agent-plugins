@@ -67,6 +67,13 @@ A project opts in by creating `.agent-workspace/workspace.json`. Set
   `idle_stop_minutes` stops an unused one, and `start --pane` names the PID
   holding a taken port instead of colliding. See the README section "Single
   service panes on demand".
+  - The idle watcher reads these variables when `start` arms it, so a change
+    applies from the next start. `SESSION_WORKSPACE_IDLE_OBSERVE=connections`
+    makes the browser count client connections instead of CDP traffic.
+    `SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS` (default `30`) is the sample
+    interval. `SESSION_WORKSPACE_IDLE_SECONDS_PER_MINUTE` (default `60`) is
+    the length of one configured minute, for tests. The watcher sets
+    `SESSION_WORKSPACE_STOP_REASON` for the stop it records; do not set it.
 - `harness` (schema v2–v5) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
   `gates`, plus optional schema-v3–v5 `guards`.
