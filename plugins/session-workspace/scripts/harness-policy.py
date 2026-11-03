@@ -2217,6 +2217,43 @@ def docs_write(ctx: Context, script: str, args: List[str]) -> None:
         raise PolicyFailure("helper.argv", "docs-write.sh --repo must be a literal path inside this pane's cwd")
 
 
+FRESHNESS_DAYS_RE = re.compile(r"\A[1-9][0-9]{0,3}\Z")
+FRESHNESS_DAYS_MAX = 3650
+
+
+def docs_directory(ctx: Context, script: str, value: str) -> None:
+    """The documented [docs-directory] operand of the knowledge validators.
+    They run `find <dir> -name '*.md'` and print what they match, so the
+    operand is a read scope. It must be literal (no expansion, glob, `~`, or
+    `..` component), must not start with `-` (find would read it as an
+    expression such as -delete), and must resolve, symlinks included, to an
+    existing directory inside this pane's own cwd: the workspace root for the
+    orchestrator, the pane's checkout for executors and reviewers. A relative
+    operand resolves against that cwd, like every other helper operand."""
+    raw = Path(value)
+    if (not value or value.startswith(("-", "~")) or ".." in raw.parts
+            or any(char in value for char in GLOB_CHARS + "]$`")):
+        raise PolicyFailure("helper.argv", "%s docs directory must be a literal path without options, globs, ~, or .. components" % script)
+    path = canonical(raw if raw.is_absolute() else ctx.pane_cwd / raw)
+    if not path.is_dir():
+        raise PolicyFailure("helper.argv", "%s docs directory must name an existing directory" % script)
+    if not within(path, ctx.pane_cwd):
+        raise PolicyFailure("helper.argv", "%s docs directory must resolve inside this pane's cwd" % script)
+
+
+def docs_validator(ctx: Context, script: str, args: List[str]) -> None:
+    """validate-links.sh / check-todos.sh [docs-directory];
+    check-freshness.sh [docs-directory] [days-threshold]."""
+    takes_days = script == "check-freshness.sh"
+    usage = "%s accepts [docs-directory]%s" % (script, " [days-threshold]" if takes_days else "")
+    if len(args) > (2 if takes_days else 1):
+        raise PolicyFailure("helper.argv", usage)
+    if args:
+        docs_directory(ctx, script, args[0])
+    if len(args) == 2 and (not FRESHNESS_DAYS_RE.fullmatch(args[1]) or int(args[1]) > FRESHNESS_DAYS_MAX):
+        raise PolicyFailure("helper.argv", "%s days-threshold must be an integer in 1..%d" % (script, FRESHNESS_DAYS_MAX))
+
+
 def memory_search(ctx: Context, script: str, args: List[str]) -> None:
     remaining = take_knowledge_store(ctx, args)
     seen = set()
@@ -2473,9 +2510,9 @@ HELPERS = {
         "memory-backlinks.sh": ("oer", memory_backlinks),
         "doctor.sh": ("oer", store_only),
         "memory-lint.sh": ("oer", memory_lint),
-        "check-freshness.sh": ("oer", no_args),
-        "validate-links.sh": ("oer", no_args),
-        "check-todos.sh": ("oer", no_args),
+        "check-freshness.sh": ("oer", docs_validator),
+        "validate-links.sh": ("oer", docs_validator),
+        "check-todos.sh": ("oer", docs_validator),
         "memory-remember.sh": ("oe", memory_remember),
         "memory-auto-capture.sh": ("oe", memory_auto_capture),
         "memory-write.sh": ("o", memory_write),
