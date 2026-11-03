@@ -42,3 +42,4 @@ The token goes at the very start of the message body. Only that leading position
    - If the target is not found, run `/panes` to show available targets.
    - If it mentions duplicate names, ask the user to rename one pane via `/whoami`.
    - A busy recipient yields a "Queued …" result. That result is durable success, so **do not resend**. It arrives on their next turn, and resending duplicates it. Retry only a hard failure, and only after fixing its named cause.
+   - "Unsubmitted …" (exit status 4) is **not** success: the reply sits unsubmitted in the recipient's input line and its durable copy stays queued. Do not resend. Tell the user to press Enter in that pane, then check `/pane-health <pane>`.

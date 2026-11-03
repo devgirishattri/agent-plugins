@@ -158,7 +158,9 @@ sweep; their cleanup remains an explicit user request.
 
 ## Reliability Contract
 
-Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, verifies either a marker or a newly-created `[Pasted text #N]` placeholder in `capture-pane -S -200`, then sends a three-pair line-edit clear sequence (`C-e C-u`, `C-a C-k`, `C-e C-u`) for any partial paste, backs off, and retries before returning failure.
+Session-chat takes a per-target lock before writing to a pane, sends text with `tmux send-keys -l`, and waits until `capture-pane -S -200` shows both the marker and the end of the line, or a newly-created `[Pasted text #N]` placeholder. Waiting for the end matters: a line that reaches the TUI in two pieces shows the header's `id:` before the tail arrives. On a timeout it sends a three-pair line-edit clear sequence (`C-e C-u`, `C-a C-k`, `C-e C-u`) for any partial paste, backs off, and retries before returning failure.
+
+A successful `tmux send-keys Enter` only means tmux wrote the key. Codex treats fast input as a paste burst and turns an Enter that arrives inside the burst into a newline, which leaves the whole line staged in its input. So when the line sits in a composer session-chat recognizes (Codex `›`, Claude Code `❯`), it checks after Enter that the composer no longer holds the line; a transcript copy above the composer does not count. If the line is still staged, it waits `SESSION_CHAT_SUBMIT_RETRY_DELAY_MS` and presses Enter once more. It never pastes again, because that would stage a second copy. If the line is still staged after that, the wrapper prints `Unsubmitted ...` and exits `4`: the line stays in the recipient's input, the durable copy stays queued, and `$session-chat:pane-health` shows the pane as `UNSUBMITTED`.
 
 Codex TUI redraws, wrapping, approval prompts, and active command output can still hide typed markers from `capture-pane`. The wrapper converts that timeout into a durable `Queued ...` success when the fallback was recorded; do not retry a queued result. Raising the verification timeout only increases the chance of immediate live delivery.
 
@@ -166,6 +168,7 @@ Codex TUI redraws, wrapping, approval prompts, and active command output can sti
 |---|---|
 | Live delivery succeeds | Continue. Do not resend. |
 | Durable `Queued ...` success | The fallback is recorded. Do not retry the message. |
+| `Unsubmitted ...`, exit `4` | Not success. The line sits unsubmitted in the recipient's input and its durable copy stays queued. Do not resend. Ask the user to press Enter in that pane, then confirm with `$session-chat:pane-health <name>`. |
 | Hard failure without a queued success | Fix the reported cause before retrying. |
 
 A delivery receipt confirms transport, not task completion.
@@ -180,6 +183,8 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
 
 - `SESSION_CHAT_VERIFY_TIMEOUT_MS`: marker verification timeout in milliseconds. Default: `4000`.
 - `SESSION_CHAT_SETTLE_MS`: delay after a successful Enter. Default: `300`.
+- `SESSION_CHAT_SUBMIT_VERIFY_MS`: how long to wait, after each Enter, for the recipient's composer to stop holding the line. Default: `1000`; `0` turns the submit check off.
+- `SESSION_CHAT_SUBMIT_RETRY_DELAY_MS`: pause before the single extra Enter, so a Codex paste burst has closed. Default: `250`.
 - `SESSION_CHAT_SEND_MAX_LEN`: maximum `$session-chat:send` payload length. Default: `1024`.
 - `SESSION_CHAT_SKIP_VERIFY`: set to `1` to skip marker verification.
 - `SESSION_CHAT_KEEP_DRAFTS`: set to `1` to retain eligible own-pane drafts after
@@ -201,6 +206,7 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
   pane, or a missing target. Relay the error and rerun the entire plugin script
   escalated/approved; retrying only one inner `tmux` command is insufficient.
 - `did not land within Xms after N attempts` followed by `Queued ...`: target was busy through all live attempts, but the message is **not lost** — it is already in the recipient's resolved durable inbox. Without `SESSION_CHAT_TARGET_MESSAGES_DIR`, the defaults are `${CODEX_HOME:-~/.codex}/messages/queue/<name>.tsv` for Codex and `${CLAUDE_HOME:-~/.claude}/messages/queue/<name>.tsv` for Claude; with the override, the queue is under `$SESSION_CHAT_TARGET_MESSAGES_DIR/queue/<name>.tsv`. Do not retry the queued message. It surfaces on the recipient's next prompt (`UserPromptSubmit` hook) or as soon as the current turn finishes (`Stop` hook feedback). Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES` only when immediate live landing matters.
+- `landed in the recipient's input line but was not submitted` followed by `Unsubmitted ...`: the recipient's TUI kept the line staged through two Enters. The message is **not lost**: it is in the input line and in the durable inbox, and `$session-chat:pane-health` shows `UNSUBMITTED`. Press Enter in that pane once. Do not resend.
 - `timed out waiting for send lock`: rare now that the unset lock timeout auto-sizes to the send budget and resets on holder change. If `SESSION_CHAT_LOCK_TIMEOUT_MS` is set, that value is treated as an absolute cap.
 - `pane 'X' is at a shell prompt`: the recipient's agent exited; the message would have been executed by their shell. Restart the agent in that pane (set `SESSION_CHAT_ALLOW_SHELL_TARGET=1` only for deliberate shell targets, e.g. tests).
 - `Multiple panes named X`: rename one pane with `$session-chat:whoami <name>` in that pane.
@@ -225,7 +231,7 @@ Use `$session-chat:messages-list` to inspect trusted dispatch message files in `
 - `$session-chat:broadcast [--all] [--match GLOB] <text>`: fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `$session-chat:send` per pane.
 - `$session-chat:message-search <pattern> [--days N] [--peer NAME]`: search the message archive plus full dispatch bodies. The archive holds every sent and surfaced incoming message as a 200-character excerpt, with 30-day retention.
 - `$session-chat:check-replies [--pending] [--since MIN] [--task TASK_ID]`: which sent messages have confirmed correlated replies. Use `$session-chat:reply <pane> <id> <message>` for responses; it generates `[re:<id>]` automatically. An unconfirmed row is not evidence that the peer still has an active task.
-- `$session-chat:pane-health [name] [--all]`: liveness, cwd/location, inbox backlog, and lock state per named pane; catches dead, duplicate, or repo-drifted workers before dispatch.
+- `$session-chat:pane-health [name] [--all]`: liveness, cwd/location, unsubmitted input, inbox backlog, and lock state per named pane; catches dead, duplicate, or repo-drifted workers before dispatch, and `UNSUBMITTED` panes whose input line holds a session-chat message that was never submitted.
 
 ## Reinstalling Source Changes
 

@@ -9,8 +9,10 @@
 #   --task TASK_ID   put a [task:TASK_ID] token after it (letters, digits, _ and -);
 #                    /check-replies --task TASK_ID lists everything tagged with it.
 #                    Both tokens form a LEADING envelope at the very top of the body.
-# Output: after a delivered or queued result only, one extra stdout line
-#   `Message id: <hex>` (the transport id this dispatch used).
+# Output: after a delivered, queued or unsubmitted result only, one extra stdout
+#   line `Message id: <hex>` (the transport id this dispatch used).
+# Exit status: 0 delivered or queued; 4 unsubmitted (staged in the recipient's
+#   input line, durable copy queued); 1 any other failure.
 # Supported platforms: macOS, Linux
 
 source "$(dirname "$0")/lib.sh"
@@ -107,19 +109,29 @@ fi
 
 dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"
 rc=$?
+exit_rc=0
 case "$rc" in
   0) echo "Dispatched task to '$TARGET_NAME'" ;;
   3) echo "Queued dispatch to '$TARGET_NAME' — recipient was busy; it will arrive on their next turn." ;;
+  4)
+    # Not success, but durable: the notification sits unsubmitted in the
+    # recipient's input line and the queued copy stays. An idle recipient has
+    # no next turn until something submits; press Enter there.
+    echo "Unsubmitted dispatch to '$TARGET_NAME' — the notification is staged in its input line but was not submitted; the durable copy stays queued."
+    exit_rc=4
+    ;;
   *) exit 1 ;;
 esac
-# One extra line, only for a delivered or queued result: the transport message
-# id this dispatch used, so a caller (task-review) can record the request id.
-# A hard failure exits above and prints no id.
+# One extra line, only for a delivered, queued or unsubmitted result: the
+# transport message id this dispatch used, so a caller (task-review) can record
+# the request id. A hard failure exits above and prints no id.
 if printf '%s' "$DISPATCH_MESSAGE_ID" | grep -qE '^[a-f0-9]{8,16}$'; then
   echo "Message id: $DISPATCH_MESSAGE_ID"
 fi
-# Only a durable outcome (0 delivered, 3 queued) reaches here; a hard failure
-# exited above and keeps the draft for a retry with the same file.
+# Only a durable outcome (0 delivered, 3 queued, 4 unsubmitted with its copy
+# queued) reaches here; a hard failure exited above and keeps the draft for a
+# retry with the same file.
 if [ -n "$DRAFT_IDENT" ]; then
   consume_own_draft "$PROMPT_FILE" "$DRAFT_IDENT" "$DRAFT_SUM"
 fi
+exit "$exit_rc"

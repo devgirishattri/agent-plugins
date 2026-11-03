@@ -75,7 +75,7 @@ shell call and use a native tool to write the file there.
    bash "$PLUGIN_ROOT/scripts/dispatch-to-session.sh" --reply-to "<message-id>" [--task <task-id>] "<pane-name>" "<draft-path>"
    ```
 
-3. After delivered or durable queued success, the transport removes eligible
+3. After a delivered, durable queued or unsubmitted result, the transport removes eligible
    own-pane drafts and reports `Removed delivered draft: <path>`.
    Do not delete a retained draft yourself or resend a successful message.
    `SESSION_CHAT_KEEP_DRAFTS=1` opts out of consumption.
@@ -92,6 +92,6 @@ is retained. A `NOTE: kept draft` or cleanup warning does not undo delivery.
 These sequential checks do not isolate concurrent same-user filesystem changes.
 
 If the reply id is invalid, relay the validation error and stop. If tmux is not
-active, explain that replies require tmux. For target, duplicate-name, busy, or
-sandbox-denial errors, follow the same guidance as `$session-chat:send` and
-`$session-chat:dispatch`.
+active, explain that replies require tmux. For target, duplicate-name, busy,
+unsubmitted, or sandbox-denial results, follow the same guidance as
+`$session-chat:send` and `$session-chat:dispatch`.

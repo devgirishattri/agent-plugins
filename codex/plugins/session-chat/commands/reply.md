@@ -28,7 +28,7 @@ and `-`. Follow the canonical skill for envelope and conflict behavior.
    `.txt` filename. Other sessions may use a separately created temporary
    directory. Preserve the verbatim body as data; never interpolate it into shell
    source. Dispatch using the installed `dispatch-to-session.sh` helper with `--reply-to` and the supplied `--task`, if any.
-   After delivered or durable queued success, the transport consumes eligible
+   After a delivered, durable queued or unsubmitted result, the transport consumes eligible
    own-pane drafts unless `SESSION_CHAT_KEEP_DRAFTS=1`. Do not delete retained
    drafts or resend successful messages. Preserve drafts after hard failure.
    Outside that namespace, remove your temporary file with `apply_patch` after
