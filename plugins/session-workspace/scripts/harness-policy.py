@@ -31,6 +31,9 @@ byte-compare decisions:
 ``decision`` is one of allow | deny | audit. Integrity failures (invalid or
 drifted config, unknown/mismatched identity) are ``deny`` in BOTH modes --
 audit only softens policy denials.
+``--floor-json`` and ``--probe-json`` (read-only, for harness-status) print the
+strict-v1 role floor table and decide this pane's own floor probe cases; they
+read no stdin and run nothing.
 
 Runs on the stock macOS python3 (3.9): stdlib only, no 3.10+ syntax.
 """
@@ -2396,6 +2399,10 @@ def workspace_read(ctx: Context, script: str, args: List[str]) -> None:
     workspace_args(ctx, script, args, ("--json",))
 
 
+def harness_status_args(ctx: Context, script: str, args: List[str]) -> None:
+    workspace_args(ctx, script, args, ("--json", "--probe"))
+
+
 def workspace_start(ctx: Context, script: str, args: List[str]) -> None:
     workspace_args(ctx, script, args, ("--no-agents", "--no-services", "--no-attach", "--adopt", "--confirmed"))
 
@@ -2526,7 +2533,7 @@ HELPERS = {
         "workspace-plan.sh": ("oer", workspace_read),
         "workspace-status.sh": ("oer", workspace_read),
         "workspace-doctor.sh": ("oer", workspace_read),
-        "harness-status.sh": ("oer", workspace_read),
+        "harness-status.sh": ("oer", harness_status_args),
         "harness-doctor.sh": ("oer", workspace_read),
         "validate-config.sh": ("oer", workspace_read),
         "workspace.sh": ("oer", workspace_dispatcher),
@@ -3270,6 +3277,12 @@ def evaluate(raw: str) -> Decision:
         return bootstrap_denial
     if ctx is None:
         return allow(None, "")
+    return evaluate_payload(ctx, raw)
+
+
+def evaluate_payload(ctx: Context, raw: str) -> Decision:
+    """Decide one hook payload for an already validated context. Every hook
+    decision and every --probe-json floor case comes through here."""
     if not raw.strip():
         return deny(ctx, "", "input.empty", "active harness received an empty hook payload", integrity=True)
     try:
@@ -3306,6 +3319,239 @@ def evaluate(raw: str) -> Decision:
     except PolicyFailure as exc:
         return deny(ctx, tool_name, exc.rule, exc.reason)
     return allow(ctx, tool_name)
+
+
+# --- Role floor report (harness-status) ------------------------------------------
+# The strict-v1 floor per resolved role, as data. A clause is (floor name,
+# clause text, rule ids the checks above raise, enforcement tables they read as
+# (FLOOR_TABLES key, noun)). harness-status prints the floor only from
+# --floor-json, with counts read from those tables. FLOOR_PROBES gives each
+# role cases that --probe-json runs through evaluate_payload(), the path every
+# hook decision takes, so a clause whose rule stops denying fails its probe.
+# test-harness-policy.sh requires every reviewer.*/executor.*/orchestrator.*
+# rule raised in this file to be listed here or in GUARD_PACK_RULES.
+FLOOR_TABLES = {
+    "EDIT_TOOL_NAMES": EDIT_TOOL_NAMES,
+    "READ_COMMANDS": READ_COMMANDS,
+    "READ_GIT": READ_GIT,
+    "CHILD_TMUX_DENIED": CHILD_TMUX_DENIED,
+    "OUTBOUND_HELPER_BASENAMES": OUTBOUND_HELPER_BASENAMES,
+    "INLINE_SHELLS": INLINE_SHELLS,
+    "INLINE_INTERPRETERS": INLINE_INTERPRETERS,
+    "GH_READ_OPTIONS": GH_READ_OPTIONS,
+    "HELPERS": HELPERS,
+    "PRIVILEGE_WRAPPERS": PRIVILEGE_WRAPPERS,
+    "ESCAPE_FLAG_TOKENS": ESCAPE_FLAG_TOKENS,
+}
+_FLOOR_EDIT = (("EDIT_TOOL_NAMES", "edit tools"),)
+_FLOOR_DRAFTS = ("message-store edits only to this pane's own drafts", ("coordination.draft",), ())
+_FLOOR_CONTAINMENT = (
+    ("containment", "edit family and path operands confined to the pane checkout", ("executor.containment",), _FLOOR_EDIT),
+    ("containment",) + _FLOOR_DRAFTS,
+    ("containment", "no inline shell or interpreter code", ("executor.inline_code",),
+     (("INLINE_SHELLS", "shells"), ("INLINE_INTERPRETERS", "interpreters"))),
+    ("containment", "literal operands only", ("path.dynamic",), ()),
+)
+_FLOOR_GH = (("gh", "reviewed read forms only", ("orchestrator.gh_mutation", "orchestrator.gh_unsupported"),
+              (("GH_READ_OPTIONS", "gh read forms"),)),)
+_FLOOR_TMUX = ("routing", "direct tmux transport denied", ("routing.master",), (("CHILD_TMUX_DENIED", "tmux verbs"),))
+_FLOOR_TO_MASTER = (
+    ("routing", "outbound coordination only through the selected helper, to the orchestrator", ("routing.master",),
+     (("OUTBOUND_HELPER_BASENAMES", "outbound helpers"),)),
+    _FLOOR_TMUX,
+)
+_FLOOR_TO_PANES = ("routing", "outbound coordination only through the selected helper, to configured panes",
+                   ("routing.master",), (("OUTBOUND_HELPER_BASENAMES", "outbound helpers"),))
+ROLE_FLOOR = {
+    "reviewer": (
+        ("readonly", "edit family denied, except this pane's own message drafts", ("reviewer.readonly", "coordination.draft"),
+         _FLOOR_EDIT),
+        ("readonly", "shell default-deny except allowlisted reads",
+         ("reviewer.shell", "reviewer.command", "reviewer.git", "reviewer.path", "reviewer.sed", "reviewer.search",
+          "reviewer.symlink_follow", "reviewer.find", "reviewer.tail", "reviewer.sort", "reviewer.file_list"),
+         (("READ_COMMANDS", "read commands"), ("READ_GIT", "git read subcommands"))),
+    ) + _FLOOR_TO_MASTER,
+    "executor": _FLOOR_CONTAINMENT + _FLOOR_TO_MASTER,
+    "orchestrator": (
+        ("child_write", "no edit or mutating shell against a child checkout", ("orchestrator.child_write",), ()),
+        ("push", "no git push", ("orchestrator.push",), ()),
+    ) + _FLOOR_GH + (_FLOOR_TO_PANES,),
+    # An environment coordinator whose cwd is not the project root.
+    "confined_orchestrator": _FLOOR_CONTAINMENT + (
+        ("git", "no local Git mutation, push included", ("orchestrator.git",), (("READ_GIT", "git read subcommands"),)),
+    ) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_TMUX),
+}
+COMMON_FLOOR = (
+    ("helpers", "selected installed version only, reviewed argv, gated by role",
+     ("helper.provenance", "helper.selection", "helper.path", "helper.launch", "helper.segment", "helper.allowlist",
+      "helper.argv", "coordination.write"), (("HELPERS", "helpers"),)),
+    ("wrappers", "one literal wrapper grammar, privilege wrappers denied", ("shell.wrapper", "shell.privilege"),
+     (("PRIVILEGE_WRAPPERS", "privilege wrappers"),)),
+    ("sandbox_escape", "no sandbox, approval or permission escape flags", ("shell.sandbox_escape",),
+     (("ESCAPE_FLAG_TOKENS", "escape flags"),)),
+)
+# Rules that only an optional harness.guards pack turns on. They are never floor.
+GUARD_PACK_RULES = {
+    "orchestrator.protected_file": "protected_files",
+    "orchestrator.child_chdir": "orchestrator.deny_child_chdir",
+}
+
+# Probe case: (kind, expected rule or "allow", label, value). kind "edit" runs
+# the case once per EDIT_TOOL_NAMES entry, "edit_one" as Edit only, "shell" as
+# one Bash command. Values name {probe} (a file in the pane checkout), {outside}
+# (a path outside every pane root), {child} (a file in a child checkout),
+# {messages} (a non-draft file in the pane's messages grant) and {cwd}. A case
+# whose place the pane lacks is skipped. Nothing is run or written: a case is
+# only decided.
+FLOOR_PROBE_NAME = ".session-workspace-floor-probe"
+FLOOR_PROBE_OUTSIDE = "/" + FLOOR_PROBE_NAME + "/outside"
+_PROBE_TO_MASTER = (
+    ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
+    ("shell", "routing.master", "tmux send-keys", "tmux send-keys -t probe probe"),
+)
+_PROBE_DRAFTS = ("edit_one", "coordination.draft", "Edit a message-store file that is not this pane's draft", "{messages}")
+_PROBE_CONTAINMENT = (
+    ("edit", "executor.containment", "edit outside the pane checkout", "{outside}"),
+    ("edit_one", "allow", "Edit inside the pane checkout", "{probe}"),
+    _PROBE_DRAFTS,
+    ("shell", "executor.containment", "touch outside the pane checkout", "touch {outside}"),
+    ("shell", "allow", "touch inside the pane checkout", "touch {probe}"),
+    ("shell", "executor.inline_code", "bash -c", "bash -c true"),
+    ("shell", "path.dynamic", "shell expansion", "ls $HOME"),
+)
+FLOOR_PROBES = {
+    "reviewer": (
+        ("edit", "reviewer.readonly", "edit inside the pane checkout", "{probe}"),
+        _PROBE_DRAFTS,
+        ("shell", "allow", "ls inside the pane checkout", "ls"),
+        ("shell", "reviewer.command", "touch", "touch {probe}"),
+        ("shell", "reviewer.git", "git commit", "git commit -m probe"),
+        ("shell", "reviewer.shell", "write redirection", "ls > {probe}"),
+        ("shell", "reviewer.sed", "sed", "sed -n 1p {probe}"),
+        ("shell", "reviewer.path", "read outside the pane's read roots", "cat {outside}"),
+    ) + _PROBE_TO_MASTER,
+    "executor": _PROBE_CONTAINMENT + _PROBE_TO_MASTER,
+    "orchestrator": (
+        ("edit", "orchestrator.child_write", "edit inside a child checkout", "{child}"),
+        ("edit_one", "allow", "Edit in the pane's own checkout", "{probe}"),
+        ("shell", "orchestrator.child_write", "touch inside a child checkout", "touch {child}"),
+        ("shell", "orchestrator.push", "git push", "git push"),
+        ("shell", "orchestrator.gh_mutation", "gh pr merge", "gh pr merge 1"),
+        ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
+    ),
+    "confined_orchestrator": _PROBE_CONTAINMENT + (
+        ("shell", "orchestrator.git", "git commit", "git commit -m probe"),
+        ("shell", "orchestrator.git", "git push", "git push"),
+        ("shell", "orchestrator.gh_mutation", "gh pr merge", "gh pr merge 1"),
+    ) + _PROBE_TO_MASTER,
+}
+COMMON_PROBES = (
+    ("shell", "helper.provenance", "helper outside the selected install",
+     "bash {outside}/plugins/cache/probe/0/scripts/probe.sh"),
+    ("shell", "shell.privilege", "sudo", "sudo true"),
+    ("shell", "shell.sandbox_escape", "escape flag", "claude --dangerously-skip-permissions"),
+)
+
+
+def floor_key(ctx: Context) -> str:
+    return "confined_orchestrator" if ctx.confined_orchestrator else ctx.semantic_role
+
+
+def floor_table(name: str) -> List[str]:
+    table = FLOOR_TABLES[name]
+    if name == "HELPERS":
+        return sorted("%s/%s:%s" % (plugin, script, entry[0]) for plugin, scripts in table.items()
+                      for script, entry in scripts.items())
+    if name == "GH_READ_OPTIONS":
+        return sorted(" ".join(part for part in ("gh",) + key if part) for key in table)
+    return sorted(table)
+
+
+def floor_report(key: str, clauses: tuple) -> dict:
+    """One role's floor as data plus the text harness-status prints for it."""
+    floors: List[dict] = []
+    for name, text, rules, tables in clauses:
+        counts = ", ".join("%d %s" % (len(floor_table(table)), noun) for table, noun in tables)
+        entry = {"text": text + (" [%s]" % counts if counts else ""), "rules": list(rules),
+                 "tables": {table: floor_table(table) for table, _ in tables}}
+        if not floors or floors[-1]["floor"] != name:
+            floors.append({"floor": name, "clauses": []})
+        floors[-1]["clauses"].append(entry)
+    text = ", ".join("%s (%s)" % (item["floor"], "; ".join(c["text"] for c in item["clauses"])) for item in floors)
+    probes = FLOOR_PROBES.get(key, ())
+    return {"key": key, "text": text, "floors": floors,
+            "probes": [{"rule": case[1], "label": case[2]} for case in probes]}
+
+
+def floor_document() -> dict:
+    """--floor-json: the whole floor table plus this process's resolved role."""
+    ctx, denial = load_context()
+    if ctx is not None:
+        current, reason = floor_key(ctx), ""
+    elif denial is not None:
+        current, reason = None, "identity not accepted [%s]" % denial.rule
+    else:
+        current, reason = None, "harness is not active in this process"
+    common = floor_report("all", COMMON_FLOOR)
+    common["probes"] = [{"rule": case[1], "label": case[2]} for case in COMMON_PROBES]
+    return {
+        "profile": PROFILE,
+        "configurable": False,
+        "current": current,
+        "reason": reason,
+        "roles": {key: floor_report(key, clauses) for key, clauses in ROLE_FLOOR.items()},
+        "all": common,
+        "guard_pack_rules": dict(GUARD_PACK_RULES),
+    }
+
+
+def probe_payloads(ctx: Context, case: tuple) -> List[Tuple[str, str, str]]:
+    """(group, tool, payload JSON) for one probe case; [] when it does not apply."""
+    kind, expected, label, value = case
+    child = next((root for root in ctx.child_roots if not within(ctx.pane_cwd, root)), None)
+    messages = ctx.message_roots[0] if ctx.message_roots else None
+    if ("{child}" in value and child is None) or ("{messages}" in value and messages is None):
+        return []
+    if expected == "allow" and kind == "edit_one" and any(within(ctx.pane_cwd, root) for root in ctx.child_roots) \
+            and ctx.semantic_role == "orchestrator" and not ctx.confined_orchestrator:
+        return []  # The orchestrator's own cwd is itself a child checkout here.
+    places = {
+        "probe": str(ctx.pane_cwd / FLOOR_PROBE_NAME),
+        "outside": FLOOR_PROBE_OUTSIDE,
+        "child": str((child or ctx.pane_cwd) / FLOOR_PROBE_NAME),
+        "messages": str((messages or ctx.pane_cwd) / FLOOR_PROBE_NAME),
+        "cwd": str(ctx.pane_cwd),
+    }
+    if kind == "shell":
+        command = value.format(**{k: shlex.quote(v) for k, v in places.items()})
+        return [(label, "Bash", json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}))]
+    target = value.format(**places)
+    tools = ["Edit"] if kind == "edit_one" else sorted(EDIT_TOOL_NAMES)
+    return [(label, tool, json.dumps({"tool_name": tool, "tool_input": {"file_path": target, "path": target}}))
+            for tool in tools]
+
+
+def probe_document() -> dict:
+    """--probe-json: decide this pane's own floor cases; never run them."""
+    ctx, denial = load_context()
+    if ctx is None:
+        reason = ("identity not accepted [%s]: %s" % (denial.rule, denial.reason) if denial is not None
+                  else "harness is not active in this process")
+        return {"ran": False, "reason": reason, "role": None, "floor": None, "mode": None, "cases": []}
+    key = floor_key(ctx)
+    cases = []
+    for case in FLOOR_PROBES.get(key, ()) + COMMON_PROBES:
+        for group, tool, payload in probe_payloads(ctx, case):
+            _note_parsed_helper_reset()
+            decision = evaluate_payload(ctx, payload)
+            expected = case[1]
+            if expected == "allow":
+                ok = decision.decision == "allow"
+            else:
+                ok = decision.decision in {"deny", "audit"} and decision.rule == expected
+            cases.append({"group": group, "tool": tool, "expect": "allow" if expected == "allow" else "deny",
+                          "expect_rule": expected, "decision": decision.decision, "rule": decision.rule, "ok": ok})
+    return {"ran": True, "reason": "", "role": ctx.semantic_role, "floor": key, "mode": ctx.mode, "cases": cases}
 
 
 # --- Diagnostics (diag/1) ------------------------------------------------------
@@ -3410,9 +3656,20 @@ def emit_codex_system_message(message: str) -> None:
 
 
 def main(argv: List[str]) -> int:
+    if argv in (["--floor-json"], ["--probe-json"]):
+        # Read-only reports for harness-status. They read no stdin and never
+        # change a hook decision.
+        try:
+            report = floor_document() if argv[0] == "--floor-json" else probe_document()
+        except Exception as exc:
+            print("harness-policy.py %s failed (%s)" % (argv[0], type(exc).__name__), file=sys.stderr)
+            return 1
+        print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+        return 0
     allowed = {"--decision-json", "--codex-hook-output"}
     if len(argv) != len(set(argv)) or any(arg not in allowed for arg in argv):
-        print("Usage: harness-policy.py [--decision-json] [--codex-hook-output]  (hook payload JSON on stdin)", file=sys.stderr)
+        print("Usage: harness-policy.py [--decision-json] [--codex-hook-output]  (hook payload JSON on stdin)\n"
+              "       harness-policy.py --floor-json | --probe-json", file=sys.stderr)
         return 2
     decision_json = "--decision-json" in argv
     codex_hook_output = "--codex-hook-output" in argv
