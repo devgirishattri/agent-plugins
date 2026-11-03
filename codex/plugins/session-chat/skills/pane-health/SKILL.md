@@ -1,6 +1,6 @@
 ---
 name: pane-health
-description: "Check liveness, message backlog, and send-lock state of named tmux panes through session-chat. Use when the user asks whether panes or workers are alive, stuck, unreachable, or have queued messages."
+description: "Check liveness, unsubmitted input, message backlog, and send-lock state of named tmux panes through session-chat. Use when the user asks whether panes or workers are alive, stuck, unreachable, or have queued messages."
 ---
 
 # Pane Health
@@ -26,5 +26,6 @@ the whole script escalated/approved.
 Flag `Location` when a worker is in an unexpected repo or worktree for the task it is about to receive.
 `DEAD` means the pane's process exited — sends to it will queue forever.
 `DUPLICATE` means two panes share a name — rename one with `$session-chat:whoami <name>` in that pane.
+`UNSUBMITTED` means unsubmitted input: a session-chat message sits in that pane's input line and its agent never submitted it, so an idle pane will not act on it. Ask the user to press Enter in that pane (`tmux send-keys -t <pane> Enter`). Do not resend: its durable copy is still queued, and a resend duplicates it.
 Backlog `ready/total` > 0 means messages are waiting for that pane's next turn; if it stays non-zero the pane may be stuck.
 `STALE(pid)` send-lock means a crashed sender left a lock behind; it is reclaimed automatically on the next send.

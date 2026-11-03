@@ -3,6 +3,8 @@
 # Usage: send-message.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] [--task TASK_ID] <target-name> <message>
 #   --priority high  queued recovery surfaces this before normal messages
 #   --ttl MINUTES    if still queued after this window, drop instead of surfacing
+# Exit status: 0 sent or queued; 4 unsubmitted (staged in the recipient's input
+# line, durable copy queued); 1 any other failure.
 # Supported platforms: macOS, Linux
 set -uo pipefail
 
@@ -68,5 +70,12 @@ rc=$?
 case "$rc" in
   0) echo "Sent to $TARGET_NAME." ;;
   3) echo "Queued to $TARGET_NAME — recipient was busy; it will arrive on their next turn." ;;
+  4)
+    # Not success: the line sits unsubmitted in the recipient's input. The
+    # durable copy stays queued, but an idle recipient has no next turn until
+    # something submits; press Enter there (pane-health shows UNSUBMITTED).
+    echo "Unsubmitted to $TARGET_NAME — the message is staged in its input line but was not submitted; the durable copy stays queued."
+    exit 4
+    ;;
   *) exit 1 ;;
 esac

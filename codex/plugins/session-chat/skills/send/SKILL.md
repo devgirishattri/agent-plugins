@@ -38,3 +38,4 @@ If the target is not found, suggest `$session-chat:panes`. If this pane has no n
 If the output reports a single-line or length limit, suggest `$session-chat:dispatch <pane-name> <task prompt>`.
 If the output reports multiple panes named the same target, tell the user to rename one pane with `$session-chat:whoami <name>`.
 If a live timeout is followed by `Queued ...`, report durable queued success and do not retry. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` only when immediate live delivery matters. Retry only a hard failure that did not queue, after fixing its cause.
+If the output is `Unsubmitted to ...` (exit `4`), report it as **not** delivered: the line sits unsubmitted in the recipient's input and its durable copy stays queued. Do not resend. Ask the user to press Enter in that pane, then run `$session-chat:pane-health <target>`.

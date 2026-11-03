@@ -15,7 +15,7 @@ Lead with the result. Add text only for errors or the follow-ups below. Run the 
    ```
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/send-message.sh [--priority high] [--ttl <minutes>] [--task <task-id>] "<target-name>" "<message>"
    ```
-3. If the output says "Sent to ..." (delivered live) or "Queued to ..." (recipient busy), report success. "Queued to ..." is durable delivery. It surfaces on the recipient's next turn.
+3. If the output says "Sent to ..." (delivered live) or "Queued to ..." (recipient busy), report success. "Queued to ..." is durable delivery. It surfaces on the recipient's next turn. "Unsubmitted to ..." (exit status 4) is **not** success: the line sits unsubmitted in the recipient's input. Do not resend. Tell the user to press Enter in that pane, then check `/pane-health <target>`.
 4. If the error mentions newlines or length, retry with `/dispatch <target> <message>`.
 5. If the error is about no name, tell the user to run `/whoami <name>` first.
 6. If the target is not found, run `/panes` to show available targets.

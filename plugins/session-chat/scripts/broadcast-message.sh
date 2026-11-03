@@ -5,6 +5,8 @@
 #   --all          target named panes across ALL tmux sessions
 #   --match GLOB   only target pane names matching the shell glob (e.g. 'worker-*')
 # Per-target results are printed as TSV (<result>\t<name>); summary line last.
+# <result> is sent | queued | unsubmitted | failed. Exit status: 1 when every
+# target failed, else 4 when any target is unsubmitted, else 0.
 # Delivery semantics per target are identical to /send (durable enqueue first,
 # live paste, queued fallback on busy recipients).
 set -uo pipefail
@@ -121,6 +123,7 @@ fi
 
 DELIVERED=0
 QUEUED=0
+UNSUBMITTED=0
 FAILED=0
 for name in "${TARGETS[@]}"; do
   send_message "$name" "$MESSAGE"
@@ -128,10 +131,12 @@ for name in "${TARGETS[@]}"; do
   case "$rc" in
     0) printf 'sent\t%s\n' "$name"; DELIVERED=$((DELIVERED + 1)) ;;
     3) printf 'queued\t%s\n' "$name"; QUEUED=$((QUEUED + 1)) ;;
+    4) printf 'unsubmitted\t%s\n' "$name"; UNSUBMITTED=$((UNSUBMITTED + 1)) ;;
     *) printf 'failed\t%s\n' "$name"; FAILED=$((FAILED + 1)) ;;
   esac
 done
 
-echo "Broadcast to ${#TARGETS[@]} pane(s): ${DELIVERED} sent, ${QUEUED} queued, ${FAILED} failed."
+echo "Broadcast to ${#TARGETS[@]} pane(s): ${DELIVERED} sent, ${QUEUED} queued, ${UNSUBMITTED} unsubmitted, ${FAILED} failed."
 [ "$FAILED" -eq "${#TARGETS[@]}" ] && exit 1
+[ "$UNSUBMITTED" -gt 0 ] && exit 4
 exit 0
