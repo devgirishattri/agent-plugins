@@ -22,12 +22,13 @@ Lead with the result. Add text only for errors or the follow-ups below. Run the 
    ```
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-to-session.sh [--priority high] [--ttl <minutes>] [--task <task-id>] "<target>" "<prompt-file-path>"
    ```
-   4. Under strict-v1, the transport removes your own draft after a delivered or queued result (`Removed delivered draft: …`); do not delete it yourself. Outside strict-v1, optionally remove the temp file with `rm -f "<prompt-file-path>"`. After a hard failure, keep the draft for the retry.
+   4. Under strict-v1, the transport removes your own draft after a delivered, queued or unsubmitted result (`Removed delivered draft: …`); do not delete it yourself. Outside strict-v1, optionally remove the temp file with `rm -f "<prompt-file-path>"`. After a hard failure, keep the draft for the retry.
 
 4. Report the script's result **verbatim**. Both success cases are fine, but they mean different things:
    - `Dispatched task to '<target>'` — the prompt landed live in the recipient's pane now.
    - `Queued dispatch to '<target>' — recipient was busy; it will arrive on their next turn.` — durable delivery. The recipient's inbox surfaces it on its next turn. **This is success — do not re-dispatch.**
-   - After either success line, the helper prints one more line, `Message id: <hex>`: the transport id of this dispatch. A hard failure prints none. Callers such as `/task-review` record it as the request id.
+   - `Unsubmitted dispatch to '<target>' — …` with exit status 4 — **not success**. The notification landed in the recipient's input line, but its TUI did not submit it even after one extra Enter. The line stays there and the durable copy stays queued, so **do not re-dispatch**. Tell the user to press Enter in that pane, and run `/pane-health <target>` to confirm it no longer shows `UNSUBMITTED`.
+   - After any of these lines, the helper prints one more line, `Message id: <hex>`: the transport id of this dispatch. A hard failure prints none. Callers such as `/task-review` record it as the request id.
    Then add: "Use `/panes` to check status or `/send <target> <message>` to follow up. Note: if `<target>` runs with `SESSION_CHAT_INCOMING_MODE=notify` (default), they will be **told not to read** the dispatch file. Set `auto` or `assist` for orchestration."
 
 5. If the error says the target is not found, run `/panes` to show available sessions.

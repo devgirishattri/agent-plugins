@@ -5,7 +5,9 @@
 #   name    check a single pane name (searched across all sessions)
 #   --all   check named panes in ALL sessions (default: current session)
 # Output: TSV rows  <name> <pane> <status> <command> <location> <backlog> <send-lock>
-#   status:   ok | DEAD (pane_dead) | DUPLICATE (name resolves to >1 pane)
+#   status:   ok | DEAD (pane_dead) | DUPLICATE (name resolves to >1 pane) |
+#             UNSUBMITTED (unsubmitted input: a session-chat message sits in
+#             the pane's input line and was never submitted)
 #   location: pane's current working directory (so a worker in the wrong repo /
 #             worktree is caught before a dispatch lands it in the wrong tree)
 #   backlog:  ready/total rows waiting in that pane's durable inbox
@@ -122,6 +124,14 @@ while IFS=$'\t' read -r name pane_id dead cmd path; do
   fi
   backlog=$(queue_backlog "$name" "$pane_id")
   lock=$(lock_state "$pane_id")
+  # A send in flight holds the lock while its text is briefly staged, so only
+  # an unlocked pane with a session-chat line in its composer is reported.
+  if [ "$status" = "ok" ]; then
+    case "$lock" in
+      held*) ;;
+      *) composer_staged_id "$pane_id" >/dev/null && status="UNSUBMITTED" ;;
+    esac
+  fi
   case "$backlog" in
     0/*) ;;
     *) [ "$status" = "ok" ] && status="ok(backlog)" ;;
@@ -137,5 +147,5 @@ $PANE_ROWS
 EOF_ROWS
 
 echo "—"
-echo "${OK} healthy, ${PROBLEMS} needing attention. DEAD = pane process exited; DUPLICATE = rename one via /whoami; ready>0 backlog = messages waiting for that pane's next turn; STALE lock = clear with: rm -rf <lock-path>."
+echo "${OK} healthy, ${PROBLEMS} needing attention. DEAD = pane process exited; DUPLICATE = rename one via /whoami; UNSUBMITTED = unsubmitted input: a session-chat message is staged in that pane's input line and its agent never submitted it (press Enter in that pane; its durable copy stays queued); ready>0 backlog = messages waiting for that pane's next turn; STALE lock = clear with: rm -rf <lock-path>."
 exit 0

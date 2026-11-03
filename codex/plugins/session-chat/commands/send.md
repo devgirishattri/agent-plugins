@@ -30,3 +30,4 @@ is transport-generated rather than manually typed.
 8. For single-line or length limits, suggest `$session-chat:dispatch <pane-name> <task prompt>`.
 9. For duplicate names, suggest `$session-chat:whoami <name>` in one pane.
 10. If a live timeout is followed by `Queued ...`, report durable queued success and do not retry. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` only when immediate live delivery matters. Retry only a hard failure that did not queue, after fixing its cause.
+11. If the output is `Unsubmitted to ...` (exit `4`), report it as **not** delivered: the line sits unsubmitted in the recipient's input and its durable copy stays queued. Do not resend. Ask the user to press Enter in that pane, then run `$session-chat:pane-health <target>`.

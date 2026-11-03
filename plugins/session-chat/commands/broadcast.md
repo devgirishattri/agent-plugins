@@ -15,8 +15,8 @@ Lead with the result. Add text only for errors or the follow-ups below. Run the 
    ```
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/broadcast-message.sh [--all] [--match "<glob>"] [--priority high] [--ttl <minutes>] "<message>"
    ```
-3. Present the per-target TSV results (`sent`/`queued`/`failed` per pane) as a short markdown table. Then give the summary line.
-4. If a target failed, suggest `/pane-health <name>` to diagnose it.
+3. Present the per-target TSV results (`sent`/`queued`/`unsubmitted`/`failed` per pane) as a short markdown table. Then give the summary line.
+4. If a target failed, suggest `/pane-health <name>` to diagnose it. If a target is `unsubmitted`, its line sits unsubmitted in that pane's input: do not resend; tell the user to press Enter in that pane.
 5. If the error is about no name, tell the user to run `/whoami <name>` first.
 6. If no panes matched, run `/panes` to show what is available.
 7. If the error mentions that the tmux socket was denied (`Operation not permitted`), do NOT treat it as "no panes" or "no name". Surface the error verbatim, including its escalated/approved retry hint. The user then re-runs the broadcast with the exec approved. Do not assume there were no targets.

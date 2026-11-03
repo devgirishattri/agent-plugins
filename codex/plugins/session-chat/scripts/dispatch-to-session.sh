@@ -3,6 +3,8 @@
 # Usage: dispatch-to-session.sh [--priority high|normal] [--ttl MINUTES] [--reply-to ID] [--task TASK_ID] <target-name> <prompt-file>
 #   --priority high  queued recovery surfaces this before normal messages
 #   --ttl MINUTES    if still queued after this window, drop instead of surfacing
+# Exit status: 0 delivered or queued; 4 unsubmitted (staged in the recipient's
+# input line, durable copy queued); 1 any other failure.
 # Supported platforms: macOS, Linux
 
 source "$(dirname "$0")/lib.sh"
@@ -87,19 +89,28 @@ fi
 
 dispatch_message "$TARGET_NAME" "$PROMPT_TEXT"
 rc=$?
+exit_rc=0
 case "$rc" in
   0) echo "Dispatched task to '$TARGET_NAME'" ;;
   3) echo "Queued dispatch to '$TARGET_NAME' — recipient was busy; it will arrive on their next turn." ;;
+  4)
+    # Not success, but durable: the notification sits unsubmitted in the
+    # recipient's input line and the queued copy stays. An idle recipient has
+    # no next turn until something submits; press Enter there.
+    echo "Unsubmitted dispatch to '$TARGET_NAME' — the notification is staged in its input line but was not submitted; the durable copy stays queued."
+    exit_rc=4
+    ;;
   *) exit 1 ;;
 esac
 
-# Print the transport id only after delivered or queued success.
+# Print the transport id only after delivered, queued or unsubmitted results.
 if printf '%s' "$DISPATCH_MESSAGE_ID" | grep -qE '^[a-f0-9]{8,16}$'; then
   echo "Message id: $DISPATCH_MESSAGE_ID"
 fi
 
-# Delivered and queued outcomes own a separate durable payload. Cleanup cannot
-# change the successful transport result; failure/uncertainty keeps the source.
+# Delivered, queued and unsubmitted outcomes own a separate durable payload.
+# Cleanup cannot change the transport result; failure/uncertainty keeps the source.
 if [ -n "$DRAFT_IDENT" ]; then
   consume_own_draft "$PROMPT_FILE" "$DRAFT_IDENT" "$DRAFT_SUM"
 fi
+exit "$exit_rc"

@@ -491,6 +491,102 @@ capture_paste_placeholder_count() {
   tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null | count_paste_placeholders
 }
 
+# --- Submit verification ---
+# A successful `tmux send-keys Enter` only means tmux wrote the key to the pane,
+# not that the agent submitted the prompt. Codex buffers fast input as a paste
+# burst and turns an Enter that arrives inside the burst into a newline, which
+# leaves the whole message staged in its input line while the sender reports
+# success. These helpers read the agent's composer (input box) from the visible
+# screen so the transport can tell "submitted" from "still staged".
+
+submit_verify_ms() { normalize_positive_int "${SESSION_CHAT_SUBMIT_VERIFY_MS:-1000}" 1000; }
+submit_retry_delay_ms() { normalize_positive_int "${SESSION_CHAT_SUBMIT_RETRY_DELAY_MS:-250}" 250; }
+
+# Whitespace-free copy, so a marker the TUI wrapped across lines still matches.
+squash_ws() { printf '%s' "$1" | tr -d ' \t\r\n'; }
+
+# squashed_contains <haystack> <needle>: 0 when <needle> occurs in <haystack>,
+# ignoring whitespace in both.
+squashed_contains() {
+  local hay needle
+  hay=$(squash_ws "$1")
+  needle=$(squash_ws "$2")
+  [ -n "$needle" ] && [[ "$hay" == *"$needle"* ]]
+}
+
+# read_composer <pane_id>: set COMPOSER_KIND (codex | claude) and COMPOSER_TEXT
+# (the composer's first line through the bottom of the visible screen), or
+# return 1 when no known composer is on screen. The composer is the LAST prompt
+# line: Codex draws `›` at column 0; Claude Code draws `❯` (older versions:
+# `> ` under a rule, or `│ > ` inside a box). Both TUIs echo every submitted
+# prompt into the transcript with the same glyph, but always above the
+# composer, so taking the last one keeps the transcript copy out of the check.
+COMPOSER_KIND=""
+COMPOSER_TEXT=""
+read_composer() {
+  local pane_id="$1" screen out
+  COMPOSER_KIND=""
+  COMPOSER_TEXT=""
+  screen=$(tmux capture-pane -t "$pane_id" -p 2>/dev/null) || return 1
+  out=$(printf '%s\n' "$screen" | awk '
+    {
+      # index() keeps the glyph tests byte-safe in any locale; Claude Code
+      # follows its glyph with a no-break space, so nothing after it is assumed.
+      line[NR] = $0; k = ""
+      if (index($0, "›") == 1) k = "codex"
+      else if (index($0, "❯") == 1 || index($0, "│ >") == 1) k = "claude"
+      else if (index($0, ">") == 1 && index(prev, "─") == 1) k = "claude"
+      if (k != "") { last = NR; kind = k }
+      prev = $0
+    }
+    END {
+      if (!last) exit 1
+      print kind
+      for (i = last; i <= NR; i++) print line[i]
+    }') || return 1
+  # shellcheck disable=SC2034  # an output for callers, like COMPOSER_TEXT
+  COMPOSER_KIND="${out%%$'\n'*}"
+  COMPOSER_TEXT="${out#*$'\n'}"
+  return 0
+}
+
+# composer_holds <pane_id> <marker>: 0 when the composer holds <marker>
+# (staged), 1 when a composer is on screen without it, 2 when none is visible.
+composer_holds() {
+  read_composer "$1" || return 2
+  squashed_contains "$COMPOSER_TEXT" "$2" && return 0
+  return 1
+}
+
+# await_submit <pane_id> <marker> <window_ms>: 0 once the composer no longer
+# holds <marker> (the TUI moved the text into its transcript or its queue), 1
+# when it still holds it after <window_ms>. A screen that shows no composer at
+# the end of the window cannot prove the text is staged, so it counts as 0.
+await_submit() {
+  local pane_id="$1" marker="$2" window_ms="$3" waited=0 rc
+  while :; do
+    composer_holds "$pane_id" "$marker"
+    rc=$?
+    [ "$rc" -eq 1 ] && return 0
+    if [ "$waited" -ge "$window_ms" ]; then
+      [ "$rc" -eq 0 ] && return 1
+      return 0
+    fi
+    sleep 0.05
+    waited=$((waited + 50))
+  done
+}
+
+# composer_staged_id <pane_id>: print the id of a session-chat message that sits
+# unsubmitted in the pane's composer; return 1 when there is none.
+composer_staged_id() {
+  local squashed re='\[from:[A-Za-z0-9_:-]+pane:%[0-9]+.*id:([a-f0-9]{8,16})\]'
+  read_composer "$1" || return 1
+  squashed=$(squash_ws "$COMPOSER_TEXT")
+  [[ "$squashed" =~ $re ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
 # --- Message id for verify markers and reply correlation ---
 
 # 16 lowercase hex chars (64 bits) from /dev/urandom via od — nothing else.
@@ -574,14 +670,15 @@ now_ms() {
   printf '%s000\n' "$seconds"
 }
 
-# Worst-case duration of one send_text call: (retries+1) verify windows plus a
+# Worst-case duration of one send_text call: (retries+1) verify windows, the
+# two submit-verification windows and the pause before the extra Enter, plus a
 # little headroom. Lock waits derive from this so fan-in (many panes acking one
 # orchestrator) queues instead of failing.
 per_send_budget_ms() {
   local retries verify_ms
   retries=$(normalize_positive_int "${SESSION_CHAT_SEND_RETRIES:-2}" 2)
   verify_ms=$(normalize_positive_int "${SESSION_CHAT_VERIFY_TIMEOUT_MS:-4000}" 4000)
-  printf '%s\n' "$(( (retries + 1) * verify_ms + 1500 ))"
+  printf '%s\n' "$(( (retries + 1) * verify_ms + 2 * $(submit_verify_ms) + $(submit_retry_delay_ms) + 1500 ))"
 }
 
 # --- Per-target send lock and per-recipient queue lock ---
@@ -1479,6 +1576,10 @@ archive_message() {
   find "$dir" -name '*.tsv' -type f -mtime +"$(archive_retention_days)" -delete 2>/dev/null || true
 }
 
+# Single paste→verify→Enter→submit-check attempt. Returns 0 submitted (or
+# unverifiable on a screen with no known composer), 2 retryable (paste failed
+# or never landed; partial input cleared), 1 Enter itself failed, 4 landed but
+# still unsubmitted after one extra Enter (text left staged).
 send_text_once() {
   local pane_id="$1"
   local text="$2"
@@ -1486,6 +1587,7 @@ send_text_once() {
   local marker="${3:-$text}"
   local settle_ms="${SESSION_CHAT_SETTLE_MS:-300}"
   local paste_placeholders_before=0
+  local verify_submit=0
   if [ "${SESSION_CHAT_SKIP_VERIFY:-}" != "1" ]; then
     paste_placeholders_before=$(capture_paste_placeholder_count "$pane_id")
   fi
@@ -1511,23 +1613,39 @@ send_text_once() {
       marker="${marker: -40}"
     fi
 
+    # Wait for the END of the payload, not just the marker. Send and dispatch
+    # lines carry id:<uid> in the header and again at the end. A payload that
+    # reaches the TUI in two pieces shows the header's copy before the tail has
+    # arrived, and an Enter sent then submits the header alone, or (Codex)
+    # lands inside the tail's paste burst as a newline. Whitespace is ignored
+    # so a tail the TUI wrapped across lines still matches.
+    local tail="${text: -40}" landed=0
     attempts=$(( (timeout_ms + 49) / 50 ))
     i=0
     while [ "$i" -lt "$attempts" ]; do
       captured=$(tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null || true)
-      if [[ "$captured" == *"$marker"* ]]; then
+      if squashed_contains "$captured" "$marker" && squashed_contains "$captured" "$tail"; then
+        landed=1
         break
       fi
       if [ "$(printf '%s\n' "$captured" | count_paste_placeholders)" -gt "$paste_placeholders_before" ]; then
+        landed=2
         break
       fi
       sleep 0.05
       i=$((i + 1))
     done
 
-    if [ "$i" -ge "$attempts" ]; then
+    if [ "$landed" -eq 0 ]; then
       clear_partial_input "$pane_id"
       return 2
+    fi
+    # Check the submit only when the text is visibly inside a composer this
+    # library recognizes; anywhere else (a shell, a paste placeholder, an
+    # unknown TUI) there is nothing reliable to read, so keep the old contract.
+    if [ "$landed" -eq 1 ] && [ "$(submit_verify_ms)" -gt 0 ] \
+      && composer_holds "$pane_id" "$marker"; then
+      verify_submit=1
     fi
   fi
 
@@ -1539,6 +1657,16 @@ send_text_once() {
   if ! tmux send-keys -t "$pane_id" Enter; then
     clear_partial_input "$pane_id"
     return 1
+  fi
+  if [ "$verify_submit" -eq 1 ] && ! await_submit "$pane_id" "$marker" "$(submit_verify_ms)"; then
+    # Still staged: the Enter most likely landed inside the TUI's paste burst
+    # and became a newline. Let the burst window close, then press Enter ONCE
+    # more. Never paste again: that would stage a second copy of the message.
+    sleep_ms "$(submit_retry_delay_ms)"
+    if ! tmux send-keys -t "$pane_id" Enter \
+      || ! await_submit "$pane_id" "$marker" "$(submit_verify_ms)"; then
+      return 4
+    fi
   fi
 
   case "$settle_ms" in
@@ -1583,8 +1711,14 @@ send_text() {
       return 0
     fi
     # status 1 = non-retryable submit (Enter) failure — bail now, let the
-    # caller keep the durable copy queued. Only status 2 (paste fail / verify
-    # timeout) is retryable.
+    # caller keep the durable copy queued. Status 4 = landed but never
+    # submitted; retrying would paste a second copy. Only status 2 (paste fail
+    # / verify timeout) is retryable.
+    if [ "$status" -eq 4 ]; then
+      release_send_lock "$lock_dir"
+      echo "ERROR: send to $pane_id landed in the recipient's input line but was not submitted after one extra Enter. The text is left staged there and the durable copy stays queued; press Enter in that pane (\$session-chat:pane-health shows it as UNSUBMITTED)." >&2
+      return 4
+    fi
     if [ "$status" -ne 2 ]; then
       release_send_lock "$lock_dir"
       return "$status"
@@ -1660,17 +1794,27 @@ send_message() {
   # Durable copy first so a busy/failed paste is never a lost message.
   enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" "$target_messages_dir" || return 1
   local formatted="[from:${my_name} pane:${TMUX_PANE:-} id:${uid}] ${message} [id:${uid}]"
-  if send_text "$target_pane" "$formatted" "id:${uid}"; then
+  local send_rc=0
+  send_text "$target_pane" "$formatted" "id:${uid}" || send_rc=$?
+  if [ "$send_rc" -eq 0 ]; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     log_sent_message "$uid" "$my_name" "$target_name" "send" "live" "$message"
     return 0
   fi
   mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
+  if [ "$send_rc" -eq 4 ]; then
+    log_sent_message "$uid" "$my_name" "$target_name" "send" "unsubmitted" "$message"
+    return 4
+  fi
   log_sent_message "$uid" "$my_name" "$target_name" "send" "queued" "$message"
   return 3
 }
 
-# Set only after delivered or durable queued success; read by the dispatch wrapper.
+# Set only after delivered, durable queued, or unsubmitted (still queued)
+# results; read by the dispatch wrapper.
+# send_message / dispatch_message return 0 delivered, 3 queued (recipient
+# busy), 4 unsubmitted (the line sits staged in the recipient's input and its
+# durable copy stays queued; an idle recipient needs Enter), 1 hard failure.
 # shellcheck disable=SC2034
 DISPATCH_MESSAGE_ID=""
 # shellcheck disable=SC2034
@@ -1713,15 +1857,21 @@ dispatch_message() {
   line_count=$(printf '%s\n' "$message" | wc -l | tr -d ' ')
   # Durable copy first (points at the task file), then the live nudge.
   enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" "$target_messages_dir" || return 1
-  if send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" "id:${uid}"; then
+  local send_rc=0
+  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" "id:${uid}" || send_rc=$?
+  if [ "$send_rc" -eq 0 ]; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "live" "$message"
     DISPATCH_MESSAGE_ID="$uid"
     return 0
   fi
   mark_message_ready "$target_name" "$uid" "$target_messages_dir" || true
-  log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "queued" "$message"
   DISPATCH_MESSAGE_ID="$uid"
+  if [ "$send_rc" -eq 4 ]; then
+    log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "unsubmitted" "$message"
+    return 4
+  fi
+  log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "queued" "$message"
   return 3
 }
 

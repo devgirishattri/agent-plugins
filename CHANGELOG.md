@@ -1,5 +1,37 @@
 # Changelog
 
+## session-chat 0.17.21 — 2026-11-03
+
+- A send or dispatch now checks that the recipient actually submitted the
+  line. Before, a successful `tmux send-keys Enter` counted as delivered. Codex
+  reads fast input as a paste burst and turns an Enter that arrives inside the
+  burst into a newline, so a dispatch to an idle Codex pane could sit in its
+  input line forever while the sender reported success and pane-health showed
+  `ok`. After Enter the transport reads the recipient's input line (the last
+  `›` line for Codex, the `❯` box for Claude Code; the transcript copy above it
+  is ignored) and waits up to `SESSION_CHAT_SUBMIT_VERIFY_MS` (default 1000) for
+  the text to leave it.
+- If the text is still staged, the transport waits
+  `SESSION_CHAT_SUBMIT_RETRY_DELAY_MS` (default 250), presses Enter once more
+  and checks again. It never pastes a second copy. If the text is still
+  staged after that, send and dispatch return the new status 4,
+  "Unsubmitted …": the text stays in the input line and the durable copy stays
+  queued, so it is not lost. Broadcast counts these as `unsubmitted`. Do not
+  resend; press Enter in that pane.
+- pane-health reports a pane whose input line holds an unsubmitted
+  session-chat message as `UNSUBMITTED` (unsubmitted input). A pane whose send
+  lock is held is skipped, since a send in flight stages its text briefly.
+- The "landed" check now waits for the end of the payload, not only the first
+  `id:` marker. A payload that reached the TUI in two pieces matched the
+  header's marker early, and the Enter then submitted the header alone or
+  landed in the tail's paste burst. This affected Claude Code as well as Codex.
+- Claude Code submits on the first Enter, so on Claude Code panes the check
+  only confirms the submit and sends nothing extra. Shells, paste placeholders
+  and unrecognized screens keep the old behavior. `SESSION_CHAT_SUBMIT_VERIFY_MS=0`
+  turns the check off.
+- Same change in the Claude and Codex copies. A sender on 0.17.20 still
+  reports these sends as delivered, so update both providers together.
+
 ## session-workspace 0.12.5 — 2026-11-03
 
 - `harness-status` now prints the strict-v1 role floor before the guard
