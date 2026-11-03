@@ -17,7 +17,7 @@ Every plugin below ships for both providers at the same version number.
 | `knowledge` | 0.5.10 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.12.5 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
-| `session-walkthrough` | 0.2.1 | Walk users through session changes with a live in-browser overlay tour; on request, validate visual provenance and render recorded walkthrough reports |
+| `session-walkthrough` | 0.3.0 | Walk users through session changes with a live in-browser overlay tour |
 
 This table is the fifth place a plugin version is written down, after the two
 plugin manifests and the two marketplace files. `scripts/validate-release.sh`
@@ -34,8 +34,7 @@ rather than assumed: the `session-scheduler` Claude suite passes 81/81 under 3.2
 |------------|-----------|------------------|
 | `jq` | `session-scheduler`, `session-workspace` | Hard. Both refuse to run without it. |
 | `python3`, `git` | `session-scheduler` contracts | Required for contracted verification; legacy tasks retain existing dependencies. |
-| `python3`, `git` | `session-walkthrough` | Required for validation, rendering and source snapshots; initial local verification is on macOS. |
-| `node` | `session-walkthrough` tests | Required to run the live tour overlay tests (`node:test`, no packages). The tour itself runs in the browser. |
+| `node`, `python3` | `session-walkthrough` tests | Required to run the plugin suite and the live tour overlay tests (`node:test`, no packages). The tour itself runs in the browser and needs neither. |
 | `python3`, `gh` | `session-workspace` PR status | Python is required; live GitHub reads additionally require authenticated `gh`. |
 | `python3`, `bash`, `tmux`, `jq`, `git`, `rg` | Scheduler verification pilot | Required by the source-checkout runner; not an installed helper. |
 | `jq` | `chronos` | Optional. Claude falls back to hand-built JSON; the Codex build never uses jq. |
@@ -222,39 +221,10 @@ does any real save, and Close removes every trace. See the
 and the walkable [example](plugins/session-walkthrough/examples/live-tour/README.md),
 a synthetic demo page with a nine-step tour.
 
-The recorded bundle is used only on explicit request ("recorded walkthrough",
-"evidence bundle", "manifest").
-Use `scripts/walkthrough.sh` to record source scope (`scope start` and `scope
-end`), validate a provenance manifest, and render a portable local HTML report.
-Python 3 and Git are required. The helpers keep coverage gaps, unavailable
-baselines and commit-only build bindings visible; observations are not test
-results or approval. See the [walkthrough skill](plugins/session-walkthrough/skills/session-walkthrough/SKILL.md)
-for arguments and authority boundaries.
-
-The bundle mode provides deterministic local report helpers and synthetic fixtures.
-Capture tools, workspace configuration and orchestration integration remain
-pending. No web or native capture pilot has been recorded; descriptor presence
-does not establish tested target support. No hooks or automatic uploads run.
-
-`render` and `scope` write only inside a git-ignored run directory within the
-repository, refusing symlink components and unsafe destinations. They never
-edit ignore rules. Normal review uses `validate --run-dir DIR` to re-derive
-committed changes; explicit `--manifest FILE` validation is read-only fixture
-mode and trusts the supplied history. Rendering with that option still enforces
-write containment. Reports retain relative media links and inline captions;
-browser playback remains a pilot check.
-
-These environment-only settings are read per invocation; no restart is needed.
-They are output settings, not launch-inherited stores.
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `SESSION_WALKTHROUGH_OUTPUT_ROOT` | `.tmp/walkthroughs` | Repository-relative output root for scope runs; must be inside the repository and git-ignored |
-| `SESSION_WALKTHROUGH_FINGERPRINT_MAX_BYTES` | `8388608` | Largest file hashed into a snapshot; larger files retain an explicit omission |
-| `SESSION_WALKTHROUGH_LOCK_TIMEOUT_SECS` | `10` | Seconds to wait for the run-directory writer lock before refusing |
-
-Invalid numeric settings fall back to their defaults. Reports are retained
-until deliberately removed. Rollback disables the plugin; prior reports remain.
+The plugin makes no recordings: no screenshots, clips, manifests or report
+pages. It has no settings, registers no hooks and uploads nothing. See the
+[walkthrough skill](plugins/session-walkthrough/skills/session-walkthrough/SKILL.md)
+for the procedure and authority boundaries.
 
 ### chronos
 
