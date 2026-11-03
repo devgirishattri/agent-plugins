@@ -1,5 +1,26 @@
 # Changelog
 
+## session-walkthrough 0.3.0 — 2026-11-03
+
+- **Recorded bundle removed. The live tour is the only mode.** Every
+  walkthrough request runs the live overlay tour in the already-running
+  browser. A request for a recorded walkthrough or an evidence bundle gets
+  a plain answer that the plugin offers only the live tour.
+- Removed `scripts/walkthrough.sh` and `walkthrough.py` (the `validate`,
+  `render` and `scope` subcommands), `manifest.schema.json`,
+  `descriptor.schema.json`, the capture-target descriptors, the `WT-*` rule
+  fixtures, and the `adapters`, `manifest`, `output`, `receipts` and
+  `workspace-integration` references. The `SESSION_WALKTHROUGH_*` settings
+  are gone with them. No capture pilot was ever recorded, so no supported
+  capture target is lost.
+- The plugin suite now checks the manifest, the skill, its links, the overlay
+  `node:test` suite and the example, and fails if a shipped file names a
+  removed bundle helper. It no longer needs `git`; it still needs `python3`
+  and `node`.
+- Migration: none for the live tour. Bundles recorded under
+  `.tmp/walkthroughs/` stay where they are, but this version cannot validate
+  or re-render them; keep 0.2.1 installed if you still need to.
+
 ## session-chat 0.17.21 — 2026-11-03
 
 - A send or dispatch now checks that the recipient actually submitted the
