@@ -3462,6 +3462,9 @@ _FLOOR_TO_MASTER = (
 )
 _FLOOR_TO_PANES = ("routing", "outbound coordination only through the selected helper, to configured panes",
                    ("routing.master",), (("OUTBOUND_HELPER_BASENAMES", "outbound helpers"),))
+# Child panes never run start/stop/restart/reconcile/install/browser-config,
+# whether through a helper, the `workspace` dispatcher on PATH or a copy.
+_FLOOR_LIFECYCLE = ("lifecycle", "workspace lifecycle verbs denied by any route", ("coordination.write",), ())
 ROLE_FLOOR = {
     "reviewer": (
         ("readonly", "edit family denied, except this pane's own message drafts", ("reviewer.readonly", "coordination.draft"),
@@ -3470,8 +3473,8 @@ ROLE_FLOOR = {
          ("reviewer.shell", "reviewer.command", "reviewer.git", "reviewer.path", "reviewer.sed", "reviewer.search",
           "reviewer.symlink_follow", "reviewer.find", "reviewer.tail", "reviewer.sort", "reviewer.file_list"),
          (("READ_COMMANDS", "read commands"), ("READ_GIT", "git read subcommands"))),
-    ) + _FLOOR_TO_MASTER,
-    "executor": _FLOOR_CONTAINMENT + _FLOOR_TO_MASTER,
+    ) + _FLOOR_TO_MASTER + (_FLOOR_LIFECYCLE,),
+    "executor": _FLOOR_CONTAINMENT + _FLOOR_TO_MASTER + (_FLOOR_LIFECYCLE,),
     "orchestrator": (
         ("child_write", "no edit or mutating shell against a child checkout", ("orchestrator.child_write",), ()),
         ("push", "no git push", ("orchestrator.push",), ()),
@@ -3509,6 +3512,7 @@ _PROBE_TO_MASTER = (
     ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
     ("shell", "routing.master", "tmux send-keys", "tmux send-keys -t probe probe"),
 )
+_PROBE_LIFECYCLE = ("shell", "coordination.write", "workspace start through the PATH dispatcher", "workspace start probe")
 _PROBE_DRAFTS = ("edit_one", "coordination.draft", "Edit a message-store file that is not this pane's draft", "{messages}")
 _PROBE_CONTAINMENT = (
     ("edit", "executor.containment", "edit outside the pane checkout", "{outside}"),
@@ -3529,8 +3533,8 @@ FLOOR_PROBES = {
         ("shell", "reviewer.shell", "write redirection", "ls > {probe}"),
         ("shell", "reviewer.sed", "sed", "sed -n 1p {probe}"),
         ("shell", "reviewer.path", "read outside the pane's read roots", "cat {outside}"),
-    ) + _PROBE_TO_MASTER,
-    "executor": _PROBE_CONTAINMENT + _PROBE_TO_MASTER,
+    ) + _PROBE_TO_MASTER + (_PROBE_LIFECYCLE,),
+    "executor": _PROBE_CONTAINMENT + _PROBE_TO_MASTER + (_PROBE_LIFECYCLE,),
     "orchestrator": (
         ("edit", "orchestrator.child_write", "edit inside a child checkout", "{child}"),
         ("edit_one", "allow", "Edit in the pane's own checkout", "{probe}"),

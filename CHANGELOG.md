@@ -44,7 +44,8 @@
   the `workspace` dispatcher on `PATH`, a copied dispatcher, or a script
   outside the cache. Every such route is now refused under
   `coordination.write`. Read verbs (`plan`, `status`, `doctor`) are
-  unchanged.
+  unchanged. `harness-status` lists this as the `lifecycle` floor clause
+  for executors and reviewers, and `--probe` checks it.
 - No config migration. Update both providers and restart agent panes so the
   new policy loads. To roll back, install the previous session-workspace
   release and remove any `idle_stop_minutes` keys, which older releases
