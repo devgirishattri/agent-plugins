@@ -549,6 +549,32 @@
       "description": "A reviewer command is not a bare read-only allowlisted PATH name."
     },
     {
+      "code": "hook.reviewer.date",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer date call sets the clock with -s, --set or a non-+FORMAT operand."
+    },
+    {
+      "code": "hook.reviewer.file",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer file call compiles a magic file with -C or --compile."
+    },
+    {
       "code": "hook.reviewer.file_list",
       "subjects": [
         "admission"
@@ -690,6 +716,19 @@
         "refused"
       ],
       "description": "A reviewer tail call follows a file and never terminates."
+    },
+    {
+      "code": "hook.reviewer.uniq",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer uniq call names an output operand that uniq would overwrite."
     },
     {
       "code": "hook.routing.master",

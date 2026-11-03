@@ -45,6 +45,8 @@ together and restart agents.
   in the command, and the shell branch is unchanged. Running a script file
   stays allowed, and script arguments such as `node server.js -p 3000` are
   not read as interpreter options.
+- The diagnostics registry adds `hook.reviewer.uniq`, `hook.reviewer.file`
+  and `hook.reviewer.date` for the DIAG line of the new denials.
 - `harness-status --probe` decides the new cases: reviewer `uniq` with one
   and two operands, `git reflog` and `git reflog expire`/`delete`, `file -C`
   and `date -s`; executor `python3 -c"print(1)"`, `node --eval=1` and a script
