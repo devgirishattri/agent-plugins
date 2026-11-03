@@ -169,6 +169,9 @@ def coordination_var_name(store):
                 else ($p.command // null) end),
               port: (if $browser != null and $s.id == $browser.session_id and $p.name == $browser_pane_name then $browser.port else ($p.port // null) end),
               browser: ($browser != null and $s.id == $browser.session_id and $p.name == $browser_pane_name),
+              # Opt-in idle stop (validated: service role, and a port or the
+              # browser pane). null means the pane runs until stopped.
+              idle_stop_minutes: ($p.idle_stop_minutes // null),
               agent: {
                 model: resolve_field($p.agent.model; $role.agent.model),
                 effort: resolve_field($p.agent.effort; $role.agent.effort),

@@ -38,12 +38,12 @@ the CLI contract string both entry points use for their compatibility check.
 | Verb | Signature | Mutates tmux? | Purpose |
 |---|---|---|---|
 | `doctor` | `workspace-doctor [--config PATH] [--json]` | Never | Read-only health check: tooling versions, config validity, plugin dependency versions, pane cwds, secrets-file gates, state-dir writability, runtime resolution, coordination-base drift, session-chat helper resolution. |
-| `plan` | `workspace-plan [TARGET\|all] [--config PATH] [--json]` | Never | Deterministic dry-run: resolves and prints exactly what `start` would do (sessions, panes, argv, env var *names*, grants) without touching tmux. |
-| `start` | `workspace-start [TARGET\|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]` | Yes | Creates only what is missing. A pane the engine already manages and is healthy is left alone (idempotent restart). |
-| `status` | `workspace-status [TARGET\|all] [--config PATH] [--json]` | Never | Reports session/pane/role/runtime/model/cwd/process/health for every planned pane. |
+| `plan` | `workspace-plan [TARGET\|all] [--config PATH] [--json] [--running]` | Never | Deterministic dry-run: resolves and prints exactly what `start` would do (sessions, panes, argv, env var *names*, grants) without touching tmux. `--running` adds a read-only `running` field per pane, the only form that reads tmux. |
+| `start` | `workspace-start [TARGET\|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]`<br>`workspace-start SESSION --pane NAME [--pane NAME...] [--config PATH] [--no-attach]` | Yes | Creates only what is missing. A pane the engine already manages and is healthy is left alone (idempotent restart). `--pane` starts only the named service panes; see "Single service panes on demand". |
+| `status` | `workspace-status [TARGET\|all] [--config PATH] [--json] [--pane NAME...]` | Never | Reports session/pane/role/runtime/model/cwd/process/health/running for every planned pane, one CDP health line per browser, and each idle-stop pane's watcher and last stop. |
 | `restart` | `workspace-restart [TARGET\|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` | Yes | `stop --confirmed` followed by `start`, for the same target. Unlike the old launchers, `restart` accepts `--no-save`. |
 | `reconcile` | `workspace-reconcile [TARGET\|all] [--config PATH] [--apply] [--adopt --confirmed]` | Only with `--apply` | Dry-run by default; `--apply` repairs missing/misnamed managed resources without respawning healthy panes. Use `--adopt --confirmed` to preview adoption, then add `--apply` to perform it; `start --adopt --confirmed` is the direct lifecycle alternative. |
-| `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. |
+| `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes and leaves the session running. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
 | `harness-status` | `harness-status [--config PATH] [--json] [--probe]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates), the strict-v1 role floor for this pane's role (every role outside a pane), the optional guard packs, and whether this pane's engine identity matches the validated plan. `--probe` decides this pane's built-in floor cases without running them and exits 1 on any unexpected decision. |
@@ -56,6 +56,74 @@ computation as the human-readable form, so the two can never disagree.
 `stop` also sends `Ctrl-C` to every managed, non-idle pane and waits
 `SESSION_WORKSPACE_STOP_GRACE_SECONDS` (default `5`) before force-killing the
 session, so an in-flight agent/service gets a chance to shut down cleanly.
+
+### Single service panes on demand (`--pane`)
+
+`workspace start SESSION --pane NAME` (repeatable) starts only the named
+service panes of one session, such as the debug browser or one dev server,
+without starting the rest of that session. If the session is not running it is
+created with only those panes; their declared commands run as in a full start.
+Panes that are already running are `[kept]`. A later full `workspace start
+SESSION` fills in the other panes and keeps the running ones.
+`workspace stop SESSION --pane NAME --confirmed` sends `Ctrl-C`, waits the
+grace period, closes only that pane, and leaves the session and its other
+panes running. Stopping the browser pane releases its port claim.
+
+- **Selection.** `NAME` is a pane name, or the part after `<project.id>-`
+  (`--pane browser` selects `example-browser`). Only role `service` panes can
+  be selected; agent panes are refused. `--pane` needs one explicit session,
+  never attaches, and is refused together with `--no-agents`,
+  `--no-services`, `--adopt` (start) or `--all`, `--no-save` (stop).
+  `split_tree` layouts are not built for a subset start and `retain_layout` is
+  neither restored nor saved, so a subset never overwrites the saved layout.
+- **Port safety.** Before it launches a dev-server pane (`port` plus
+  `command`), `start --pane` refuses when the port is already bound by any
+  other process and names the holder: `service port occupied before launch:
+  3001 (web) is held by pid 4242 (node); nothing was started for it.` A pane
+  this project already runs on that port is kept, not refused. The holder is
+  found with `lsof`, or on Linux from `/proc`; a holder this user cannot
+  inspect is reported with the `lsof` command to run. Full-session starts keep
+  the schema-v5 check they had.
+- **Idle stop.** A service pane with `idle_stop_minutes` (off by default) gets
+  a watcher when it starts, reported as `[idle-stop] ... armed (watcher pid
+  N)`. The watcher samples the pane's port every 30 seconds. For a dev
+  server, idle means no inbound connection to its `port` (an open HMR or
+  keep-alive connection is use). For the browser pane, idle means no CDP
+  commands to `127.0.0.1:<browser.port>`: an open connection that only sends
+  keepalive pings is idle (see below). After the whole window it runs
+  `workspace stop SESSION --pane NAME` and records why, for example
+  `idle: no CDP commands to 127.0.0.1:9326 for 30 minutes`. The watcher exits
+  when its pane closes for any other reason, and a restarted pane is never
+  stopped by an older watcher. A host where connections cannot be counted
+  (no `/proc` socket table and no `lsof`) never stops a pane for idleness. The
+  watcher needs `python3`.
+- **Run record.** Each selected pane has a record at
+  `${XDG_STATE_HOME:-$HOME/.local/state}/session-workspace/<project.id>/panes/<pane>.json`
+  with the watcher state, the last activity, and the last stop and its reason.
+  `workspace status SESSION --pane NAME` shows it as `idle stop:` and
+  `last stop:` lines.
+- **Browser health line.** `workspace status` prints one line per browser
+  pane before the per-session detail: `browser: example-browser
+  http://127.0.0.1:9326 — up (Chrome/131.0)  cdp_clients=1`, or `down` with
+  the `--pane` start command to run. Check it before a browser smoke.
+- **Browser idleness and chrome-devtools.** chrome-devtools-mcp opens one
+  DevTools websocket on its first tool call and holds it for its whole MCP
+  session, sending a 6-byte ping about every 30 seconds. Its cheapest tool
+  call sends about 150 bytes. So the watcher reads how many bytes each open
+  connection has received from its client, and a sample counts as use when
+  they sum to more than 32 bytes plus one byte per second since the previous
+  sample. The bytes come from Linux `sock_diag` (the source of `ss -ti`) or
+  macOS `nettop`. chrome-devtools-mcp reconnects by itself on its next call
+  after `workspace start SESSION --pane browser`, so the master does not
+  restart. Where per-socket bytes cannot be read, the browser falls back to
+  counting connections, and an open chrome-devtools connection then keeps it
+  up; `status` shows which with `observing traffic` or
+  `observing connections`.
+- **Harness.** Under strict-v1 the orchestrator may run exactly
+  `workspace-start.sh SESSION --pane NAME... [--no-attach] [--config PATH]`
+  and `workspace-stop.sh SESSION --pane NAME... --confirmed [--config PATH]`
+  through the trusted helper path, for configured service panes of that
+  session only. Executors and reviewers stay refused, by any route.
 
 ## Safety model
 
@@ -397,7 +465,13 @@ role floor is off. The floor:
   and files outside the workspace are not otherwise gated. Its shell is
   otherwise free. It owns `task-new`/`task-assign`
   (only to configured executor/reviewer panes), `tasks-clean`,
-  `messages-clean`, memory/docs writes, and every workspace mutator.
+  `messages-clean`, memory/docs writes, and every workspace mutator,
+  including the single-pane `workspace-start.sh SESSION --pane NAME` and
+  `workspace-stop.sh SESSION --pane NAME --confirmed` forms (configured
+  service panes of that session only). Executors and reviewers are refused
+  the lifecycle verbs (`start`, `stop`, `restart`, `reconcile`, `install`,
+  `browser-config`) by any route, including the `workspace` dispatcher on
+  `PATH`, under rule `coordination.write`.
 - **Unknown tools are allowed** for every role (`Read`, `Grep`, `Glob`,
   `WebFetch`, ...). Classification is by tool *name*, never by the shape of
   the payload, so the plugin is a floor, not a tool allowlist.
@@ -1043,9 +1117,11 @@ Lifecycle stays keyed on `browser.session_id`. `workspace start <session>` (or
 `all`) claims the port, starts every pane of that session, then waits for
 `/json/version`; `--no-services` suppresses the Chrome pane like any other
 service pane and skips the claim and the wait; `workspace stop <session>`
-releases the port. When Chrome shares a session with dev servers it can no
-longer be stopped or restarted on its own: `workspace restart <session>` bounces
-every pane in that session, and a failed sibling slot suppresses the readiness
+releases the port. When Chrome shares a session with dev servers, start or
+stop it on its own with `workspace start <session> --pane <browser pane>` and
+`workspace stop <session> --pane <browser pane> --confirmed` (see "Single
+service panes on demand"). `workspace restart <session>` still bounces every
+pane in that session, and a failed sibling slot suppresses the readiness
 wait and its `[ready]`/`[failed]` report. Because a `split_tree` layout with
 `only_when_fresh: true` is built only while the window has exactly one pane,
 moving Chrome into an already-running session requires stopping that session
@@ -1158,7 +1234,8 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].panes[].cwd` | string | no | session/window default | Relative (to `project.root`) or absolute working directory. Validated to resolve inside the project root; a missing directory is a hard validation error **unless** `optional: true`. |
 | `sessions[].panes[].optional` | boolean | no | `false` | A missing `cwd` for an optional pane is reported (INFO in `doctor`, "skipped" in `start`) rather than failing validation/the slot. |
 | `sessions[].panes[].command` | array of strings, min 1 item | no | (agent argv, or interactive shell) | For a `shell`-runtime (typically `service`-role) pane: literal argv to run instead of an interactive shell. A bare string command is rejected — it must be an array, so there's never a shell re-parsing step. |
-| `sessions[].panes[].port` | integer, 1-65535 | no | — | First-class metadata only (surfaced in `plan`/`status` output); does not itself change what gets launched or add a `--port` flag anywhere. |
+| `sessions[].panes[].port` | integer, 1-65535 | no | — | First-class metadata (surfaced in `plan`/`status` output); does not change what gets launched or add a `--port` flag anywhere. A pane with `port` and `command` is refused by `start --pane` (and by a schema-v5 start) while another process holds the port, naming the holder's PID. |
+| `sessions[].panes[].idle_stop_minutes` | integer, 1-1440 | no | — (never stopped) | `service` panes only, and only one with a port to watch: the browser pane or a pane with `port`. A watcher stops the pane after this many minutes with no inbound connection to that port (for the browser, no CDP commands; keepalive pings on an open connection do not count) and records why. See "Single service panes on demand". |
 | `sessions[].panes[].read_paths` | array of ≤16 strings | no | — (no extra reads) | Active strict-v1 **reviewer** or **executor** panes only (schema v2–5). Existing files/directories the pane's shell may read in addition to its cwd; see "Reviewer read paths" and "Executor read paths". Any other role, or an inactive harness, is a validation error. |
 | `sessions[].panes[].agent.*` | see `roles.<r>.agent.*` | no | role-level value, or no flag | Pane-level override of `model`/`effort`/`profile`/`permission_mode`, taking precedence over the role's own value. |
 

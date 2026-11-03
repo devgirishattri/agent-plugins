@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "project": {
+    "id": "example",
+    "display_name": "Example services started one pane at a time",
+    "root": "."
+  },
+  "runtimes": {},
+  "roles": {
+    "service": {
+      "runtime": "shell",
+      "env_group": "none"
+    }
+  },
+  "stores": {
+    "pin": []
+  },
+  "browser": {
+    "session_id": "services",
+    "pane_name": "${PROJECT_ID}-browser",
+    "port": 9326,
+    "chrome_program": "true",
+    "mcp_package": "chrome-devtools-mcp@1.2.3"
+  },
+  "sessions": [
+    {
+      "id": "services",
+      "name": "${PROJECT_ID}-services",
+      "layout": {
+        "kind": "standard",
+        "name": "tiled"
+      },
+      "panes": [
+        {
+          "name": "${PROJECT_ID}-browser",
+          "role": "service",
+          "cwd": ".",
+          "idle_stop_minutes": 30
+        },
+        {
+          "name": "${PROJECT_ID}-web",
+          "role": "service",
+          "cwd": ".",
+          "command": ["true", "dev"],
+          "port": 3001,
+          "idle_stop_minutes": 20
+        },
+        {
+          "name": "${PROJECT_ID}-api",
+          "role": "service",
+          "cwd": ".",
+          "command": ["true", "dev"],
+          "port": 3002
+        }
+      ]
+    }
+  ],
+  "behavior": {
+    "default_start_target": "services",
+    "attach": "never"
+  }
+}

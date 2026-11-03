@@ -289,7 +289,7 @@ else
 fi
 
 echo "== golden fixtures validate clean =="
-for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3 orchestration-v4 browser browser-multipane; do
+for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3 orchestration-v4 browser browser-multipane services-on-demand; do
   OUT="$(bash "$HERE/validate-config.sh" --config "$HERE/fixtures/valid/$fx.json" 2>&1)"
   STATUS=$?
   if [ "$STATUS" -eq 0 ] && printf '%s' "$OUT" | grep -q "^OK:"; then
@@ -1140,6 +1140,9 @@ declare -a RULE_FIXTURES=(
   "browser-selected-pane-command.json:browser session pane must omit command"
   "browser-selected-pane-port.json:browser session pane must omit port"
   "browser-selected-pane-runtime.json:browser session pane role must use the built-in shell runtime"
+  "idle-stop-not-service.json:idle_stop_minutes applies only to service panes"
+  "idle-stop-no-port.json:idle_stop_minutes needs a port to watch"
+  "idle-stop-range.json:idle_stop_minutes must be an integer in 1..1440"
 )
 for entry in "${RULE_FIXTURES[@]}"; do
   fx="${entry%%:*}"
@@ -3390,6 +3393,342 @@ else
   fail "browser stop: stopping the shared services session releases the DevTools port claim" \
     "owner=$(cat "$SWT_BR_OWNER" 2>/dev/null) sessions=$(SWT_TMUX list-sessions -F '#{session_name}' 2>/dev/null | tr '\n' ' ')"
 fi
+
+# --- 12y. single service panes on demand (--pane) --------------------------
+# A coordinator starts ONE service (a dev server or the debug browser) without
+# the rest of its services session, stops it again, and an opt-in idle window
+# stops it by itself. Covered here against the real engine and a private tmux
+# server:
+#   * start --pane creates the session with only the named panes, runs their
+#     declared commands, claims/awaits the DevTools port only for a selected
+#     browser, and never attaches;
+#   * status/plan report which panes are running, plus the browser health line;
+#   * a dev server whose port is held by another process is refused, nothing
+#     is created for it, and the holder's PID is named;
+#   * stop --pane stops only the named pane, records when and why, and
+#     releases a stopped browser's port claim;
+#   * idle stop: CDP commands keep the browser up; a connection that stays
+#     open sending only keepalive pings (as chrome-devtools-mcp holds one)
+#     does not, so the watcher stops the pane and records why; where only
+#     connections can be counted, a held connection keeps it up instead;
+#     a dev server with no inbound connections stops the same way;
+#   * a split_tree session first created by --pane keeps every pane's name
+#     when the rest of the session is started later.
+SWT_PROJ_OD="$SWT_ROOT/sample-ondemand"
+SWT_OD_BPORT=47341
+SWT_OD_WPORT=47342
+SWT_OD_CACHE="$SWT_ROOT/ondemand-cache"
+mkdir -p "$SWT_PROJ_OD/.agent-workspace" "$SWT_OD_CACHE"
+cat > "$SWT_PROJ_OD/.agent-workspace/workspace.json" <<EOF
+{"schema_version":1,"project":{"id":"sample-ondemand","root":"."},
+"runtimes":{},
+"roles":{"service":{"runtime":"shell","env_group":"none"},"tooling":{"runtime":"shell","env_group":"none"}},
+"stores":{"pin":[]},
+"behavior":{"default_start_target":"all","attach":"never","stop_scope":"selected","session_chat_helper":{"resolve":"never"}},
+"browser":{"session_id":"services","pane_name":"sample-ondemand-browser","port":$SWT_OD_BPORT,"chrome_program":"$SWT_BIN/chrome-stub","mcp_package":"chrome-devtools-mcp@1.2.3"},
+"sessions":[{"id":"services","name":"sample-ondemand-services","layout":{"kind":"standard","name":"tiled"},"panes":[
+  {"name":"sample-ondemand-shell","role":"service","cwd":"."},
+  {"name":"sample-ondemand-browser","role":"service","cwd":".","idle_stop_minutes":2},
+  {"name":"sample-ondemand-web","role":"service","cwd":".","command":["python3","-m","http.server","$SWT_OD_WPORT","--bind","127.0.0.1"],"port":$SWT_OD_WPORT,"idle_stop_minutes":2},
+  {"name":"sample-ondemand-tool","role":"tooling","cwd":"."}
+]}]}
+EOF
+SWT_CFG_OD="$SWT_PROJ_OD/.agent-workspace/workspace.json"
+SWT_OD_WIN='=sample-ondemand-services:0'
+SWT_OD_OWNER="$SWT_STATE/session-workspace/browser-ports/$SWT_OD_BPORT"
+SWT_OD_RECORDS="$SWT_STATE/session-workspace/sample-ondemand/panes"
+# One configured idle minute lasts SWT_OD_SPM seconds here, sampled every
+# 0.2s, so the idle windows below take seconds, not minutes. The default long
+# window keeps the watchers armed by the non-idle tests out of the way.
+swrun_od() {
+  env -u TMUX TMUX_TMPDIR="$SWT_TMPDIR" PATH="$SWT_BIN:$PATH" XDG_STATE_HOME="$SWT_STATE" \
+    XDG_CACHE_HOME="$SWT_OD_CACHE" SESSION_WORKSPACE_STOP_GRACE_SECONDS=1 \
+    SESSION_WORKSPACE_IDLE_SECONDS_PER_MINUTE="${SWT_OD_SPM:-600}" SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS=0.2 \
+    SESSION_WORKSPACE_IDLE_OBSERVE="${SWT_OD_OBSERVE:-}" \
+    bash "$@"
+}
+swt_od_pane() {
+  SWT_TMUX list-panes -t "$SWT_OD_WIN" -F "#{pane_id}	#{@session_workspace_pane}" 2>/dev/null | awk -F'\t' -v n="$1" '$2 == n {print $1}'
+}
+swt_od_names() {
+  SWT_TMUX list-panes -t "$SWT_OD_WIN" -F '#{@session_workspace_pane}' 2>/dev/null | sort | tr '\n' ' '
+}
+# swt_od_wait_gone NAME SECONDS — true once NAME has no pane in the window.
+swt_od_wait_gone() {
+  local i=0 limit=$(( $2 * 10 ))
+  while [ "$i" -lt "$limit" ]; do
+    [ -z "$(swt_od_pane "$1")" ] && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane browser --config "$SWT_CFG_OD" 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_od_names)" = "sample-ondemand-browser " ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[ready]  browser DevTools endpoint http://127.0.0.1:$SWT_OD_BPORT" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "attach: skipped (--pane starts services in the background)" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[idle-stop] sample-ondemand-services / sample-ondemand-browser — idle stop armed" &&
+   [ "$(sed -n '1p' "$SWT_OD_OWNER" 2>/dev/null)" = "sample-ondemand" ]; then
+  pass "start --pane browser: creates the session with only the browser pane, launches Chrome, claims and awaits its port, never attaches"
+else
+  fail "start --pane browser: creates the session with only the browser pane, launches Chrome, claims and awaits its port, never attaches" \
+    "status=$SWT_STATUS names=[$(swt_od_names)] owner=$(cat "$SWT_OD_OWNER" 2>/dev/null) output=$SWT_OUT"
+fi
+
+SWT_OD_STATUS="$(swrun_od "$HERE/workspace-status.sh" services --config "$SWT_CFG_OD" --json 2>&1)"
+if printf '%s' "$SWT_OD_STATUS" | jq -e --argjson port "$SWT_OD_BPORT" '
+  (.[] | select(.pane == "sample-ondemand-browser") | .running == true and .endpoint.up == true and .endpoint.url == "http://127.0.0.1:\($port)"
+     and .endpoint.browser == "chrome-stub/1.0" and .idle.minutes == 2 and .idle.watcher == "watching") and
+  all(.[] | select(.pane != "sample-ondemand-browser"); .running == false and .health == "missing")
+' >/dev/null 2>&1; then
+  pass "status --json: only the started pane is running; the browser row carries its endpoint and armed idle watcher"
+else
+  fail "status --json: only the started pane is running; the browser row carries its endpoint and armed idle watcher" "$SWT_OD_STATUS"
+fi
+SWT_OUT="$(swrun_od "$HERE/workspace-status.sh" services --pane browser --config "$SWT_CFG_OD" 2>&1)"
+if printf '%s' "$SWT_OUT" | grep -Eq "^browser: sample-ondemand-browser http://127.0.0.1:$SWT_OD_BPORT — up \(chrome-stub/1.0\)  cdp_clients=0$" &&
+   [ "$(printf '%s' "$SWT_OUT" | grep -c '^  pane: ')" = "1" ] &&
+   printf '%s' "$SWT_OUT" | grep -q 'health=healthy  running=yes  readiness=ready'; then
+  pass "status --pane: one health line for the DevTools endpoint, and only the selected pane is reported"
+else
+  fail "status --pane: one health line for the DevTools endpoint, and only the selected pane is reported" "$SWT_OUT"
+fi
+
+SWT_OD_PLAN="$(swrun_od "$HERE/workspace-plan.sh" services --config "$SWT_CFG_OD" --json --running 2>&1)"
+SWT_OD_PLAIN="$(swrun_od "$HERE/workspace-plan.sh" services --config "$SWT_CFG_OD" --json 2>&1)"
+if printf '%s' "$SWT_OD_PLAN" | jq -e '[.sessions[0].panes[] | {(.name): .running}] | add == {"sample-ondemand-shell":false,"sample-ondemand-browser":true,"sample-ondemand-web":false,"sample-ondemand-tool":false}' >/dev/null 2>&1 &&
+   printf '%s' "$SWT_OD_PLAIN" | jq -e 'all(.sessions[].panes[]; has("running") | not) and (.sessions[0].panes[1].idle_stop_minutes == 2)' >/dev/null 2>&1; then
+  pass "plan --json --running marks running panes; plain plan --json stays tmux-free (no running key)"
+else
+  fail "plan --json --running marks running panes; plain plan --json stays tmux-free (no running key)" "running=$SWT_OD_PLAN plain=$SWT_OD_PLAIN"
+fi
+
+# Port safety: a foreign listener (standing in for an executor's own `pnpm
+# dev`) holds the dev server's port. Nothing may be created for the pane.
+python3 -c 'import socket,sys,time
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(30)' "$SWT_OD_WPORT" &
+SWT_OD_HOLDER=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  python3 "$HERE/service-ports.py" probe "$SWT_OD_WPORT" | grep -qx listening && break
+  sleep 0.1
+done
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane web --config "$SWT_CFG_OD" 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -ne 0 ] && [ -z "$(swt_od_pane sample-ondemand-web)" ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "service port occupied before launch: $SWT_OD_WPORT (sample-ondemand-web) is held by pid $SWT_OD_HOLDER (python3)"; then
+  pass "start --pane web: a port held by another process is refused, nothing is created, and the holder's PID is named"
+else
+  fail "start --pane web: a port held by another process is refused, nothing is created, and the holder's PID is named" \
+    "status=$SWT_STATUS holder=$SWT_OD_HOLDER names=[$(swt_od_names)] output=$SWT_OUT"
+fi
+kill "$SWT_OD_HOLDER" 2>/dev/null
+wait "$SWT_OD_HOLDER" 2>/dev/null
+
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane web --config "$SWT_CFG_OD" 2>&1)"
+SWT_STATUS=$?
+SWT_OD_WEB="$(swt_od_pane sample-ondemand-web)"
+[ -n "$SWT_OD_WEB" ] && swt_wait_cmd "$SWT_OD_WEB" "python3"
+SWT_OUT2="$(swrun_od "$HERE/workspace-start.sh" services --pane web --config "$SWT_CFG_OD" 2>&1)"
+SWT_STATUS2=$?
+if [ "$SWT_STATUS" -eq 0 ] && [ "$SWT_STATUS2" -eq 0 ] &&
+   [ "$(swt_od_names)" = "sample-ondemand-browser sample-ondemand-web " ] &&
+   printf '%s' "$SWT_OUT2" | grep -Fq "[kept] sample-ondemand-services / sample-ondemand-web" &&
+   [ "$(swt_od_pane sample-ondemand-web)" = "$SWT_OD_WEB" ]; then
+  pass "start --pane web: once the port is free the dev server starts beside the browser; a repeat is kept, and its own port is not a conflict"
+else
+  fail "start --pane web: once the port is free the dev server starts beside the browser; a repeat is kept, and its own port is not a conflict" \
+    "status=$SWT_STATUS/$SWT_STATUS2 names=[$(swt_od_names)] out=$SWT_OUT out2=$SWT_OUT2"
+fi
+
+SWT_OD_ERRS=""
+for swt_od_args in "services --pane nope" "services --pane tool" "--pane web" "all --pane web" "services --pane web --no-services" "services --pane"; do
+  # shellcheck disable=SC2086
+  if swrun_od "$HERE/workspace-start.sh" $swt_od_args --config "$SWT_CFG_OD" >/dev/null 2>&1; then
+    SWT_OD_ERRS="$SWT_OD_ERRS [$swt_od_args accepted]"
+  fi
+done
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane tool --config "$SWT_CFG_OD" 2>&1)"
+if [ -z "$SWT_OD_ERRS" ] && printf '%s' "$SWT_OUT" | grep -Fq "pane sample-ondemand-tool has role tooling; --pane selects service panes only" &&
+   [ "$(swt_od_names)" = "sample-ondemand-browser sample-ondemand-web " ]; then
+  pass "start --pane: unknown or non-service panes, a missing session, all, --no-services and a bare --pane are refused without touching tmux"
+else
+  fail "start --pane: unknown or non-service panes, a missing session, all, --no-services and a bare --pane are refused without touching tmux" \
+    "errs=$SWT_OD_ERRS names=[$(swt_od_names)] out=$SWT_OUT"
+fi
+
+SWT_OUT="$(swrun_od "$HERE/workspace-stop.sh" services --pane sample-ondemand-web --confirmed --config "$SWT_CFG_OD" 2>&1)"
+SWT_STATUS=$?
+SWT_OD_STATUS="$(swrun_od "$HERE/workspace-status.sh" services --config "$SWT_CFG_OD" --json 2>&1)"
+if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_od_names)" = "sample-ondemand-browser " ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[stopped] sample-ondemand-services / sample-ondemand-web — workspace stop --pane" &&
+   printf '%s' "$SWT_OD_STATUS" | jq -e '(.[] | select(.pane == "sample-ondemand-web") | .running == false and .last_stop.reason == "workspace stop --pane")
+     and (.[] | select(.pane == "sample-ondemand-browser") | .running == true)' >/dev/null 2>&1; then
+  pass "stop --pane web: only the dev server stops (full pane name accepted); status records when and why"
+else
+  fail "stop --pane web: only the dev server stops (full pane name accepted); status records when and why" \
+    "status=$SWT_STATUS names=[$(swt_od_names)] out=$SWT_OUT status_json=$SWT_OD_STATUS"
+fi
+if ! swrun_od "$HERE/workspace-stop.sh" services --pane browser --config "$SWT_CFG_OD" >/dev/null 2>&1 &&
+   ! swrun_od "$HERE/workspace-stop.sh" services --pane browser --all --confirmed --config "$SWT_CFG_OD" >/dev/null 2>&1 &&
+   swrun_od "$HERE/workspace-stop.sh" services --pane browser --confirmed --expect-pane-id %999999 --config "$SWT_CFG_OD" 2>&1 | grep -Fq "restarted since it was judged idle" &&
+   [ "$(swt_od_names)" = "sample-ondemand-browser " ]; then
+  pass "stop --pane: refused without --confirmed or with --all; the idle watcher's pane-id guard leaves a restarted pane running"
+else
+  fail "stop --pane: refused without --confirmed or with --all; the idle watcher's pane-id guard leaves a restarted pane running" "names=[$(swt_od_names)]"
+fi
+
+SWT_OUT="$(swrun_od "$HERE/workspace-stop.sh" services --pane browser --confirmed --config "$SWT_CFG_OD" 2>&1)"
+if [ ! -e "$SWT_OD_OWNER" ] && ! SWT_TMUX has-session -t '=sample-ondemand-services' 2>/dev/null; then
+  pass "stop --pane browser: stopping the last pane ends the session and releases the DevTools port claim"
+else
+  fail "stop --pane browser: stopping the last pane ends the session and releases the DevTools port claim" "owner=$(cat "$SWT_OD_OWNER" 2>/dev/null) out=$SWT_OUT"
+fi
+
+# Idle stop, browser: 2 configured minutes = 4 s. A client that sends
+# command-sized traffic (200 bytes every 0.5 s for 6 s) keeps the pane up past
+# the window. It then holds its connection open sending only 6-byte pings,
+# the way chrome-devtools-mcp holds one between tool calls, and the watcher
+# stops the pane while that connection is still open. Needs per-socket
+# traffic (Linux sock_diag, macOS nettop); a host that can only count
+# connections is covered by the next case.
+SWT_OD_SPM=2
+export SWT_OD_SPM
+SWT_OD_MODE="$(python3 "$HERE/service-ports.py" activity "$SWT_OD_BPORT" 2>/dev/null | jq -r '.mode // "none"' 2>/dev/null)"
+if [ "$SWT_OD_MODE" = "traffic" ]; then
+  SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane browser --config "$SWT_CFG_OD" 2>&1)"
+  python3 -c 'import socket,sys,time
+s=socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+for _ in range(12):
+    s.send(b"x" * 200); time.sleep(0.5)
+try:
+    for _ in range(24):
+        s.send(b"p" * 6); time.sleep(0.5)
+except OSError:
+    time.sleep(12)
+s.close()' "$SWT_OD_BPORT" &
+  SWT_OD_CLIENT=$!
+  sleep 5
+  SWT_OD_ALIVE="$(swt_od_pane sample-ondemand-browser)"
+  SWT_OD_LIVE="$(swrun_od "$HERE/workspace-status.sh" services --pane browser --config "$SWT_CFG_OD" --json 2>/dev/null)"
+  if [ -n "$SWT_OD_ALIVE" ] &&
+     printf '%s' "$SWT_OD_LIVE" | jq -e '.[0].endpoint.cdp_clients == 1 and .[0].idle.observing == "traffic"' >/dev/null 2>&1 &&
+     swt_od_wait_gone sample-ondemand-browser 10 && kill -0 "$SWT_OD_CLIENT" 2>/dev/null; then
+    SWT_OD_STATUS="$(swrun_od "$HERE/workspace-status.sh" services --config "$SWT_CFG_OD" --json 2>&1)"
+    if printf '%s' "$SWT_OD_STATUS" | jq -e --arg r "idle: no CDP commands to 127.0.0.1:$SWT_OD_BPORT for 2 minutes" \
+         '.[] | select(.pane == "sample-ondemand-browser") | .running == false and .last_stop.reason == $r' >/dev/null 2>&1 &&
+       [ ! -e "$SWT_OD_OWNER" ]; then
+      pass "idle stop (browser): CDP commands keep it up past the window; a held-open connection sending only pings does not, and the stop is recorded"
+    else
+      fail "idle stop (browser): CDP commands keep it up past the window; a held-open connection sending only pings does not, and the stop is recorded" \
+        "owner=$(cat "$SWT_OD_OWNER" 2>/dev/null) status=$SWT_OD_STATUS"
+    fi
+  else
+    fail "idle stop (browser): CDP commands keep it up past the window; a held-open connection sending only pings does not, and the stop is recorded" \
+      "alive_at_5s=[$SWT_OD_ALIVE] live=$SWT_OD_LIVE names=[$(swt_od_names)] record=$(cat "$SWT_OD_RECORDS/sample-ondemand-browser.json" 2>/dev/null) start=$SWT_OUT"
+  fi
+  kill "$SWT_OD_CLIENT" 2>/dev/null
+  wait "$SWT_OD_CLIENT" 2>/dev/null
+else
+  pass "idle stop (browser, traffic): skipped, this host can only count connections (activity mode: $SWT_OD_MODE)"
+fi
+
+# Idle stop, browser, connections only (SESSION_WORKSPACE_IDLE_OBSERVE, the
+# fallback where traffic cannot be read): a held connection keeps the pane up
+# past the window; after it closes, the watcher stops the pane.
+SWT_OD_OBSERVE=connections
+export SWT_OD_OBSERVE
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane browser --config "$SWT_CFG_OD" 2>&1)"
+python3 -c 'import socket,sys,time
+s=socket.create_connection(("127.0.0.1", int(sys.argv[1]))); time.sleep(6); s.close()' "$SWT_OD_BPORT" &
+SWT_OD_CLIENT=$!
+sleep 5
+SWT_OD_ALIVE="$(swt_od_pane sample-ondemand-browser)"
+SWT_OD_CLIENTS="$(swrun_od "$HERE/workspace-status.sh" services --pane browser --config "$SWT_CFG_OD" --json 2>/dev/null | jq -r '.[0].endpoint.cdp_clients')"
+wait "$SWT_OD_CLIENT" 2>/dev/null
+if [ -n "$SWT_OD_ALIVE" ] && [ "$SWT_OD_CLIENTS" = "1" ] && swt_od_wait_gone sample-ondemand-browser 10; then
+  SWT_OD_STATUS="$(swrun_od "$HERE/workspace-status.sh" services --config "$SWT_CFG_OD" --json 2>&1)"
+  if printf '%s' "$SWT_OD_STATUS" | jq -e --arg r "idle: no CDP client connections to 127.0.0.1:$SWT_OD_BPORT for 2 minutes" \
+       '.[] | select(.pane == "sample-ondemand-browser") | .running == false and .last_stop.reason == $r' >/dev/null 2>&1 &&
+     [ ! -e "$SWT_OD_OWNER" ]; then
+    pass "idle stop (browser, connections only): a held connection keeps it up past the window; with no client the watcher stops it and records why"
+  else
+    fail "idle stop (browser, connections only): a held connection keeps it up past the window; with no client the watcher stops it and records why" \
+      "owner=$(cat "$SWT_OD_OWNER" 2>/dev/null) status=$SWT_OD_STATUS"
+  fi
+else
+  fail "idle stop (browser, connections only): a held connection keeps it up past the window; with no client the watcher stops it and records why" \
+    "alive_at_5s=[$SWT_OD_ALIVE] clients=[$SWT_OD_CLIENTS] names=[$(swt_od_names)] record=$(cat "$SWT_OD_RECORDS/sample-ondemand-browser.json" 2>/dev/null) start=$SWT_OUT"
+fi
+SWT_OD_OBSERVE=""
+
+# Idle stop, dev server: nothing ever connects, so it stops after the window.
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane web --config "$SWT_CFG_OD" 2>&1)"
+if [ -n "$(swt_od_pane sample-ondemand-web)" ] && swt_od_wait_gone sample-ondemand-web 12 &&
+   jq -e --arg r "idle: no inbound connections to port $SWT_OD_WPORT for 2 minutes" '.state == "stopped" and .stop_reason == $r' \
+     "$SWT_OD_RECORDS/sample-ondemand-web.json" >/dev/null 2>&1; then
+  pass "idle stop (dev server): no inbound connections for the window stops the pane and records why"
+else
+  fail "idle stop (dev server): no inbound connections for the window stops the pane and records why" \
+    "names=[$(swt_od_names)] record=$(cat "$SWT_OD_RECORDS/sample-ondemand-web.json" 2>/dev/null) start=$SWT_OUT"
+fi
+
+# nettop parsing (macOS traffic source), against a captured-shape sample: only
+# rows whose LOCAL port is the watched port count, IPv6 "." ports included.
+if python3 - "$HERE/service-ports.py" <<'PYEOF' >/dev/null 2>&1
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('ports', sys.argv[1])
+ports = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ports)
+sample = """time,,bytes_in,
+10:41:12.123456,Google Chrome.4242,9000,
+10:41:12.123456,tcp4 127.0.0.1:9326<->127.0.0.1:53422,1234,
+10:41:12.123456,tcp6 ::1.9326<->::1.53500,77,
+10:41:12.123456,tcp4 127.0.0.1:53422<->127.0.0.1:9326,555,
+"""
+got = ports.parse_nettop(sample, 9326)
+assert got == {'tcp4 127.0.0.1:9326<->127.0.0.1:53422': 1234, 'tcp6 ::1.9326<->::1.53500': 77}, got
+assert ports.parse_nettop('nettop: unknown option', 9326) is None
+PYEOF
+then
+  pass "idle stop: nettop rows are matched by local port only, and output without a bytes_in column is not traffic"
+else
+  fail "idle stop: nettop rows are matched by local port only, and output without a bytes_in column is not traffic" "see service-ports.py parse_nettop"
+fi
+SWT_OD_SPM=600
+sleep 1
+if ! pgrep -f "idle-watch.py spawn .*--project sample-ondemand " >/dev/null 2>&1; then
+  pass "idle stop: no watcher outlives the pane it watched"
+else
+  fail "idle stop: no watcher outlives the pane it watched" "$(pgrep -af 'idle-watch.py spawn' 2>/dev/null)"
+fi
+
+# split_tree: a session first created by --pane, then started whole.
+SWT_PROJ_ODT="$SWT_ROOT/sample-ondemand-tree"
+mkdir -p "$SWT_PROJ_ODT/.agent-workspace"
+jq --arg chrome "$SWT_BIN/chrome-stub" '.project.id = "sample-odtree" | .stores = {"pin": []}
+  | .behavior = {"attach": "never", "session_chat_helper": {"resolve": "never"}}
+  | .browser.chrome_program = $chrome | .browser.port = 47343
+  | .sessions[0].panes[2].command = ["sleep", "3600"] | .sessions[0].panes[2].port = 47344' \
+  "$HERE/fixtures/valid/browser-multipane.json" > "$SWT_PROJ_ODT/.agent-workspace/workspace.json"
+SWT_CFG_ODT="$SWT_PROJ_ODT/.agent-workspace/workspace.json"
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane sidecar --config "$SWT_CFG_ODT" 2>&1)"
+SWT_STATUS=$?
+SWT_OUT2="$(swrun_od "$HERE/workspace-start.sh" services --config "$SWT_CFG_ODT" 2>&1)"
+SWT_STATUS2=$?
+SWT_ODT_NAMES="$(SWT_TMUX list-panes -t '=sample-odtree-services:0' -F '#{@session_workspace_pane}' 2>/dev/null | sort | tr '\n' ' ')"
+if [ "$SWT_STATUS" -eq 0 ] && [ "$SWT_STATUS2" -eq 0 ] &&
+   [ "$SWT_ODT_NAMES" = "sample-odtree-browser sample-odtree-shell sample-odtree-sidecar " ] &&
+   printf '%s' "$SWT_OUT2" | grep -Fq "[kept] sample-odtree-services / sample-odtree-sidecar"; then
+  pass "split_tree: a session first created by --pane keeps every pane's name when the whole session starts later"
+else
+  fail "split_tree: a session first created by --pane keeps every pane's name when the whole session starts later" \
+    "status=$SWT_STATUS/$SWT_STATUS2 names=[$SWT_ODT_NAMES] out=$SWT_OUT out2=$SWT_OUT2"
+fi
+swrun_od "$HERE/workspace-stop.sh" services --config "$SWT_CFG_ODT" --confirmed >/dev/null 2>&1
+swrun_od "$HERE/workspace-stop.sh" services --config "$SWT_CFG_OD" --confirmed >/dev/null 2>&1
 
 # --- 13. teardown + leak check -------------------------------------------
 swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG" --confirmed --all >/dev/null 2>&1

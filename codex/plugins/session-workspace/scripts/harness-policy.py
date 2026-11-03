@@ -250,6 +250,10 @@ class Context:
     read_paths: tuple = ()
     plan_panes: frozenset = frozenset()
     plan_message_roots: tuple = ()
+    project_id: str = ""
+    # (session id, pane name, role name) for every planned pane: the table
+    # `--pane NAME` resolves against (resolve_service_panes).
+    session_panes: tuple = ()
 
     @property
     def confined_orchestrator(self):
@@ -607,6 +611,10 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         grant_roots=tuple(sorted(grant_paths, key=str)),
         message_roots=tuple(sorted(message_paths, key=str)),
         plan_panes=frozenset(p["name"] for p in panes),
+        project_id=str(project.get("id", "")),
+        session_panes=tuple((str(s.get("id", "")), str(p.get("name", "")), str(p.get("role", "")))
+                            for s in plan.get("sessions", []) if isinstance(s, dict)
+                            for p in s.get("panes", []) if isinstance(p, dict)),
         plan_message_roots=tuple(sorted({canonical(Path(g["path"])) for p in panes
                                         for g in p.get("grants", []) if g.get("store") == "messages"}, key=str)),
         claude_home=claude_home,
@@ -2366,12 +2374,45 @@ WORKSPACE_VERB_SCRIPT = {
 }
 
 
-def workspace_args(ctx: Context, script: str, args: List[str], bare_flags: Tuple[str, ...], allow_target: bool = True, value_flags: Tuple[str, ...] = ()) -> None:
+def resolve_service_panes(ctx: Context, script: str, session: str, values: List[str]) -> None:
+    """`--pane NAME` admits only a service pane (role "service") of the named
+    session, named exactly or by the part after "<project.id>-" -- the same
+    resolution as lib.sh's sw_select_panes, so the argv admitted here is the
+    argv the engine accepts. Repeating a pane is outside the reviewed shape."""
+    rows = [row for row in ctx.session_panes if row[0] == session]
+    if not rows:
+        raise PolicyFailure("helper.argv", "%s --pane requires a configured session id" % script)
+    resolved: List[str] = []
+    for value in values:
+        match = [row for row in rows if row[1] == value] or [row for row in rows if row[1] == "%s-%s" % (ctx.project_id, value)]
+        if len(match) != 1:
+            raise PolicyFailure("helper.argv", "%s --pane %s is not a pane of session %s" % (script, value, session))
+        if match[0][2] != "service":
+            raise PolicyFailure("helper.argv", "%s --pane selects service panes only; %s has role %s" % (script, match[0][1], match[0][2]))
+        if match[0][1] in resolved:
+            raise PolicyFailure("helper.argv", "%s --pane names each pane once (%s)" % (script, match[0][1]))
+        resolved.append(match[0][1])
+
+
+def workspace_args(ctx: Context, script: str, args: List[str], bare_flags: Tuple[str, ...], allow_target: bool = True, value_flags: Tuple[str, ...] = (),
+                   pane_flags: Optional[Tuple[str, ...]] = None, pane_requires: Tuple[str, ...] = ()) -> None:
+    """pane_flags, when given, admits `--pane NAME` (repeatable). A --pane
+    form is its own reviewed shape: exactly one session id positional, every
+    other flag drawn from pane_flags, and every flag in pane_requires present."""
     remaining = list(args)
     positional = 0
+    target = ""
+    panes: List[str] = []
+    seen: List[str] = []
     while remaining:
         arg = remaining.pop(0)
+        if pane_flags is not None and arg == "--pane":
+            if not remaining or remaining[0].startswith("-") or not LABEL_RE.fullmatch(remaining[0]):
+                raise PolicyFailure("helper.argv", "%s --pane requires a literal pane name" % script)
+            panes.append(remaining.pop(0))
+            continue
         if arg in bare_flags:
+            seen.append(arg)
             continue
         if arg == "--config":
             if not remaining:
@@ -2388,27 +2429,49 @@ def workspace_args(ctx: Context, script: str, args: List[str], bare_flags: Tuple
                 raise PolicyFailure("helper.argv", "%s --provider must be codex|claude|all" % script)
             if arg == "--target" and candidate_path(value, ctx.pane_cwd) is None:
                 raise PolicyFailure("helper.argv", "%s --target must be a literal path" % script)
+            seen.append(arg)
             continue
         if allow_target and not arg.startswith("-") and LABEL_RE.fullmatch(arg) and positional == 0:
             positional += 1
+            target = arg
             continue
         raise PolicyFailure("helper.argv", "%s argument is outside its reviewed grammar: %s" % (script, arg))
+    if panes:
+        if not target or target == "all":
+            raise PolicyFailure("helper.argv", "%s --pane requires one explicit session id" % script)
+        outside = sorted(set(seen) - set(pane_flags or ()))
+        if outside:
+            raise PolicyFailure("helper.argv", "%s --pane cannot be combined with %s" % (script, ", ".join(outside)))
+        missing = [flag for flag in pane_requires if flag not in seen]
+        if missing:
+            raise PolicyFailure("helper.argv", "%s --pane requires %s" % (script, ", ".join(missing)))
+        resolve_service_panes(ctx, script, target, panes)
 
 
 def workspace_read(ctx: Context, script: str, args: List[str]) -> None:
-    workspace_args(ctx, script, args, ("--json",))
+    if script == "workspace-plan.sh":
+        workspace_args(ctx, script, args, ("--json", "--running"))
+    elif script == "workspace-status.sh":
+        workspace_args(ctx, script, args, ("--json",), pane_flags=("--json",))
+    else:
+        workspace_args(ctx, script, args, ("--json",))
 
 
 def harness_status_args(ctx: Context, script: str, args: List[str]) -> None:
     workspace_args(ctx, script, args, ("--json", "--probe"))
 
 
+# Single-service lifecycle (`--pane`) is an orchestrator form: start admits
+# only --no-attach and --config beside it; stop requires --confirmed and admits
+# nothing else. The HELPERS table already keeps both scripts orchestrator-only.
 def workspace_start(ctx: Context, script: str, args: List[str]) -> None:
-    workspace_args(ctx, script, args, ("--no-agents", "--no-services", "--no-attach", "--adopt", "--confirmed"))
+    workspace_args(ctx, script, args, ("--no-agents", "--no-services", "--no-attach", "--adopt", "--confirmed"),
+                   pane_flags=("--no-attach",))
 
 
 def workspace_stop(ctx: Context, script: str, args: List[str]) -> None:
-    workspace_args(ctx, script, args, ("--no-save", "--confirmed", "--all"))
+    workspace_args(ctx, script, args, ("--no-save", "--confirmed", "--all"),
+                   pane_flags=("--confirmed",), pane_requires=("--confirmed",))
 
 
 def workspace_restart(ctx: Context, script: str, args: List[str]) -> None:
@@ -2772,6 +2835,39 @@ def child_transport_bypass(tokens: List[str], child: bool) -> Optional[str]:
     return None
 
 
+# Workspace lifecycle a child role must never drive any other way. The
+# canonical helper invocation is already orchestrator-only (HELPERS); these
+# are the other routes into the same engine: the machine-wide `workspace`
+# dispatcher on PATH (workspace-install), the project bootstrap shim
+# (workspace.sh), and a lifecycle script run by name or through an
+# interpreter. Read verbs (plan, status, doctor, harness-*) stay available.
+WORKSPACE_LIFECYCLE_VERBS = {"start", "stop", "restart", "reconcile", "install", "browser-config"}
+WORKSPACE_VERB_DISPATCHERS = {"workspace", "workspace.sh", "workspace-environment.sh"}
+WORKSPACE_LIFECYCLE_SCRIPTS = {
+    "workspace-start.sh",
+    "workspace-stop.sh",
+    "workspace-restart.sh",
+    "workspace-reconcile.sh",
+    "workspace-install.sh",
+    "workspace-browser-config.sh",
+}
+
+
+def child_lifecycle_bypass(tokens: List[str]) -> Optional[str]:
+    for segment in segments(tokens):
+        argv = parse_wrappers(segment).argv
+        for token in executable_tokens(segment):
+            name = Path(token).name
+            if name in WORKSPACE_LIFECYCLE_SCRIPTS:
+                return name
+            if name in WORKSPACE_VERB_DISPATCHERS:
+                index = argv.index(token)
+                verb = argv[index + 1] if index + 1 < len(argv) else ""
+                if verb in WORKSPACE_LIFECYCLE_VERBS:
+                    return "%s %s" % (name, verb)
+    return None
+
+
 def segment_mutates(segment: List[str]) -> bool:
     if REDIR_WRITE_MARK in segment:
         return True
@@ -3080,6 +3176,10 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
     bypass = child_transport_bypass(tokens, ctx.semantic_role != "orchestrator" or bool(ctx.environment))
     if bypass is not None:
         raise PolicyFailure("routing.master", "coordination transport may only run as the selected session-chat helper (%s)" % bypass)
+    if ctx.semantic_role != "orchestrator":
+        lifecycle = child_lifecycle_bypass(tokens)
+        if lifecycle is not None:
+            raise PolicyFailure("coordination.write", "workspace lifecycle is an orchestrator operation in strict-v1 (%s)" % lifecycle)
 
     if ctx.semantic_role == "orchestrator":
         # shlex otherwise folds newlines into whitespace. Detection must also

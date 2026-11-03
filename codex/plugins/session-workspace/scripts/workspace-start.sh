@@ -10,9 +10,18 @@
 # unless --no-attach is passed. An unresolvable session-chat helper aborts the
 # run when behavior.session_chat_helper.on_missing is "fail".
 #
+# `--pane NAME` (repeatable) starts only the named service panes of ONE
+# session: the session is created if needed with just those panes, their
+# declared commands run, and no other pane of the session is created or
+# touched. A NAME is a pane's full name or the part after "<project.id>-".
+# Each selected dev server's port must be free (or held by that pane's own
+# live launch) or nothing is started and the holder's PID is named. A --pane
+# start never attaches: it brings a service up in the background.
+#
 # Usage: workspace-start.sh [TARGET|all] [--config PATH]
 #          [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]
-# shellcheck disable=SC2034  # NO_AGENTS / NO_SERVICES / ALLOW_ADOPT / DRY_RUN are
+#        workspace-start.sh SESSION --pane NAME [--pane NAME...] [--config PATH] [--no-attach]
+# shellcheck disable=SC2034  # NO_AGENTS / NO_SERVICES / ALLOW_ADOPT / DRY_RUN / SW_PANE_SUBSET are
 # the documented caller contract that the sourced lifecycle.sh reads (see its
 # header); ShellCheck cannot see across the `source` boundary.
 set -uo pipefail
@@ -28,6 +37,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: workspace-start.sh [TARGET|all] [--config PATH]
          [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]
+       workspace-start.sh SESSION --pane NAME [--pane NAME...] [--config PATH] [--no-attach]
 EOF
 }
 
@@ -40,10 +50,16 @@ NO_SERVICES=0
 NO_ATTACH=0
 ADOPT_FLAG=0
 CONFIRMED_FLAG=0
+declare -a PANE_ARGS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --config) CONFIG_OVERRIDE="${2:-}"; shift 2 ;;
+    --pane)
+      if [ $# -lt 2 ] || [ -z "$2" ] || [ "${2#-}" != "$2" ]; then
+        echo "ERROR: --pane requires a pane name" >&2; usage; exit 1
+      fi
+      PANE_ARGS+=("$2"); shift 2 ;;
     --no-agents) NO_AGENTS=1; shift ;;
     --no-services) NO_SERVICES=1; shift ;;
     --no-attach) NO_ATTACH=1; shift ;;
@@ -58,6 +74,19 @@ done
 
 ensure_jq
 ensure_tmux
+
+SW_PANE_SUBSET=0
+if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
+  if [ -z "$TARGET" ] || [ "$TARGET" = "all" ]; then
+    echo "ERROR: --pane needs one explicit session: workspace start SESSION --pane NAME" >&2
+    exit 1
+  fi
+  if [ "$NO_AGENTS" -eq 1 ] || [ "$NO_SERVICES" -eq 1 ] || [ "$ADOPT_FLAG" -eq 1 ] || [ "$CONFIRMED_FLAG" -eq 1 ]; then
+    echo "ERROR: --pane cannot be combined with --no-agents, --no-services, --adopt, or --confirmed" >&2
+    exit 1
+  fi
+  SW_PANE_SUBSET=1
+fi
 
 ALLOW_ADOPT=0
 if [ "$ADOPT_FLAG" -eq 1 ]; then
@@ -117,9 +146,37 @@ sw_lock_acquire "$PROJECT_ID" || exit 1
 
 PLAN_JSON="$(bash "$HERE/workspace-plan.sh" --config "$CONFIG_PATH" --json)" || exit 1
 
+declare -a SELECTED_PANES=()
+if [ "$SW_PANE_SUBSET" -eq 1 ]; then
+  SELECTED_LIST="$(sw_select_panes "$PLAN_JSON" "$TARGET" "${PANE_ARGS[@]}")" || exit 1
+  while IFS= read -r selected_pane; do
+    [ -n "$selected_pane" ] && SELECTED_PANES+=("$selected_pane")
+  done <<<"$SELECTED_LIST"
+  SELECTED_JSON="$(printf '%s\n' "${SELECTED_PANES[@]}" | jq -R . | jq -sc .)"
+  UNRESOLVED="$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" --argjson sel "$SELECTED_JSON" \
+    '.sessions[] | select(.id == $t) | .panes[] | select((.name as $n | $sel | index($n)) != null and (.skip_unresolved // false)) | .name')"
+  if [ -n "$UNRESOLVED" ]; then
+    echo "ERROR: --pane: optional pane(s) with an unresolved cwd cannot start: $(printf '%s' "$UNRESOLVED" | tr '\n' ' ')" >&2
+    exit 1
+  fi
+  # Narrow the plan to the selected panes of TARGET. .all_panes keeps the
+  # whole session for the session-env pin (see lifecycle.sh).
+  PLAN_JSON="$(printf '%s' "$PLAN_JSON" | jq -c --arg t "$TARGET" --argjson sel "$SELECTED_JSON" '
+    .sessions |= map(if .id == $t then (.all_panes = .panes | .panes |= map(select(.name as $n | $sel | index($n) != null))) else . end)')"
+fi
+
 sw_require_available_read_paths "$PLAN_JSON" "$TARGET" || exit 1
 
-if [ "$(printf '%s' "$PLAN_JSON" | jq -r '.schema_version')" = "5" ] && [ "$NO_SERVICES" -eq 0 ]; then
+# Port safety. A whole-session start keeps its schema-v5-only preflight; a
+# --pane start checks every selected dev server on every schema version,
+# because starting one service next to an executor's own `pnpm dev` is exactly
+# the collision --pane exists to avoid.
+if [ "$SW_PANE_SUBSET" -eq 1 ]; then
+  if printf '%s' "$PLAN_JSON" | jq -e --arg t "$TARGET" 'any(.sessions[] | select(.id == $t) | .panes[]; (.browser | not) and .port != null and .command != null)' >/dev/null; then
+    command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required to check that a --pane dev server's port is free" >&2; exit 1; }
+    printf '%s' "$PLAN_JSON" | python3 "$HERE/service-ports.py" "$TARGET" "${SELECTED_PANES[@]}" || exit 1
+  fi
+elif [ "$(printf '%s' "$PLAN_JSON" | jq -r '.schema_version')" = "5" ] && [ "$NO_SERVICES" -eq 0 ]; then
   printf '%s' "$PLAN_JSON" | python3 "$HERE/service-ports.py" "$TARGET" || exit 1
 fi
 
@@ -127,6 +184,11 @@ declare -a BROWSER_PORTS=()
 while IFS= read -r browser_json; do
   BROWSER_SESSION_ID="$(printf '%s' "$browser_json" | jq -r '.session_id')"
   BROWSER_PORT="$(printf '%s' "$browser_json" | jq -r '.port')"
+  BROWSER_PANE="$(printf '%s' "$browser_json" | jq -r '.pane_name // ""')"
+  if [ "$SW_PANE_SUBSET" -eq 1 ]; then
+    # A --pane start claims and waits for a browser only when its pane is selected.
+    printf '%s\n' "${SELECTED_PANES[@]}" | grep -Fxq -- "$BROWSER_PANE" || continue
+  fi
   if { [ "$TARGET" = "all" ] || [ "$TARGET" = "$BROWSER_SESSION_ID" ]; } && [ "$NO_SERVICES" -eq 0 ]; then
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to verify browser readiness" >&2; exit 1; }
     sw_browser_claim_port "$PROJECT_ID" "$BROWSER_PORT" || exit 1
@@ -135,7 +197,11 @@ while IFS= read -r browser_json; do
   fi
 done < <(printf '%s' "$PLAN_JSON" | jq -c '(.browsers // (if .browser != null then [.browser] else [] end))[]')
 
-echo "session-workspace start — $CONFIG_PATH (project: $PROJECT_ID)"
+if [ "$SW_PANE_SUBSET" -eq 1 ]; then
+  echo "session-workspace start — $CONFIG_PATH (project: $PROJECT_ID, session: $TARGET, panes: ${SELECTED_PANES[*]})"
+else
+  echo "session-workspace start — $CONFIG_PATH (project: $PROJECT_ID)"
+fi
 sw_process_plan "$PLAN_JSON" "$TARGET"
 
 for BROWSER_PORT in "${BROWSER_PORTS[@]:-}"; do
@@ -164,6 +230,8 @@ fi
 # first session in the plan, matching the order `workspace-plan` displays.
 if [ "$NO_ATTACH" -eq 1 ]; then
   echo "attach: suppressed by --no-attach"
+elif [ "$SW_PANE_SUBSET" -eq 1 ]; then
+  echo "attach: skipped (--pane starts services in the background)"
 else
   if [ "$TARGET" != "all" ]; then
     ATTACH_SESSION="$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" 'first(.sessions[] | select(.id == $t) | .name) // ""')"

@@ -94,7 +94,7 @@ make_helper_tree() {
 CHAT_HELPERS="send-message.sh dispatch-to-session.sh check-replies.sh list-panes.sh pane-health.sh get-my-name.sh messages-list.sh message-search.sh broadcast-message.sh"
 SCHED_HELPERS="task-status.sh task-board.sh task-review.sh task-done.sh task-block.sh task-new.sh task-assign.sh tasks-clean.sh scheduler-doctor.sh task-contract.sh"
 KNOW_HELPERS="save-context.sh load-context.sh list-contexts.sh share-context.sh search-contexts.sh memory-search.sh memory-remember.sh docs-write.sh doctor.sh memory-lint.sh memory-backlinks.sh memory-write.sh memory-index.sh init.sh remove-context.sh memory-auto-capture.sh validate-links.sh check-todos.sh check-freshness.sh"
-WS_HELPERS="workspace.sh workspace-status.sh harness-status.sh workspace-start.sh workspace-stop.sh workspace-restart.sh workspace-reconcile.sh workspace-install.sh workspace-browser-config.sh"
+WS_HELPERS="workspace.sh workspace-plan.sh workspace-status.sh harness-status.sh workspace-start.sh workspace-stop.sh workspace-restart.sh workspace-reconcile.sh workspace-install.sh workspace-browser-config.sh"
 SM_HELPERS="list-sessions.sh search-sessions.sh session-stats.sh delete-session.sh delete-all-sessions.sh find-or-skip.sh"
 # shellcheck disable=SC2086
 make_helper_tree "$FAKE_CLAUDE" session-chat 1.2.3 $CHAT_HELPERS
@@ -1053,6 +1053,64 @@ as_exec "auto-capture missing staged value is denied" "$(bash_payload "bash $KNO
 as_master "orchestrator workspace-stop --confirmed is allowed" "$(bash_payload "bash $WS/workspace-stop.sh development --confirmed")" '.decision == "allow"'
 as_master "orchestrator workspace.sh start via dispatcher is allowed" "$(bash_payload "bash $WS/workspace.sh start --no-attach")" '.decision == "allow"'
 as_master "orchestrator workspace start with a foreign --config is denied" "$(bash_payload "bash $WS/workspace-start.sh --config /tmp/other.json")" '.decision == "deny" and .rule == "helper.argv"'
+echo "== single service panes (--pane) =="
+# A services session beside the golden topology: a browser and a dev server
+# (role service) plus a non-service tool pane, so --pane resolution, the
+# service-only rule, and every refused shape are exercised against a real plan.
+SVC_CONFIG="$ROOT/.agent-workspace/services.json"
+jq '.roles.service = {"runtime":"shell","env_group":"none"} | .roles.tooling = {"runtime":"shell","env_group":"none"}
+  | .browser = {"session_id":"services","pane_name":"${PROJECT_ID}-browser","port":9326,"chrome_program":"true","mcp_package":"chrome-devtools-mcp@1.2.3"}
+  | .sessions += [{"id":"services","name":"${PROJECT_ID}-services","panes":[
+      {"name":"${PROJECT_ID}-browser","role":"service","cwd":".","idle_stop_minutes":30},
+      {"name":"${PROJECT_ID}-web","role":"service","cwd":".","command":["npm","run","dev"],"port":3001},
+      {"name":"${PROJECT_ID}-tool","role":"tooling","cwd":"."}]}]' "$CONFIG" > "$SVC_CONFIG"
+as_master_svc() { expect "$1" master "$MASTER_PANE" "$ROOT" "$SVC_CONFIG" enforce "$2" "$3"; }
+as_exec_svc() { expect "$1" executor "$EXEC_PANE" "$CHILD" "$SVC_CONFIG" enforce "$2" "$3"; }
+as_review_svc() { expect "$1" reviewer "$REVIEW_PANE" "$CHILD" "$SVC_CONFIG" enforce "$2" "$3"; }
+as_master_svc "orchestrator start --pane (short name) is allowed" "$(bash_payload "bash $WS/workspace-start.sh services --pane browser")" '.decision == "allow"'
+as_master_svc "orchestrator start --pane (full name, repeated pane flag, --no-attach, own --config) is allowed" "$(bash_payload "bash $WS/workspace-start.sh services --pane harness-sample-browser --pane web --no-attach --config $SVC_CONFIG")" '.decision == "allow"'
+as_master_svc "orchestrator start --pane via dispatcher is allowed" "$(bash_payload "bash $WS/workspace.sh start services --pane browser")" '.decision == "allow"'
+as_master_svc "orchestrator stop --pane --confirmed is allowed" "$(bash_payload "bash $WS/workspace-stop.sh services --pane browser --confirmed")" '.decision == "allow"'
+as_master_svc "orchestrator stop --pane via dispatcher is allowed" "$(bash_payload "bash $WS/workspace.sh stop services --pane web --confirmed")" '.decision == "allow"'
+as_master_svc "orchestrator status --pane --json is allowed" "$(bash_payload "bash $WS/workspace-status.sh services --pane browser --json")" '.decision == "allow"'
+as_master_svc "orchestrator plan --json --running is allowed" "$(bash_payload "bash $WS/workspace-plan.sh --json --running")" '.decision == "allow"'
+as_master_svc "orchestrator start --pane without a session is denied" "$(bash_payload "bash $WS/workspace-start.sh --pane browser")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator start all --pane is denied" "$(bash_payload "bash $WS/workspace-start.sh all --pane browser")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator start --pane of an unknown pane is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane nope")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator start --pane of a pane in another session is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane master")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator start --pane of an agent pane is denied" "$(bash_payload "bash $WS/workspace-start.sh development --pane master")" '.decision == "deny" and .rule == "helper.argv" and (.reason | contains("service panes only"))'
+as_master_svc "orchestrator start --pane of a non-service pane is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane tool")" '.decision == "deny" and .rule == "helper.argv" and (.reason | contains("service panes only"))'
+as_master_svc "orchestrator start --pane naming one pane twice is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane browser --pane harness-sample-browser")" '.decision == "deny" and .rule == "helper.argv"'
+for extra in "--adopt --confirmed" "--no-services" "--no-agents" "--confirmed"; do
+  as_master_svc "orchestrator start --pane with $extra is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane browser $extra")" '.decision == "deny" and .rule == "helper.argv"'
+done
+as_master_svc "orchestrator start --pane with no value is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator start --pane with a path-like value is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane ../browser")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator start --pane with an expansion is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane \$PANE")" '.decision == "deny" and .rule == "helper.segment"'
+as_master_svc "orchestrator stop --pane without --confirmed is denied" "$(bash_payload "bash $WS/workspace-stop.sh services --pane browser")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator stop --pane with --all is denied" "$(bash_payload "bash $WS/workspace-stop.sh services --pane browser --confirmed --all")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator stop --pane with --no-save is denied" "$(bash_payload "bash $WS/workspace-stop.sh services --pane browser --confirmed --no-save")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator stop --expect-pane-id (idle watcher only) is denied" "$(bash_payload "bash $WS/workspace-stop.sh services --pane browser --confirmed --expect-pane-id %3")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator status --pane without a session is denied" "$(bash_payload "bash $WS/workspace-status.sh --pane browser")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_svc "orchestrator restart --pane is outside the grammar" "$(bash_payload "bash $WS/workspace-restart.sh services --pane browser")" '.decision == "deny" and .rule == "helper.argv"'
+as_exec_svc "executor start --pane helper is denied" "$(bash_payload "bash $WS/workspace-start.sh services --pane browser")" '.decision == "deny" and .rule == "coordination.write"'
+as_exec_svc "executor stop --pane helper is denied" "$(bash_payload "bash $WS/workspace-stop.sh services --pane browser --confirmed")" '.decision == "deny" and .rule == "coordination.write"'
+as_review_svc "reviewer start --pane helper is denied" "$(bash_payload "bash $WS/workspace.sh start services --pane browser")" '.decision == "deny" and .rule == "coordination.write"'
+as_exec_svc "executor status --pane helper stays allowed" "$(bash_payload "bash $WS/workspace-status.sh services --pane browser --json")" '.decision == "allow"'
+# The PATH dispatcher (workspace-install), the project shim and a lifecycle
+# script run by name reach the same engine; a child role is refused on every
+# route, while read verbs stay available.
+for route in "workspace start services --pane browser" "workspace stop services --pane browser --confirmed" "workspace stop all --confirmed --all" \
+             "workspace restart services" "workspace reconcile --apply" "env workspace start" "bash /usr/local/bin/workspace stop services --confirmed" \
+             "./.agent-workspace/workspace.sh start services" "workspace-stop.sh services --confirmed" "sh workspace-start.sh services" \
+             "workspace-environment.sh start --environment x"; do
+  as_exec_svc "executor lifecycle via '$route' is denied" "$(bash_payload "$route")" '.decision == "deny" and .rule == "coordination.write"'
+done
+as_review_svc "reviewer lifecycle via the PATH dispatcher is denied" "$(bash_payload "workspace stop services --pane browser --confirmed")" '.decision == "deny" and .rule == "coordination.write"'
+as_exec_svc "executor read verb via the PATH dispatcher stays allowed" "$(bash_payload "workspace status services --pane browser")" '.decision == "allow"'
+as_exec_svc "executor plan via the PATH dispatcher stays allowed" "$(bash_payload "workspace plan --json --running")" '.decision == "allow"'
+as_exec_svc "executor naming a lifecycle script as an operand is a read, not a run" "$(bash_payload "cat workspace-start.sh")" '.decision == "allow"'
+as_master_svc "orchestrator PATH dispatcher keeps its free shell" "$(bash_payload "workspace start services --pane browser")" '.decision == "allow"'
 as_master "orchestrator workspace install --target is allowed" "$(bash_payload "bash $WS/workspace-install.sh --target /usr/local/bin/workspace --dry-run")" '.decision == "allow"'
 as_master "orchestrator browser-config with a bad provider is denied" "$(bash_payload "bash $WS/workspace-browser-config.sh --provider vim")" '.decision == "deny" and .rule == "helper.argv"'
 as_master "orchestrator session delete requires --confirmed" "$(bash_payload "bash $SM/delete-session.sh 123e4567-e89b-12d3-a456-426614174000")" '.decision == "deny" and .rule == "helper.argv"'

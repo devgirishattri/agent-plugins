@@ -5,8 +5,15 @@
 # any state directory. Invoked by the plugin's workspace-plan command in
 # both provider trees, and reachable via the dispatcher as `workspace.sh plan`.
 #
-# Usage: workspace-plan.sh [TARGET|all] [--config PATH] [--json]
-#   TARGET  a sessions[].id to show only that session (default: all)
+# Usage: workspace-plan.sh [TARGET|all] [--config PATH] [--json] [--running]
+#   TARGET     a sessions[].id to show only that session (default: all)
+#   --running  also observe tmux, read-only, and add `running` to every pane:
+#              true for a live managed pane whose runtime or command was
+#              really launched, false otherwise, null when tmux is not
+#              installed. Opt-in on purpose: the harness, hooks, and every
+#              lifecycle verb read `plan --json` as a deterministic,
+#              tmux-free description of the config, so live state never
+#              enters it unless asked for.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -15,12 +22,13 @@ source "$HERE/config.sh"
 source "$HERE/validate-config.sh"
 
 usage() {
-  echo "Usage: workspace-plan.sh [TARGET|all] [--config PATH] [--json]" >&2
+  echo "Usage: workspace-plan.sh [TARGET|all] [--config PATH] [--json] [--running]" >&2
 }
 
 TARGET="all"
 CONFIG_OVERRIDE=""
 JSON_MODE=0
+RUNNING_MODE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,6 +38,10 @@ while [ $# -gt 0 ]; do
       ;;
     --json)
       JSON_MODE=1
+      shift
+      ;;
+    --running)
+      RUNNING_MODE=1
       shift
       ;;
     -h|--help)
@@ -125,6 +137,24 @@ if [ "$TARGET" != "all" ]; then
   PLAN_JSON="$(printf '%s' "$PLAN_JSON" | jq -c --arg t "$TARGET" '.sessions |= map(select(.id == $t))')"
 fi
 
+if [ "$RUNNING_MODE" -eq 1 ]; then
+  # One server-wide read. The pane marker is pane-scope only, so a row names a
+  # managed pane; the project marker is read at pane scope by the same format
+  # (tmux falls back to the session value, which a managed session carries).
+  LIVE_JSON="null"
+  if command -v tmux >/dev/null 2>&1; then
+    LIVE_JSON="$(tmux list-panes -a -F '#{session_name}	#{@session_workspace_project}	#{@session_workspace_pane}	#{pane_dead}	#{@session_workspace_launched}' 2>/dev/null |
+      jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") | select(.[2] != "")
+                 | {session: .[0], project: .[1], pane: .[2], live: (.[3] == "0" and .[4] != "")})')"
+    [ -n "$LIVE_JSON" ] || LIVE_JSON="[]"
+  fi
+  PLAN_JSON="$(printf '%s' "$PLAN_JSON" | jq -c --argjson live "$LIVE_JSON" '
+    .project.id as $pid
+    | .sessions |= map(.name as $sname | .panes |= map(.name as $pn | . + {running:
+        (if $live == null then null
+         else any($live[]; .session == $sname and .project == $pid and .pane == $pn and .live) end)}))')"
+fi
+
 if [ "$JSON_MODE" -eq 1 ]; then
   printf '%s\n' "$PLAN_JSON" | jq '.'
   exit 0
@@ -196,6 +226,8 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
     p_perm="$(printf '%s' "$pane" | jq -r '.agent.permission_mode // ""')"
     p_command="$(printf '%s' "$pane" | jq -r 'if .command then (.command | join(" ")) else "" end')"
     p_port="$(printf '%s' "$pane" | jq -r '.port // ""')"
+    p_idle="$(printf '%s' "$pane" | jq -r '.idle_stop_minutes // ""')"
+    p_running="$(printf '%s' "$pane" | jq -r 'if has("running") then (if .running == null then "unknown (tmux not installed)" elif .running then "yes" else "no" end) else "" end')"
 
     printf '  pane: %s' "$p_name"
     [ "$p_optional" = "true" ] && printf ' (optional)'
@@ -207,6 +239,8 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
     printf '%s\n' "$pane" | jq -r 'if (.read_paths // [] | length) > 0 then "    read_paths (shell only): " + (.read_paths | tojson) else empty end'
     [ -n "$p_command" ] && printf '    command: %s\n' "$p_command"
     [ -n "$p_port" ] && printf '    port: %s\n' "$p_port"
+    [ -n "$p_idle" ] && printf '    idle_stop_minutes: %s\n' "$p_idle"
+    [ -n "$p_running" ] && printf '    running: %s\n' "$p_running"
     printf '    agent: model=%s effort=%s profile=%s permission_mode=%s\n' \
       "$(flag_or_none "$p_model")" "$(flag_or_none "$p_effort")" "$(flag_or_none "$p_profile")" "$(flag_or_none "$p_perm")"
     printf '%s\n' "$pane" | jq -r '

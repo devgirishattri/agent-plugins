@@ -961,6 +961,12 @@
                   "minimum": 1,
                   "maximum": 65535
                 },
+                "idle_stop_minutes": {
+                  "description": "Opt-in, off by default. Service panes only (role service) that have something to watch: their own port (a dev server) or the browser pane's DevTools port. After the pane launches, a watcher stops it through workspace stop --pane once no inbound TCP connection (for the browser: no CDP client connection) has been seen for this many minutes, and records why. Requires python3 (and lsof on macOS).",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1440
+                },
                 "agent": {
                   "type": "object",
                   "additionalProperties": false,

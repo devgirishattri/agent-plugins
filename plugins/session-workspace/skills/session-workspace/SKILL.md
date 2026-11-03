@@ -61,6 +61,12 @@ A project opts in by creating `.agent-workspace/workspace.json`. Set
     single pane that receives the Chrome argv. A one-pane session can omit it.
   - Only the selected pane reports DevTools readiness. Siblings keep their own
     `command`/`port`.
+- Service panes (the browser, dev servers) also start and stop on their own:
+  `workspace start SESSION --pane NAME` and
+  `workspace stop SESSION --pane NAME --confirmed`. An optional pane
+  `idle_stop_minutes` stops an unused one, and `start --pane` names the PID
+  holding a taken port instead of colliding. See the README section "Single
+  service panes on demand".
 - `harness` (schema v2–v5) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
   `gates`, plus optional schema-v3–v5 `guards`.

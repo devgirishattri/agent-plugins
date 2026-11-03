@@ -1,5 +1,55 @@
 # Changelog
 
+## session-workspace 0.12.6 — 2026-11-03
+
+- **Single service panes on demand.** `workspace start SESSION --pane NAME`
+  (repeatable) starts only the named service panes of one session, such as
+  the debug browser or one dev server. It creates the session with only those
+  panes when it is not running, runs their declared commands, and keeps panes
+  that already run. `workspace stop SESSION --pane NAME --confirmed` closes
+  only those panes and leaves the session running; stopping the browser pane
+  releases its port claim. NAME is the pane name or the part after
+  `<project.id>-`, and only role `service` panes can be selected. `--pane`
+  never attaches, and a subset start neither builds a `split_tree` layout nor
+  restores or saves `retain_layout`.
+- **Idle stop.** New optional per-pane `idle_stop_minutes` (1–1440, off by
+  default) for service panes with a port to watch. A watcher samples the port
+  every 30 seconds and stops the pane after the whole window with no use. For
+  a dev server, use is any inbound connection. For the browser, use is CDP
+  commands, read as the bytes clients sent (Linux `sock_diag`, macOS
+  `nettop`). chrome-devtools-mcp holds its websocket open for its whole
+  session and pings on it, so the open connection and its keepalive pings do
+  not count. It reconnects by itself after the pane starts again. Where those
+  bytes cannot be read, the browser counts connections instead. The stop and
+  its reason are recorded in
+  `$XDG_STATE_HOME/session-workspace/<project.id>/panes/<pane>.json`. A host
+  that cannot count connections never stops a pane for idleness. The watcher
+  needs `python3`.
+- **Port safety.** `start --pane` refuses a dev-server pane (`port` plus
+  `command`) whose port is already bound by another process, on every schema
+  version, and names the holder (`... 3001 (web) is held by pid 4242
+  (node)`). The schema-v5 full-start check names the holder too.
+- **Status.** `workspace status` prints one CDP health line per browser pane
+  (`browser: NAME http://127.0.0.1:PORT — up (...)  cdp_clients=N`) and, per
+  pane, `running=yes|no`, the idle watcher and the last stop. `status` accepts
+  `SESSION --pane NAME`. `workspace plan --json --running` adds a read-only
+  `running` field per pane; plain `plan --json` is unchanged and still does
+  not read tmux.
+- **Harness (strict-v1).** The orchestrator's trusted-helper grammar admits
+  `workspace-start.sh SESSION --pane NAME... [--no-attach]` and
+  `workspace-stop.sh SESSION --pane NAME... --confirmed` (plus `--config` for
+  this workspace) for configured service panes of that session only.
+  **Behavior change:** executors and reviewers were already refused the
+  lifecycle helpers, but could still run `workspace start` or `stop` through
+  the `workspace` dispatcher on `PATH`, a copied dispatcher, or a script
+  outside the cache. Every such route is now refused under
+  `coordination.write`. Read verbs (`plan`, `status`, `doctor`) are
+  unchanged.
+- No config migration. Update both providers and restart agent panes so the
+  new policy loads. To roll back, install the previous session-workspace
+  release and remove any `idle_stop_minutes` keys, which older releases
+  reject.
+
 ## knowledge 0.5.12 — 2026-11-03
 
 - Validating the context store while another process saves no longer reports
