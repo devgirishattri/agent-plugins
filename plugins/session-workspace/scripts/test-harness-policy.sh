@@ -93,7 +93,7 @@ make_helper_tree() {
 }
 CHAT_HELPERS="send-message.sh dispatch-to-session.sh check-replies.sh list-panes.sh pane-health.sh get-my-name.sh messages-list.sh message-search.sh broadcast-message.sh"
 SCHED_HELPERS="task-status.sh task-board.sh task-review.sh task-done.sh task-block.sh task-new.sh task-assign.sh tasks-clean.sh scheduler-doctor.sh task-contract.sh"
-KNOW_HELPERS="save-context.sh load-context.sh list-contexts.sh share-context.sh search-contexts.sh memory-search.sh memory-remember.sh docs-write.sh doctor.sh memory-lint.sh memory-backlinks.sh memory-write.sh memory-index.sh init.sh remove-context.sh memory-auto-capture.sh"
+KNOW_HELPERS="save-context.sh load-context.sh list-contexts.sh share-context.sh search-contexts.sh memory-search.sh memory-remember.sh docs-write.sh doctor.sh memory-lint.sh memory-backlinks.sh memory-write.sh memory-index.sh init.sh remove-context.sh memory-auto-capture.sh validate-links.sh check-todos.sh check-freshness.sh"
 WS_HELPERS="workspace.sh workspace-status.sh harness-status.sh workspace-start.sh workspace-stop.sh workspace-restart.sh workspace-reconcile.sh workspace-install.sh workspace-browser-config.sh"
 SM_HELPERS="list-sessions.sh search-sessions.sh session-stats.sh delete-session.sh delete-all-sessions.sh find-or-skip.sh"
 # shellcheck disable=SC2086
@@ -1773,6 +1773,85 @@ if [ "$H6" -eq 2 ] && grep -q '^BLOCKED by session-workspace strict-v1 \[helper.
 expect "H1 Codex-shaped payload: executor quoted bracket path under --literal-pathspecs is allowed" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(codex_bash_payload "git --literal-pathspecs add -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
 expect "H1 Codex-shaped payload: executor bracket pathspec without the option is denied" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(codex_bash_payload "git add -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
 expect "H1 Codex argv-list payload: reviewer quoted bracket path is allowed" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce '{"tool_name":"shell","tool_input":{"command":["cat","src/app/[id]/page.tsx"]}}' "$H1_ALLOW"
+
+echo "== knowledge docs validators: [docs-directory] [days-threshold] inside the pane cwd =="
+# validate-links.sh / check-todos.sh [docs-directory] and check-freshness.sh
+# [docs-directory] [days-threshold]. The directory must resolve inside the
+# pane's own cwd: the workspace root for the orchestrator, the checkout for
+# executors and reviewers.
+mkdir -p "$ROOT/docs/decisions" "$CHILD/docs/guides" "$TMPROOT/outside-docs"
+printf '# decision\n' > "$ROOT/docs/decisions/0001-example.md"
+printf '# guide\n' > "$CHILD/docs/guides/setup.md"
+printf '# outside\n' > "$TMPROOT/outside-docs/secret.md"
+ln -s "$TMPROOT/outside-docs" "$ROOT/docs/outside-link"
+ln -s "$TMPROOT/outside-docs" "$CHILD/docs/outside-link"
+ln -s "$CHILD/docs/guides" "$CHILD/docs/guides-link"
+DOCS_ALLOW='.decision == "allow"'
+DOCS_ARGV='.decision == "deny" and .rule == "helper.argv"'
+DOCS_SEGMENT='.decision == "deny" and .rule == "helper.segment"'
+for h in validate-links.sh check-todos.sh check-freshness.sh; do
+  as_master "orchestrator $h with no argument is allowed" "$(bash_payload "bash $KNOW/$h")" "$DOCS_ALLOW"
+  as_master "orchestrator $h on an absolute docs subdirectory is allowed" "$(bash_payload "bash $KNOW/$h $ROOT/docs/decisions")" "$DOCS_ALLOW"
+  as_master "orchestrator $h on a relative docs directory with a trailing slash is allowed" "$(bash_payload "bash $KNOW/$h docs/")" "$DOCS_ALLOW"
+  as_master "orchestrator $h on a child checkout's docs (inside the workspace root) is allowed" "$(bash_payload "bash $KNOW/$h $CHILD/docs")" "$DOCS_ALLOW"
+  as_master "orchestrator $h on a directory outside the workspace root is denied" "$(bash_payload "bash $KNOW/$h $TMPROOT/outside-docs")" "$DOCS_ARGV"
+  as_master "orchestrator $h with ../ traversal out of the workspace is denied" "$(bash_payload "bash $KNOW/$h ../outside-docs")" "$DOCS_ARGV"
+  as_master "orchestrator $h with a .. component that stays inside is denied" "$(bash_payload "bash $KNOW/$h $ROOT/docs/../docs")" "$DOCS_ARGV"
+  as_master "orchestrator $h on a symlink pointing outside the workspace is denied" "$(bash_payload "bash $KNOW/$h $ROOT/docs/outside-link")" "$DOCS_ARGV"
+  as_master "orchestrator $h on a file instead of a directory is denied" "$(bash_payload "bash $KNOW/$h $ROOT/AGENTS.md")" "$DOCS_ARGV"
+  as_master "orchestrator $h on a missing directory is denied" "$(bash_payload "bash $KNOW/$h $ROOT/docs/missing")" "$DOCS_ARGV"
+  as_master "orchestrator $h with two directories is denied" "$(bash_payload "bash $KNOW/$h docs docs/decisions")" "$DOCS_ARGV"
+  as_master "orchestrator $h with a find-expression value (-delete) is denied" "$(bash_payload "bash $KNOW/$h -delete")" "$DOCS_ARGV"
+  as_master "orchestrator $h with an option-looking value (--help) is denied" "$(bash_payload "bash $KNOW/$h --help")" "$DOCS_ARGV"
+  as_master "orchestrator $h with an empty directory value is denied" "$(bash_payload "bash $KNOW/$h ''")" "$DOCS_ARGV"
+  as_master "orchestrator $h with a quoted ~ path is denied" "$(bash_payload "bash $KNOW/$h '~/docs'")" "$DOCS_ARGV"
+  as_master "orchestrator $h with a quoted glob is denied" "$(bash_payload "bash $KNOW/$h 'docs/*'")" "$DOCS_ARGV"
+  as_master "orchestrator $h with an unquoted glob is denied" "$(bash_payload "bash $KNOW/$h docs/*")" "$DOCS_ARGV"
+  as_master "orchestrator $h with a variable directory is denied" "$(bash_payload "bash $KNOW/$h \"\$HOME/docs\"")" "$DOCS_SEGMENT"
+  as_master "orchestrator $h composed with && is denied" "$(bash_payload "bash $KNOW/$h docs && rm -rf docs")" "$DOCS_SEGMENT"
+  as_master "orchestrator $h composed with a pipe is denied" "$(bash_payload "bash $KNOW/$h docs | tee docs/out.md")" "$DOCS_SEGMENT"
+  as_master "orchestrator $h with a command substitution is denied" "$(bash_payload "bash $KNOW/$h \$(pwd)/docs")" "$DOCS_SEGMENT"
+  for role in exec review; do
+    case "$role" in exec) run=as_exec; who=executor ;; review) run=as_review; who=reviewer ;; esac
+    "$run" "$who $h with no argument is allowed" "$(bash_payload "bash $KNOW/$h")" "$DOCS_ALLOW"
+    "$run" "$who $h on its own checkout's absolute docs directory is allowed" "$(bash_payload "bash $KNOW/$h $CHILD/docs")" "$DOCS_ALLOW"
+    "$run" "$who $h on a relative docs subdirectory is allowed" "$(bash_payload "bash $KNOW/$h docs/guides")" "$DOCS_ALLOW"
+    "$run" "$who $h on a symlink that stays inside its checkout is allowed" "$(bash_payload "bash $KNOW/$h docs/guides-link")" "$DOCS_ALLOW"
+    "$run" "$who $h on the workspace root's docs (outside its checkout) is denied" "$(bash_payload "bash $KNOW/$h $ROOT/docs")" "$DOCS_ARGV"
+    "$run" "$who $h on a directory outside the workspace is denied" "$(bash_payload "bash $KNOW/$h $TMPROOT/outside-docs")" "$DOCS_ARGV"
+    "$run" "$who $h with ../ traversal to a sibling checkout is denied" "$(bash_payload "bash $KNOW/$h ../component-b")" "$DOCS_ARGV"
+    "$run" "$who $h on a symlink to a sibling checkout is denied" "$(bash_payload "bash $KNOW/$h escape-link")" "$DOCS_ARGV"
+    "$run" "$who $h on a symlink pointing outside the workspace is denied" "$(bash_payload "bash $KNOW/$h docs/outside-link")" "$DOCS_ARGV"
+    "$run" "$who $h on a file instead of a directory is denied" "$(bash_payload "bash $KNOW/$h README.md")" "$DOCS_ARGV"
+    "$run" "$who $h with two directories is denied" "$(bash_payload "bash $KNOW/$h docs docs/guides")" "$DOCS_ARGV"
+    "$run" "$who $h with a find-expression value (-delete) is denied" "$(bash_payload "bash $KNOW/$h -delete")" "$DOCS_ARGV"
+    "$run" "$who $h composed with ; is denied" "$(bash_payload "bash $KNOW/$h docs; cat /etc/hosts")" "$DOCS_SEGMENT"
+  done
+done
+for h in validate-links.sh check-todos.sh; do
+  as_master "orchestrator $h with a trailing threshold is denied (no threshold slot)" "$(bash_payload "bash $KNOW/$h docs 30")" "$DOCS_ARGV"
+  as_exec "executor $h with a trailing threshold is denied (no threshold slot)" "$(bash_payload "bash $KNOW/$h docs 30")" "$DOCS_ARGV"
+done
+FRESH="$KNOW/check-freshness.sh"
+as_master "orchestrator check-freshness with a docs directory and threshold is allowed" "$(bash_payload "bash $FRESH $ROOT/docs/decisions 30")" "$DOCS_ALLOW"
+as_master "orchestrator check-freshness with the lowest threshold (1) is allowed" "$(bash_payload "bash $FRESH docs 1")" "$DOCS_ALLOW"
+as_master "orchestrator check-freshness with the highest threshold (3650) is allowed" "$(bash_payload "bash $FRESH docs 3650")" "$DOCS_ALLOW"
+as_exec "executor check-freshness with a docs directory and threshold is allowed" "$(bash_payload "bash $FRESH docs 90")" "$DOCS_ALLOW"
+as_review "reviewer check-freshness with a docs directory and threshold is allowed" "$(bash_payload "bash $FRESH $CHILD/docs 30")" "$DOCS_ALLOW"
+as_master "orchestrator check-freshness with threshold 0 is denied" "$(bash_payload "bash $FRESH docs 0")" "$DOCS_ARGV"
+as_master "orchestrator check-freshness with threshold 3651 is denied" "$(bash_payload "bash $FRESH docs 3651")" "$DOCS_ARGV"
+as_exec "executor check-freshness with a five-digit threshold is denied" "$(bash_payload "bash $FRESH docs 99999")" "$DOCS_ARGV"
+as_review "reviewer check-freshness with a non-numeric threshold is denied" "$(bash_payload "bash $FRESH docs abc")" "$DOCS_ARGV"
+as_master "orchestrator check-freshness with a zero-padded threshold is denied" "$(bash_payload "bash $FRESH docs 030")" "$DOCS_ARGV"
+as_master "orchestrator check-freshness with a negative threshold is denied" "$(bash_payload "bash $FRESH docs -5")" "$DOCS_ARGV"
+as_exec "executor check-freshness with a date-expression threshold is denied" "$(bash_payload "bash $FRESH docs '30 days'")" "$DOCS_ARGV"
+as_master "orchestrator check-freshness with an empty threshold is denied" "$(bash_payload "bash $FRESH docs ''")" "$DOCS_ARGV"
+as_master "orchestrator check-freshness with an extra argument after the threshold is denied" "$(bash_payload "bash $FRESH docs 30 extra")" "$DOCS_ARGV"
+as_master "orchestrator check-freshness with a threshold but no directory is denied" "$(bash_payload "bash $FRESH 30")" "$DOCS_ARGV"
+as_review "reviewer check-freshness with an outside directory and a valid threshold is denied" "$(bash_payload "bash $FRESH $TMPROOT/outside-docs 30")" "$DOCS_ARGV"
+expect "Codex-shaped payload: executor validate-links on its docs directory is allowed" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(codex_bash_payload "bash $KNOW/validate-links.sh $CHILD/docs")" "$DOCS_ALLOW"
+expect "Codex argv-list payload: executor check-todos on a relative docs directory is allowed" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(jq -cn --arg h "$KNOW/check-todos.sh" '{tool_name:"shell",tool_input:{command:["bash",$h,"docs"]}}')" "$DOCS_ALLOW"
+expect "Codex argv-list payload: executor check-todos on a symlink escape is denied" executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$(jq -cn --arg h "$KNOW/check-todos.sh" '{tool_name:"shell",tool_input:{command:["bash",$h,"docs/outside-link"]}}')" "$DOCS_ARGV"
 
 echo "== hook wrapper (harness-hook.sh) =="
 WRAP="$HERE/harness-hook.sh"

@@ -345,8 +345,8 @@ regexes, shell fragments, commands, or permission exceptions. The floor:
   coordination helpers (below): session-chat send/dispatch/reply to the
   orchestrator only, scheduler `task-done`/`task-block` (never `--force`,
   never `task-new`/`task-assign`), context save/share/load/list/search/diff,
-  read-only knowledge recall/search/graph/lint/doctor. Never memory/docs
-  writes.
+  read-only knowledge recall/search/graph/lint/doctor and the docs
+  validators. Never memory/docs writes.
 - **Executor** — edit targets must resolve (through symlinks) inside its
   configured pane cwd. Arbitrary shell stays available for builds/tests/git
   inside the checkout, but every path-like operand must resolve inside that
@@ -663,6 +663,15 @@ whose `projectPath` is this workspace); on Codex, the plugin enabled in
 `~/.codex/.tmp/marketplaces/`. Every allowed helper carries an exact
 per-basename argv grammar (`harness-policy.py`'s `HELPERS` table) — there is
 no grammar-less pass for any role.
+
+The knowledge docs validators take their documented operands:
+`validate-links.sh [docs-directory]`, `check-todos.sh [docs-directory]` and
+`check-freshness.sh [docs-directory] [days-threshold]`. The directory must be
+literal (no glob, `~`, `..` component, or leading `-`) and must resolve,
+symlinks included, to an existing directory inside the pane's own cwd: the
+workspace root for the orchestrator, the checkout for executors and
+reviewers. A relative directory resolves against that cwd. The threshold is
+an integer from 1 to 3650.
 
 ### The hook
 
