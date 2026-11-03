@@ -1,5 +1,59 @@
 # Changelog
 
+## session-workspace 0.12.8 — 2026-11-03
+
+Security fix for the strict-v1 executor inline-code floor (executors and
+confined orchestrators). Update both providers together and restart agents.
+
+- Executors could run inline code by giving an interpreter or shell its
+  program on stdin, because `executor.inline_code` read only argv:
+  `echo 'import os' | python3`, `python3 - <<EOF`, `python3 <<EOF`,
+  `node <<<'...'`, `python3 < tool.py`, `echo ls | bash`, `bash <<EOF`,
+  `sh -s`. An interpreter or shell with no script operand, or with `-` as
+  the script, now counts as reading its program from stdin and is refused.
+  Version, help and info runs with no other option (`python3 --version`,
+  `node -v`, `perl -v`, `ruby -v`, `php -m`, `bash --version`; `ruby -v -w`
+  reads stdin), `python3 -m MODULE`, `node --test`/`--run`, `php -S`,
+  `php -f FILE` and every script run, with or without piped input, stay
+  allowed. Shell `-o`/`-O` take the next word wherever they sit in a
+  cluster, so `bash -ox pipefail` has no script. Bare `python3` or `bash`
+  with nothing piped in is refused too; it would only read the pane's
+  stdin.
+- Executors could hide inline code behind a launch prefix that the policy
+  did not unwrap: `timeout 5 python3 -c ...`, `nice`, `stdbuf`, `ionice`,
+  `setsid`, `taskset` and `chrt`, a shell keyword before the command
+  (`then`, `do`, `else`, `!`), and `find -exec`/`-execdir`/`-ok`/`-okdir`.
+  The inline-code check now unwraps each of these with its own option
+  grammar, nested and combined with `env`, `command`, `exec`, `nohup` and
+  `time` (which were already unwrapped), then applies the same checks. An
+  option outside a prefix's reviewed grammar falls back to the first later
+  shell or interpreter token. `timeout 5 python3 tool.py` and
+  `nice -n 5 make` stay allowed. This unwrapping is used for the
+  inline-code check only.
+- A newline in a command was folded into whitespace, so a command on a later
+  line was read as arguments of the first: `ls` then `python3 -c ...` on the
+  next line passed every per-command floor check, and `ls` then `sudo ls`
+  passed `shell.privilege`. The floor now also reads the command split into
+  lines the way the shell runs it, with backslash-newline joins, unquoted
+  `#` comments and heredoc bodies (`<<` and `<<-`) dropped. Both readings
+  must pass, so the line-split reading can only narrow what is allowed. A
+  heredoc body written to a file (`cat > notes.md <<EOF`) is data, as
+  before.
+- fish `--command`, `--init-command` and `-C` count as inline shell code.
+- `harness-status --probe` decides five new executor and confined
+  orchestrator cases: a pipe into `python3`, a heredoc into `bash`,
+  `timeout 5 python3 -c ...`, `python3 -c` on a second line, and a script
+  run behind `timeout`. `--floor-json` lists the launch prefixes.
+- Still not covered: task-runner launchers (`uv run`, `poetry run`, `npx`,
+  `bundle exec`, `npm exec`), `flock`, `watch`, `strace` and `script`, and
+  languages outside the floor's tables (`awk`, `deno`, `bun`, `lua`,
+  `Rscript`).
+- Tests: one case per gap with an allowed control next to it. With
+  `HARNESS_TEST_BASELINE_POLICY_0127` pointing at the 0.12.7
+  `harness-policy.py`, each gap case also asserts that 0.12.7 allowed it.
+  `HARNESS_TEST_BASELINE_POLICY` stays the baseline for the 0.12.7 cases.
+- No config migration.
+
 ## session-workspace 0.12.7 — 2026-11-03
 
 Security fix for the strict-v1 reviewer read-only floor, the orchestrator
