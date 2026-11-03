@@ -98,6 +98,41 @@ PATH_FIELDS = {
 }
 # Reviewer read-only command allowlist. Deliberately excludes sed/awk/perl
 # (write/exec-capable scripts), tee/env/xargs, and every mutating tool.
+#
+# Write/execute audit of every entry (0.12.7, GNU coreutils 9.4, diffutils
+# 3.10, file 5.45, jq 1.7 on Linux; FreeBSD-derived tools on macOS). An entry
+# with a write, exec or hidden-operand form names the rule that refuses it
+# (check_read_command, file_list_read, or a check in validate_reviewer_read).
+# check_read_command forms also count as mutations in segment_mutates.
+#   basename dirname pwd true false echo  no file or exec operands.
+#   cat head wc ls df stat realpath nl cut tr  read operands only; nothing
+#       writes on GNU or BSD. GNU `wc --files0-from` -> reviewer.file_list.
+#   printf  no file writes; the shell builtin's `-v VAR` only sets a variable.
+#   tail    `-f`/`-F`/`--follow` never terminate -> reviewer.tail.
+#   du      reads only; `--files0-from` -> reviewer.file_list, `-L` ->
+#           reviewer.symlink_follow.
+#   diff    GNU diffutils has no `--output` (git's is in GIT_DANGEROUS);
+#           `-l`/`--paginate` pipes through the fixed `pr`, no user program.
+#           `-r` -> reviewer.symlink_follow.
+#   grep rg find  `--pre`, `--hostname-bin`, `-z`, `-L`, `-exec`, `-delete`,
+#           `-fprint*` etc. -> reviewer.search / symlink_follow / find. Until
+#           0.12.7 find actions and rg --pre still counted as reads for the
+#           orchestrator's child-write floor; they now count as mutations.
+#   sort    `-o`, `-T`, `--compress-program` -> reviewer.sort.
+#   uniq    POSIX `uniq [input [output]]` truncates and writes the second
+#           operand on GNU and BSD -> reviewer.uniq. BSD getopt stops at the
+#           first operand, so `uniq in -c` writes a file named -c there.
+#   file    `-C`/`--compile` writes NAME.mgc -> reviewer.file; `-f`/
+#           `--files-from` loads more operands -> reviewer.file_list.
+#   date    `-s`/`--set` and a non-+ operand ([MMDDhhmm[[CC]YY][.ss]] on GNU,
+#           [[[mm]dd]HH]MM[[cc]yy][.ss] on BSD) set the clock -> reviewer.date.
+#   shasum cksum  `-c`/`--check` reads the files a checksum list names ->
+#           reviewer.file_list. BSD cksum has no check mode.
+#   jq      no write or exec builtin. `-f`, `--rawfile`, `--slurpfile` and
+#           `-L` are path operands. Residual read: `import`/`include` inside
+#           the program text resolve under jq's search path (~/.jq and -L),
+#           limited to .jq/.json names.
+#   which   reads PATH only.
 READ_COMMANDS = {
     "basename",
     "cat",
@@ -182,6 +217,13 @@ GIT_DANGEROUS = {"--output", "--ext-diff", "--textconv", "--exec-path", "--confi
 GIT_BRANCH_WRITE_FLAGS = {"-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy", "--set-upstream-to", "-u", "--unset-upstream", "--edit-description"}
 GIT_TAG_WRITE_FLAGS = {"-a", "-s", "-d", "-f", "-m", "-F", "--annotate", "--sign", "--delete", "--force", "--message", "--file"}
 GIT_REMOTE_WRITE_SUBS = {"add", "rename", "remove", "rm", "set-head", "set-branches", "set-url", "prune", "update"}
+# `git reflog` reads only as bare `git reflog [log options]` or through these
+# subcommands. Git dispatches on the word right after `reflog`: expire,
+# delete and drop (2.50) destroy entries, and any other word there is either
+# such a subcommand from a newer Git or a ref that `git reflog show REF` names
+# explicitly, so both are refused.
+GIT_REFLOG_READ_SUBS = {"show", "list", "exists"}
+GIT_REFLOG_WRITE_SUBS = {"expire", "delete", "drop"}
 
 # tmux verbs a child pane must never drive directly: they are the exact
 # transport bypasses the session-chat courier exists to prevent.
@@ -927,6 +969,11 @@ def git_is_read_only(tokens: List[str]) -> bool:
             return False
         if positionals and positionals[0] not in {"show", "get-url"}:
             return False
+    if sub == "reflog":
+        if any(t in GIT_REFLOG_WRITE_SUBS for t in rest):
+            return False
+        if rest and not rest[0].startswith("-") and rest[0] not in GIT_REFLOG_READ_SUBS:
+            return False
     return True
 
 
@@ -1252,6 +1299,97 @@ def sort_writes(argv: List[str]) -> bool:
                for kind, value in argv_fields(argv))
 
 
+def getopt_fields(argv: List[str], short_values: str = "", long_values: Tuple[str, ...] = (),
+                  permute: bool = True) -> Iterable[Tuple[str, str]]:
+    """Yield ("short", char), ("long", name) or ("operand", token) for a
+    getopt-style argv. A short option in SHORT_VALUES takes the rest of its
+    cluster or the next token; a long option that is a prefix of one in
+    LONG_VALUES takes the next token unless written with `=` (ambiguous
+    prefixes included: the real tool rejects those). `--` ends options.
+    PERMUTE False is BSD getopt: the first operand ends option parsing."""
+    index = 1
+    positional = False
+    while index < len(argv):
+        token = argv[index]
+        index += 1
+        if positional or token == "-" or not token.startswith("-"):
+            yield "operand", token
+            positional = positional or not permute
+            continue
+        if token == "--":
+            positional = True
+            continue
+        if token.startswith("--"):
+            name, equals, _ = token.partition("=")
+            yield "long", name
+            if not equals and any(option.startswith(name) for option in long_values):
+                index += 1
+            continue
+        for offset in range(1, len(token)):
+            yield "short", token[offset]
+            if token[offset] in short_values:
+                if offset + 1 == len(token):
+                    index += 1
+                break
+
+
+def long_prefix(name: str, option: str) -> bool:
+    """NAME is a GNU-style abbreviation (or the full spelling) of OPTION."""
+    return len(name) > 2 and option.startswith(name)
+
+
+def uniq_writes(argv: List[str]) -> bool:
+    """`uniq [input [output]]` opens and truncates its second operand. Counted
+    as BSD getopt does (options end at the first operand), which also covers
+    GNU's permuted forms: any second non-option operand is a write."""
+    fields = getopt_fields(argv, "fsw", ("--skip-fields", "--skip-chars", "--check-chars"), permute=False)
+    return sum(1 for kind, _ in fields if kind == "operand") >= 2
+
+
+def file_compiles(argv: List[str]) -> bool:
+    """`file -C [-m magic]` writes a compiled NAME.mgc into the cwd."""
+    return any((kind == "short" and value == "C") or (kind == "long" and long_prefix(value, "--compile"))
+               for kind, value in getopt_fields(argv, "efFmP", ("--exclude", "--exclude-quiet", "--files-from",
+                                                                "--separator", "--magic-file", "--parameter")))
+
+
+def date_sets(argv: List[str]) -> bool:
+    """`date -s STRING`, `--set` and any operand that is not a +FORMAT set the
+    system clock (GNU MMDDhhmm[[CC]YY][.ss]; BSD [[[mm]dd]HH]MM[[cc]yy][.ss],
+    set before BSD date validates the rest of its argv). `-I` takes only an
+    attached value, so `-Iseconds` is not `-s`."""
+    for kind, value in getopt_fields(argv, "dfrtvzI", ("--date", "--file", "--reference")):
+        if (kind == "short" and value == "s") or (kind == "long" and long_prefix(value, "--set")):
+            return True
+        if kind == "operand" and not value.startswith("+"):
+            return True
+    return False
+
+
+FIND_ACTIONS = {"-delete", "-exec", "-execdir", "-fls", "-fprint", "-fprint0", "-fprintf", "-ok", "-okdir"}
+
+
+def check_read_command(argv: List[str]) -> None:
+    """Raise when an allowlisted read command would write, set state or run
+    another program through an operand or option (see the READ_COMMANDS
+    audit). validate_reviewer_read refuses these for reviewers and
+    segment_mutates counts them as mutations, so the orchestrator's
+    child-write floor sees `uniq a child/b` and `find child -delete` too."""
+    executable = Path(argv[0]).name if argv else ""
+    if executable == "find" and any(token in FIND_ACTIONS for token in argv[1:]):
+        raise PolicyFailure("reviewer.find", "reviewer find mutation/execution actions are forbidden")
+    if executable in {"rg", "grep"} and any(token.split("=", 1)[0] in {"--pre", "--hostname-bin"} for token in argv[1:]):
+        raise PolicyFailure("reviewer.search", "reviewer search preprocessors and hostname programs are forbidden")
+    if executable == "sort" and sort_writes(argv):
+        raise PolicyFailure("reviewer.sort", "reviewer sort output/program options are forbidden")
+    if executable == "uniq" and uniq_writes(argv):
+        raise PolicyFailure("reviewer.uniq", "reviewer uniq takes at most one input operand: a second operand is an output file it overwrites")
+    if executable == "file" and file_compiles(argv):
+        raise PolicyFailure("reviewer.file", "reviewer file -C/--compile writes a compiled magic file")
+    if executable == "date" and date_sets(argv):
+        raise PolicyFailure("reviewer.date", "reviewer date may only print: -s/--set and a non-+FORMAT operand set the clock")
+
+
 def executable_path(token: str, base: Path) -> Optional[Path]:
     """The executable of a segment is a PATH operand only when written as one
     (contains a slash or a ./ ../ ~/ prefix); a bare name is a PATH lookup,
@@ -1372,6 +1510,15 @@ def file_list_read(tokens: List[str]) -> bool:
     executable = Path(tokens[0]).name if tokens else ""
     if executable == "find":
         return any(token == "-files0-from" for token in tokens[1:])
+    if executable == "file":
+        # `file -f NAMEFILE` / `--files-from` reads its operands from a file.
+        return any((kind == "short" and value == "f") or (kind == "long" and long_prefix(value, "--files-from"))
+                   for kind, value in getopt_fields(tokens, "efFmP", ("--exclude", "--exclude-quiet", "--files-from",
+                                                                      "--separator", "--magic-file", "--parameter")))
+    if executable in {"shasum", "cksum"}:
+        # `-c`/`--check` hashes every file the checksum list names.
+        return any((kind == "short" and value == "c") or (kind == "long" and long_prefix(value, "--check"))
+                   for kind, value in getopt_fields(tokens, "alo", ("--algorithm", "--length")))
     if executable not in {"sort", "du", "wc"}:
         return False
     return any(kind == "option" and value.startswith("--") and len(value) > 2
@@ -2792,14 +2939,13 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
         for _, path, _ in argv_paths(tokens, base, globs_quoted=quoted_globs_literal(tokens, quoted_globs)):
             if path.is_dir():
                 raise PolicyFailure("reviewer.symlink_follow", "reviewer diff requires file operands; directory comparison follows leaf symlinks")
-    if executable == "find" and any(token in {"-delete", "-exec", "-execdir", "-fls", "-fprint", "-fprint0", "-fprintf", "-ok", "-okdir"} for token in tokens):
+    if executable == "find" and any(token in FIND_ACTIONS for token in tokens):
         raise PolicyFailure("reviewer.find", "reviewer find mutation/execution actions are forbidden")
     if executable == "tail" and any(token in {"-f", "-F", "--follow"} or token.startswith("--follow=") for token in tokens):
         raise PolicyFailure("reviewer.tail", "reviewer tail must not follow (never-terminating)")
     if executable in {"rg", "grep"} and any(token in {"--pre", "--pre-glob"} or token.startswith(("--pre=", "--pre-glob=")) for token in option_tokens):
         raise PolicyFailure("reviewer.search", "reviewer search preprocessors are forbidden")
-    if executable == "sort" and sort_writes(tokens):
-        raise PolicyFailure("reviewer.sort", "reviewer sort output/program options are forbidden")
+    check_read_command(unwrap_prefixes(tokens))
     ensure_paths_within(tokens, base, lambda p: reviewer_readable(ctx, p), "reviewer.path",
                         extra_read=lambda p: skill_content_readable(ctx, p), globs_quoted=quoted_globs)
     return "coordination.message_read" if message_read else None
@@ -2874,12 +3020,13 @@ def segment_mutates(segment: List[str]) -> bool:
     executable = command_basename(segment)
     if not executable:
         return False
-    if executable == "sort":
+    if executable in READ_COMMANDS:
         try:
-            return sort_writes(unwrap_prefixes(segment))
+            check_read_command(unwrap_prefixes(segment))
         except PolicyFailure:
             return True
-    if executable in READ_COMMANDS or executable in CD_COMMANDS or executable == "popd":
+        return False
+    if executable in CD_COMMANDS or executable == "popd":
         # A directory change mutates nothing by itself; the segments that run
         # inside the new cwd are judged against it by walk_segments.
         return False
@@ -2932,12 +3079,118 @@ INLINE_SHELLS = {"bash", "dash", "fish", "sh", "zsh", "ksh"}
 INLINE_INTERPRETERS = {"node", "perl", "python", "python3", "ruby", "php"}
 
 
+# Per-interpreter option grammar, read up to the script operand:
+# (short options that run inline code, short options that take a value, long
+# options that run inline code, long options that take a value, long options
+# that load a module, inline when its value is a data: URL). A short value is
+# NEXT (the rest of the cluster, else the next token), ATTACHED (the rest of
+# the cluster only), ONE (exactly one character) or a set of characters it
+# consumes before the cluster continues (perl -l[octal], -0[digits]). So
+# `python3 -Wignore::DeprecationWarning`, `perl -pi -e`, `perl -lne` and
+# `ruby -Ke` (EUC, not -e) parse the way each interpreter does. Versioned
+# binaries (python3.12, perl5.36, php8.3, pypy3, nodejs) use their family.
+NEXT, ATTACHED, ONE = "next", "attached", "one"
+_OCTAL, _HEX = "01234567", "0123456789abcdefABCDEFxX"
+INLINE_GRAMMAR = {
+    "python": ("c", {"m": NEXT, "W": NEXT, "X": NEXT}, (), ("--check-hash-based-pycs",), ()),
+    "node": ("ep", {"r": NEXT, "C": NEXT}, ("--eval", "--print"),
+             ("--require", "--import", "--loader", "--experimental-loader", "--conditions", "--input-type",
+              "--env-file", "--env-file-if-exists", "--inspect-port", "--debug-port", "--title",
+              "--disable-warning", "--redirect-warnings", "--watch-path", "--test-reporter",
+              "--test-reporter-destination", "--test-name-pattern", "--test-skip-pattern",
+              "--test-concurrency", "--test-timeout", "--test-shard", "--run"),
+             ("--require", "--import", "--loader", "--experimental-loader")),
+    "perl": ("eE", {"I": NEXT, "m": ATTACHED, "M": ATTACHED, "F": ATTACHED, "i": ATTACHED, "x": ATTACHED,
+                    "d": ATTACHED, "D": ATTACHED, "V": ATTACHED, "l": _OCTAL, "0": _HEX,
+                    "C": "IOESioDALa0123456789"}, (), (), ()),
+    "ruby": ("e", {"r": NEXT, "I": NEXT, "C": NEXT, "E": NEXT, "F": ATTACHED, "i": ATTACHED, "x": ATTACHED,
+                   "W": ATTACHED, "K": ONE, "T": "0123456789", "0": _OCTAL},
+             (), ("--enable", "--disable", "--encoding", "--external-encoding", "--internal-encoding", "--dump",
+                  "--backtrace-limit", "--crash-report", "--parser"), ()),
+    "php": ("rRBE", {char: NEXT for char in "cdfztFS"}, ("--run", "--process-begin", "--process-code", "--process-end"),
+            ("--php-ini", "--define", "--file", "--process-file", "--zend-extension", "--rf", "--rc", "--re",
+             "--rz", "--ri", "--server", "--docroot"), ()),
+}
+# Perl -M/-m text is spliced into `use MODULE ...;`, so anything beyond a
+# module name and import list (`-M'strict; system 1'`) is inline code.
+PERL_MODULE_RE = re.compile(r"-?[A-Za-z0-9_:.]+(?:=[A-Za-z0-9_:,.+-]*)?\Z")
+# Long options that run inline code wherever they appear, script arguments
+# included, as the exact -c/-e/--eval/-r tokens always were.
+INLINE_LONG_ANYWHERE = {"node": ("--eval", "--print"),
+                        "php": ("--run", "--process-begin", "--process-code", "--process-end")}
+
+
+def interpreter_family(executable: str) -> str:
+    match = re.fullmatch(r"(python|pypy|perl|php|ruby|nodejs|node)(?:[0-9][0-9.]*)?", executable)
+    if match is None:
+        return ""
+    return {"pypy": "python", "nodejs": "node"}.get(match.group(1), match.group(1))
+
+
+def interpreter_inline_code(family: str, argv: List[str]) -> bool:
+    """Read FAMILY's options in ARGV up to the script operand: attached and
+    clustered short forms (`-c"code"`, `-Bc`, `-ne`), `--eval=`/`--print=`
+    long forms and data: URL module loads all count as inline code."""
+    inline_short, value_short, inline_long, value_long, loader_long = INLINE_GRAMMAR[family]
+    anywhere = INLINE_LONG_ANYWHERE.get(family, ())
+    if any(token.partition("=")[0] in anywhere for token in argv[1:]):
+        return True
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        index += 1
+        if token in {"-", "--"} or not token.startswith("-"):
+            return False  # script operand, stdin program or end of options
+        if token.startswith("--"):
+            name, equals, value = token.partition("=")
+            if name in inline_long:
+                return True
+            if name in value_long and not equals and index < len(argv):
+                value = argv[index]
+                index += 1
+            if name in loader_long and value.startswith("data:"):
+                return True
+            continue
+        offset = 1
+        while offset < len(token):
+            char = token[offset]
+            offset += 1
+            if char in inline_short:
+                return True
+            arity = value_short.get(char)
+            if arity is None:
+                continue
+            if arity == ONE:
+                offset += 1
+                continue
+            if arity not in {NEXT, ATTACHED}:
+                while offset < len(token) and token[offset] in arity:
+                    offset += 1
+                continue
+            value = token[offset:]
+            if not value and arity == NEXT and index < len(argv):
+                value = argv[index]
+                index += 1
+            if family == "perl" and char in "mM" and value and not PERL_MODULE_RE.match(value):
+                return True
+            if family == "node" and char == "r" and value.startswith("data:"):
+                return True
+            if family == "python" and char == "m":
+                return False  # module run: the rest is the module's own argv
+            break
+    return False
+
+
 def executor_inline_code(segment: List[str]) -> bool:
     executable = command_basename(segment)
     if executable in INLINE_SHELLS:
         return any(len(token) > 1 and token[0] in "-+" and not token.startswith("--") and "c" in token[1:] for token in segment[1:])
-    if executable in INLINE_INTERPRETERS:
-        return any(token in {"-c", "-e", "--eval", "-r"} for token in segment[1:])
+    family = interpreter_family(executable)
+    if family:
+        # The exact tokens are the earlier floor, still refused anywhere in the
+        # segment; the per-interpreter grammar adds attached/clustered forms.
+        return (any(token in {"-c", "-e", "--eval", "-r"} for token in segment[1:])
+                or interpreter_inline_code(family, unwrap_prefixes(segment)))
     return executable == "eval"
 
 
@@ -3471,7 +3724,8 @@ ROLE_FLOOR = {
          _FLOOR_EDIT),
         ("readonly", "shell default-deny except allowlisted reads",
          ("reviewer.shell", "reviewer.command", "reviewer.git", "reviewer.path", "reviewer.sed", "reviewer.search",
-          "reviewer.symlink_follow", "reviewer.find", "reviewer.tail", "reviewer.sort", "reviewer.file_list"),
+          "reviewer.symlink_follow", "reviewer.find", "reviewer.tail", "reviewer.sort", "reviewer.uniq",
+          "reviewer.file", "reviewer.date", "reviewer.file_list"),
          (("READ_COMMANDS", "read commands"), ("READ_GIT", "git read subcommands"))),
     ) + _FLOOR_TO_MASTER + (_FLOOR_LIFECYCLE,),
     "executor": _FLOOR_CONTAINMENT + _FLOOR_TO_MASTER + (_FLOOR_LIFECYCLE,),
@@ -3521,6 +3775,9 @@ _PROBE_CONTAINMENT = (
     ("shell", "executor.containment", "touch outside the pane checkout", "touch {outside}"),
     ("shell", "allow", "touch inside the pane checkout", "touch {probe}"),
     ("shell", "executor.inline_code", "bash -c", "bash -c true"),
+    ("shell", "executor.inline_code", "python3 -c with attached code", 'python3 -c"print(1)"'),
+    ("shell", "executor.inline_code", "node --eval=", "node --eval=1"),
+    ("shell", "allow", "python3 running a script file in the pane checkout", "python3 {probe}"),
     ("shell", "path.dynamic", "shell expansion", "ls $HOME"),
 )
 FLOOR_PROBES = {
@@ -3532,6 +3789,13 @@ FLOOR_PROBES = {
         ("shell", "reviewer.git", "git commit", "git commit -m probe"),
         ("shell", "reviewer.shell", "write redirection", "ls > {probe}"),
         ("shell", "reviewer.sed", "sed", "sed -n 1p {probe}"),
+        ("shell", "allow", "uniq with one input operand", "uniq {probe}"),
+        ("shell", "reviewer.uniq", "uniq with an output operand", "uniq {probe} {probe}"),
+        ("shell", "allow", "git reflog", "git reflog"),
+        ("shell", "reviewer.git", "git reflog expire", "git reflog expire --all --expire=now"),
+        ("shell", "reviewer.git", "git reflog delete", "git reflog delete HEAD"),
+        ("shell", "reviewer.file", "file -C", "file -C -m {probe}"),
+        ("shell", "reviewer.date", "date -s", "date -s 00:00"),
         ("shell", "reviewer.path", "read outside the pane's read roots", "cat {outside}"),
     ) + _PROBE_TO_MASTER + (_PROBE_LIFECYCLE,),
     "executor": _PROBE_CONTAINMENT + _PROBE_TO_MASTER + (_PROBE_LIFECYCLE,),
@@ -3539,6 +3803,8 @@ FLOOR_PROBES = {
         ("edit", "orchestrator.child_write", "edit inside a child checkout", "{child}"),
         ("edit_one", "allow", "Edit in the pane's own checkout", "{probe}"),
         ("shell", "orchestrator.child_write", "touch inside a child checkout", "touch {child}"),
+        ("shell", "orchestrator.child_write", "uniq writing its output operand into a child checkout",
+         "uniq {probe} {child}"),
         ("shell", "orchestrator.push", "git push", "git push"),
         ("shell", "orchestrator.gh_mutation", "gh pr merge", "gh pr merge 1"),
         ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
@@ -3546,6 +3812,7 @@ FLOOR_PROBES = {
     "confined_orchestrator": _PROBE_CONTAINMENT + (
         ("shell", "orchestrator.git", "git commit", "git commit -m probe"),
         ("shell", "orchestrator.git", "git push", "git push"),
+        ("shell", "orchestrator.git", "git reflog expire", "git reflog expire --all --expire=now"),
         ("shell", "orchestrator.gh_mutation", "gh pr merge", "gh pr merge 1"),
     ) + _PROBE_TO_MASTER,
 }

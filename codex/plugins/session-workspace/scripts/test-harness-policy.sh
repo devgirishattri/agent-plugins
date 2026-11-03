@@ -1412,6 +1412,126 @@ for message_config in "$AMBIG_CONFIG" "$OVERLAP_CONFIG" "$INCWD_CONFIG" "$INCWD_
 done
 rm -f "$CHILD/msg-alias"
 
+echo "== 0.12.7 read-command writes, reviewer reflog, executor inline code =="
+# Each gap_case is a payload the released policy allowed. With
+# HARNESS_TEST_BASELINE_POLICY set to that release's harness-policy.py
+# inside a copy of that release's scripts directory (git archive <rev>
+# plugins/session-workspace/scripts | tar -x -C DIR; the policy loads siblings),
+# every gap_case also asserts the baseline allowed it: the control that the
+# gap was real. The allow cases are the controls that the fix stays narrow.
+BASELINE_POLICY="${HARNESS_TEST_BASELINE_POLICY:-}"
+# gap_case LABEL ROLE PAYLOAD JQ_EXPR
+gap_case() {
+  local label="$1" role="$2" payload="$3" expression="$4" pane cwd out
+  case "$role" in
+    reviewer) pane="$REVIEW_PANE" cwd="$CHILD" ;;
+    executor) pane="$EXEC_PANE" cwd="$CHILD" ;;
+    *) pane="$MASTER_PANE" cwd="$ROOT" ;;
+  esac
+  expect "$label" "$role" "$pane" "$cwd" "$CONFIG" enforce "$payload" "$expression"
+  [ -n "$BASELINE_POLICY" ] || return 0
+  out="$(POLICY="$BASELINE_POLICY" run_policy "$role" "$pane" "$cwd" "$CONFIG" enforce "$payload" 2>&1)"
+  if printf '%s' "$out" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+    pass "baseline control: released policy allowed it: $label"
+  else
+    fail "baseline control: released policy allowed it: $label" "$out"
+  fi
+}
+[ -n "$BASELINE_POLICY" ] || echo "  (baseline controls skipped: set HARNESS_TEST_BASELINE_POLICY to the released harness-policy.py)"
+printf 'kept\n' > "$CHILD/src/uniq-existing.txt"
+UNIQ='.decision == "deny" and .rule == "reviewer.uniq"'
+as_review "uniq: one input operand is allowed" "$(bash_payload 'uniq README.md')" '.decision == "allow"'
+as_review "uniq: options with values and one operand are allowed" "$(bash_payload 'uniq -c -f 1 -s 2 --skip-fields 1 README.md')" '.decision == "allow"'
+as_review "uniq: attached values (-cf1) and -- with one operand are allowed" "$(bash_payload 'uniq -cf1 -- README.md')" '.decision == "allow"'
+as_review "uniq: stdin with no operand is allowed" "$(bash_payload 'uniq -d')" '.decision == "allow"'
+gap_case "uniq: reported form, nonexistent bare input and slash output, is denied" reviewer "$(bash_payload 'uniq package.json src/b.txt')" "$UNIQ"
+gap_case "uniq: nonexistent slash output is denied" reviewer "$(bash_payload 'uniq README.md src/b.txt')" "$UNIQ"
+gap_case "uniq: nonexistent bare output is denied" reviewer "$(bash_payload 'uniq README.md notes.txt')" "$UNIQ"
+gap_case "uniq: existing slash output is denied" reviewer "$(bash_payload 'uniq README.md src/uniq-existing.txt')" "$UNIQ"
+gap_case "uniq: existing bare output is denied" reviewer "$(bash_payload 'uniq src/uniq-existing.txt README.md')" "$UNIQ"
+gap_case "uniq: output after options is denied" reviewer "$(bash_payload 'uniq -c -f 1 README.md notes.txt')" "$UNIQ"
+gap_case "uniq: stdin input with an output operand is denied" reviewer "$(bash_payload 'uniq - notes.txt')" "$UNIQ"
+gap_case "uniq: BSD form, an option after the input (output file -c), is denied" reviewer "$(bash_payload 'uniq README.md -c')" "$UNIQ"
+gap_case "uniq: an output operand after -- is denied" reviewer "$(bash_payload 'uniq -- README.md notes.txt')" "$UNIQ"
+gap_case "uniq: executor read grant path does not admit an output operand" executor "$(bash_payload "uniq $CLAUDE_CACHE/session-chat/1.2.3/scripts/send-message.sh $CLAUDE_CACHE/session-chat/1.2.3/scripts/out.txt")" '.decision == "deny" and .rule == "executor.containment"'
+as_exec "uniq: executor output inside its checkout stays allowed (control)" "$(bash_payload 'uniq README.md notes.txt')" '.decision == "allow"'
+
+# Step 2 audit gaps (see the READ_COMMANDS comment): one case each.
+as_review "file: a plain read is allowed" "$(bash_payload 'file -b README.md')" '.decision == "allow"'
+gap_case "file: -C -m compiles and writes a magic file, denied" reviewer "$(bash_payload 'file -C -m README.md')" '.decision == "deny" and .rule == "reviewer.file"'
+gap_case "file: clustered -bC is denied" reviewer "$(bash_payload 'file -bC -m README.md')" '.decision == "deny" and .rule == "reviewer.file"'
+gap_case "file: --compile abbreviation is denied" reviewer "$(bash_payload 'file --comp -m README.md')" '.decision == "deny" and .rule == "reviewer.file"'
+gap_case "file: -f loads operands from a name list, denied" reviewer "$(bash_payload 'file -f README.md')" '.decision == "deny" and .rule == "reviewer.file_list"'
+as_review "date: +FORMAT, -u, -d and -Iseconds print only and are allowed" "$(bash_payload "date -u -d '2 days ago' +%F")" '.decision == "allow"'
+as_review "date: -Iseconds is not -s" "$(bash_payload 'date -Iseconds')" '.decision == "allow"'
+gap_case "date: -s sets the clock, denied" reviewer "$(bash_payload 'date -s 00:00')" '.decision == "deny" and .rule == "reviewer.date"'
+gap_case "date: --set= sets the clock, denied" reviewer "$(bash_payload 'date --set=00:00')" '.decision == "deny" and .rule == "reviewer.date"'
+gap_case "date: a non-+ operand sets the clock (GNU and BSD), denied" reviewer "$(bash_payload 'date -u 0101000026')" '.decision == "deny" and .rule == "reviewer.date"'
+as_review "shasum/cksum: hashing a named file is allowed" "$(bash_payload 'shasum -a 256 README.md')" '.decision == "allow"'
+gap_case "shasum: -c hashes the files a list names, denied" reviewer "$(bash_payload 'shasum -c README.md')" '.decision == "deny" and .rule == "reviewer.file_list"'
+gap_case "cksum: --check hashes the files a list names, denied" reviewer "$(bash_payload 'cksum --check README.md')" '.decision == "deny" and .rule == "reviewer.file_list"'
+CW='.decision == "deny" and .rule == "orchestrator.child_write"'
+as_master "orchestrator uniq with a root-local output is allowed (control)" "$(bash_payload 'uniq AGENTS.md notes.txt')" '.decision == "allow"'
+as_master "orchestrator uniq reading a child is allowed (control)" "$(bash_payload 'uniq component-a/README.md')" '.decision == "allow"'
+gap_case "orchestrator uniq writing into a child is a child write" master "$(bash_payload 'uniq AGENTS.md component-a/out.txt')" "$CW"
+gap_case "orchestrator uniq run inside a child is a child write" master "$(bash_payload 'cd component-a && uniq README.md out.txt')" "$CW"
+as_master "orchestrator find reading a child is allowed (control)" "$(bash_payload 'find component-a -name README.md')" '.decision == "allow"'
+gap_case "orchestrator find -delete in a child is a child write" master "$(bash_payload 'find component-a -name x -delete')" "$CW"
+gap_case "orchestrator rg --pre over a child is a child write" master "$(bash_payload 'rg --pre ./x hello component-a')" "$CW"
+gap_case "orchestrator file -C inside a child is a child write" master "$(bash_payload 'cd component-a && file -C -m README.md')" "$CW"
+
+GITD='.decision == "deny" and .rule == "reviewer.git"'
+as_review "reflog: bare git reflog is allowed" "$(bash_payload 'git reflog')" '.decision == "allow"'
+as_review "reflog: show with log options and a quoted ref is allowed" "$(bash_payload "git reflog show --date=iso -n 5 'HEAD@{1}'")" '.decision == "allow"'
+as_review "reflog: list is allowed" "$(bash_payload 'git reflog list')" '.decision == "allow"'
+as_review "reflog: exists is allowed" "$(bash_payload 'git reflog exists HEAD')" '.decision == "allow"'
+as_review "reflog: an option first is an implicit show, allowed" "$(bash_payload 'git reflog --date=relative')" '.decision == "allow"'
+gap_case "reflog: expire --all --expire=now is denied" reviewer "$(bash_payload 'git reflog expire --all --expire=now')" "$GITD"
+gap_case "reflog: expire with an unquoted ref is denied" reviewer "$(bash_payload 'git reflog expire --expire=now main')" "$GITD"
+gap_case "reflog: delete with a single-quoted ref is denied" reviewer "$(bash_payload "git reflog delete 'HEAD@{0}'")" "$GITD"
+gap_case "reflog: delete with a double-quoted ref is denied" reviewer "$(bash_payload 'git reflog delete "main@{1}"')" "$GITD"
+gap_case "reflog: delete with an unquoted plain ref is denied" reviewer "$(bash_payload 'git reflog delete HEAD')" "$GITD"
+as_review "reflog: delete with an unquoted brace ref is denied" "$(bash_payload 'git reflog delete HEAD@{0}')" '.decision == "deny" and (.rule == "reviewer.git" or .rule == "path.dynamic")'
+gap_case "reflog: drop (Git 2.50) is denied" reviewer "$(bash_payload 'git reflog drop main')" "$GITD"
+gap_case "reflog: an unknown word after reflog is denied" reviewer "$(bash_payload 'git reflog main')" "$GITD"
+gap_case "reflog: a write word later in an implicit show is denied" reviewer "$(bash_payload 'git reflog -n 1 expire')" "$GITD"
+gap_case "reflog: behind global options is still denied" reviewer "$(bash_payload 'git --no-pager -C . reflog expire --all')" "$GITD"
+gap_case "orchestrator reflog expire in a child is a child write" master "$(bash_payload 'git -C component-a reflog expire --all')" "$CW"
+as_master "orchestrator reflog read in a child is allowed (control)" "$(bash_payload 'git -C component-a reflog')" '.decision == "allow"'
+
+INL='.decision == "deny" and .rule == "executor.inline_code"'
+as_exec "inline: python3 running a script file is allowed" "$(bash_payload 'python3 tool.py --verbose')" '.decision == "allow"'
+as_exec "inline: script arguments that look like options are not interpreter options" "$(bash_payload 'node server.js -p 3000 -env')" '.decision == "allow"'
+as_exec "inline: python3 -W value with a c is not -c" "$(bash_payload 'python3 -Wignore::DeprecationWarning:collections tool.py')" '.decision == "allow"'
+as_exec "inline: python3 -m module run is allowed" "$(bash_payload 'python3 -m pytest -q')" '.decision == "allow"'
+as_exec "inline: perl -M module import is allowed" "$(bash_payload 'perl -MData::Dumper -w tool.pl')" '.decision == "allow"'
+as_exec "inline: ruby -Ke (EUC) is not -e" "$(bash_payload 'ruby -Ke tool.rb')" '.decision == "allow"'
+as_exec "inline: php script with -d ini is allowed" "$(bash_payload 'php -d display_errors=1 tool.php')" '.decision == "allow"'
+as_exec "inline: node --import of a file module is allowed" "$(bash_payload 'node --import ./setup.mjs tool.js')" '.decision == "allow"'
+gap_case "inline: python3 -c attached code is denied" executor "$(bash_payload 'python3 -c"print(1)"')" "$INL"
+gap_case "inline: python3 -c attached import/system is denied" executor "$(bash_payload "python3 -c\"import os; os.system('true')\"")" "$INL"
+gap_case "inline: python3 clustered -Bc is denied" executor "$(bash_payload "python3 -Bc 'print(1)'")" "$INL"
+gap_case "inline: python3 -X value then attached -c is denied" executor "$(bash_payload "python3 -X dev -c'print(1)'")" "$INL"
+gap_case "inline: versioned python3.12 -c is denied" executor "$(bash_payload "python3.12 -c 'print(1)'")" "$INL"
+gap_case "inline: node --eval= is denied" executor "$(bash_payload 'node --eval=1')" "$INL"
+gap_case "inline: node -p is denied" executor "$(bash_payload "node -p '1'")" "$INL"
+gap_case "inline: node --print is denied" executor "$(bash_payload "node --print '1'")" "$INL"
+gap_case "inline: node --print= is denied" executor "$(bash_payload 'node --print=1')" "$INL"
+gap_case "inline: node -pe is denied" executor "$(bash_payload "node -pe '1'")" "$INL"
+gap_case "inline: node --import of a data: URL is denied" executor "$(bash_payload "node --import 'data:text/javascript,process.exit()' tool.js")" "$INL"
+gap_case "inline: perl attached -e is denied" executor "$(bash_payload "perl -e'print 1'")" "$INL"
+gap_case "inline: perl -E is denied" executor "$(bash_payload "perl -E 'say 1'")" "$INL"
+gap_case "inline: perl clustered -lne is denied" executor "$(bash_payload "perl -lne 'print'")" "$INL"
+gap_case "inline: perl -M with code is denied" executor "$(bash_payload "perl '-Mstrict; print 1' tool.pl")" "$INL"
+gap_case "inline: ruby attached -e is denied" executor "$(bash_payload "ruby -e'p 1'")" "$INL"
+gap_case "inline: ruby clustered -ne is denied" executor "$(bash_payload "ruby -ne 'p 1'")" "$INL"
+gap_case "inline: php attached -r is denied" executor "$(bash_payload "php -r'echo 1;'")" "$INL"
+gap_case "inline: php clustered -nr is denied" executor "$(bash_payload "php -nr 'echo 1;'")" "$INL"
+gap_case "inline: php -B begin code is denied" executor "$(bash_payload "php -B 'echo 1;'")" "$INL"
+gap_case "inline: php --run= is denied" executor "$(bash_payload "php --run='echo 1;'")" "$INL"
+as_exec "inline: bash running a script file is allowed (shell branch unchanged)" "$(bash_payload 'bash tool.sh')" '.decision == "allow"'
+rm -f "$CHILD/src/uniq-existing.txt"
+
 echo "== role floor report (--floor-json / --probe-json) =="
 # report_policy ROLE PANE CWD CONFIG MODE FLAG [extra env...]: a read-only
 # report mode in one pane identity. Reads no stdin.

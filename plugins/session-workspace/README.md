@@ -441,11 +441,20 @@ role floor is off. The floor:
   orchestrator child-write checks alike (`grep`/`rg`/`sort` know which
   letters take a pattern versus a file, so `grep -e/api/` stays a pattern;
   reviewers may never use `sort -o`/`-T` or any abbreviation of
-  `--output`/`--temporary-directory`/`--compress-program`); redirection
+  `--output`/`--temporary-directory`/`--compress-program`; from 0.12.7 they
+  may not give `uniq` an output operand (`uniq in out`, or BSD's
+  `uniq in -c`), run `file -C`, set the clock with `date -s`/`--set` or a
+  non-`+FORMAT` operand, load operands from a list with `file -f` or
+  `shasum`/`cksum -c`, or run `git reflog` other than bare,
+  `show`, `list` or `exists`, so `expire`, `delete` and `drop` are refused); redirection
   targets are checked against the shell's cwd and can never be consumed as a
   data value (`grep -e > out`); a bare operand
   that names an existing entry (a planted symlink) is canonicalized;
-  `xargs`, inline code (`bash -c`, `python -c`, `node -e`, `eval`), and any
+  `xargs`, inline code (`bash -c`, `python -c`, `node -e`, `eval`; from
+  0.12.7 also attached and clustered forms such as `python3 -c"..."`,
+  `python3 -Bc`, `perl -lne`, `ruby -e'...'`, `php -nr`, `node -p`,
+  `--eval=`/`--print=`, `perl -E`, `php -B/-R/-E`, a `data:` URL module
+  load, and versioned binaries such as `python3.12`), and any
   sandbox/approval-escape flag are refused. Outbound
   coordination may only target
   the orchestrator; direct `tmux send-keys`/`paste-buffer`/... and copied or
@@ -854,9 +863,13 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   withhold write-scoped GitHub credentials from orchestrator panes (per-role
   secret visibility). File-backed `gh api` GET inputs transmit the file's
   contents to GitHub.
-- Pre-existing (tracked, unchanged in 0.9.0): `find` is classified as a read
-  command, so a root orchestrator's `find <child> -delete` or
-  `find <child> -exec ...` is not caught by the child-root floor.
+- Until 0.12.7, `find` actions (`find <child> -delete`, `-exec ...`),
+  `rg --pre`, `uniq` with an output operand and `git reflog expire` counted
+  as reads, so a root orchestrator's child-root floor did not catch them.
+  From 0.12.7 they count as mutations.
+- The executor inline-code floor reads the interpreter's own argv. It does
+  not see a program fed on stdin (`python3 < script`, a pipe or a heredoc)
+  or one launched behind a prefix it does not unwrap (`timeout`, `nice`).
 - Codex `PreToolUse` carries no per-call `exec_command` workdir (only the
   turn's top-level `cwd`), so executor/reviewer shell containment on Codex
   is incomplete for commands that set their own workdir; see "The hook".
