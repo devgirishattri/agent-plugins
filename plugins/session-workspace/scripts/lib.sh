@@ -22,6 +22,72 @@ sw_require_available_read_paths() {
   return 0
 }
 
+# sw_select_panes PLAN_JSON SESSION_ID NAME... — resolve `--pane NAME` values
+# for one session of a computed plan. A value names a pane exactly, or by the
+# part after "<project.id>-" (the "${PROJECT_ID}-" prefix most configs give
+# pane names), so `--pane browser` selects "example-browser" in project
+# "example". Only service panes (role "service": dev servers, the browser,
+# other shell services) can be selected; agent panes stay whole-session
+# topology. Prints one resolved pane name per line, in argument order,
+# de-duplicated; when any value does not resolve it prints every reason on
+# stderr, prints nothing on stdout, and returns 1. harness-policy.py resolves
+# the same way (resolve_service_panes) so the argv it admits is exactly the
+# argv this engine accepts.
+sw_select_panes() {
+  local plan_json="$1" session_id="$2" want_json result
+  shift 2
+  want_json="$(printf '%s\n' "$@" | jq -R . | jq -sc .)" || return 1
+  result="$(printf '%s' "$plan_json" | jq -c --arg sid "$session_id" --argjson want "$want_json" '
+    .project.id as $pid
+    | ([.sessions[] | select(.id == $sid)][0]) as $s
+    | if $s == null then {errors: ["unknown session target \"" + $sid + "\""], panes: []}
+      else
+        [ $want[] as $w
+          | ([$s.panes[] | select(.name == $w)]
+             | if length == 1 then . else [$s.panes[] | select(.name == ($pid + "-" + $w))] end) as $m
+          | if ($m | length) != 1 then
+              {error: ("no pane \"" + $w + "\" in session " + $sid + " (service panes: "
+                       + ([$s.panes[] | select(.role == "service") | .name] | if length == 0 then "none" else join(", ") end) + ")")}
+            elif $m[0].role != "service" then
+              {error: ("pane " + $m[0].name + " has role " + $m[0].role + "; --pane selects service panes only")}
+            else {name: $m[0].name} end
+        ] as $r
+        | {errors: [$r[] | .error // empty],
+           panes: (reduce ($r[] | .name // empty) as $n ([]; if index($n) != null then . else . + [$n] end))}
+      end')" || return 1
+  if [ "$(printf '%s' "$result" | jq '.errors | length')" != "0" ]; then
+    printf '%s' "$result" | jq -r '.errors[] | "ERROR: --pane: " + .' >&2
+    return 1
+  fi
+  printf '%s' "$result" | jq -r '.panes[]'
+}
+
+# sw_pane_record_path PROJECT_ID PANE_NAME — the per-pane run record that the
+# idle watcher (idle-watch.py) and `workspace stop --pane` write and
+# `workspace status` reads. Pane names are charset-restricted by validation
+# (A-Za-z0-9._-), so the name is a safe single path component.
+sw_pane_record_path() {
+  printf '%s/session-workspace/%s/panes/%s.json\n' "${XDG_STATE_HOME:-$HOME/.local/state}" "$1" "$2"
+}
+
+# sw_pane_record_stop PROJECT_ID PANE_NAME PANE_ID REASON — merge "stopped,
+# when, why" into the pane's run record (atomic rename; no lock: the record is
+# a report, and the last writer wins).
+sw_pane_record_stop() {
+  local file dir tmp current
+  file="$(sw_pane_record_path "$1" "$2")"
+  dir="$(dirname "$file")"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  current="$(cat "$file" 2>/dev/null)"
+  printf '%s' "$current" | jq -e 'type == "object"' >/dev/null 2>&1 || current='{}'
+  tmp="$file.$$.tmp"
+  printf '%s' "$current" | jq -c --arg pane "$2" --arg pane_id "$3" --arg reason "$4" \
+    --arg at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    '. + {pane: $pane, state: "stopped", stopped_at: $at, stop_reason: $reason}
+     | if (.pane_id // "") != $pane_id then . + {pane_id: $pane_id} | del(.watcher_pid) else . end' >"$tmp" 2>/dev/null &&
+    mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+}
+
 # The bootstrap shim (templates/workspace.sh) resolves the newest compatible
 # plugin install by asking `workspace.sh --contract` for this exact string.
 # Bump the trailing integer only on a breaking CLI contract change.

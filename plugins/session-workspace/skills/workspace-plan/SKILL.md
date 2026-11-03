@@ -22,9 +22,12 @@ Real flags:
 - `TARGET|all`: optional `sessions[].id` filter; default is `all`.
 - `--config PATH`: use a specific workspace config instead of discovery.
 - `--json`: emit the resolved plan as JSON.
+- `--running`: add a read-only `running` field to each pane (true when the
+  managed pane is alive and launched, `null` without tmux).
 
 This command is mutation-free. It validates config, resolves pane cwd paths,
 and prints the normalized plan without touching tmux or any state directory.
+Only `--running` reads tmux, and it changes nothing.
 Unknown targets fail with the known session ids. The human report shows env
 variable names only and never prints env values or secret values.
 

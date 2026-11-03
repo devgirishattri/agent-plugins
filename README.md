@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.21 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.9 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.12 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.12.5 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-workspace` | 0.12.6 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.0 | Walk users through session changes with a live in-browser overlay tour |
 
@@ -831,6 +831,10 @@ session-manager operations do not honor `CLAUDE_HOME`.
 | `SESSION_WORKSPACE_SOURCE_TREE_DIR` | Yes | Yes | Unset | Development override for the sibling-checkout search used to resolve the engine from a source tree instead of an installed copy. |
 | `SESSION_WORKSPACE_LOCK_TIMEOUT` | Yes | Yes | `30` | Seconds to wait for the tmux lifecycle lock before giving up. |
 | `SESSION_WORKSPACE_STOP_GRACE_SECONDS` | Yes | Yes | `5` | Grace period given to a pane's agent to exit before `workspace-stop` escalates. |
+| `SESSION_WORKSPACE_IDLE_OBSERVE` | Yes | Yes | Unset | Set to `connections` to make the browser's idle watcher count client connections instead of CDP traffic. Read when `start` arms the watcher. |
+| `SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS` | Yes | Yes | `30` | Seconds between idle-watcher samples, at most the idle window. Read when `start` arms the watcher. |
+| `SESSION_WORKSPACE_IDLE_SECONDS_PER_MINUTE` | Yes | Yes | `60` | Length in seconds of one `idle_stop_minutes` minute. Intended for tests. |
+| `SESSION_WORKSPACE_STOP_REASON` | Yes | Yes | Unset | Reason recorded for a `stop --pane`. The idle watcher sets it; leave it unset. |
 | `SESSION_WORKSPACE_ATTACH_DRY_RUN` | Yes | Yes | `0` | Set to `1` to skip the terminal attach step. Intended for tests and automation. |
 
 All behavior lives in the plugin engine. An adopting project contributes only a

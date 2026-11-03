@@ -194,7 +194,7 @@ def harness_engine_vars: [
     (($s.value.layout.nodes // []) | to_entries[] | . as $n |
       chk($n.value; ["id", "from", "dir", "percent"]; ["id"]; "sessions." + $slabel + ".layout.nodes[" + ($n.key | tostring) + "]")),
     (($s.value.panes // []) | to_entries[] | . as $p | ($p.value.name // ("panes[" + ($p.key | tostring) + "]")) as $plabel | (
-      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths"] + (if $cfg.schema_version == 5 then ["runtime"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
+      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths", "idle_stop_minutes"] + (if $cfg.schema_version == 5 then ["runtime"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
       chk($p.value.agent // {}; ["model", "effort", "profile", "permission_mode"]; []; "sessions." + $slabel + ".panes." + $plabel + ".agent")
     ))
   )),
@@ -407,6 +407,26 @@ def harness_engine_vars: [
          else empty end)
       else empty end)
    else empty end),
+
+  # ---- opt-in idle stop: an integer window on a service pane that has
+  #      something to observe -- its own port (a dev server) or the DevTools
+  #      port (the browser pane, which must omit port). Any schema version. ----
+  (. as $cfg
+   | ([$cfg.browser?, $cfg.browsers[]? | select(. != null) | . as $b
+       | {session_id: $b.session_id,
+          pane: ($b.pane_name // ([($cfg.sessions // [])[] | select(.id == $b.session_id) | (.panes // [])[].name] | if length == 1 then .[0] else null end))}]) as $browser_panes
+   | ($cfg.sessions // [])[] | . as $s | ($s.panes // [])[] | . as $p
+   | select($p | type == "object" and has("idle_stop_minutes"))
+   | ("pane " + (($p.name // "?") | tostring) + ": idle_stop_minutes") as $l
+   | ($p.idle_stop_minutes) as $m
+   | if ($m | type) != "number" or ($m | floor) != $m or $m < 1 or $m > 1440 then
+       $l + " must be an integer in 1..1440"
+     elif ($p.role // "") != "service" then
+       $l + " applies only to service panes (role \"service\"), not role \"" + (($p.role // "") | tostring) + "\""
+     elif ($p | has("port")) | not then
+       (if any($browser_panes[]; .session_id == $s.id and .pane == $p.name) then empty
+        else $l + " needs a port to watch: set the pane's port (dev server) or select it as the browser pane" end)
+     else empty end),
 
   # ---- commands must be argv arrays, never a command string ----
   ((.sessions // [])[] | (.panes // [])[] | . as $p |

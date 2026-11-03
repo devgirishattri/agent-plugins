@@ -31,6 +31,11 @@
 #   ALLOW_ADOPT     0|1 — --adopt --confirmed was passed
 #   NO_AGENTS       0|1 — do not launch claude/codex-runtime panes
 #   NO_SERVICES     0|1 — do not launch service-role panes' commands
+#   SW_PANE_SUBSET  0|1 — optional (default 0). 1 means the plan's session
+#                   carries only the panes `start --pane` selected: the
+#                   split_tree build and retain_layout save/restore are
+#                   skipped, because both describe the WHOLE session and a
+#                   partial window would overwrite or misapply them
 # Populates: SW_FAILED_SLOTS (count), SW_CHANGED (count of started/adopted)
 set -uo pipefail
 
@@ -45,6 +50,7 @@ source "$HERE/tmux-lib.sh"
 SW_FAILED_SLOTS=0
 SW_CHANGED=0
 SW_KEPT=0
+SW_PANE_SUBSET="${SW_PANE_SUBSET:-0}"
 
 _sw_report() {
   # $1=status $2=session $3=pane $4=detail
@@ -155,7 +161,9 @@ _sw_pin_session_env() {
       pin_names+=("$k")
       pin_values+=("$v")
     done < <(bash "$HERE/adapters.sh" session-env --config "$CONFIG_PATH" --pane "$pane_name" 2>/dev/null)
-  done < <(printf '%s' "$session_json" | jq -r '(.panes // [])[] | [(.role // ""), .name] | @tsv')
+  # .all_panes is present when `start --pane` narrowed .panes: the session
+  # environment still describes the whole session, as a full start pins it.
+  done < <(printf '%s' "$session_json" | jq -r '(.all_panes // .panes // [])[] | [(.role // ""), .name] | @tsv')
 
   n="${#pin_names[@]}"
   [ "$n" -gt 0 ] || return 0
@@ -276,6 +284,51 @@ _sw_launch_pane() {
   fi
 }
 
+# _sw_arm_idle_watch PANE_ID SESSION_ID PANE_PLAN_JSON — start the idle-stop
+# watcher (idle-watch.py) for a pane whose config sets idle_stop_minutes, right
+# after its runtime really launched. Never fails the launch: a watcher that
+# cannot start leaves the pane running and says so. Sets SW_IDLE_NOTE, which
+# the per-slot loop prints after the pane's [started]/[adopted] line.
+SW_IDLE_NOTE=""
+_sw_arm_idle_watch() {
+  local pane_id="$1" session_id="$2" pane_plan="$3"
+  local minutes port kind pane_name record_dir watcher_pid config_abs
+  SW_IDLE_NOTE=""
+  minutes="$(printf '%s' "$pane_plan" | jq -r '.idle_stop_minutes // empty')"
+  [ -n "$minutes" ] || return 0
+  pane_name="$(printf '%s' "$pane_plan" | jq -r '.name')"
+  port="$(printf '%s' "$pane_plan" | jq -r '.port // empty')"
+  kind="service"
+  [ "$(printf '%s' "$pane_plan" | jq -r '.browser // false')" = "true" ] && kind="browser"
+  if ! command -v python3 >/dev/null 2>&1; then
+    SW_IDLE_NOTE="idle stop NOT armed: python3 is required to watch port ${port:-?}; the pane keeps running until stopped"
+    return 0
+  fi
+  record_dir="$(dirname "$(sw_pane_record_path "$PROJECT_ID" "$pane_name")")"
+  # The watcher runs detached from / and outlives this run, so it gets an
+  # absolute config path even when --config was given relative.
+  config_abs="$(cd "$(dirname "$CONFIG_PATH")" 2>/dev/null && pwd -P)/$(basename "$CONFIG_PATH")"
+  if watcher_pid="$(python3 "$HERE/idle-watch.py" spawn --config "$config_abs" --project "$PROJECT_ID" \
+      --session "$session_id" --pane "$pane_name" --pane-id "$pane_id" --port "$port" --kind "$kind" \
+      --minutes "$minutes" --state-dir "$record_dir" </dev/null 2>/dev/null)" && [ -n "$watcher_pid" ]; then
+    if [ "$kind" = "browser" ]; then
+      SW_IDLE_NOTE="idle stop armed (watcher pid $watcher_pid): stops after $minutes min with no CDP commands to 127.0.0.1:$port"
+    else
+      SW_IDLE_NOTE="idle stop armed (watcher pid $watcher_pid): stops after $minutes min with no inbound connections to port $port"
+    fi
+  else
+    SW_IDLE_NOTE="idle stop NOT armed: the watcher did not start; the pane keeps running until stopped"
+  fi
+  return 0
+}
+
+_sw_report_idle_note() {
+  # $1=session $2=pane
+  [ -n "$SW_IDLE_NOTE" ] || return 0
+  _sw_report "idle-stop" "$1" "$2" "$SW_IDLE_NOTE"
+  SW_IDLE_NOTE=""
+}
+
 # _sw_claim_pane PANE_ID SESSION_ID PANE_PLAN_JSON — (unless suppressed)
 # launch, then set the pane name and markers. Shared by "started", "adopted"
 # and "relaunched" outcomes.
@@ -300,8 +353,10 @@ _sw_claim_pane() {
   sw_set_pane_markers "$pane_id" "$PROJECT_ID" "$pane_name" "$role" "$runtime" || return 1
   # Only a launch that actually ran is recorded as launched: a pane whose
   # launch was suppressed by --no-agents/--no-services stays repairable.
+  SW_IDLE_NOTE=""
   if [ "$SW_LAUNCH_SUPPRESSED" -eq 0 ]; then
     sw_set_pane_launched "$pane_id" "$runtime" || return 1
+    _sw_arm_idle_watch "$pane_id" "$session_id" "$pane_plan"
   fi
 }
 
@@ -526,7 +581,17 @@ _sw_process_session() {
   existing_count="$(tmux list-panes -t "$window_target" -F '#{pane_id}' 2>/dev/null | wc -l | tr -d ' ')"
   [ -z "$existing_count" ] && existing_count=0
 
-  if [ "$layout_kind" = "split_tree" ] && [ "$only_fresh" = "true" ] && [ "$existing_count" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+  # "Fresh" means the window's one pane is the blank pane new-session made.
+  # A sole pane that already carries a pane marker was claimed earlier (a
+  # session first created by `start --pane`): building the tree from it would
+  # hand that pane to node 0's slot whatever its real slot is, so the standard
+  # marker/gap-fill path below takes over instead and every pane keeps its
+  # name. A --pane run never builds the tree: it is not the whole session.
+  local sole_marked=""
+  if [ "$existing_count" -eq 1 ]; then
+    sole_marked="$(tmux list-panes -t "$window_target" -F "$(printf '#{%s}' "$MARKER_PANE")" 2>/dev/null | head -n1)"
+  fi
+  if [ "$layout_kind" = "split_tree" ] && [ "$only_fresh" = "true" ] && [ "$existing_count" -eq 1 ] && [ -z "$sole_marked" ] && [ "$SW_PANE_SUBSET" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     local nodes_json pane_order_json order_id resolved_pane
     nodes_json="$(printf '%s' "$session_json" | jq -c '.layout.nodes')"
     pane_order_json="$(printf '%s' "$session_json" | jq -c '.layout.pane_order')"
@@ -649,7 +714,7 @@ _sw_process_session() {
     fi
   fi
 
-  if [ "$DRY_RUN" -eq 0 ] && [ "$retain" = "true" ]; then
+  if [ "$DRY_RUN" -eq 0 ] && [ "$retain" = "true" ] && [ "$SW_PANE_SUBSET" -eq 0 ]; then
     sw_restore_layout "$PROJECT_ID" "$session_id" "$window_target" 2>/dev/null || true
   fi
 
@@ -723,6 +788,7 @@ _sw_process_session() {
         fi
         if _sw_claim_pane "$pane_id" "$session_id" "$pane_json"; then
           _sw_report "started" "$session_name" "$pane_name" "relaunched — managed pane had no runtime running"
+          _sw_report_idle_note "$session_name" "$pane_name"
           SW_CHANGED=$((SW_CHANGED + 1))
         else
           _sw_report "failed" "$session_name" "$pane_name" "relaunch failed"
@@ -749,6 +815,7 @@ _sw_process_session() {
           _sw_report "claimed" "$session_name" "$pane_name" "$pane_id — runtime launch suppressed by --no-agents/--no-services; a later start without that flag launches it"
         else
           _sw_report "started" "$session_name" "$pane_name" "$pane_id"
+          _sw_report_idle_note "$session_name" "$pane_name"
         fi
         SW_CHANGED=$((SW_CHANGED + 1))
       else
@@ -781,6 +848,7 @@ _sw_process_session() {
       fi
       if _sw_claim_pane "$pane_id" "$session_id" "$pane_json"; then
         _sw_report "adopted" "$session_name" "$pane_name" "$pane_id"
+        _sw_report_idle_note "$session_name" "$pane_name"
         SW_CHANGED=$((SW_CHANGED + 1))
       else
         _sw_report "failed" "$session_name" "$pane_name" "adoption launch failed"
@@ -795,7 +863,7 @@ _sw_process_session() {
     fi
   done
 
-  if [ "$DRY_RUN" -eq 0 ] && [ "$retain" = "true" ]; then
+  if [ "$DRY_RUN" -eq 0 ] && [ "$retain" = "true" ] && [ "$SW_PANE_SUBSET" -eq 0 ]; then
     sw_save_layout "$PROJECT_ID" "$session_id" "$window_target" 2>/dev/null || true
   fi
 }
