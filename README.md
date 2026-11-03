@@ -17,7 +17,7 @@ Every plugin below ships for both providers at the same version number.
 | `knowledge` | 0.5.9 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.12.3 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
-| `session-walkthrough` | 0.2.0 | Walk users through session changes with a live in-browser overlay tour; on request, validate visual provenance and render recorded walkthrough reports |
+| `session-walkthrough` | 0.2.1 | Walk users through session changes with a live in-browser overlay tour; on request, validate visual provenance and render recorded walkthrough reports |
 
 This table is the fifth place a plugin version is written down, after the two
 plugin manifests and the two marketplace files. `scripts/validate-release.sh`

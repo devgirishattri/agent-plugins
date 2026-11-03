@@ -25,13 +25,14 @@
 function sessionWalkthroughTourFactory() {
   'use strict';
 
-  var VERSION = '0.2.0';
+  var VERSION = '0.2.1';
   var STORAGE_KEY = 'session-walkthrough-tour';
   var CONTROLLER_KEY = '__sessionWalkthroughTour';
   var GLOBAL_KEY = 'SessionWalkthroughTour';
   var ROOT_ID = 'session-walkthrough-tour-root';
   var STYLE_ID = 'session-walkthrough-tour-style';
   var NATIVE_MARK = '__sessionWalkthroughNative';
+  var SHEET_MARK = '__sessionWalkthroughSheet';
   var DEFAULTS = {
     cardMaxWidth: 350,
     gap: 12,
@@ -40,6 +41,8 @@ function sessionWalkthroughTourFactory() {
     pollTimeout: 3000,
     pollInterval: 100,
     setupTimeout: 4000,
+    settleTimeout: 1000,
+    settleInterval: 50,
     watchInterval: 1000
   };
 
@@ -375,6 +378,32 @@ function sessionWalkthroughTourFactory() {
     };
   }
 
+  // True when two rectangles differ by less than half a CSS pixel on every edge.
+  function sameRect(a, b) {
+    var x = edges(a), y = edges(b);
+    if (!x || !y) return false;
+    return Math.abs(x.left - y.left) < 0.5 && Math.abs(x.top - y.top) < 0.5 &&
+      Math.abs(x.right - y.right) < 0.5 && Math.abs(x.bottom - y.bottom) < 0.5;
+  }
+
+  // True while a finite CSS transition or animation runs on the element or on
+  // one of its ancestors, for example a menu that opens with a scale effect.
+  function isAnimating(doc, el) {
+    if (!el || !doc || typeof doc.getAnimations !== 'function') return false;
+    var running;
+    try { running = doc.getAnimations(); } catch (error) { return false; }
+    for (var i = 0; i < running.length; i++) {
+      var a = running[i];
+      if (!a || a.playState !== 'running' || !a.effect) continue;
+      var target = a.effect.target;
+      if (!target || !(target === el || (typeof target.contains === 'function' && target.contains(el)))) continue;
+      var end = NaN;
+      try { end = a.effect.getComputedTiming().endTime; } catch (error) { end = NaN; }
+      if (isFinite(end)) return true;
+    }
+    return false;
+  }
+
   // ---------------------------------------------------------------------------
   // Runtime
   // ---------------------------------------------------------------------------
@@ -433,6 +462,48 @@ function sessionWalkthroughTourFactory() {
       var node = doc.getElementById && doc.getElementById(id);
       if (node && node.parentNode) node.parentNode.removeChild(node);
     });
+    removeSheets(doc, function (sheet) { return !!(sheet && sheet[SHEET_MARK]); });
+  }
+
+  function removeSheets(doc, match) {
+    var list = doc && doc.adoptedStyleSheets;
+    if (!list || typeof list.length !== 'number') return;
+    var kept = Array.prototype.filter.call(list, function (sheet) { return !match(sheet); });
+    if (kept.length !== list.length) {
+      try { doc.adoptedStyleSheets = kept; } catch (error) { /* read-only: leave it */ }
+    }
+  }
+
+  // A constructed stylesheet, adopted by the document. Content Security
+  // Policy style-src does not apply to it, while it blocks an inline <style>
+  // element on any page without 'unsafe-inline' (nonce-based policies too).
+  function adoptSheet(win, doc, text) {
+    var Sheet = win && win.CSSStyleSheet;
+    var list = doc && doc.adoptedStyleSheets;
+    if (typeof Sheet !== 'function' || !list || typeof list.length !== 'number') return null;
+    try {
+      var sheet = new Sheet();
+      if (typeof sheet.replaceSync !== 'function') return null;
+      sheet.replaceSync(text);
+      sheet[SHEET_MARK] = true;
+      doc.adoptedStyleSheets = Array.prototype.concat.call([], Array.prototype.slice.call(list), [sheet]);
+      return sheet;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // The page's script nonce, for the <style> fallback on nonce-based policies.
+  // Browsers hide the nonce attribute after load but keep the nonce property.
+  function pageNonce(doc) {
+    try {
+      var nodes = doc.querySelectorAll('script[nonce],style[nonce],link[nonce]');
+      for (var i = 0; i < nodes.length; i++) {
+        var value = nodes[i].nonce || nodes[i].getAttribute('nonce');
+        if (value) return value;
+      }
+    } catch (error) { /* no selector support */ }
+    return '';
   }
 
   function start(defineTour, options) {
@@ -488,6 +559,9 @@ function sessionWalkthroughTourFactory() {
     var showing = null;
     var busy = false;
     var repositionQueued = false;
+    var sheet = null;
+    var stylesMode = '';
+    var observer = null;
     var program = null;
     try {
       program = buildProgram('(' + sessionWalkthroughTourFactory.toString() + ')', '(' + defineTour.toString() + ')');
@@ -530,6 +604,24 @@ function sessionWalkthroughTourFactory() {
         if (value) return value;
         if (state.closed || my !== token || now() >= deadline) return null;
         await sleep(interval);
+      }
+    }
+
+    // Wait until the target stops moving before placing the card: a menu that
+    // opens with a CSS transition, smooth scrolling, late layout. Measuring
+    // mid-animation draws the ring on the wrong rectangle. Bounded by
+    // settleTimeout.
+    async function settleTarget(el) {
+      var deadline = now() + cfg.settleTimeout;
+      var my = token;
+      var last = el.getBoundingClientRect();
+      for (;;) {
+        await sleep(cfg.settleInterval);
+        if (state.closed || my !== token || el.isConnected === false) return;
+        var rect = el.getBoundingClientRect();
+        if (sameRect(rect, last) && !isAnimating(doc, el)) return;
+        last = rect;
+        if (now() >= deadline) return;
       }
     }
 
@@ -646,11 +738,39 @@ function sessionWalkthroughTourFactory() {
       return el;
     }
 
-    function buildDom() {
+    function installStyles() {
+      sheet = adoptSheet(win, doc, STYLE_TEXT);
+      if (sheet) { stylesMode = 'adopted'; return null; }
       var style = make('style');
       style.id = STYLE_ID;
+      var nonce = pageNonce(doc);
+      if (nonce) style.nonce = nonce;
       style.textContent = STYLE_TEXT;
       (doc.head || doc.documentElement || doc.body).appendChild(style);
+      stylesMode = 'element';
+      return style;
+    }
+
+    // Some apps assign document.adoptedStyleSheets wholesale; put ours back.
+    function keepSheet() {
+      var list = sheet && doc.adoptedStyleSheets;
+      if (!list || Array.prototype.indexOf.call(list, sheet) >= 0) return;
+      try {
+        doc.adoptedStyleSheets = Array.prototype.concat.call([], Array.prototype.slice.call(list), [sheet]);
+      } catch (error) { /* ignore */ }
+    }
+
+    // 'adopted' or 'element' when the overlay's stylesheet applies, 'blocked'
+    // when the page refused it (the card would sit unstyled in the page flow).
+    function stylesStatus() {
+      if (!nodes.root || typeof win.getComputedStyle !== 'function') return stylesMode;
+      var position = '';
+      try { position = win.getComputedStyle(nodes.root).position; } catch (error) { position = ''; }
+      return position && position !== 'fixed' ? 'blocked' : stylesMode;
+    }
+
+    function buildDom() {
+      var style = installStyles();
 
       var root = make('div');
       root.id = ROOT_ID;
@@ -782,21 +902,28 @@ function sessionWalkthroughTourFactory() {
       nodes.next.textContent = state.index >= state.total - 1 ? 'Finish' : 'Next';
     }
 
-    function position() {
-      if (state.closed || !nodes.card) return;
-      if (nodes.root.isConnected === false && doc.body) doc.body.appendChild(nodes.root);
-      var vp = viewport();
-      var width = cardWidthFor(vp, cfg.cardMaxWidth, cfg.margin);
-      nodes.card.style.width = width + 'px';
-      var measured = nodes.card.getBoundingClientRect();
-      var size = { width: width, height: Math.max(1, num(measured && measured.height, 0)) };
+    // The current target. Frameworks re-create nodes (a v-if or a keyed list
+    // re-render), so a detached target is re-queried from the step.
+    function liveTarget() {
       var target = current.target;
       if (target && target.isConnected === false) {
         var step = tour.steps[state.index];
         target = resolveTarget(step, makeCtx(step));
         current.target = visible(target) ? target : null;
-        target = current.target;
       }
+      return current.target;
+    }
+
+    function position() {
+      if (state.closed || !nodes.card) return;
+      if (nodes.root.isConnected === false && doc.body) doc.body.appendChild(nodes.root);
+      keepSheet();
+      var vp = viewport();
+      var width = cardWidthFor(vp, cfg.cardMaxWidth, cfg.margin);
+      nodes.card.style.width = width + 'px';
+      var measured = nodes.card.getBoundingClientRect();
+      var size = { width: width, height: Math.max(1, num(measured && measured.height, 0)) };
+      var target = liveTarget();
       var rect = target ? visibleRectOf(target) : null;
       if (rect && !(rect.width > 0 && rect.height > 0)) rect = null;
       var placement = computePlacement(rect, vp, size, {
@@ -926,6 +1053,8 @@ function sessionWalkthroughTourFactory() {
             typeof found.scrollIntoView === 'function') {
           try { found.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (error) { /* ignore */ }
         }
+        await settleTarget(found);
+        if (my !== token) return false;
       } else {
         current.missing = true;
         var timeout = num(pollCfg.timeout, cfg.pollTimeout);
@@ -1018,7 +1147,7 @@ function sessionWalkthroughTourFactory() {
       var targetRect = null, cardRect = null, overlaps = false;
       if (!state.closed && nodes.card) {
         cardRect = plainRect(nodes.card.getBoundingClientRect());
-        if (current.target && current.target.isConnected !== false) {
+        if (liveTarget()) {
           var clamped = clampRect(visibleRectOf(current.target), viewport());
           targetRect = plainRect(clamped);
           overlaps = clamped ? rectsOverlap(cardRect, clamped) : false;
@@ -1041,6 +1170,7 @@ function sessionWalkthroughTourFactory() {
         overlaps: overlaps,
         targetRect: targetRect,
         cardRect: cardRect,
+        styles: state.closed ? null : stylesStatus(),
         viewport: { width: win.innerWidth, height: win.innerHeight, devicePixelRatio: win.devicePixelRatio || 1 },
         guard: guard ? { gated: guard.state.gated, blocked: guard.state.blocked } : null
       };
@@ -1061,9 +1191,18 @@ function sessionWalkthroughTourFactory() {
         entry[0].removeEventListener(entry[1], entry[2], entry[3]);
       });
       if (guard) { guard.restore(); }
+      if (observer) {
+        try { observer.disconnect(); } catch (error) { /* ignore */ }
+        observer = null;
+      }
       [nodes.root, nodes.style].forEach(function (node) {
         if (node && node.parentNode) node.parentNode.removeChild(node);
       });
+      if (sheet) {
+        var mine = sheet;
+        removeSheets(doc, function (s) { return s === mine; });
+        sheet = null;
+      }
       removeStale(doc);
       nodes = {};
       if (storage) {
@@ -1083,11 +1222,36 @@ function sessionWalkthroughTourFactory() {
       return status();
     }
 
+    // Re-place the ring and card when the page changes under them: a re-render
+    // that replaces or resizes the target, or a transition that ends. Changes
+    // inside the overlay itself are ignored.
+    function observePage() {
+      listen(doc, 'transitionend', queueReposition, true);
+      listen(doc, 'animationend', queueReposition, true);
+      var Observer = win.MutationObserver;
+      if (typeof Observer !== 'function' || !doc.body) return;
+      try {
+        observer = new Observer(function (records) {
+          for (var i = 0; i < records.length; i++) {
+            var node = records[i].target;
+            if (!(nodes.root && typeof nodes.root.contains === 'function' && nodes.root.contains(node))) {
+              queueReposition();
+              return;
+            }
+          }
+        });
+        observer.observe(doc.body, { childList: true, subtree: true, attributes: true, characterData: true });
+      } catch (error) {
+        observer = null;
+      }
+    }
+
     function begin(startIndex) {
       buildDom();
       listen(doc, 'keydown', onKey, true);
       listen(win, 'resize', queueReposition);
       listen(win, 'scroll', queueReposition, true);
+      observePage();
       if (tour.guard && typeof tour.guard.setInterval === 'function') {
         guard = installIntervalGuard(win, tour.guard.setInterval);
         if (typeof tour.guard.reArm === 'function') {
@@ -1135,7 +1299,10 @@ function sessionWalkthroughTourFactory() {
     GLOBAL_KEY: GLOBAL_KEY,
     ROOT_ID: ROOT_ID,
     STYLE_ID: STYLE_ID,
+    SHEET_MARK: SHEET_MARK,
     DEFAULTS: DEFAULTS,
+    sameRect: sameRect,
+    isAnimating: isAnimating,
     clampRect: clampRect,
     inflateRect: inflateRect,
     rectsOverlap: rectsOverlap,
