@@ -182,14 +182,17 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
         SKIPPED=$((SKIPPED + 1))
         continue
       fi
+      # Record before C-c, not just before the kill: a pane whose command is
+      # the service itself closes the moment C-c ends it, and anything that
+      # sees the pane gone (status, its idle watcher) must already find this
+      # stop recorded. The pane id is the record's identity.
+      sw_pane_record_stop "$PROJECT_ID" "$pane_name" "$found" "$STOP_REASON" ||
+        echo "WARNING: could not record the stop of $pane_name" >&2
       case "$(sw_pane_current_command "$found")" in
         bash|sh|zsh|fish|ksh|dash|"") ;;
         *) tmux send-keys -t "$found" C-c 2>/dev/null || true
            _sw_wait_pane_idle "$found" ;;
       esac
-      # Record before the kill: the pane id is the record's identity.
-      sw_pane_record_stop "$PROJECT_ID" "$pane_name" "$found" "$STOP_REASON" ||
-        echo "WARNING: could not record the stop of $pane_name" >&2
       tmux kill-pane -t "$found" 2>/dev/null || true
       echo "  [stopped] $SESSION_NAME / $pane_name — $STOP_REASON"
       STOPPED=$((STOPPED + 1))
