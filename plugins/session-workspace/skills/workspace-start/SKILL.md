@@ -32,6 +32,12 @@ Real flags:
 - `--no-attach`: suppress post-start attach behavior regardless of
   `behavior.attach`.
 - `--adopt --confirmed`: allow occupied unmanaged panes to be claimed.
+- `SESSION --pane NAME` (repeatable): start only the named service panes
+  (role `service`, such as the debug browser or a dev server) of one session.
+  NAME is the pane name or the part after `<project.id>-`. The session is
+  created if it is not running, with only those panes, and their declared
+  commands run. Running panes are `[kept]`. `--pane` never attaches and cannot
+  be combined with `--no-agents`, `--no-services` or `--adopt`.
 
 Safety gates:
 
@@ -57,6 +63,16 @@ On a fully successful run, attach is controlled by `behavior.attach`:
 `if_terminal` attaches only from an interactive terminal; `never` never
 attaches. `--no-attach` forces attach off. The command prints one
 `attach: ...` line for the decision.
+
+With `--pane`, a dev-server pane (`port` plus `command`) whose port is already
+bound by another process is refused before launch. The error names the PID
+holding it, for example `service port occupied before launch: 3001 (web) is
+held by pid 4242 (node)`. Relay it and do not retry on another port. A pane
+with `idle_stop_minutes` prints an `[idle-stop]` line after it starts; a
+watcher then stops the pane once nothing has used its port for that many
+minutes and records why. For a dev server, use means an inbound connection.
+For the browser, use means CDP commands, so an open chrome-devtools
+connection that only pings does not keep it up.
 
 Authorized panes get secrets through a private 0600 single-use file path in
 the launch script. The secret values are not placed in argv, tmux history, or

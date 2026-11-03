@@ -1,6 +1,6 @@
 ---
 description: Tear down session-workspace sessions/panes (destructive; requires --confirmed)
-argument-hint: "[TARGET|all] [--config PATH] [--no-save] --confirmed [--all]"
+argument-hint: "[TARGET|all] [--config PATH] [--no-save] --confirmed [--all] | SESSION --pane NAME [--pane NAME...] --confirmed"
 allowed-tools: Bash(bash:*)
 ---
 
@@ -18,6 +18,8 @@ Lead with the result. Add text only for errors or the follow-ups below. Report t
 - It leaves a session untouched when this engine did not create it, even if the configured name is the same. It uses exact `=NAME` targeting, never a prefix match.
 - By default the scope is `behavior.stop_scope` (usually just the selected TARGET session). Pass `--all` to widen the scope to every managed session for this project, regardless of config.
 - The window layout is saved before killing only when ALL three hold: the session has `retain_layout: true`, `behavior.save_before_stop` is `true`, and `--no-save` was not passed.
+
+`SESSION --pane NAME --confirmed` (repeatable `--pane`) stops only the named service panes of one session and leaves the session and every other pane running. It sends `C-c`, waits the grace period, closes the pane, and records the stop in the pane's run record. A pane that is not running is reported `[absent]`. `--pane` cannot be combined with `--all` or `--no-save`. Relay its `stopped: N  not running: N  skipped: N` summary verbatim.
 
 Relay the `killed: N` summary verbatim. Never run this without the user having asked for it.
 
