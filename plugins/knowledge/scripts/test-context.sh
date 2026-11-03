@@ -774,23 +774,31 @@ else
   fi
 fi
 
-# --- Test 17: owner release waits for a transient generation claim ---
+# --- Test 17: owner release carries an in-flight takeover marker away ---
+# A waiter's .reclaim marker can sit in the held lock while the owner releases
+# (a file now, a directory from 0.5.9). The release renames the whole lock
+# directory, marker included, so the lock path never shows a directory with no
+# holder and no lock or quarantine is left behind.
 RELEASE_CLAIM_STORE="$TMP/release-claim-contexts"
 mkdir -m 700 "$RELEASE_CLAIM_STORE"
 if bash -c '
   source "$1"
   root="$2"
-  acquire_context_store_lock "$root" || exit 1
-  mkdir -m 700 "$root/.knowledge-context.lock/.reclaim"
-  (sleep 0.1; rmdir "$root/.knowledge-context.lock/.reclaim") &
-  dropper=$!
-  release_context_store_lock || exit 1
-  wait "$dropper" || exit 1
-  [ ! -e "$root/.knowledge-context.lock" ]
+  for marker in file dir; do
+    acquire_context_store_lock "$root" || exit 1
+    if [ "$marker" = file ]; then
+      : > "$root/.knowledge-context.lock/.reclaim"
+    else
+      mkdir -m 700 "$root/.knowledge-context.lock/.reclaim"
+    fi
+    release_context_store_lock || exit 2
+    [ ! -e "$root/.knowledge-context.lock" ] || exit 3
+    [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".knowledge-context-stale.*" -print -quit)" ] || exit 4
+  done
 ' _ "$HERE/lib.sh" "$RELEASE_CLAIM_STORE"; then
-  pass "release_waits_for_transient_generation_claim"
+  pass "release_carries_inflight_reclaim_marker_away"
 else
-  fail "release_waits_for_transient_generation_claim" "owner release failed during bounded claim contention"
+  fail "release_carries_inflight_reclaim_marker_away" "release with an in-flight reclaim marker failed or left residue"
 fi
 
 # --- Test 18: dead-lock recovery and generation turnover are both safe ---
@@ -815,40 +823,27 @@ else
   fail "dead_writer_lock_reclaimed" "dead generation was not reclaimed safely"
 fi
 
+# A waiter may read a dead holder's pid, get descheduled while the lock turns
+# over, then resume against a new live holder. Its in-place takeover must fail
+# and leave the new holder's lock alone.
 ABA_STORE="$TMP/aba-contexts"
 mkdir -m 700 "$ABA_STORE"
 if bash -c '
   source "$1"
   root="$2"
-  mkdir -m 700 "$root/.knowledge-context.lock"
   dead_pid=999999
   while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
-  printf "%s\n" "$dead_pid" > "$root/.knowledge-context.lock/pid"
-  chmod 600 "$root/.knowledge-context.lock/pid"
-  old_token=$(_context_lock_generation_token "$root") || exit 1
-
-  rm -f "$root/.knowledge-context.lock/pid"
-  rmdir "$root/.knowledge-context.lock"
-  mkdir -m 700 "$root/.knowledge-context.lock"
-  printf "%s\n" "$$" > "$root/.knowledge-context.lock/pid"
-  chmod 600 "$root/.knowledge-context.lock/pid"
-  new_token=$(_context_lock_generation_token "$root") || exit 1
-  [ "$new_token" != "$old_token" ] || exit 1
-
-  if _context_quarantine_lock_generation "$root" "$old_token" dead; then
-    exit 1
-  else
-    rc=$?
-  fi
-  [ "$rc" -eq 2 ] || exit 1
-  [ "$(_context_lock_generation_token "$root")" = "$new_token" ] || exit 1
-  [ ! -e "$root/.knowledge-context.lock/.reclaim" ] || exit 1
-  [ -z "$(find "${root}.knowledge-context-stale."* -maxdepth 0 -print -quit 2>/dev/null)" ] || exit 1
-  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".knowledge-context-stale.*" -print -quit 2>/dev/null)" ] || exit 1
+  acquire_context_store_lock "$root" || exit 1
+  if _context_reclaim_lock "$root/.knowledge-context.lock" "$dead_pid"; then exit 2; fi
+  [ "$(sed -n "1p" "$root/.knowledge-context.lock/pid")" = "$$" ] || exit 3
+  [ ! -e "$root/.knowledge-context.lock/.reclaim" ] || exit 4
+  release_context_store_lock || exit 5
+  [ ! -e "$root/.knowledge-context.lock" ] || exit 6
+  [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -name ".knowledge-context-stale.*" -print -quit 2>/dev/null)" ] || exit 7
 ' _ "$HERE/lib.sh" "$ABA_STORE"; then
-  pass "stale_generation_cannot_reclaim_replacement"
+  pass "stale_takeover_never_touches_a_newer_holder"
 else
-  fail "stale_generation_cannot_reclaim_replacement" "replacement generation changed or was quarantined"
+  fail "stale_takeover_never_touches_a_newer_holder" "a takeover for a dead pid changed a live holder's lock"
 fi
 
 # --- Test 19: the transient reclaim claim stays owner-only and empty ---
