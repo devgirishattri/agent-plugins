@@ -1077,6 +1077,12 @@ These checks do not themselves enable repository merge protection.
   behavior on either side. CI runs both, plus every plugin's smoke tests and
   `shellcheck --severity=warning` over all `*.sh`, on push to `main` and on
   pull requests.
+- CI splits those suites across parallel shard jobs (`release-checks`,
+  `smoke-claude-scheduler`, `smoke-claude-workspace`, `smoke-codex-workspace`,
+  `smoke-plugins`, `knowledge-evals`). The `validate-release` check passes
+  only when every shard succeeds, and `validate-release.sh` fails if a shard is
+  missing from that gate. A new push to a pull request cancels the pull
+  request's older run. Runs on `main` are never cancelled.
 - `claude plugin validate <path>` checks a single plugin or marketplace manifest
   against the Claude schema, which is a faster inner-loop check than a full
   release validation.
