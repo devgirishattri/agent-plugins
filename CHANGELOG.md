@@ -1,5 +1,36 @@
 # Changelog
 
+## session-walkthrough 0.2.1 — 2026-11-03
+
+- **Strict Content Security Policy.** A `style-src` without `'unsafe-inline'`,
+  nonce-based policies included, blocked the overlay's `<style>` element. The
+  card then rendered unstyled below the page while the dry run still reported
+  no overlap. The overlay now adopts a constructed stylesheet, which
+  `style-src` does not block. Where constructed stylesheets are missing it
+  falls back to a `<style>` element with the page's nonce. `status()` reports
+  `styles`, and the dry run stops when it is `blocked`.
+- **Animated targets.** A target inside a CSS transition, such as a menu that
+  opens with a scale effect, was measured mid-animation. The ring stayed on
+  the wrong rectangle and the card could cover the target. The overlay now
+  waits for the target to stop moving (at most `settleTimeout`, 1000 ms).
+- **Re-created targets.** When a framework replaced the highlighted node, the
+  ring stayed on the old rectangle and `status()` reported no target until the
+  next scroll. Placement now follows page DOM changes and the end of CSS
+  transitions and animations, and `status()` queries a detached target again.
+- **Tours never discard the user's edits.** In agent trials, four of five
+  generated tours reset the whole form from `onClose` or a step's `setup`,
+  which would also drop edits the user made during the tour. The docs now
+  forbid that, document `onClose` (undo only what the tour set), and put
+  field changes behind action buttons.
+- Docs: the Vue 2 `el.__vue__` helper now steps down from the outermost
+  instance on a shared root element. The reload line works under strict CSP
+  through chrome-devtools; the fallback is to repeat the first injection.
+  Route steps drop unsaved edits. Optional `sourcePath` injection for
+  chrome-devtools-mcp 1.11.0 or later. SKILL.md gives the example's full path,
+  which agents missed when they looked next to `SKILL.md`.
+- No migration. Update the plugin; an open tour keeps the version it was
+  injected with until it is injected again.
+
 ## knowledge 0.5.10 — 2026-11-03
 
 - The context store's writer lock no longer treats a successful `mkdir` as

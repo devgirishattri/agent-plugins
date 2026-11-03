@@ -135,10 +135,14 @@ class FakeElement extends FakeEventTarget {
 
 function matches(el, selector) {
   selector = selector.trim();
+  if (selector.includes(',')) return selector.split(',').some((part) => matches(el, part));
   if (selector.startsWith('#')) return el.id === selector.slice(1);
   if (selector.startsWith('.')) return String(el.className).split(/\s+/).includes(selector.slice(1));
-  const attr = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(selector);
-  if (attr) return attr[2] === undefined ? attr[1] in el.attributes : el.attributes[attr[1]] === attr[2];
+  const attr = /^([a-z0-9]*)\[([\w-]+)(?:="([^"]*)")?\]$/i.exec(selector);
+  if (attr) {
+    if (attr[1] && el.tagName !== attr[1].toUpperCase()) return false;
+    return attr[3] === undefined ? attr[2] in el.attributes : el.attributes[attr[2]] === attr[3];
+  }
   if (/^[a-z0-9]+$/i.test(selector)) return el.tagName === selector.toUpperCase();
   throw new Error('fake DOM does not support selector ' + selector);
 }
