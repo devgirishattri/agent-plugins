@@ -1042,7 +1042,10 @@ esac
 # When that pathname vanished between find(1) enumerating and stat'ing it, BSD
 # find exited nonzero and _context_validate_tree condemned a healthy store
 # (~1-3 per 800 validations against an EMPTY store; a single snapshot masks the
-# window, so this fixture is deliberately empty apart from .history).
+# window, so this fixture is deliberately empty apart from .history). Each
+# release also leaves a .knowledge-context-stale.<pid> quarantine for a moment,
+# and a validator that saw it vanish between its checks used to report it as
+# not a directory (scripts/test-context-locks.py has the deterministic case).
 echo
 echo "--- validator: bounded revalidation under a concurrent writer ---"
 
@@ -1062,7 +1065,11 @@ chmod 700 "$race_store" "$race_store/.history"
   race_fail=0
   race_checks=0
   while kill -0 "$race_writer" 2>/dev/null; do
-    _context_validate_tree "$race_store" >/dev/null 2>&1 || race_fail=$((race_fail + 1))
+    if ! _context_validate_tree "$race_store" >/dev/null 2>"$TMP/race_error"; then
+      race_fail=$((race_fail + 1))
+      # Keep the first rejection's message for the failure report.
+      [ -s "$TMP/race_first_error" ] || cp "$TMP/race_error" "$TMP/race_first_error"
+    fi
     race_checks=$((race_checks + 1))
   done
   wait "$race_writer"
@@ -1074,7 +1081,7 @@ if [ "${race_fail:-1}" = "0" ] && [ "${race_checks:-0}" -gt 50 ]; then
   pass "validator_no_spurious_failure_under_writer_churn"
 else
   fail "validator_no_spurious_failure_under_writer_churn" \
-    "$race_fail spurious rejection(s) of a healthy store across $race_checks validations"
+    "$race_fail spurious rejection(s) of a healthy store across $race_checks validations; first: $(head -1 "$TMP/race_first_error" 2>/dev/null)"
 fi
 
 # The retry must not soften a real violation: a structural problem is
