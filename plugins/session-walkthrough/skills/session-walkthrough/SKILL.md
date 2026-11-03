@@ -25,7 +25,7 @@ running. It highlights each new or changed element and explains it in a small
 card that quotes the request line it covers. The user clicks through it. The
 contract, the step shape and the full procedure are in
 [references/live-tour.md](references/live-tour.md). A walkable example is in
-`examples/live-tour/`.
+`${CLAUDE_PLUGIN_ROOT}/examples/live-tour/`.
 
 Authority:
 
@@ -35,6 +35,7 @@ Authority:
   application code.
 - Annotations live only in the page DOM. Close removes them.
 - Tour actions only set controls. The user performs any real save themselves.
+- A tour never discards or resets the user's unsaved edits.
 
 Procedure (orchestrating agent):
 
@@ -58,8 +59,9 @@ Procedure (orchestrating agent):
    ${CLAUDE_PLUGIN_ROOT}/scripts/tour/overlay.js
    ```
 
-6. Dry-run every step with `SessionWalkthroughTour.goTo(i)`. Check placement
-   with the returned geometry (`targetRect`, `cardRect`, `overlaps`) or
+6. Dry-run every step with `SessionWalkthroughTour.goTo(i)`. Check that the
+   returned `styles` is not `blocked`. Check placement with the returned
+   geometry (`targetRect`, `cardRect`, `overlaps`) or
    `getBoundingClientRect()`, not element-scoped screenshots. Confirm that no
    save happened: only GET requests in the network list, page data unchanged.
    Return to step 1.
