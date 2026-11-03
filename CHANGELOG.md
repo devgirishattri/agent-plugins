@@ -31,6 +31,29 @@
 - No migration. Update the plugin; an open tour keeps the version it was
   injected with until it is injected again.
 
+## knowledge 0.5.10 — 2026-11-03
+
+- The context store's writer lock no longer treats a successful `mkdir` as
+  ownership. uutils mkdir (Rust coreutils, the default on Ubuntu 25.10 and
+  later) through 0.10.0 exits 0 when it loses the race to create a directory.
+  The loser then failed to write its pid file and deleted the winner's pid and
+  lock directory on the way out, so concurrent saves failed with "cannot
+  publish writer-lock holder PID" and a third writer could take the lock
+  while the first still held it. The holder now claims the lock only by
+  creating its pid file exclusively (O_EXCL), and a writer that loses that
+  create keeps waiting without touching anything.
+- A stale lock (holder process gone) is taken over in place under an
+  exclusively created `.reclaim` marker, instead of being renamed away under a
+  marker made with `mkdir`, which uutils could hand to two waiters at once. A
+  release renames the whole lock directory into the in-store quarantine, so a
+  takeover marker in flight leaves with it. The marker is now an empty
+  owner-only file. A 0.5.9 directory marker is still accepted and still
+  blocks a takeover.
+- Same protocol as the session-scheduler task locks and the session-chat
+  locks. A store can be shared by Claude and Codex writers, and a 0.5.9 writer
+  rejects the new file marker as unsafe, so update both providers together.
+  No store migration.
+
 ## session-chat 0.17.20 — 2026-11-02
 
 - Send and queue locks no longer treat a successful `mkdir` as ownership.

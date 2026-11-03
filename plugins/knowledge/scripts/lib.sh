@@ -206,6 +206,51 @@ _context_lock_fingerprint() {
   printf '%s|%s|%s|%s\n' "$lock_id" "$pid_id" "$reclaim_id" "$entry_count"
 }
 
+_context_check_reclaim_marker() {
+  # Validate one .reclaim marker, read-only. 0 = valid, or gone because its
+  # takeover finished; 1 = unsafe (reported). A takeover creates an empty
+  # owner-only file; knowledge 0.5.9 and earlier created an empty 0700
+  # directory, which a mixed-version store can still show.
+  local path="$1" label="$2" mode
+  _context_path_exists "$path" || return 0
+  if [ -L "$path" ]; then
+    _context_store_error "$label claim cannot be a symbolic link: $path"
+    return 1
+  fi
+  if ! _context_require_owner "$path"; then
+    _context_path_exists "$path" || return 0
+    return 1
+  fi
+  if ! mode=$(_context_path_mode "$path"); then
+    _context_path_exists "$path" || return 0
+    _context_store_error "cannot inspect permissions for $path"
+    return 1
+  fi
+  if [ -f "$path" ]; then
+    if [ "$mode" != "600" ]; then
+      _context_store_error "$label claim file must be mode 600: $path"
+      return 1
+    fi
+    if [ -s "$path" ]; then
+      _context_store_error "$label claim must be empty: $path"
+      return 1
+    fi
+  elif [ -d "$path" ]; then
+    if [ "$mode" != "700" ]; then
+      _context_store_error "$label claim must be mode 700: $path"
+      return 1
+    fi
+    if [ -n "$(find -P "$path" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+      _context_store_error "$label claim must be empty: $path"
+      return 1
+    fi
+  else
+    _context_path_exists "$path" || return 0
+    _context_store_error "$label claim must be a regular file: $path"
+    return 1
+  fi
+}
+
 _context_check_lock_generation() {
   local root="$1" lock_dir="$1/.knowledge-context.lock" path relative holder_pid mode
   local -a traversal_status
@@ -242,32 +287,17 @@ _context_check_lock_generation() {
           exit 1
         fi
         holder_pid=$(sed -n '1p' "$path" 2>/dev/null) || holder_pid=""
-        # Empty is valid only during the bounded mkdir-to-publish window.
+        # Empty is valid only while a writer publishes or rewrites it.
         if [ -n "$holder_pid" ] && ! [[ "$holder_pid" =~ ^[0-9]+$ ]]; then
           _context_store_error "writer lock contains an invalid holder PID: $path"
           exit 1
         fi
         ;;
       .reclaim)
-        # A contender creates this empty owner-only directory before moving a
-        # stale generation. Its inode is the generation-specific claim: other
-        # reclaimers wait, and the claimant must revalidate lock+PID identities
-        # after winning it before touching the reusable lock pathname.
-        if [ -L "$path" ] || [ ! -d "$path" ]; then
-          _context_path_exists "$path" || continue
-          _context_store_error "writer-lock reclaim claim must be a real directory: $path"
-          exit 1
-        fi
-        _context_require_owner "$path" || exit 1
-        mode=$(_context_path_mode "$path") || exit 2
-        if [ "$mode" != "700" ]; then
-          _context_store_error "writer-lock reclaim claim must be mode 700: $path"
-          exit 1
-        fi
-        if [ -n "$(find -P "$path" -mindepth 1 -print -quit 2>/dev/null)" ]; then
-          _context_store_error "writer-lock reclaim claim must be empty: $path"
-          exit 1
-        fi
+        # A stale-lock takeover holds this marker for a moment (see
+        # _context_reclaim_lock): an empty owner-only file, or an empty 0700
+        # directory from knowledge 0.5.9 and earlier.
+        _context_check_reclaim_marker "$path" "writer-lock reclaim" || exit "$?"
         ;;
       *)
         _context_store_error "unexpected file in context store: $path"
@@ -551,9 +581,9 @@ _context_pid_alive() {
 }
 
 _context_lock_generation_token() {
-  # Return the identity of one exact reusable-path generation. The PID content
-  # alone is insufficient: after an owner releases, another writer may reuse
-  # .knowledge-context.lock before a waiter acts on the old PID (the ABA race).
+  # Return the identity of one exact lock generation: the lock directory and
+  # pid inodes plus the holder pid. A holder records it when it acquires and
+  # checks it before it releases, so it never releases a lock that changed.
   local root="$1" lock_dir="$1/.knowledge-context.lock" pid_file
   local lock_id pid_id holder_pid
   _context_path_exists "$lock_dir" || return 2
@@ -564,35 +594,6 @@ _context_lock_generation_token() {
   holder_pid=$(sed -n '1p' "$pid_file" 2>/dev/null) || return 2
   [[ "$holder_pid" =~ ^[0-9]+$ ]] || return 2
   printf '%s|%s|%s\n' "$lock_id" "$pid_id" "$holder_pid"
-}
-
-_context_drop_reclaim_claim() {
-  local lock_dir="$1" expected_claim_id="$2" claim_dir="$1/.reclaim"
-  local actual_claim_id mode
-  _context_path_exists "$claim_dir" || return 0
-  if [ -L "$claim_dir" ] || [ ! -d "$claim_dir" ]; then
-    _context_store_error "writer-lock reclaim claim changed type: $claim_dir"
-    return 1
-  fi
-  _context_require_owner "$claim_dir" || return 1
-  actual_claim_id=$(_context_path_identity "$claim_dir") || return 1
-  if [ "$actual_claim_id" != "$expected_claim_id" ]; then
-    _context_store_error "writer-lock reclaim claim changed generation: $claim_dir"
-    return 1
-  fi
-  mode=$(_context_path_mode "$claim_dir") || return 1
-  if [ "$mode" != "700" ]; then
-    _context_store_error "writer-lock reclaim claim must be mode 700: $claim_dir"
-    return 1
-  fi
-  if [ -n "$(find -P "$claim_dir" -mindepth 1 -print -quit 2>/dev/null)" ]; then
-    _context_store_error "writer-lock reclaim claim must be empty: $claim_dir"
-    return 1
-  fi
-  rmdir "$claim_dir" || {
-    _context_store_error "cannot release writer-lock reclaim claim: $claim_dir"
-    return 1
-  }
 }
 
 _context_quarantine_dir_pid() {
@@ -607,9 +608,12 @@ _context_quarantine_dir_pid() {
 
 _context_remove_quarantine_dir() {
   # Bounded teardown of one in-store quarantine: a compliant teardown stage
-  # holds at most a stale `pid` file and an empty `.reclaim` claim before the
+  # holds at most a stale `pid` file and an empty `.reclaim` marker before the
   # final rmdir, so anything else fails closed. Never recursive, and tolerant
-  # of entries vanishing when a concurrent teardown finishes first.
+  # of entries vanishing when a concurrent teardown finishes first. A marker
+  # here belongs to a takeover anchored to this generation before the rename.
+  # Removing it is safe: a takeover only rewrites the pid of the dead holder
+  # it saw, and this pid is the live releaser's, or already gone.
   local stale_dir="$1" entry relative
   _context_path_exists "$stale_dir" || return 0
   if [ -L "$stale_dir" ] || [ ! -d "$stale_dir" ]; then
@@ -635,17 +639,12 @@ _context_remove_quarantine_dir() {
         }
         ;;
       .reclaim)
-        if [ -L "$entry" ] || [ ! -d "$entry" ]; then
-          _context_path_exists "$entry" || continue
-          _context_store_error "quarantined reclaim claim must be a real directory: $entry"
-          return 1
-        fi
-        _context_require_owner "$entry" || return 1
-        if [ -n "$(find -P "$entry" -mindepth 1 -print -quit 2>/dev/null)" ]; then
-          _context_store_error "quarantined reclaim claim must be empty: $entry"
-          return 1
-        fi
-        rmdir "$entry" 2>/dev/null || {
+        _context_check_reclaim_marker "$entry" "quarantined reclaim" || return 1
+        if [ -d "$entry" ]; then
+          rmdir "$entry" 2>/dev/null
+        else
+          rm -f "$entry" 2>/dev/null
+        fi || {
           _context_path_exists "$entry" || continue
           _context_store_error "cannot remove quarantined reclaim claim: $entry"
           return 1
@@ -665,14 +664,14 @@ _context_remove_quarantine_dir() {
 }
 
 _context_validate_quarantine_artifact() {
-  # In-store quarantines are transient: an owner release or dead-lock reclaim
-  # renames the validated lock generation to <root>/.knowledge-context-stale.<pid>
-  # (a same-directory rename, so an exact-root sandbox with no parent write
-  # access can still release) and dismantles it immediately. Validation accepts
-  # only the shapes a compliant teardown can produce, tolerates entries
-  # vanishing when that teardown completes mid-check, and never mutates a
-  # quarantine — a live teardown owner must not have its stage rejected or
-  # removed out from under it.
+  # In-store quarantines are transient: an owner release renames its lock
+  # generation to <root>/.knowledge-context-stale.<pid> (a same-directory
+  # rename, so an exact-root sandbox with no parent write access can still
+  # release) and dismantles it immediately. Validation accepts only the shapes
+  # a compliant teardown can produce, tolerates entries vanishing when that
+  # teardown completes mid-check, and never mutates a quarantine — a live
+  # teardown owner must not have its stage rejected or removed out from under
+  # it.
   local root="$1" stale_dir mode entry relative holder_pid
   while IFS= read -r -d '' stale_dir; do
     _context_path_exists "$stale_dir" || continue
@@ -723,19 +722,7 @@ _context_validate_quarantine_artifact() {
           fi
           ;;
         .reclaim)
-          if [ -L "$entry" ] || [ ! -d "$entry" ]; then
-            _context_path_exists "$entry" || continue
-            _context_store_error "quarantined reclaim claim must be a real directory: $entry"
-            return 1
-          fi
-          if ! _context_require_owner "$entry"; then
-            _context_path_exists "$entry" || continue
-            return 1
-          fi
-          if [ -n "$(find -P "$entry" -mindepth 1 -print -quit 2>/dev/null)" ]; then
-            _context_store_error "quarantined reclaim claim must be empty: $entry"
-            return 1
-          fi
+          _context_check_reclaim_marker "$entry" "quarantined reclaim" || return 1
           ;;
         *)
           _context_path_exists "$entry" || continue
@@ -766,125 +753,111 @@ _context_sweep_stale_quarantines() {
   done < <(find -P "$root" -mindepth 1 -maxdepth 1 -name '.knowledge-context-stale.*' -print0 2>/dev/null)
 }
 
-_context_quarantine_lock_generation() {
-  # Quarantine exactly the generation represented by <expected_token>. Creating
-  # .reclaim is the atomic claim. The token is then re-read under that claim; a
-  # mismatch means pathname turnover occurred, so the new generation is left
-  # untouched and the caller retries.
-  #
-  # mode=dead  — reclaim only if the recorded PID is still dead.
-  # mode=owner — release the generation held by this process.
-  local root="$1" expected_token="$2" reclaim_mode="$3"
-  local lock_dir="$1/.knowledge-context.lock" claim_dir claim_id current_token
-  local expected_lock_id expected_pid_id expected_holder_pid stale_dir actual_id mode
-  IFS='|' read -r expected_lock_id expected_pid_id expected_holder_pid <<< "$expected_token"
-  if [ -z "$expected_lock_id" ] || [ -z "$expected_pid_id" ] \
-    || ! [[ "$expected_holder_pid" =~ ^[0-9]+$ ]]; then
-    _context_store_error "invalid writer-lock generation token"
-    return 1
-  fi
-
-  claim_dir="$lock_dir/.reclaim"
-  if ! mkdir -m 700 "$claim_dir" 2>/dev/null; then
-    return 2
-  fi
-  claim_id=$(_context_path_identity "$claim_dir") || {
-    _context_store_error "cannot identify writer-lock reclaim claim: $claim_dir"
-    return 1
-  }
-
-  if ! _context_validate_lock_artifact "$root"; then
-    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-    return 1
-  fi
-  if ! current_token=$(_context_lock_generation_token "$root"); then
-    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-    return 2
-  fi
-  if [ "$current_token" != "$expected_token" ]; then
-    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-    return 2
-  fi
-
-  case "$reclaim_mode" in
-    dead)
-      if _context_pid_alive "$expected_holder_pid"; then
-        _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-        return 2
-      fi
-      ;;
-    owner)
-      if [ "$expected_holder_pid" != "$$" ]; then
-        _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-        _context_store_error "refusing to release a writer lock held by PID $expected_holder_pid: $lock_dir"
-        return 1
-      fi
-      ;;
-    *)
-      _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-      _context_store_error "unknown writer-lock reclaim mode: $reclaim_mode"
-      return 1
-      ;;
-  esac
-
-  # With the generation-specific claim held, compliant owners and competing
-  # reclaimers cannot remove this pathname. The rename therefore moves only the
-  # generation whose lock/PID identities were revalidated above. The quarantine
-  # lives INSIDE the store: a same-directory rename needs write access only to
-  # SESSION_CONTEXT_HOME itself, never to its parent, so an exact-root sandbox
-  # (writable contexts/ under an unwritable tmp/) can release and reclaim.
-  stale_dir="$root/.knowledge-context-stale.$$"
-  if _context_path_exists "$stale_dir"; then
-    # $$ names the live teardown owner, and this process fully dismantles each
-    # quarantine before minting another, so a survivor at our own name is an
-    # orphan from a recycled PID. Dismantle it bounded before reusing the name.
-    if ! _context_remove_quarantine_dir "$stale_dir"; then
-      _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-      _context_store_error "stale-lock quarantine path already exists: $stale_dir"
+# --- Writer lock protocol ---
+# The writer lock is <root>/.knowledge-context.lock, a directory holding the
+# holder's `pid` file. The claim, takeover and release helpers below have
+# IDENTICAL bodies in the Claude and Codex libs (scripts/test-context-locks.py
+# checks), because writers of both providers can share one store. The protocol
+# is the one the session-scheduler task locks and session-chat locks use.
+#
+# None of them trusts mkdir as a test-and-set. uutils mkdir (Rust coreutils,
+# the default on Ubuntu 25.10 and later) through 0.10.0 exits 0 when another
+# process creates the directory between its existence check and its own
+# mkdir(2), so two writers could both believe they created the lock. The claim
+# is the exclusive create (O_EXCL, via noclobber) of the pid file inside it.
+#
+# _context_claim_lock <lock-dir>: publish $$ as the holder of a lock directory
+# this process just created, or believes it did. 0 = claimed; 1 = another
+# writer published first, or the directory vanished, so keep waiting; 2 = the
+# pid file cannot be written (the empty directory is removed). The pid file is
+# born 0600, and a writer never removes one it did not create.
+_context_claim_lock() {
+  local path="$1" _
+  [ ! -L "$path" ] || return 1
+  for _ in 1 2; do
+    ( umask 077; set -o noclobber; printf '%s\n' "$$" > "$path/pid" ) 2>/dev/null && return 0
+    if [ -e "$path/pid" ] || [ -L "$path/pid" ] || [ ! -d "$path" ]; then
       return 1
     fi
-  fi
-  if ! mv "$lock_dir" "$stale_dir" 2>/dev/null; then
-    _context_drop_reclaim_claim "$lock_dir" "$claim_id" || return 1
-    _context_path_exists "$lock_dir" || return 2
-    _context_store_error "cannot quarantine writer lock: $lock_dir"
-    return 1
-  fi
+  done
+  rmdir "$path" 2>/dev/null || true
+  return 2
+}
 
-  if [ -L "$stale_dir" ] || [ ! -d "$stale_dir" ]; then
-    _context_store_error "reclaimed writer lock changed type: $stale_dir"
-    return 1
+# _context_reclaim_lock <lock-dir> <expected-dead-pid> -> 0 only on a
+# successful takeover. A stale lock is taken over in place, never moved or
+# deleted: between a waiter reading a dead pid and acting on it, that holder's
+# lock can be released and claimed again by another writer, and moving the
+# directory away then would give the lock two holders. The takeover re-reads
+# the pid under an exclusively created .reclaim marker, so of several waiters
+# that saw the same dead pid only one succeeds, and none touches a newer
+# holder's lock. It runs in a subshell anchored with `cd -P` to the
+# directory's inode, so a release that renames the directory away leaves it
+# operating on the old generation. `$$` inside the subshell is still the
+# caller's pid.
+_context_reclaim_lock() (
+  # Keep every access on this directory generation, even if release renames it.
+  local path="$1" expected="$2" result=1
+  [[ "$expected" =~ ^[0-9]+$ ]] || return 1
+  [ ! -L "$path" ] && cd -P "$path" 2>/dev/null || return 1
+  umask 077
+  set -o noclobber
+  { : > .reclaim; } 2>/dev/null || return 1
+  if [ ! -L pid ] && [ -f pid ] && [ "$(sed -n '1p' pid 2>/dev/null)" = "$expected" ]; then
+    printf '%s\n' "$$" >| pid 2>/dev/null && result=0
   fi
-  _context_require_owner "$stale_dir" || return 1
-  actual_id=$(_context_path_identity "$stale_dir") || return 1
-  if [ "$actual_id" != "$expected_lock_id" ]; then
-    _context_store_error "reclaimed writer lock changed generation: $stale_dir"
-    return 1
-  fi
-  mode=$(_context_path_mode "$stale_dir") || return 1
-  [ "$mode" = "700" ] || {
-    _context_store_error "reclaimed writer lock must be mode 700: $stale_dir"
-    return 1
-  }
-  actual_id=$(_context_path_identity "$stale_dir/pid") || return 1
-  if [ "$actual_id" != "$expected_pid_id" ] \
-    || [ "$(sed -n '1p' "$stale_dir/pid" 2>/dev/null)" != "$expected_holder_pid" ]; then
-    _context_store_error "reclaimed writer-lock PID changed generation: $stale_dir/pid"
-    return 1
-  fi
-  ensure_context_regular_file "$stale_dir/pid" || return 1
-  rm -f "$stale_dir/pid" || return 1
-  _context_drop_reclaim_claim "$stale_dir" "$claim_id" || return 1
-  rmdir "$stale_dir" || {
-    _context_store_error "cannot remove stale writer-lock quarantine: $stale_dir"
-    return 1
-  }
+  rm -f .reclaim 2>/dev/null || true
+  return "$result"
+)
+
+# _context_release_lock <root>: release the writer lock THIS process holds
+# (pid file == $$) with ONE rename of the whole directory to the in-store
+# quarantine <root>/.knowledge-context-stale.$$, then dismantle that copy. The
+# pid stays in place until the rename, so no waiter sees the lock path as a
+# directory without a holder, and a takeover's marker in flight leaves with
+# the directory. A same-directory rename needs write access only to
+# SESSION_CONTEXT_HOME itself, never to its parent, so an exact-root sandbox
+# (writable contexts/ under an unwritable tmp/) can release. 0 = released;
+# 1 = not held by this process, or the rename failed, so the lock is kept;
+# 2 = released, but the quarantine could not be dismantled (reported; the
+# sweep finishes it after this process exits).
+_context_release_lock() {
+  local root="$1" lock_dir="$1/.knowledge-context.lock" stale_dir="$1/.knowledge-context-stale.$$"
+  local attempt=1
+  [ ! -L "$lock_dir" ] && [ -d "$lock_dir" ] && [ ! -L "$lock_dir/pid" ] || return 1
+  [ "$(sed -n '1p' "$lock_dir/pid" 2>/dev/null)" = "$$" ] || return 1
+  # $$ names this live process, and each quarantine it makes is dismantled
+  # before the next, so one already at this name is an orphan of a recycled
+  # pid. Dismantle it first, so the rename below cannot move into it.
+  _context_remove_quarantine_dir "$stale_dir" || return 1
+  mv "$lock_dir" "$stale_dir" 2>/dev/null || return 1
+  # A takeover anchored to this generation can hold its marker here for a
+  # moment, which makes the final rmdir fail; retry briefly.
+  until _context_remove_quarantine_dir "$stale_dir" 2>/dev/null; do
+    if [ "$attempt" -ge 50 ]; then
+      _context_remove_quarantine_dir "$stale_dir" && return 0
+      return 2
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.01
+  done
 }
 
 acquire_context_store_lock() {
-  local root="$1" lock_dir="$1/.knowledge-context.lock" pid_file holder_pid generation_token
-  local attempts=0 reclaim_rc
-  while ! mkdir -m 700 "$lock_dir" 2>/dev/null; do
+  local root="$1" lock_dir="$1/.knowledge-context.lock" pid_file="$1/.knowledge-context.lock/pid"
+  local holder_pid="" attempts=0 claim
+  while :; do
+    # mkdir success alone does not prove ownership; the pid claim does.
+    if mkdir -m 700 "$lock_dir" 2>/dev/null; then
+      claim=0
+      _context_claim_lock "$lock_dir" || claim=$?
+      if [ "$claim" -eq 0 ]; then
+        break
+      elif [ "$claim" -eq 2 ]; then
+        _context_store_error "cannot publish writer-lock holder PID: $pid_file"
+        return 1
+      fi
+    fi
     if [ -L "$lock_dir" ] || { _context_path_exists "$lock_dir" && [ ! -d "$lock_dir" ]; }; then
       # The holder may have released between the existence and directory
       # checks; retry rather than reporting a vanished lock as unsafe.
@@ -892,101 +865,50 @@ acquire_context_store_lock() {
       _context_store_error "writer lock is not a safe directory: $lock_dir"
       return 1
     fi
+    holder_pid=""
     if [ -d "$lock_dir" ]; then
       if ! _context_validate_lock_artifact "$root"; then
         _context_path_exists "$lock_dir" || continue
         return 1
       fi
-      pid_file="$lock_dir/pid"
-      if ! _context_path_exists "$pid_file"; then
-        # The winner may be between mkdir and publishing its PID.
-        attempts=$((attempts + 1))
-        if [ "$attempts" -ge 250 ]; then
-          _context_store_error "writer lock has no inspectable holder PID: $lock_dir"
-          return 1
-        fi
-        sleep 0.02
-        continue
-      fi
-      if ! generation_token=$(_context_lock_generation_token "$root"); then
-        _context_path_exists "$lock_dir" || continue
-        sleep 0.002
-        continue
-      fi
-      holder_pid=${generation_token##*|}
-      if ! [[ "$holder_pid" =~ ^[0-9]+$ ]]; then
-        if ! _context_path_exists "$lock_dir" || ! _context_path_exists "$pid_file"; then
-          continue
-        fi
-        if [ -z "$holder_pid" ]; then
-          attempts=$((attempts + 1))
-          if [ "$attempts" -ge 250 ]; then
-            _context_store_error "writer lock holder PID remained empty: $pid_file"
-            return 1
-          fi
-          sleep 0.02
-          continue
-        fi
-        _context_store_error "writer lock contains an invalid holder PID: $pid_file"
-        return 1
-      fi
-      if _context_pid_alive "$holder_pid"; then
-        : # A live owner keeps the lock; continue the bounded wait below.
-      else
-        if _context_quarantine_lock_generation "$root" "$generation_token" dead; then
-          attempts=0
-          continue
-        else
-          reclaim_rc=$?
-          if [ "$reclaim_rc" -eq 2 ]; then
-            attempts=$((attempts + 1))
-            if [ "$attempts" -ge 250 ]; then
-              _context_store_error "timed out claiming stale writer lock: $lock_dir"
-              return 1
-            fi
-            sleep 0.02
-            continue
-          fi
-          return 1
-        fi
+      holder_pid=$(sed -n '1p' "$pid_file" 2>/dev/null) || holder_pid=""
+      # An empty or missing pid means its creator has not published it yet,
+      # or a takeover is rewriting it; a non-numeric one is reported by the
+      # validation above on the next pass. Only a numeric, dead pid is stale.
+      if [[ "$holder_pid" =~ ^[0-9]+$ ]] && ! _context_pid_alive "$holder_pid"; then
+        # Stale holder: take it over in place (see _context_reclaim_lock).
+        _context_reclaim_lock "$lock_dir" "$holder_pid" && break
       fi
     fi
     attempts=$((attempts + 1))
     if [ "$attempts" -ge 250 ]; then
-      _context_store_error "timed out waiting for writer lock: $lock_dir"
+      if [ -d "$lock_dir" ] && [ -z "$holder_pid" ]; then
+        _context_store_error "writer lock has no inspectable holder PID: $lock_dir"
+      else
+        _context_store_error "timed out waiting for writer lock: $lock_dir"
+      fi
       return 1
     fi
     sleep 0.02
   done
+  # This process holds the lock: secure its generation and record it, so
+  # release can refuse a lock that changed underneath it.
   CONTEXT_STORE_LOCK_DIR="$lock_dir"
-  _context_harden_directory "$lock_dir" || {
-    rmdir "$lock_dir" 2>/dev/null || true
-    CONTEXT_STORE_LOCK_DIR=""
-    return 1
-  }
-  pid_file="$lock_dir/pid"
-  if ! (set -o noclobber; printf '%s\n' "$$" > "$pid_file") 2>/dev/null \
-    || ! chmod 600 "$pid_file" \
-    || ! ensure_context_regular_file "$pid_file"; then
-    rm -f "$pid_file" 2>/dev/null || true
-    rmdir "$lock_dir" 2>/dev/null || true
-    CONTEXT_STORE_LOCK_DIR=""
-    _context_store_error "cannot publish writer-lock holder PID: $pid_file"
-    return 1
-  fi
-  if ! CONTEXT_STORE_LOCK_TOKEN=$(_context_lock_generation_token "$root"); then
-    rm -f "$pid_file" 2>/dev/null || true
-    rmdir "$lock_dir" 2>/dev/null || true
+  CONTEXT_STORE_LOCK_TOKEN=""
+  if ! _context_harden_directory "$lock_dir" \
+    || ! ensure_context_regular_file "$pid_file" \
+    || ! CONTEXT_STORE_LOCK_TOKEN=$(_context_lock_generation_token "$root") \
+    || [ "${CONTEXT_STORE_LOCK_TOKEN##*|}" != "$$" ]; then
+    _context_release_lock "$root" >/dev/null 2>&1 || true
     CONTEXT_STORE_LOCK_DIR=""
     CONTEXT_STORE_LOCK_TOKEN=""
-    _context_store_error "cannot record writer-lock generation: $lock_dir"
+    _context_store_error "cannot secure the claimed writer lock: $lock_dir"
     return 1
   fi
 }
 
 release_context_store_lock() {
-  local lock_dir="${CONTEXT_STORE_LOCK_DIR:-}" root expected_token release_rc current_token
-  local attempts=0
+  local lock_dir="${CONTEXT_STORE_LOCK_DIR:-}" root expected_token current_token release_rc=0
   [ -n "$lock_dir" ] || return 0
   expected_token="${CONTEXT_STORE_LOCK_TOKEN:-}"
   if [ -z "$expected_token" ]; then
@@ -994,27 +916,19 @@ release_context_store_lock() {
     return 1
   fi
   root=${lock_dir%/.knowledge-context.lock}
-  while :; do
-    if _context_quarantine_lock_generation "$root" "$expected_token" owner; then
-      break
-    else
-      release_rc=$?
-    fi
-    [ "$release_rc" -eq 2 ] || return 1
-    if ! current_token=$(_context_lock_generation_token "$root") \
-      || [ "$current_token" != "$expected_token" ]; then
-      _context_store_error "writer lock changed before release: $lock_dir"
-      return 1
-    fi
-    attempts=$((attempts + 1))
-    if [ "$attempts" -ge 250 ]; then
-      _context_store_error "timed out claiming writer lock for release: $lock_dir"
-      return 1
-    fi
-    sleep 0.02
-  done
+  if ! current_token=$(_context_lock_generation_token "$root") \
+    || [ "$current_token" != "$expected_token" ]; then
+    _context_store_error "writer lock changed before release: $lock_dir"
+    return 1
+  fi
+  _context_release_lock "$root" || release_rc=$?
+  if [ "$release_rc" -eq 1 ]; then
+    _context_store_error "cannot release writer lock: $lock_dir"
+    return 1
+  fi
   CONTEXT_STORE_LOCK_DIR=""
   CONTEXT_STORE_LOCK_TOKEN=""
+  [ "$release_rc" -eq 0 ]
 }
 
 atomic_copy_context_file() {
