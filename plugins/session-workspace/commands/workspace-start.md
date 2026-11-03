@@ -1,6 +1,6 @@
 ---
 description: Bring up session-workspace sessions/panes/agents/services
-argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]"
+argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed] | SESSION --pane NAME [--pane NAME...]"
 allowed-tools: Bash(bash:*)
 ---
 
@@ -22,6 +22,12 @@ An unmanaged pane that occupies a planned slot always FAILS. A same-named tmux s
 `--no-agents`/`--no-services` skip launching the corresponding pane's runtime. The pane is still created and marked. The command reports such a pane as `[claimed]`, not healthy. A later `start` without the flag launches its runtime.
 
 `--no-attach` suppresses the post-start attach. Otherwise `start` attaches per `behavior.attach` and prints one `attach: ...` line that says what it did. With no positional `TARGET`, the target is `behavior.default_start_target` (default `all`).
+
+`SESSION --pane NAME` (repeatable) starts only the named service panes (role `service`, such as the debug browser or a dev server) of one session. It creates the session if it is not running, with only those panes, and runs their declared commands. Panes that are already running are `[kept]`. NAME is the pane name or the part after `<project.id>-`. `--pane` never attaches, and it cannot be combined with `--no-agents`, `--no-services` or `--adopt`.
+
+Before it launches a dev-server pane (`port` plus `command`), `--pane` refuses when the port is already bound by another process and names the PID holding it, for example `service port occupied before launch: 3001 (web) is held by pid 4242 (node)`. Nothing is started for that pane. Relay that line and do not retry on another port.
+
+A pane with `idle_stop_minutes` prints an `[idle-stop]` line after it starts. A watcher then stops that pane once nothing has used its port for that many minutes and records why. For a dev server, use means an inbound connection. For the browser, use means CDP commands, so an open chrome-devtools connection that only pings does not keep it up. `workspace status SESSION --pane NAME` shows the watcher and the last stop.
 
 Relay the per-pane report lines and the summary count (`started/adopted: N  kept (already healthy): N  failed: N`) verbatim.
 

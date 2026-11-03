@@ -1,6 +1,6 @@
 ---
 description: Bring up session-workspace sessions/panes/agents/services
-argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]"
+argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed] | SESSION --pane NAME [--pane NAME...]"
 ---
 
 ## Instructions
@@ -29,6 +29,13 @@ argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no
    - `--no-attach`: suppress post-start attach behavior regardless of
      `behavior.attach`.
    - `--adopt --confirmed`: allow occupied unmanaged panes to be claimed.
+   - `SESSION --pane NAME` (repeatable): start only the named service panes
+     (role `service`, such as the debug browser or a dev server) of one
+     session. NAME is the pane name or the part after `<project.id>-`. The
+     session is created if it is not running, with only those panes, and
+     their declared commands run. Running panes are `[kept]`. `--pane` never
+     attaches and cannot be combined with `--no-agents`, `--no-services` or
+     `--adopt`.
 
 4. Safety/behavior:
    - Start validates config, requires `jq` and `tmux`, and takes a project lock.
@@ -54,6 +61,17 @@ argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no
      `if_terminal` attaches only from an interactive terminal; `never` never
      attaches. `--no-attach` forces attach off. The command prints one
      `attach: ...` line for the decision.
+   - With `--pane`, a dev-server pane (`port` plus `command`) whose port is
+     already bound by another process is refused before launch, and the error
+     names the holding PID, for example `service port occupied before launch:
+     3001 (web) is held by pid 4242 (node)`. Relay it; do not retry on another
+     port.
+   - A pane with `idle_stop_minutes` prints an `[idle-stop]` line after it
+     starts. A watcher stops the pane once nothing has used its port for that
+     many minutes and records why in the pane's run record, which
+     `workspace-status` shows. For a dev server, use means an inbound
+     connection. For the browser, use means CDP commands, so an open
+     chrome-devtools connection that only pings does not keep it up.
    - Secrets for authorized panes travel through a private 0600 single-use file
      path in the launch script; secret values are not placed in argv, tmux
      history, or session environment.

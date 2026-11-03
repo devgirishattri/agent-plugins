@@ -25,6 +25,10 @@ Real flags:
 - `--confirmed`: required; without it the command refuses to run.
 - `--all`: widen from configured/selected sessions to every live session
   marked for the current project.
+- `SESSION --pane NAME --confirmed` (repeatable `--pane`): stop only the named
+  service panes of one session; the session and its other panes keep running.
+  Cannot be combined with `--all` or `--no-save`. Prints
+  `stopped: N  not running: N  skipped: N`.
 
 Stop is destructive. It validates config, takes the project lock, and targets
 tmux sessions by exact name. It kills only sessions carrying this project's

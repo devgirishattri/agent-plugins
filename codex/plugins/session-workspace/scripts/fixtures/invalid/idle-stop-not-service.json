@@ -1,0 +1,3 @@
+{"schema_version":1,"project":{"id":"p","root":"."},"runtimes":{"claude":{"program":"claude"}},"roles":{"service":{"runtime":"shell"},"worker":{"runtime":"claude"}},"stores":{"pin":[]},
+"sessions":[{"id":"services","name":"p-services","panes":[
+  {"name":"p-worker","role":"worker","cwd":".","port":4000,"idle_stop_minutes":10}]}]}
