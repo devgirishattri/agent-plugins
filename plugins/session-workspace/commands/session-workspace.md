@@ -37,8 +37,8 @@ Lead with the result. Add text only for errors or the follow-ups below.
      dispatcher on `PATH` (no config or tmux mutation)
    - `/session-workspace:workspace-browser-config` — preview or explicitly apply the project
      MCP entries derived from the optional browser block
-   - `/session-workspace:harness-status` — read-only: is the opt-in strict-v1 harness active,
-     and does this pane's engine identity match the validated plan
+   - `/session-workspace:harness-status` — read-only: harness activation, the strict-v1 role
+     floor (`--probe` decides its cases), and whether this pane's identity matches the plan
    - `/session-workspace:harness-doctor` — read-only harness health (config, activation, hook
      registration, python3, live identity)
    - `/session-workspace:workspace-orchestrator` — schema-v4/v5 reviewed Git
