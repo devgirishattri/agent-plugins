@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import fnmatch
+import itertools
 import os
 import re
 import shlex
@@ -723,6 +724,77 @@ def has_unquoted_expansion(command: str) -> bool:
                 return True
         index += 1
     return in_single or in_double
+
+
+def heredoc_delimiters(line: str) -> List[Tuple[str, bool]]:
+    """The (delimiter, strip_tabs) of each `<<WORD` / `<<-WORD` on LINE, in
+    order. The delimiter is the unquoted word, as the shell compares it."""
+    out: List[Tuple[str, bool]] = []
+    tokens = parse_shell(line)
+    for index, token in enumerate(tokens[:-1]):
+        if token != "<<":
+            continue
+        word = tokens[index + 1]
+        strip = word.startswith("-")
+        if strip:
+            word = word[1:] or (tokens[index + 2] if index + 2 < len(tokens) else "")
+        out.append((word, strip))
+    return out
+
+
+def command_lines(command: str) -> str:
+    """COMMAND as the shell runs it line by line: an unquoted newline ends a
+    command (it becomes `;`), a backslash-newline joins lines, an unquoted
+    `#` comment is dropped and a heredoc body is dropped (it is the stdin of
+    the command that opened it, never a command). parse_shell folds a
+    newline into whitespace, so `ls<newline>python3 -c ...` would otherwise
+    read as one `ls` command. Used to narrow the floor only."""
+    out: List[str] = []
+    line: List[str] = []
+    in_single = in_double = False
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+        if in_single:
+            line.append(char)
+            in_single = char != "'"
+            index += 1
+            continue
+        if char == "\\" and index + 1 < length:
+            if command[index + 1] != "\n":
+                line.append(command[index : index + 2])
+            index += 2
+            continue
+        if in_double:
+            line.append(char)
+            in_double = char != '"'
+            index += 1
+            continue
+        if char == "#" and (not line or (len(line[-1]) == 1 and (line[-1].isspace() or line[-1] in CONTROL_CHARS))):
+            while index < length and command[index] != "\n":
+                index += 1
+            continue
+        if char == "\n":
+            text = "".join(line)
+            out.append(text + ";")
+            line = []
+            index += 1
+            for delimiter, strip in heredoc_delimiters(text):
+                while index < length:
+                    end = command.find("\n", index)
+                    end = length if end < 0 else end
+                    body = command[index:end]
+                    index = min(end + 1, length)
+                    if (body.lstrip("\t") if strip else body) == delimiter:
+                        break
+            continue
+        line.append(char)
+        in_single = char == "'"
+        in_double = char == '"'
+        index += 1
+    out.append("".join(line))
+    return "".join(out)
 
 
 def is_control(token: str) -> bool:
@@ -3127,36 +3199,76 @@ def interpreter_family(executable: str) -> str:
     return {"pypy": "python", "nodejs": "node"}.get(match.group(1), match.group(1))
 
 
-def interpreter_inline_code(family: str, argv: List[str]) -> bool:
-    """Read FAMILY's options in ARGV up to the script operand: attached and
-    clustered short forms (`-c"code"`, `-Bc`, `-ne`), `--eval=`/`--print=`
-    long forms and data: URL module loads all count as inline code."""
+# Options that print and exit without reading a program (version, help,
+# info). They count only when no other option is given: `ruby -v` alone
+# prints the version, but `ruby -v -w` reads its program from stdin.
+INLINE_QUERY = {
+    "python": ("Vh?", ("--version", "--help", "--help-env", "--help-xoptions", "--help-all")),
+    "node": ("vh", ("--version", "--help", "--v8-options", "--completion-bash")),
+    "perl": ("vVh", ("--version", "--help")),
+    "ruby": ("vh", ("--version", "--help", "--copyright")),
+    "php": ("vhim", ("--version", "--help", "--info", "--modules", "--ini", "--rf", "--rc", "--re", "--rz", "--ri")),
+}
+# Options that run something other than a program text and never read one
+# from stdin, whatever else is given: node's test runner and package.json
+# script runner, php's built-in web server.
+INLINE_RUNNERS = {"node": ("", ("--test", "--run")), "php": ("S", ("--server",))}
+# Options whose value is the program file, so the program is not inline or on stdin.
+INLINE_SCRIPT_OPTIONS = {"php": ("fF", ("--file", "--process-file"))}
+
+
+def interpreter_program(family: str, argv: List[str]) -> str:
+    """Where FAMILY's program comes from, reading its options in ARGV up to
+    the script operand: "inline" (attached and clustered short forms such as
+    `-c"code"`, `-Bc`, `-ne`, `--eval=`/`--print=` long forms, data: URL
+    module loads), "script" (a program file), "module" (python -m),
+    "query" (version, help or info output only) or "stdin" (`-`, or no
+    program operand at all: a pipe, heredoc, here-string or redirect feeds
+    it)."""
     inline_short, value_short, inline_long, value_long, loader_long = INLINE_GRAMMAR[family]
+    query_short, query_long = INLINE_QUERY[family]
+    script_short, script_long = INLINE_SCRIPT_OPTIONS.get(family, ("", ()))
+    runner_short, runner_long = INLINE_RUNNERS.get(family, ("", ()))
     anywhere = INLINE_LONG_ANYWHERE.get(family, ())
     if any(token.partition("=")[0] in anywhere for token in argv[1:]):
-        return True
+        return "inline"
+    query = other = False
     index = 1
     while index < len(argv):
         token = argv[index]
         index += 1
-        if token in {"-", "--"} or not token.startswith("-"):
-            return False  # script operand, stdin program or end of options
+        if token == "-":
+            return "stdin"
+        if token == "--":
+            return "script" if index < len(argv) else "stdin"
+        if not token.startswith("-"):
+            return "script"
         if token.startswith("--"):
             name, equals, value = token.partition("=")
             if name in inline_long:
-                return True
+                return "inline"
+            if name in script_long:
+                return "script"
+            if name in runner_long:
+                return "query"
+            query, other = query or name in query_long, other or name not in query_long
             if name in value_long and not equals and index < len(argv):
                 value = argv[index]
                 index += 1
             if name in loader_long and value.startswith("data:"):
-                return True
+                return "inline"
             continue
         offset = 1
         while offset < len(token):
             char = token[offset]
             offset += 1
             if char in inline_short:
-                return True
+                return "inline"
+            if char in script_short:
+                return "script"
+            if char in runner_short:
+                return "query"
+            query, other = query or char in query_short, other or char not in query_short
             arity = value_short.get(char)
             if arity is None:
                 continue
@@ -3172,26 +3284,201 @@ def interpreter_inline_code(family: str, argv: List[str]) -> bool:
                 value = argv[index]
                 index += 1
             if family == "perl" and char in "mM" and value and not PERL_MODULE_RE.match(value):
-                return True
+                return "inline"
             if family == "node" and char == "r" and value.startswith("data:"):
-                return True
+                return "inline"
             if family == "python" and char == "m":
-                return False  # module run: the rest is the module's own argv
+                return "module"  # the rest is the module's own argv
             break
-    return False
+    return "query" if query and not other else "stdin"
+
+
+def interpreter_inline_code(family: str, argv: List[str]) -> bool:
+    return interpreter_program(family, argv) in {"inline", "stdin"}
+
+
+# Shell options that take a value: fish's short options (getopt), and each
+# shell's long options that take the next token.
+SHELL_VALUE_SHORT = {"fish": "dfop"}
+SHELL_VALUE_LONG = {"bash": ("--rcfile", "--init-file"), "zsh": ("--emulate",),
+                    "fish": ("--debug", "--features", "--debug-output", "--profile", "--profile-startup")}
+
+
+def shell_inline_code(executable: str, argv: List[str]) -> bool:
+    """A shell runs inline code from -c (any short cluster with c, anywhere,
+    as before; fish also -C, --command and --init-command), or a program on
+    stdin: -s, `-`/`--` with no script after it, or no script operand at all
+    (`echo cmd | bash`, `bash <<EOF`). `bash script.sh`, `bash --version`
+    and `bash -n script.sh` are not inline."""
+    if any(len(token) > 1 and token[0] in "-+" and not token.startswith("--") and "c" in token[1:] for token in argv[1:]):
+        return True
+    if executable == "fish" and any(
+            (len(token) > 1 and token[0] == "-" and not token.startswith("--") and "C" in token[1:])
+            or token.partition("=")[0] in {"--command", "--init-command"} for token in argv[1:]):
+        return True
+    value_long = SHELL_VALUE_LONG.get(executable, ())
+    query = other = False
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        index += 1
+        if token in {"-", "--"}:
+            return index >= len(argv)
+        if token.startswith("--"):
+            name, equals, _ = token.partition("=")
+            query, other = query or name in {"--version", "--help"}, other or name not in {"--version", "--help"}
+            if name in value_long and not equals:
+                index += 1
+            continue
+        if len(token) > 1 and token[0] in "-+":
+            other = True
+            if token[0] == "-" and "s" in token[1:]:
+                return True
+            if executable == "fish":
+                # getopt: a value option takes the rest of the cluster, else the next token
+                for offset, char in enumerate(token[1:], 2):
+                    if char in SHELL_VALUE_SHORT["fish"]:
+                        index += 0 if offset < len(token) else 1
+                        break
+            else:
+                # sh/bash/zsh/ksh: each o/O in a cluster takes the next word (`-ox pipefail`)
+                index += token.count("o", 1) + token.count("O", 1)
+            continue
+        return False  # the script operand
+    return not (query and not other)
+
+
+# Launch prefixes that run a command given after their own options, unwrapped
+# for the inline-code check only (parse_wrappers stays the general wrapper
+# grammar): (flag short options, value short options, flag long options,
+# value long options, short and long options after which no command runs,
+# operands before the command). Shell keywords that precede a command
+# (`! cmd`, `then cmd`, `do cmd`) unwrap the same way.
+INLINE_LAUNCHERS = {
+    "timeout": ("fpv", "ks", ("--foreground", "--preserve-status", "--verbose"), ("--kill-after", "--signal"),
+                ("", ("--help", "--version")), 1),
+    "nice": ("", "n", (), ("--adjustment",), ("", ("--help", "--version")), 0),
+    "stdbuf": ("", "ioe", (), ("--input", "--output", "--error"), ("", ("--help", "--version")), 0),
+    "ionice": ("t", "cn", ("--ignore",), ("--class", "--classdata"),
+               ("pPu", ("--pid", "--pgid", "--uid", "--help", "--version")), 0),
+    "setsid": ("cfw", "", ("--ctty", "--fork", "--wait"), (), ("", ("--help", "--version")), 0),
+    "taskset": ("ac", "", ("--all-tasks", "--cpu-list"), (), ("p", ("--pid", "--help", "--version")), 1),
+    "chrt": ("abdfiormRv", "TPD", ("--all-tasks", "--batch", "--deadline", "--fifo", "--idle", "--other", "--rr",
+                                   "--reset-on-fork", "--max", "--verbose"),
+             ("--sched-runtime", "--sched-period", "--sched-deadline"), ("p", ("--pid", "--help", "--version")), 1),
+}
+SHELL_KEYWORD_PREFIXES = {"!", "if", "then", "elif", "else", "do", "while", "until"}
+FIND_EXEC_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir"}
+
+
+def inline_candidate(token: str) -> bool:
+    name = Path(token).name
+    return name in INLINE_SHELLS or name == "eval" or bool(interpreter_family(name))
+
+
+def launcher_command(name: str, argv: List[str]) -> List[str]:
+    """The command INLINE_LAUNCHERS[NAME] runs, read from its options. An
+    option outside the reviewed grammar falls back to the first later shell
+    or interpreter token, so an unknown option never hides inline code."""
+    flag_short, value_short, flag_long, value_long, (none_short, none_long), operands = INLINE_LAUNCHERS[name]
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            index += 1
+            break
+        if token == "-" or not token.startswith("-"):
+            break
+        index += 1
+        if token.startswith("--"):
+            option, equals, _ = token.partition("=")
+            if option in none_long:
+                return []
+            if option in flag_long:
+                continue
+            if option in value_long:
+                index += 0 if equals else 1
+                continue
+            return launcher_fallback(argv, index)
+        if name == "nice" and re.fullmatch(r"-[0-9]+", token):
+            continue  # obsolete `nice -N`
+        offset = 1
+        while offset < len(token):
+            char = token[offset]
+            offset += 1
+            if char in none_short:
+                return []
+            if char in flag_short:
+                continue
+            if char in value_short:
+                if offset >= len(token):
+                    index += 1
+                break
+            return launcher_fallback(argv, index)
+    index += operands
+    return argv[index:] if index < len(argv) else []
+
+
+def launcher_fallback(argv: List[str], start: int) -> List[str]:
+    for index in range(start, len(argv)):
+        if inline_candidate(argv[index]):
+            return argv[index:]
+    return []
+
+
+def inline_launches(segment: List[str]) -> List[List[str]]:
+    """Every argv SEGMENT launches, after the parse_wrappers hops, shell
+    keyword prefixes, INLINE_LAUNCHERS (`timeout 5 python3 -c ...`,
+    `nice -n 5 bash -c ...`) and find -exec/-execdir/-ok/-okdir actions."""
+    pending = [segment]
+    out: List[List[str]] = []
+    while pending:
+        argv = unwrap_prefixes(pending.pop())
+        if not argv:
+            continue
+        name = Path(argv[0]).name
+        if name in SHELL_KEYWORD_PREFIXES:
+            pending.append(argv[1:])
+            continue
+        if name in INLINE_LAUNCHERS:
+            pending.append(launcher_command(name, argv))
+            continue
+        if name == "find":
+            index = 1
+            while index < len(argv):
+                if argv[index] in FIND_EXEC_ACTIONS:
+                    end = index + 1
+                    while end < len(argv) and argv[end] not in {";", "+"}:
+                        end += 1
+                    pending.append(argv[index + 1 : end])
+                    index = end
+                index += 1
+        out.append(argv)
+    return out
 
 
 def executor_inline_code(segment: List[str]) -> bool:
-    executable = command_basename(segment)
-    if executable in INLINE_SHELLS:
-        return any(len(token) > 1 and token[0] in "-+" and not token.startswith("--") and "c" in token[1:] for token in segment[1:])
-    family = interpreter_family(executable)
-    if family:
-        # The exact tokens are the earlier floor, still refused anywhere in the
-        # segment; the per-interpreter grammar adds attached/clustered forms.
-        return (any(token in {"-c", "-e", "--eval", "-r"} for token in segment[1:])
-                or interpreter_inline_code(family, unwrap_prefixes(segment)))
-    return executable == "eval"
+    """Inline shell or interpreter code anywhere SEGMENT launches it: the
+    program text in argv (-c, -e, --eval, ...) or on stdin (a pipe, heredoc,
+    here-string, `<` redirect or `-`). Running a script file is not inline."""
+    for argv in inline_launches(segment):
+        executable = Path(argv[0]).name
+        if executable in INLINE_SHELLS:
+            if shell_inline_code(executable, argv):
+                return True
+            continue
+        family = interpreter_family(executable)
+        if family:
+            # The exact tokens are the earlier floor, still refused anywhere in
+            # the argv; the per-interpreter grammar adds attached/clustered
+            # forms and a program on stdin.
+            if (any(token in {"-c", "-e", "--eval", "-r"} for token in argv[1:])
+                    or interpreter_inline_code(family, argv)):
+                return True
+            continue
+        if executable == "eval":
+            return True
+    return False
 
 
 # gh 2.100.0 reviewed grammar. This is intentionally role-local: never teach
@@ -3405,7 +3692,11 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
     # and unsupported/dynamic wrapper options (exec -a/-l, nohup --, time -o,
     # env -S/--split-string, ...) fail closed here, so no later classifier
     # ever sees a re-parsed or privileged argv.
-    for segment in segments(tokens):
+    # A newline ends a command for the shell but not for parse_shell, so the
+    # floor also reads the line-split form (heredoc bodies dropped). Both
+    # parses must pass: the second can only narrow what the first allows.
+    line_tokens = parse_shell(command_lines(command)) if "\n" in command else tokens
+    for segment in segments(tokens) + (segments(line_tokens) if line_tokens is not tokens else []):
         parse_wrappers(segment)
     # No permission-widening escape hatch for ANY role: the engine refuses
     # these flags in runtimes.*.args, and a nested agent launched with them
@@ -3479,7 +3770,10 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
         # permission is used only by the two per-segment path checks below.
         quoted_globs = True
         floor_base = (reviewer_base or ctx.pane_cwd) if ctx.semantic_role == "executor" else ctx.pane_cwd
-        for segment, cwd, after in walk_segments(tokens, floor_base):
+        walks = [walk_segments(tokens, floor_base)]
+        if line_tokens is not tokens:
+            walks.append(walk_segments(line_tokens, floor_base))
+        for segment, cwd, after in itertools.chain(*walks):
             if ctx.semantic_role == "executor":
                 message_read_guard(ctx, segment, cwd, globs_quoted=quoted_globs)
             if ctx.semantic_role == "orchestrator" and command_basename(segment) == "git" and not git_is_read_only(segment):
@@ -3691,6 +3985,7 @@ FLOOR_TABLES = {
     "OUTBOUND_HELPER_BASENAMES": OUTBOUND_HELPER_BASENAMES,
     "INLINE_SHELLS": INLINE_SHELLS,
     "INLINE_INTERPRETERS": INLINE_INTERPRETERS,
+    "INLINE_LAUNCHERS": INLINE_LAUNCHERS,
     "GH_READ_OPTIONS": GH_READ_OPTIONS,
     "HELPERS": HELPERS,
     "PRIVILEGE_WRAPPERS": PRIVILEGE_WRAPPERS,
@@ -3702,7 +3997,7 @@ _FLOOR_CONTAINMENT = (
     ("containment", "edit family and path operands confined to the pane checkout", ("executor.containment",), _FLOOR_EDIT),
     ("containment",) + _FLOOR_DRAFTS,
     ("containment", "no inline shell or interpreter code", ("executor.inline_code",),
-     (("INLINE_SHELLS", "shells"), ("INLINE_INTERPRETERS", "interpreters"))),
+     (("INLINE_SHELLS", "shells"), ("INLINE_INTERPRETERS", "interpreters"), ("INLINE_LAUNCHERS", "launch prefixes"))),
     ("containment", "literal operands only", ("path.dynamic",), ()),
 )
 _FLOOR_GH = (("gh", "reviewed read forms only", ("orchestrator.gh_mutation", "orchestrator.gh_unsupported"),
@@ -3778,6 +4073,11 @@ _PROBE_CONTAINMENT = (
     ("shell", "executor.inline_code", "python3 -c with attached code", 'python3 -c"print(1)"'),
     ("shell", "executor.inline_code", "node --eval=", "node --eval=1"),
     ("shell", "allow", "python3 running a script file in the pane checkout", "python3 {probe}"),
+    ("shell", "executor.inline_code", "python3 reading its program from a pipe", "echo 'print(1)' | python3"),
+    ("shell", "executor.inline_code", "bash reading a heredoc", "bash <<'EOF'\ntrue\nEOF"),
+    ("shell", "executor.inline_code", "python3 -c behind timeout", "timeout 5 python3 -c 'print(1)'"),
+    ("shell", "executor.inline_code", "python3 -c on the second line", "ls\npython3 -c 'print(1)'"),
+    ("shell", "allow", "a script file run behind timeout", "timeout 5 python3 {probe}"),
     ("shell", "path.dynamic", "shell expansion", "ls $HOME"),
 )
 FLOOR_PROBES = {
