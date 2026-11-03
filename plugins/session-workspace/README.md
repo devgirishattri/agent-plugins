@@ -46,7 +46,7 @@ the CLI contract string both entry points use for their compatibility check.
 | `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
-| `harness-status` | `harness-status [--config PATH] [--json]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates/guards) and whether this pane's engine identity matches the validated plan. |
+| `harness-status` | `harness-status [--config PATH] [--json] [--probe]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates), the strict-v1 role floor for this pane's role (every role outside a pane), the optional guard packs, and whether this pane's engine identity matches the validated plan. `--probe` decides this pane's built-in floor cases without running them and exits 1 on any unexpected decision. |
 | `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3–v5 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
 
 `TARGET` is a `sessions[].id` from the config, or `all` (the default).
@@ -307,7 +307,14 @@ engine-owned launch identity the policy cross-checks.
 ### The strict-v1 floor (immutable, not configurable)
 
 Configuration selects *which* panes hold each role; it cannot add scripts,
-regexes, shell fragments, commands, or permission exceptions. The floor:
+regexes, shell fragments, commands, or permission exceptions. `harness-status`
+prints a summary of this floor on its `floor (strict-v1, not configurable):`
+lines, generated from `ROLE_FLOOR` and the enforcement tables in
+`harness-policy.py` (`--floor-json`), and `harness-status --probe` decides
+each role's built-in floor cases through the hook's own code path
+(`--probe-json`). Its `optional guard packs:` line lists only
+`harness.guards`, which adds to the floor; an empty packs line never means a
+role floor is off. The floor:
 
 - **Draft staging (reviewer, executor, environment-scoped coordinator)** —
   from 0.7.1 the only message-store write is the pane's own drafts
@@ -751,6 +758,9 @@ staged at the store top level must move to `drafts/<pane-name>/`; the old
 top-level exception is removed because it also allowed editing or deleting
 other panes' pending dispatch files. Restart affected agents after
 updating. Downgrading restores the earlier, broader reviewer exception.
+- `harness-status --probe` proves only that the installed policy *decides*
+  this pane's floor cases as stated; like the `policy:` line, it cannot prove
+  that the provider loaded and trusted the hook.
 - `harness-status`/`harness-doctor` probe `harness-policy.py` directly, so
   their `policy:`/`identity.live` verdict is the policy *engine's* decision
   for this process — it assumes the bundled hook is actually loaded and

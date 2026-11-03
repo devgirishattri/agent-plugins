@@ -36,7 +36,7 @@ is not a scaffold.
 | `/workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
 | `/workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
 | `/workspace-browser-config` | Render/apply project MCP entries for the configured browser |
-| `/harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), and does this pane's engine identity match the plan |
+| `/harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), which strict-v1 role floor applies (`--probe` decides its cases), which optional guard packs add to it, and does this pane's engine identity match the plan |
 | `/harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
 | `$session-workspace:workspace-orchestrator` | Schema-v4 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
 | `$session-workspace:verification-recipe` | Create or maintain a project-local, executed verification recipe with retained evidence |

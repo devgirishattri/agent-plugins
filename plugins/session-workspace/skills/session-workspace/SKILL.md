@@ -23,7 +23,7 @@ planning, runtime argv/env construction, and create/adopt/reconcile/stop/restart
 | `/session-workspace:workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
 | `/session-workspace:workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
 | `/session-workspace:workspace-browser-config` | Render/apply project MCP entries for the configured browser |
-| `/session-workspace:harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), and does this pane's engine identity match the plan |
+| `/session-workspace:harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), which strict-v1 role floor applies (`--probe` decides its cases), which optional guard packs add to it, and does this pane's engine identity match the plan |
 | `/session-workspace:harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
 | `/session-workspace:workspace-orchestrator` | Schema-v4 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
 | `/session-workspace:verification-recipe` | Author or maintain a project-local launch/doctor/drive/evidence/cleanup recipe; guidance only, no new runtime, permission, or approval gate |

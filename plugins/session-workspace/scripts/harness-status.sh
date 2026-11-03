@@ -11,7 +11,15 @@
 # source of truth: whatever it says is exactly what the PreToolUse hook will
 # do here, so status/doctor can never disagree with the policy.
 #
-# Usage: harness-status.sh [--config PATH] [--json]
+# The "floor" lines are the immutable strict-v1 role floor, rendered only from
+# harness-policy.py --floor-json (the policy's own tables), for this pane's
+# resolved role or, without an accepted identity, for every role. The
+# "optional guard packs" line lists only the configured harness.guards packs,
+# which add to the floor. --probe decides this pane's built-in floor cases
+# through harness-policy.py --probe-json; it runs and writes nothing, and the
+# script exits 1 when any case is not decided as expected.
+#
+# Usage: harness-status.sh [--config PATH] [--json] [--probe]
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -20,12 +28,14 @@ source "$HERE/config.sh"
 
 CONFIG_OVERRIDE=""
 JSON_MODE=0
+PROBE_MODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --config) CONFIG_OVERRIDE="${2:-}"; shift 2 ;;
     --json) JSON_MODE=1; shift ;;
+    --probe) PROBE_MODE=1; shift ;;
     -h|--help)
-      echo "Usage: harness-status.sh [--config PATH] [--json]"
+      echo "Usage: harness-status.sh [--config PATH] [--json] [--probe]"
       exit 0
       ;;
     *) echo "ERROR: unknown argument: $1" >&2; exit 1 ;;
@@ -43,9 +53,20 @@ PLAN_JSON="$(bash "$HERE/workspace-plan.sh" --config "$CONFIG_PATH" --json)" || 
 # denials (identity/config/drift). Absent python3 the probe is null and the
 # doctor reports that separately.
 PROBE_JSON="null"
+FLOOR_JSON="null"
+CASES_JSON="null"
 if command -v python3 >/dev/null 2>&1; then
   PROBE_JSON="$(printf '{"tool_name":"HarnessStatusProbe","tool_input":{}}' | python3 "$HERE/harness-policy.py" --decision-json 2>/dev/null)" || PROBE_JSON="null"
   printf '%s' "$PROBE_JSON" | jq -e 'type == "object"' >/dev/null 2>&1 || PROBE_JSON="null"
+  FLOOR_JSON="$(python3 "$HERE/harness-policy.py" --floor-json 2>/dev/null </dev/null)" || FLOOR_JSON="null"
+  printf '%s' "$FLOOR_JSON" | jq -e 'type == "object"' >/dev/null 2>&1 || FLOOR_JSON="null"
+  if [ "$PROBE_MODE" -eq 1 ]; then
+    CASES_JSON="$(python3 "$HERE/harness-policy.py" --probe-json 2>/dev/null </dev/null)" || CASES_JSON="null"
+    printf '%s' "$CASES_JSON" | jq -e 'type == "object"' >/dev/null 2>&1 || CASES_JSON="null"
+  fi
+fi
+if [ "$PROBE_MODE" -eq 1 ] && [ "$CASES_JSON" = "null" ]; then
+  CASES_JSON='{"ran":false,"reason":"harness-policy.py --probe-json is unavailable (python3 missing or failed)","role":null,"floor":null,"mode":null,"cases":[]}'
 fi
 
 STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
@@ -61,9 +82,13 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
   --arg env_guards "${SESSION_WORKSPACE_GUARDS_JSON:-}" \
   --arg chat_alias "${SESSION_CHAT_PANE_NAME:-}" \
   --arg knowledge_alias "${KNOWLEDGE_PANE_NAME:-}" \
-  --argjson probe "$PROBE_JSON" '
+  --argjson probe "$PROBE_JSON" \
+  --argjson floor "$FLOOR_JSON" \
+  --argjson cases "$CASES_JSON" '
   . as $plan
   | ([.sessions[] | .panes[] | select(.name == $env_pane)] | .[0] // null) as $pane
+  | (.harness.roles // {}) as $role_names
+  | ([.sessions[] | .panes[] | select(.role == $role_names.orchestrator and (.scope.environment // null) != null and .cwd != $plan.project.root)] | length > 0) as $has_confined
   | [$env_config, $env_root, $env_pane, $env_role, $env_cwd] as $core
   | ([$core[] | select(. != "")] | length) as $core_set
   | {
@@ -73,6 +98,28 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
       profile: (.harness.profile // null),
       roles: (.harness.roles // null),
       gates: (.harness.gates // null),
+      # floor: the immutable strict-v1 role floor from harness-policy.py
+      # --floor-json. guards: only the optional harness.guards packs.
+      floor: (if .harness.active != true or $floor == null then null else
+        ($floor.current) as $current
+        | {
+            profile: $floor.profile,
+            configurable: $floor.configurable,
+            view: (if $current == null then "all" else "pane" end),
+            current: $current,
+            reason: $floor.reason,
+            roles: [
+              (if $current != null then [$current]
+               else ["reviewer", "executor", "orchestrator"] + (if $has_confined then ["confined_orchestrator"] else [] end) end)[]
+              | . as $key
+              | $floor.roles[$key] + {name: (
+                  if $key == "confined_orchestrator" then "\($role_names.orchestrator) (confined)"
+                  else ($role_names[$key] // $key) end)}
+            ],
+            all: $floor.all,
+            guard_pack_rules: $floor.guard_pack_rules
+          }
+        end),
       guards: (.harness.guards // null),
       read_paths: ($pane.read_paths // []),
       identity: {
@@ -111,22 +158,37 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
           end
         )
       },
-      policy: $probe
+      policy: $probe,
+      probe: $cases
     }
 ')"
 
+# --probe exits 1 when any case was not decided as expected.
+PROBE_RC=0
+if [ "$PROBE_MODE" -eq 1 ] && ! printf '%s' "$STATUS_JSON" | jq -e '.probe.ran != true or all(.probe.cases[]; .ok)' >/dev/null 2>&1; then
+  PROBE_RC=1
+fi
+
 if [ "$JSON_MODE" -eq 1 ]; then
   printf '%s\n' "$STATUS_JSON"
-  exit 0
+  exit "$PROBE_RC"
 fi
 
 printf 'session-workspace harness status — %s\n' "$CONFIG_PATH"
 printf '%s\n' "$STATUS_JSON" | jq -r '
+  def pad($n): . + ([range([$n - length, 0] | max)] | map(" ") | join(""));
   if .active then
     "state: active  mode=\(.mode)  profile=\(.profile)",
     "roles: orchestrator=\(.roles.orchestrator) executor=\(.roles.executor) reviewer=\(.roles.reviewer)",
-    "gates: plan-review=\(.gates.plan_review_ttl_minutes)m audit=\(.gates.audit_ttl_minutes)m"
-    ,(if .guards then "guards: " + (.guards | tojson) else "guards: none (schema-v2-compatible behavior)" end)
+    "gates: plan-review=\(.gates.plan_review_ttl_minutes)m audit=\(.gates.audit_ttl_minutes)m",
+    (if .floor == null then
+       "floor (strict-v1, not configurable): not rendered (python3 unavailable; the hook fails closed without it)"
+     else
+       "floor (strict-v1, not configurable):",
+       (.floor.roles[] | "  \(.name) -> \(.text)"),
+       "  all roles -> \(.floor.all.text)"
+     end),
+    (if .guards then "optional guard packs: " + (.guards | tojson) else "optional guard packs: none (schema-v2-compatible behavior)" end)
   else
     "state: inactive"
   end,
@@ -148,5 +210,21 @@ printf '%s\n' "$STATUS_JSON" | jq -r '
      "policy: strict-v1 active for role \(.policy.role) in \(.policy.mode) mode; identity accepted"
    else
      "policy: BLOCKING in this process [\(.policy.rule)] \(.policy.reason)"
+   end),
+  (if .probe == null then empty
+   elif .probe.ran != true then
+     "probe: not run (\(.probe.reason))"
+   else
+     ([.probe.cases[] | select(.ok | not)] | length) as $bad
+     | "probe (decides this pane'"'"'s floor cases, runs nothing): \(.probe.floor) in \(.probe.mode) mode, \(.probe.cases | length) cases, " + (if $bad == 0 then "all as expected" else "\($bad) NOT as expected" end),
+       ([.probe.cases | to_entries[] | .value + {index: .key}] | group_by(.group) | sort_by(.[0].index)[]
+        | if length > 1 and all(.[]; .ok) and ([.[].rule] | unique | length) == 1 and ([.[].decision] | unique | length) == 1
+          then "  " + (.[0].decision | pad(6)) + " " + (.[0].rule | pad(26)) + " " + .[0].group + " [\(length) edit tools]"
+          else .[] | if .ok
+            then "  " + (.decision | pad(6)) + " " + (.rule | pad(26)) + " " + .group
+            else "  UNEXPECTED " + .decision + " " + .rule + " (expected " + .expect + " " + .expect_rule + "): " + .group + " (\(.tool))"
+            end
+          end)
    end)
 '
+exit "$PROBE_RC"
