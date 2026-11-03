@@ -22,6 +22,9 @@ unset KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES
 # ---------------------------------------------------------------------------
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# KNOWLEDGE_DOCS_TEST_CLAUDE_VALIDATE_LINKS selects another validate-links.sh,
+# for example an original copy from `git show`, to run the same assertions.
+VALIDATE_LINKS="${KNOWLEDGE_DOCS_TEST_CLAUDE_VALIDATE_LINKS:-$HERE/validate-links.sh}"
 TMP=$(mktemp -d)
 PASS=0; FAIL=0; FAILURES=()
 pass() { PASS=$((PASS + 1)); echo "  PASS  $1"; }
@@ -54,7 +57,7 @@ fi
 
 # 3: validate-links DETECTS a broken link in the module dir
 printf '# API\nSee [missing](nope.md).\n' > "$MOD/README.md"
-if ! bash "$HERE/validate-links.sh" "$MOD" >/dev/null 2>&1; then
+if ! bash "$VALIDATE_LINKS" "$MOD" >/dev/null 2>&1; then
   pass "validate_links_detects_in_module_dir"
 else
   fail "validate_links_detects_in_module_dir" "broken link not flagged in module dir"
@@ -62,10 +65,58 @@ fi
 
 # 4: validate-links passes a valid cross-link in the module dir
 printf '# API\nSee [other](other.md).\n' > "$MOD/README.md"
-if bash "$HERE/validate-links.sh" "$MOD" >/dev/null 2>&1; then
+if bash "$VALIDATE_LINKS" "$MOD" >/dev/null 2>&1; then
   pass "validate_links_accepts_module_dir"
 else
   fail "validate_links_accepts_module_dir" "valid link in module dir flagged"
+fi
+
+# 4a-4f: a markdown link target is a URL, so a space or a literal percent sign
+# in a file name is written %20 or %25. validate-links decodes the target
+# before it looks for the file, and a BROKEN line names the decoded path.
+# enc_docs <case> <link as written> [name of the file that exists in api/]
+enc_docs() {
+  local d="$TMP/enc/$1/docs"
+  mkdir -p "$d/guide" "$d/api"
+  printf '# Guide\n\nSee [the item](%s).\n' "$2" > "$d/guide/index.md"
+  if [ -n "${3:-}" ]; then printf '# Item\n' > "$d/api/$3"; fi
+  printf '%s' "$d"
+}
+links_valid() {  # <test name> <docs dir>
+  local out rc
+  out=$(bash "$VALIDATE_LINKS" "$2" 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ "$out" = "All doc cross-references valid." ]; then
+    pass "$1"
+  else
+    fail "$1" "rc=$rc out=$out"
+  fi
+}
+
+d=$(enc_docs pct20 '../api/1.2%20List%20Items.md' '1.2 List Items.md')
+links_valid "validate_links_decodes_percent20_space" "$d"
+
+d=$(enc_docs pct25 '../api/100%25%20done.md' '100% done.md')
+links_valid "validate_links_decodes_percent25_literal_percent" "$d"
+
+d=$(enc_docs plain '../api/1.2 List Items.md' '1.2 List Items.md')
+links_valid "validate_links_accepts_plain_space" "$d"
+
+d=$(enc_docs bare '../api/50%off.md' '50%off.md')
+links_valid "validate_links_keeps_bare_percent_literal" "$d"
+
+# Markdown allows spaces between "(" and the link target.
+d=$(enc_docs lead ' ../api/item.md' 'item.md')
+links_valid "validate_links_ignores_space_before_target" "$d"
+
+# Control: a %20 link to a file that does not exist is still BROKEN, and the
+# line shows the link as written and the decoded expected path.
+d=$(enc_docs missing '../api/1.2%20Missing%20Item.md')
+out=$(bash "$VALIDATE_LINKS" "$d" 2>&1); rc=$?
+want="BROKEN: $d/guide/index.md -> ../api/1.2%20Missing%20Item.md (expected at $d/guide/../api/1.2 Missing Item.md)"
+if [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -qxF "$want"; then
+  pass "validate_links_percent20_missing_names_decoded_path"
+else
+  fail "validate_links_percent20_missing_names_decoded_path" "rc=$rc out=$out"
 fi
 
 # 5: check-freshness accepts the dir without erroring (skips cleanly outside git)
