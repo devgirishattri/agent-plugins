@@ -267,6 +267,33 @@ _context_reclaim_lock "$LOCK" "$dead" || exit 5
 [ ! -e "$LOCK/.reclaim" ] || exit 7
 ''', env_extra={"MARKER": marker})
 
+    def test_quarantine_finished_mid_validation_is_not_unsafe(self):
+        # A read-only validator can list a releaser's quarantine just before
+        # that releaser removes it. A quarantine that is gone by the time the
+        # validator checks its type is a finished teardown, not an unsafe
+        # store. The `[` hook removes it at exactly that check. A quarantine
+        # name that stays a regular file is still rejected.
+        for provider in LIBS:
+            with self.subTest(provider=provider):
+                self.run_case(provider, '''
+stale="$STORE/.knowledge-context-stale.4242"
+command mkdir -m 700 "$stale"
+finished=0
+function [() {
+  if [[ "$#" = 4 && "$1" = '!' && "$2" = -d && "$3" = "$stale" && "$finished" = 0 ]]; then
+    command rmdir "$stale"
+    finished=1
+  fi
+  builtin [ "$@"
+}
+_context_validate_tree "$STORE" || { echo "rejected a store whose quarantine finished mid-check" >&2; exit 1; }
+[[ "$finished" = 1 ]] || { echo "the hook never ran" >&2; exit 2; }
+unset -f '['
+: > "$stale"
+if _context_validate_tree "$STORE" 2>"$HOME/err"; then echo "accepted a quarantine that is a regular file" >&2; exit 3; fi
+grep -q "writer-lock quarantine must be a directory" "$HOME/err" || { cat "$HOME/err" >&2; exit 4; }
+''')
+
     def test_release_by_a_non_holder_keeps_the_lock(self):
         for provider in LIBS:
             with self.subTest(provider=provider):
@@ -296,6 +323,7 @@ grep -q "cannot publish writer-lock holder PID" "$HOME/err" || { cat "$HOME/err"
         # Both providers share one lock protocol on a shared store.
         names = ["_context_check_reclaim_marker", "_context_claim_lock", "_context_reclaim_lock",
                  "_context_release_lock", "_context_remove_quarantine_dir",
+                 "_context_validate_quarantine_artifact",
                  "acquire_context_store_lock", "release_context_store_lock"]
         pattern = re.compile(r"^(" + "|".join(names) + r")\(\) ([({])\n.*?^[)}]\n", re.M | re.S)
         bodies = {provider: {m.group(1): m.group(0) for m in pattern.finditer(path.read_text())}

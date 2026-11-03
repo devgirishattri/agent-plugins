@@ -1,5 +1,26 @@
 # Changelog
 
+## knowledge 0.5.12 — 2026-11-03
+
+- Validating the context store while another process saves no longer reports
+  a healthy store as unsafe. Every release renames the writer lock into a
+  short-lived `.knowledge-context-stale.<pid>` quarantine and then removes it.
+  A validator that listed the quarantine just before its releaser removed it
+  checked the type of a path that was already gone and failed with
+  "writer-lock quarantine must be a directory". A quarantine that has vanished
+  is now treated as a finished teardown; one that stays a non-directory is
+  still rejected. This was the intermittent
+  `validator_no_spurious_failure_under_writer_churn` failure in CI (about 1
+  validation in 2,500, so a run of about 240 failed now and then). Outside
+  tests it could fail `/context-list`, the doctor's context check, or a save
+  that started just as another writer released, because each of these
+  validates the store while the previous releaser may still be removing its
+  quarantine.
+- The writer-churn test now prints the first rejection's message, and
+  `scripts/test-context-locks.py` has a deterministic case for both providers
+  that removes the quarantine at exactly that check.
+- No store migration.
+
 ## knowledge 0.5.11 — 2026-11-03
 
 - `validate-links.sh` now decodes a percent-encoded markdown link target before

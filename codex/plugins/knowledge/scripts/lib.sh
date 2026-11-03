@@ -748,6 +748,9 @@ _context_validate_quarantine_artifact() {
       return 1
     fi
     if [ ! -d "$stale_dir" ]; then
+      # Its releaser can finish the teardown between the checks above and this
+      # one. A quarantine that is gone is not unsafe.
+      _context_path_exists "$stale_dir" || continue
       _context_store_error "writer-lock quarantine must be a directory: $stale_dir"
       return 1
     fi
