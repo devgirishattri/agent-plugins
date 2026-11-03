@@ -35,7 +35,7 @@ description: Overview of session-workspace lifecycle and the opt-in strict-v1 ro
    - `$session-workspace:workspace-restart [TARGET|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` - stop then start the same target.
    - `$session-workspace:workspace-reconcile [TARGET|all] [--config PATH] [--apply] [--adopt --confirmed]` - dry-run or apply repairs; adoption requires confirmation.
    - `$session-workspace:workspace-browser-config [--config PATH] [--provider codex|claude|all] [--apply] [--json]` - preview or explicitly apply browser MCP entries.
-   - `$session-workspace:harness-status [--config PATH] [--json]` - read-only harness activation, role, gate, and live identity status.
+   - `$session-workspace:harness-status [--config PATH] [--json] [--probe]` - read-only harness activation, role, gate, strict-v1 role floor, optional guard pack, and live identity status; `--probe` decides this pane's floor cases.
    - `$session-workspace:harness-doctor [--config PATH] [--json]` - read-only harness config/hook/runtime/identity validation.
    - `$session-workspace:workspace-orchestrator <intent>` - schema-v4 reviewed Git lifecycle across configured executor/reviewer pairs; coordinates only from the configured orchestrator pane.
 

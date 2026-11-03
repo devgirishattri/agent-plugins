@@ -1,5 +1,42 @@
 # Changelog
 
+## session-workspace 0.12.5 — 2026-11-03
+
+- `harness-status` now prints the strict-v1 role floor before the guard
+  packs. The old `guards:` line listed only the optional `harness.guards`
+  packs, and agents read it as the complete enforcement list: executor panes
+  refused a correct change, citing that line as proof that reviewer read-only
+  and executor containment were not enforced. Both are part of the immutable
+  floor and were enforced.
+- The `floor (strict-v1, not configurable):` lines are generated from
+  `harness-policy.py` itself (`--floor-json`): a new `ROLE_FLOOR` table names
+  each role's floor clauses and the rule ids the policy raises for them, and
+  the bracketed counts are read from the enforcement tables (`EDIT_TOOL_NAMES`,
+  `READ_COMMANDS`, `READ_GIT`, `HELPERS`, ...). A pane with an accepted
+  identity sees its own role and an `all roles` line. Without one, every role
+  is shown, plus `<orchestrator> (confined)` when the plan has environment
+  coordinators outside the project root.
+- The text line `guards:` is renamed `optional guard packs:`. `--json` adds a
+  `floor` object and a `probe` key. `guards` is unchanged, so `harness-doctor`
+  and other readers keep working. `orchestrator.child_chdir` and
+  `orchestrator.protected_file` are guard-pack rules, so they stay on the packs
+  line and are not shown as floor.
+- New `harness-status --probe`: the policy decides the built-in cases for the
+  pane's own floor (`--probe-json`) through `evaluate_payload()`, the code path
+  every hook decision takes, so a pane can check its floor without emulating
+  another identity. Nothing is run or written. An unexpected decision prints an
+  `UNEXPECTED` line and the script exits 1. The helper grammar accepts
+  `--probe` for `harness-status.sh` in every role, directly and through
+  `workspace.sh harness-status`; hook decisions are otherwise unchanged.
+- Tests: per-role `harness-status` fixtures for the floor and packs lines, a
+  copy of the scripts with an edited `READ_COMMANDS`/`ROLE_FLOOR` that changes
+  the printed floor, a simulated enforcement drift that `--probe` reports, a
+  check that every floor rule is raised by the policy and every
+  reviewer/executor/orchestrator rule is floor or a named guard-pack rule, and
+  probes for every pane of a schema-v5 environment topology.
+- No config migration. Update both providers together and restart agents: a
+  0.12.3 policy refuses `harness-status.sh --probe` with `helper.argv`.
+
 ## session-workspace 0.12.4 — 2026-11-03
 
 - strict-v1 accepts the documented operands of the knowledge docs

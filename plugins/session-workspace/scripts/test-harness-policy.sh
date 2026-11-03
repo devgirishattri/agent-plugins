@@ -871,6 +871,9 @@ as_review "reviewer workspace read verb via dispatcher is allowed" "$(bash_paylo
 as_review "reviewer workspace start via dispatcher is denied" "$(bash_payload "bash $WS/workspace.sh start")" '.decision == "deny" and .rule == "coordination.write"'
 as_review "reviewer harness-status.sh is allowed" "$(bash_payload "bash $WS/harness-status.sh --json")" '.decision == "allow"'
 as_review "reviewer harness-status.sh --config pointing elsewhere is denied" "$(bash_payload "bash $WS/harness-status.sh --config /tmp/other.json")" '.decision == "deny" and .rule == "helper.argv"'
+as_review "reviewer harness-status.sh --probe --json is allowed" "$(bash_payload "bash $WS/harness-status.sh --probe --json")" '.decision == "allow"'
+as_exec "executor harness-status --probe via dispatcher is allowed" "$(bash_payload "bash $WS/workspace.sh harness-status --probe")" '.decision == "allow"'
+as_review "reviewer workspace-status.sh --probe is denied (harness-status only)" "$(bash_payload "bash $WS/workspace-status.sh --probe")" '.decision == "deny" and .rule == "helper.argv"'
 as_review "reviewer workspace-start.sh is denied" "$(bash_payload "bash $WS/workspace-start.sh")" '.decision == "deny" and .rule == "coordination.write"'
 as_review "reviewer helper from an unlisted plugin is denied" "$(bash_payload "bash $CLAUDE_CACHE/unlisted-plugin/1.0.0/scripts/mystery.sh")" '.decision == "deny"'
 
@@ -1350,6 +1353,85 @@ for message_config in "$AMBIG_CONFIG" "$OVERLAP_CONFIG" "$INCWD_CONFIG" "$INCWD_
   fi
 done
 rm -f "$CHILD/msg-alias"
+
+echo "== role floor report (--floor-json / --probe-json) =="
+# report_policy ROLE PANE CWD CONFIG MODE FLAG [extra env...]: a read-only
+# report mode in one pane identity. Reads no stdin.
+report_policy() {
+  local role="$1" pane="$2" cwd="$3" config="$4" mode="$5" flag="$6"
+  shift 6
+  env -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME \
+    SESSION_WORKSPACE_CONFIG="$config" SESSION_WORKSPACE_PROJECT_ROOT="$ROOT" \
+    SESSION_WORKSPACE_PANE_NAME="$pane" SESSION_WORKSPACE_ROLE="$role" \
+    SESSION_WORKSPACE_PANE_CWD="$cwd" SESSION_WORKSPACE_HARNESS_MODE="$mode" \
+    CLAUDE_HOME="$FAKE_CLAUDE" CODEX_HOME="$FAKE_CODEX" "$@" \
+    "$PY" "$POLICY" "$flag" </dev/null
+}
+FLOOR_DOC="$(env -u SESSION_WORKSPACE_CONFIG "$PY" "$POLICY" --floor-json </dev/null)"
+if printf '%s' "$FLOOR_DOC" | jq -e '
+    .profile == "strict-v1" and .configurable == false and .current == null
+    and (.roles | keys) == ["confined_orchestrator","executor","orchestrator","reviewer"]
+    and all(.roles[], .all; (.text | length) > 0 and (.floors | length) > 0 and (.probes | length) > 0)' >/dev/null 2>&1; then
+  pass "--floor-json: the whole strict-v1 floor table, no resolved role outside a pane"
+else
+  fail "--floor-json: the whole strict-v1 floor table, no resolved role outside a pane" "$FLOOR_DOC"
+fi
+# Every floor rule is one the policy raises, and every reviewer/executor/
+# orchestrator rule the policy raises is floor or a named optional guard pack.
+RAISED_RULES="$(grep -o 'PolicyFailure("[a-z_.]*"' "$POLICY" | sed 's/PolicyFailure("//; s/"$//' | sort -u | jq -R . | jq -cs .)"
+if printf '%s' "$FLOOR_DOC" | jq -e --argjson raised "$RAISED_RULES" '
+    ([.roles[], .all | .floors[].clauses[].rules[]] | unique) as $floor
+    | ($floor - $raised) == []
+    and (([$raised[] | select(test("^(reviewer|executor|orchestrator)[.]"))] - $floor - (.guard_pack_rules | keys)) == [])
+    and ((.guard_pack_rules | keys) - $raised) == []' >/dev/null 2>&1; then
+  pass "--floor-json: floor rules match the rules harness-policy.py raises (guard-pack rules named separately)"
+else
+  fail "--floor-json: floor rules match the rules harness-policy.py raises (guard-pack rules named separately)" "$(printf '%s' "$FLOOR_DOC" | jq -c --argjson raised "$RAISED_RULES" '([.roles[], .all | .floors[].clauses[].rules[]] | unique) as $f | {floor_not_raised: ($f - $raised), raised_not_listed: ([$raised[] | select(test("^(reviewer|executor|orchestrator)[.]"))] - $f - (.guard_pack_rules | keys))}')"
+fi
+if printf '%s' "$FLOOR_DOC" | jq -e '
+    all((.roles | to_entries[] | .value), .all;
+      [.probes[].rule] as $probed
+      | all(.floors[].clauses[]; (.rules - (.rules - $probed)) != []))' >/dev/null 2>&1; then
+  pass "--floor-json: every floor clause has a probe case for one of its rules"
+else
+  fail "--floor-json: every floor clause has a probe case for one of its rules" "$FLOOR_DOC"
+fi
+if printf '%s' "$FLOOR_DOC" | jq -e '
+    [.roles.reviewer.floors[].clauses[] | select(.rules | index("reviewer.readonly")) | .tables.EDIT_TOOL_NAMES[]] | index("notebookedit") != null and index("multiedit") != null' >/dev/null 2>&1; then
+  pass "--floor-json: the reviewer edit family is read from EDIT_TOOL_NAMES"
+else
+  fail "--floor-json: the reviewer edit family is read from EDIT_TOOL_NAMES" "$FLOOR_DOC"
+fi
+for floor_case in \
+  "reviewer|$REVIEW_PANE|$CHILD|$CONFIG|enforce|reviewer|deny" \
+  "executor|$EXEC_PANE|$CHILD|$CONFIG|enforce|executor|deny" \
+  "master|$MASTER_PANE|$ROOT|$CONFIG|enforce|orchestrator|deny" \
+  "executor|$EXEC_PANE|$CHILD|$AUDIT_CONFIG|audit|executor|audit"; do
+  IFS='|' read -r f_role f_pane f_cwd f_config f_mode f_key f_denied <<<"$floor_case"
+  F_CURRENT="$(report_policy "$f_role" "$f_pane" "$f_cwd" "$f_config" "$f_mode" --floor-json | jq -r '.current')"
+  F_PROBE="$(report_policy "$f_role" "$f_pane" "$f_cwd" "$f_config" "$f_mode" --probe-json)"
+  if [ "$F_CURRENT" = "$f_key" ] && printf '%s' "$F_PROBE" | jq -e --arg key "$f_key" --arg mode "$f_mode" --arg denied "$f_denied" '
+      .ran == true and .floor == $key and .mode == $mode and (.cases | length) > 10
+      and all(.cases[]; .ok)
+      and any(.cases[]; .expect == "allow") and all(.cases[] | select(.expect == "deny"); .decision == $denied)' >/dev/null 2>&1; then
+    pass "--probe-json ($f_role, $f_mode): resolves the $f_key floor and decides every case as expected"
+  else
+    fail "--probe-json ($f_role, $f_mode): resolves the $f_key floor and decides every case as expected" "current=$F_CURRENT $(printf '%s' "$F_PROBE" | jq -c '{ran, reason, floor, mode, bad: [.cases[]? | select(.ok | not)]}' 2>&1)"
+  fi
+done
+F_FORGED="$(report_policy executor "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce --probe-json)"
+if printf '%s' "$F_FORGED" | jq -e '.ran == false and (.reason | startswith("identity not accepted [identity.role]")) and .cases == []' >/dev/null 2>&1; then
+  pass "--probe-json: a forged identity runs no case"
+else
+  fail "--probe-json: a forged identity runs no case" "$F_FORGED"
+fi
+F_PROBE_ARGS="$(printf '{}' | env -u SESSION_WORKSPACE_CONFIG "$PY" "$POLICY" --probe-json --decision-json 2>&1)"
+F_PROBE_ARGS_RC=$?
+if [ "$F_PROBE_ARGS_RC" -eq 2 ] && printf '%s' "$F_PROBE_ARGS" | grep -q '^Usage:'; then
+  pass "report modes take no other flag (usage error otherwise)"
+else
+  fail "report modes take no other flag (usage error otherwise)" "rc=$F_PROBE_ARGS_RC $F_PROBE_ARGS"
+fi
 
 echo "== audit vs enforce =="
 expect "audit mode reports a policy denial as audit" reviewer "$REVIEW_PANE" "$CHILD" "$AUDIT_CONFIG" audit \
