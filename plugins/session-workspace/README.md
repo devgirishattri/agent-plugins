@@ -679,7 +679,9 @@ now admits only forms it lists and refuses everything else. The tables are
 them, and `workspace.json` cannot add to them.
 
 - **Words.** Each word is plain (letters, digits and `_ . / : , + = @ % -`)
-  or exactly one single-quoted run with nothing attached. `^`, `~`, `*`,
+  or exactly one single-quoted run with nothing attached. The one join
+  allowed is the POSIX `'it'\''s'` idiom that session-chat prints for a
+  path holding an apostrophe; it is literal in bash and zsh alike. `^`, `~`, `*`,
   `?`, brackets, braces, spaces and `$` appear only inside single quotes
   (zsh `EXTENDED_GLOB` reads `^x` and `a~b` as globs; a leading `=` is zsh
   `EQUALS` expansion and is refused). Double quotes, backslashes, control

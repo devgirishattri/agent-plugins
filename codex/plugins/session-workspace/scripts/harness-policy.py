@@ -3176,12 +3176,22 @@ def exact_segments(command: str) -> List[List[Tuple[str, bool]]]:
             index += len(operator)
             continue
         if char == "'":
-            end = command.find("'", index + 1)
-            if end < 0:
-                raise PolicyFailure("reviewer.shell", "reviewer command has an unterminated single quote")
+            # One single-quoted run, or runs joined only by the POSIX \' idiom
+            # ('it'\''s') that session-chat prints for a path holding an
+            # apostrophe: literal in bash and zsh alike.
+            parts: List[str] = []
+            while True:
+                end = command.find("'", index + 1)
+                if end < 0:
+                    raise PolicyFailure("reviewer.shell", "reviewer command has an unterminated single quote")
+                parts.append(command[index + 1:end])
+                if command[end + 1:end + 4] == "\\''":
+                    index = end + 3
+                    continue
+                break
             if end + 1 < length and command[end + 1] not in " |&;":
                 raise PolicyFailure("reviewer.shell", "a single-quoted reviewer word cannot have text attached after it")
-            out[-1].append((command[index + 1:end], True))
+            out[-1].append(("'".join(parts), True))
             index = end + 1
             continue
         end = index

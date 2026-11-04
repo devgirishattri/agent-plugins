@@ -228,7 +228,8 @@ when a user hits them.
 - Shell is default-deny. Two exceptions apply:
   - Exact read forms (0.12.11) inside its own checkout or explicit per-pane
     `read_paths`. Each word is plain (letters, digits, `_ . / : , + = @ % -`)
-    or one single-quoted run with nothing attached. Segments join only with
+    or one single-quoted run with nothing attached (a printed message path
+    may join runs with `'\''`). Segments join only with
     `|`, `||`, `&&` or `;`. The program is a bare listed name, options are
     whole listed words before the operands, and a value option takes the next
     word. No redirection, substitution, double quotes, backslashes, unlisted

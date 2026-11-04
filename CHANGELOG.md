@@ -8,7 +8,9 @@
   exact-form grammar, built into the immutable floor (`EXACT_FORMS`,
   `EXACT_GIT`); `workspace.json` still cannot add commands or exceptions.
   - Words are plain (letters, digits, `_ . / : , + = @ % -`) or one
-    single-quoted run with nothing attached. Segments join only with `|`,
+    single-quoted run with nothing attached (runs may join only by the POSIX
+    `'it'\''s'` idiom, which session-chat prints for a path holding an
+    apostrophe). Segments join only with `|`,
     `||`, `&&` and `;`. No redirection, grouping, substitution, comments,
     control characters, double quotes or backslashes (`reviewer.shell`).
   - The program is a bare listed name. Assignments only to `LC_*`, `LANG`,
