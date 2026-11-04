@@ -71,13 +71,22 @@ sw_pane_record_path() {
 }
 
 # sw_pane_record_stop PROJECT_ID PANE_NAME PANE_ID REASON — merge "stopped,
-# when, why" into the pane's run record (atomic rename; no lock: the record is
-# a report, and the last writer wins).
+# when, why" into the pane's run record (atomic rename). With python3 this
+# runs under the record's flock, the one the idle watcher takes for each
+# write, so a watcher sample does not overwrite the stop (it exits instead).
+# Without python3 no watcher can be running, and a plain merge is enough; the
+# plain merge is also the fallback when record-stop fails (a python3 stub, or
+# a lock held for 5 s), so a stop is always recorded.
 sw_pane_record_stop() {
-  local file dir tmp current
+  local file dir tmp current watcher
   file="$(sw_pane_record_path "$1" "$2")"
   dir="$(dirname "$file")"
   mkdir -p "$dir" 2>/dev/null || return 1
+  watcher="$(dirname "${BASH_SOURCE[0]}")/idle-watch.py"
+  if command -v python3 >/dev/null 2>&1 && [ -f "$watcher" ] &&
+     python3 "$watcher" record-stop --record="$file" --pane="$2" --pane-id="$3" --reason="$4" 2>/dev/null; then
+    return 0
+  fi
   current="$(cat "$file" 2>/dev/null)"
   printf '%s' "$current" | jq -e 'type == "object"' >/dev/null 2>&1 || current='{}'
   tmp="$file.$$.tmp"

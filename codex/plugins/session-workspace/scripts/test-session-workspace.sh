@@ -3449,7 +3449,7 @@ SWT_OD_RECORDS="$SWT_STATE/session-workspace/sample-ondemand/panes"
 swrun_od() {
   env -u TMUX TMUX_TMPDIR="$SWT_TMPDIR" PATH="$SWT_BIN:$PATH" XDG_STATE_HOME="$SWT_STATE" \
     XDG_CACHE_HOME="$SWT_OD_CACHE" SESSION_WORKSPACE_STOP_GRACE_SECONDS=1 \
-    SESSION_WORKSPACE_IDLE_SECONDS_PER_MINUTE="${SWT_OD_SPM:-600}" SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS=0.2 \
+    SESSION_WORKSPACE_IDLE_SECONDS_PER_MINUTE="${SWT_OD_SPM:-600}" SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS="${SWT_OD_SAMPLE:-0.2}" \
     SESSION_WORKSPACE_IDLE_OBSERVE="${SWT_OD_OBSERVE:-}" \
     bash "$@"
 }
@@ -3695,12 +3695,15 @@ fi
 #   * "held" selects ["output"] alone: a held-open connection and repeated
 #     window resizes (which rewrap its text) are not use, so it is stopped;
 #   * on Linux, a default dev server whose requests all close at once stays
-#     up: its server-side TIME_WAIT sockets (60 s) count as recent use.
+#     up: its server-side TIME_WAIT sockets (60 s) count as recent use;
+#   * a `stop --pane` record survives a watcher that samples every 0.05 s
+#     while the stop waits for the pane to exit ("slow" takes 3 s on C-c).
 SWT_PROJ_OO="$SWT_ROOT/sample-odout"
 SWT_OO_LPORT=47345
 SWT_OO_QPORT=47346
 SWT_OO_CPORT=47347
 SWT_OO_HPORT=47348
+SWT_OO_SPORT=47349
 mkdir -p "$SWT_PROJ_OO/.agent-workspace"
 # One line: the launcher reads a command's argv one element per line.
 SWT_OO_TICKS='["python3","-u","-c","import time; [(print(\"[server] GET / request\", i, flush=True), time.sleep(1)) for i in range(12)]; time.sleep(3600)"]'
@@ -3714,7 +3717,8 @@ cat > "$SWT_PROJ_OO/.agent-workspace/workspace.json" <<EOF
   {"name":"sample-odout-logs","role":"service","cwd":".","command":$SWT_OO_TICKS,"port":$SWT_OO_LPORT,"idle_stop_minutes":2,"idle_activity":["connections","output"]},
   {"name":"sample-odout-quiet","role":"service","cwd":".","command":$SWT_OO_TICKS,"port":$SWT_OO_QPORT,"idle_stop_minutes":2},
   {"name":"sample-odout-close","role":"service","cwd":".","command":["python3","-m","http.server","$SWT_OO_CPORT","--bind","127.0.0.1"],"port":$SWT_OO_CPORT,"idle_stop_minutes":2},
-  {"name":"sample-odout-held","role":"service","cwd":".","command":["python3","-m","http.server","$SWT_OO_HPORT","--bind","127.0.0.1"],"port":$SWT_OO_HPORT,"idle_stop_minutes":2,"idle_activity":["output"]}
+  {"name":"sample-odout-held","role":"service","cwd":".","command":["python3","-m","http.server","$SWT_OO_HPORT","--bind","127.0.0.1"],"port":$SWT_OO_HPORT,"idle_stop_minutes":2,"idle_activity":["output"]},
+  {"name":"sample-odout-slow","role":"service","cwd":".","command":["python3","-c","import signal, sys, time; signal.signal(signal.SIGINT, lambda *a: (time.sleep(3), sys.exit(0))); time.sleep(3600)"],"port":$SWT_OO_SPORT,"idle_stop_minutes":2}
 ]}]}
 EOF
 SWT_CFG_OO="$SWT_PROJ_OO/.agent-workspace/workspace.json"
@@ -3736,7 +3740,8 @@ swt_oo_wait_gone() {
 jq '.sessions[0].panes[0].idle_activity = ["output", "connections"]' "$SWT_CFG_OO" > "$SWT_PROJ_OO/.agent-workspace/reordered.json"
 if bash "$HERE/workspace-plan.sh" services --config "$SWT_PROJ_OO/.agent-workspace/reordered.json" --json 2>/dev/null | jq -e '
      [.sessions[0].panes[] | {(.name): .idle_activity}] | add == {"sample-odout-logs":["connections","output"],
-       "sample-odout-quiet":["connections"],"sample-odout-close":["connections"],"sample-odout-held":["output"]}' >/dev/null 2>&1 &&
+       "sample-odout-quiet":["connections"],"sample-odout-close":["connections"],"sample-odout-held":["output"],
+       "sample-odout-slow":["connections"]}' >/dev/null 2>&1 &&
    bash "$HERE/workspace-plan.sh" services --config "$SWT_CFG_OO" 2>/dev/null | grep -Fxq "    idle_activity: connections+output"; then
   pass "plan: idle_activity in canonical order, [\"connections\"] by default for an idle-stop dev server"
 else
@@ -3808,6 +3813,35 @@ else
   fail "idle stop (output only): a held connection and window resizes are not use; the pane is stopped after the window" \
     "gone_at_step=[$SWT_OO_GONE] clients_after=[$SWT_OO_HELD_CLIENTS] record=$(cat "$SWT_OO_RECORDS/sample-odout-held.json" 2>/dev/null) start=$SWT_OUT"
 fi
+
+# A manual stop while the watcher samples (before 0.12.10 the watcher kept
+# its record in memory and wrote it over the stop). The stop records first, then
+# sends C-c and waits the 1 s grace for "slow", which ignores C-c for 3 s; a
+# watcher sampling every 0.05 s gets about 20 samples into that window. The
+# record lock makes it leave the stop alone and exit.
+SWT_OD_SPM=600
+SWT_OD_SAMPLE=0.05
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane slow --config "$SWT_CFG_OO" 2>&1)"
+SWT_OO_SLOW="$(swt_oo_pane sample-odout-slow)"
+[ -n "$SWT_OO_SLOW" ] && swt_wait_cmd "$SWT_OO_SLOW" "python3"
+sleep 0.5
+SWT_OO_SLOW_PID="$(jq -r '.watcher_pid // empty' "$SWT_OO_RECORDS/sample-odout-slow.json" 2>/dev/null)"
+SWT_OUT2="$(swrun_od "$HERE/workspace-stop.sh" services --pane slow --confirmed --config "$SWT_CFG_OO" 2>&1)"
+SWT_OO_SLOW_STATUS="$(swrun_od "$HERE/workspace-status.sh" services --pane slow --config "$SWT_CFG_OO" --json 2>&1)"
+sleep 1
+SWT_OO_SLOW_REC="$(cat "$SWT_OO_RECORDS/sample-odout-slow.json" 2>/dev/null)"
+if [ -n "$SWT_OO_SLOW" ] && [ -n "$SWT_OO_SLOW_PID" ] && [ -z "$(swt_oo_pane sample-odout-slow)" ] &&
+   printf '%s' "$SWT_OUT2" | grep -Fq "[stopped] sample-odout-services / sample-odout-slow — workspace stop --pane" &&
+   printf '%s' "$SWT_OO_SLOW_STATUS" | jq -e '.[0].running == false and .[0].last_stop.reason == "workspace stop --pane"' >/dev/null 2>&1 &&
+   printf '%s' "$SWT_OO_SLOW_REC" | jq -e --arg id "$SWT_OO_SLOW" '.state == "stopped" and .stop_reason == "workspace stop --pane" and .pane_id == $id' >/dev/null 2>&1 &&
+   ! kill -0 "$SWT_OO_SLOW_PID" 2>/dev/null; then
+  pass "stop --pane: the stop record survives a watcher sampling while the pane exits, and the watcher exits"
+else
+  fail "stop --pane: the stop record survives a watcher sampling while the pane exits, and the watcher exits" \
+    "pane=[$SWT_OO_SLOW] watcher=[$SWT_OO_SLOW_PID] status=$SWT_OO_SLOW_STATUS record=$SWT_OO_SLOW_REC stop=$SWT_OUT2 start=$SWT_OUT"
+fi
+SWT_OD_SAMPLE=""
+SWT_OD_SPM=2
 
 if [ -r /proc/net/tcp ]; then
   SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane close --config "$SWT_CFG_OO" 2>&1)"
