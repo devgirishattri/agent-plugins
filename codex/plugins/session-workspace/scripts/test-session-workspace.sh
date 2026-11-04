@@ -756,7 +756,7 @@ hs_as() {
     bash "$dir/harness-status.sh" --config "$config" "$@"
 }
 HS_FLOOR_HEAD='^floor (strict-v1, not configurable):$'
-HS_FLOOR_REVIEWER="^  reviewer -> readonly (edit family denied, except this pane's own message drafts \\[12 edit tools\\]; shell default-deny except allowlisted reads \\["
+HS_FLOOR_REVIEWER="^  reviewer -> readonly (edit family denied, except this pane's own message drafts \\[12 edit tools\\]; shell default-deny except listed exact read forms \\["
 HS_FLOOR_EXECUTOR='^  executor -> containment (edit family and path operands confined to the pane checkout \['
 HS_FLOOR_MASTER='^  master -> child_write (no edit or mutating shell against a child checkout), push (no git push), gh ('
 HS_FLOOR_ALL='^  all roles -> helpers (selected installed version only, reviewed argv, gated by role \['
@@ -831,7 +831,7 @@ import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
 edits = [
-    ('    "jq",\n    "ls",\n', '    "ls",\n'),
+    ('    "cksum": (_flags(""), {}, "paths", (1, None)),\n', ''),
     ('("push", "no git push", ("orchestrator.push",), ())', '("push", "no git push to any remote", ("orchestrator.push",), ())'),
 ]
 for old, new in edits:
@@ -841,13 +841,13 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 HS_DRIFT_OUT="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HS_DRIFT/harness-status.sh" --config "$HARNESS_CFG_ABS" 2>&1)"
 HS_DRIFT_JSON="$(env -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_PROJECT_ROOT -u SESSION_WORKSPACE_PANE_NAME -u SESSION_WORKSPACE_ROLE -u SESSION_WORKSPACE_PANE_CWD -u SESSION_WORKSPACE_HARNESS_MODE -u SESSION_CHAT_PANE_NAME -u KNOWLEDGE_PANE_NAME bash "$HS_DRIFT/harness-status.sh" --config "$HARNESS_CFG_ABS" --json 2>&1)"
-HS_BASE_READS="$(printf '%s\n' "$HS_ALL_OUT" | grep -o 'allowlisted reads \[[0-9]* read commands' | grep -o '[0-9]*')"
+HS_BASE_READS="$(printf '%s\n' "$HS_ALL_OUT" | grep -o 'listed exact read forms \[[0-9]* read programs' | grep -o '[0-9]*')"
 if printf '%s\n' "$HS_DRIFT_OUT" | grep -q "push (no git push to any remote)" \
-  && printf '%s\n' "$HS_DRIFT_OUT" | grep -q "allowlisted reads \[$((HS_BASE_READS - 1)) read commands" \
-  && printf '%s' "$HS_DRIFT_JSON" | jq -e '[.floor.roles[] | select(.name == "reviewer") | .floors[].clauses[].tables.READ_COMMANDS // empty | index("jq")] == [null]' >/dev/null 2>&1; then
-  pass "harness-status: editing a policy table (READ_COMMANDS, ROLE_FLOOR) changes the printed floor"
+  && printf '%s\n' "$HS_DRIFT_OUT" | grep -q "listed exact read forms \[$((HS_BASE_READS - 1)) read programs" \
+  && printf '%s' "$HS_DRIFT_JSON" | jq -e '[.floor.roles[] | select(.name == "reviewer") | .floors[].clauses[].tables.EXACT_FORMS // empty | index("cksum")] == [null]' >/dev/null 2>&1; then
+  pass "harness-status: editing a policy table (EXACT_FORMS, ROLE_FLOOR) changes the printed floor"
 else
-  fail "harness-status: editing a policy table (READ_COMMANDS, ROLE_FLOOR) changes the printed floor" "base=$HS_BASE_READS $HS_DRIFT_OUT"
+  fail "harness-status: editing a policy table (EXACT_FORMS, ROLE_FLOOR) changes the printed floor" "base=$HS_BASE_READS $HS_DRIFT_OUT"
 fi
 python3 - "$HS_DRIFT/harness-policy.py" <<'PY'
 import sys

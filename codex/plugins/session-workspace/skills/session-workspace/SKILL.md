@@ -232,7 +232,8 @@ For reviewers, other native edits remain blocked. Shell remains default-deny
 except exact read forms (0.12.11) inside its checkout or explicit per-pane
 `read_paths`, and trusted coordination helpers. Use `$session-chat:reply` for
 verdicts. Each word is plain (letters, digits, `_ . / : , + = @ % -`) or one
-single-quoted run with nothing attached. Segments join only with `|`, `||`,
+single-quoted run with nothing attached (a printed message path may join runs
+with `'\''`). Segments join only with `|`, `||`,
 `&&` or `;`. The program is a bare listed name, options are whole listed words
 before the operands, and a value option takes the next word. No redirection,
 substitution, double quotes, backslashes, unlisted commands or ungranted
