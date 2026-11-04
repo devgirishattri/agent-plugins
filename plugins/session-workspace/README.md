@@ -121,7 +121,9 @@ panes running. Stopping the browser pane releases its port claim.
 - **Run record.** Each selected pane has a record at
   `${XDG_STATE_HOME:-$HOME/.local/state}/session-workspace/<project.id>/panes/<pane>.json`
   with the watcher state, the last activity, and the last stop and its reason.
-  `workspace status SESSION --pane NAME` shows it as `idle stop:` and
+  The watcher and `workspace stop --pane` change it under one lock
+  (`<pane>.json.lock`), and a watcher that finds a stop recorded for its pane
+  exits instead of writing over it. `workspace status SESSION --pane NAME` shows it as `idle stop:` and
   `last stop:` lines.
 - **Browser health line.** `workspace status` prints one line per browser
   pane before the per-session detail: `browser: example-browser

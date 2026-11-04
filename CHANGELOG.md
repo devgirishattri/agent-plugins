@@ -1,5 +1,30 @@
 # Changelog
 
+## session-workspace 0.12.10 — 2026-11-04
+
+- **A manual stop's record is no longer lost to the idle watcher.** The
+  watcher kept the pane's run record in memory and wrote it at every sample.
+  `workspace stop --pane` records the stop first, then sends `Ctrl-C` and
+  waits for the pane to exit, so a sample in that wait overwrote the stop.
+  `workspace status` then showed no last stop, and once the pane was gone the
+  watcher recorded it as `pane closed by something other than its idle
+  watcher`. This turned the CI case "stop --pane web: only the dev server
+  stops (full pane name accepted); status records when and why" red at
+  random on main (0.12.7 and 0.12.9).
+  - The watcher and the stop now read, change and write the record under one
+    exclusive `flock` on `<pane>.json.lock` next to the record. The watcher
+    exits instead of writing over a stop recorded for its pane. The stop's
+    write goes through `idle-watch.py record-stop`. Without `python3` no
+    watcher can run, and the stop keeps its plain `jq` merge.
+  - Affected since 0.12.6: panes with `idle_stop_minutes` stopped by
+    `workspace stop --pane` while their watcher was armed. The watcher's own
+    idle stop was not affected.
+- Test (on-demand block): a pane that takes 3 s to exit on `Ctrl-C`, a
+  watcher sampling every 0.05 s, and a manual stop. The stop record, the
+  status line and the watcher's exit are checked. 0.12.9 loses the stop
+  record every time: no last stop, or the wrong reason once the pane is gone.
+- No config migration.
+
 ## session-workspace 0.12.9 — 2026-11-04
 
 - **Pane output as an idle-stop signal.** New optional pane field
