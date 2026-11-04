@@ -3150,7 +3150,7 @@ EXACT_GIT = {
              {"-e": "text", "-A": "num", "-B": "num", "-C": "num"}, "grep"),
     "config": (_flags(""), {}, "config"),
     "reflog": (_flags("--oneline"), {"-n": "num"}, "reflog"),
-    "remote": (_flags("-v --verbose"), {}, "remote"),
+    "remote": (_flags(""), {}, "remote"),
 }
 # Options spelled with an attached value, as a listed prefix: OPTION=VALUE.
 EXACT_GIT_EQ = {
@@ -3166,9 +3166,9 @@ EXACT_GIT_CONFIG_BARE = (("--get", "core.hooksPath"), ("--get-all", "remote.orig
 EXACT_GIT_CONFIG_ACTIONS = {"--list": 0, "-l": 0, "--get": 1, "--get-all": 1, "--get-regexp": 1}
 EXACT_GIT_CONFIG_FLAGS = _flags("--show-origin --show-scope --null -z --name-only")
 # git remote reads: exactly these word lists after `remote`, NAME a plain
-# remote name (show -n and get-url read the config and never contact it).
-EXACT_GIT_REMOTE_FORMS = ((), ("-v",), ("--verbose",), ("get-url", "NAME"), ("get-url", "--all", "NAME"),
-                          ("get-url", "--push", "NAME"), ("show", "-n", "NAME"))
+# remote name. Only bare `git remote`, which lists remote names: -v, get-url
+# and show -n print the remote URL, which can hold a credential.
+EXACT_GIT_REMOTE_FORMS = ((),)
 
 # Tools whose script argument can write or execute. Only the exact sed form
 # `sed -n 'N[,M]p' FILE...` is listed; everything else keeps its old rule.
@@ -3491,7 +3491,7 @@ def exact_git(ctx: Context, argv: List[str], base: Path) -> None:
         words = argv[start:]
         if not any(len(form) == len(words) and all(want == got or (want == "NAME" and GIT_REMOTE_NAME_RE.fullmatch(got))
                                                     for want, got in zip(form, words)) for form in EXACT_GIT_REMOTE_FORMS):
-            raise PolicyFailure("reviewer.git", "git remote reads only as `git remote [-v]`, `git remote get-url [--all|--push] NAME` or `git remote show -n NAME`")
+            raise PolicyFailure("reviewer.git", "git remote reads only as bare `git remote`: -v, get-url and show print the remote URL, which can hold a credential")
         return
     shown = kind == "reflog" and start < len(argv) and argv[start] == "show"
     position, seen_flags, seen_values, dashdash = exact_options(argv, start + (1 if shown else 0), flags, values, "reviewer.git",
