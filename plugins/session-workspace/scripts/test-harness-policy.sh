@@ -690,8 +690,9 @@ as_review "reviewer git branch --list with a pattern is allowed" "$(bash_payload
 as_review "reviewer git branch -a is allowed" "$(bash_payload 'git branch -a -v')" '.decision == "allow"'
 as_review "reviewer git tag <name> (creation) is denied" "$(bash_payload 'git tag v1.0')" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "reviewer git tag -l is allowed" "$(bash_payload "git tag -l 'v*'")" '.decision == "allow"'
-as_review "reviewer git remote -v is allowed" "$(bash_payload 'git remote -v')" '.decision == "allow"'
-as_review "reviewer git remote get-url is allowed" "$(bash_payload 'git remote get-url origin')" '.decision == "allow"'
+as_review "reviewer git remote (names only) is allowed" "$(bash_payload 'git remote')" '.decision == "allow"'
+as_review "reviewer git remote -v (prints the URL) is denied" "$(bash_payload 'git remote -v')" '.decision == "deny" and .rule == "reviewer.git"'
+as_review "reviewer git remote get-url (prints the URL) is denied" "$(bash_payload 'git remote get-url origin')" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "reviewer git remote set-url is denied" "$(bash_payload 'git remote set-url origin https://x.invalid')" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "reviewer env-assignment prefix is denied as a launch wrapper" "$(bash_payload "GIT_PAGER='touch x' git log -1")" '.decision == "deny" and .rule == "reviewer.shell"'
 as_review "reviewer env wrapper is denied" "$(bash_payload 'env git status')" '.decision == "deny" and .rule == "reviewer.shell"'
@@ -1843,7 +1844,7 @@ as_review "git: tag --list -- PATTERN --force is denied" "$(bash_payload "git ta
 as_review "git: tag -- PATTERN without --list is denied" "$(bash_payload "git tag -- 'v*'")" "$(xd reviewer.git)"
 as_review "git: branch --list -- NAME is denied" "$(bash_payload 'git branch --list -- main')" "$(xd reviewer.git)"
 as_review "git control: reflog show --date=FORMAT REV is allowed" "$(bash_payload 'git reflog show --date=iso HEAD')" "$XA"
-as_review "git control: remote show -n NAME and get-url --push NAME are allowed" "$(bash_payload 'git remote show -n origin && git remote get-url --push origin')" "$XA"
+as_review "git: remote show -n NAME and get-url --push NAME (print the URL, 0.12.12) are denied" "$(bash_payload 'git remote show -n origin && git remote get-url --push origin')" "$(xd reviewer.git)"
 as_review "git: remote show -n NAME EXTRA is denied" "$(bash_payload 'git remote show -n origin extra')" "$(xd reviewer.git)"
 # Messages: the pane's own delivered files and drafts stay readable.
 as_review "messages control: an own draft is readable with the exact grammar" "$(bash_payload "cat '$NF_DIR/verdict.md'")" '.decision == "allow" and .rule == "coordination.message_read"'
@@ -1976,6 +1977,33 @@ if [ "$LIVE_BEFORE" = "$LIVE_AFTER" ] && printf '%s' "$LIVE_AFTER" | jq -e '.dec
 else
   fail "test mode: a test-mode run leaves the live decision unchanged" "$LIVE_BEFORE / $LIVE_AFTER"
 fi
+
+echo "== 0.12.12 reviewer git remote reads only as bare git remote =="
+# -v, get-url and show -n print the remote URL, which can hold a credential.
+# Decided through the read-only test mode against the reviewer checkout. Set
+# HARNESS_TEST_BASELINE_POLICY_01211 to the 0.12.11 harness-policy.py (inside a
+# copy of its scripts directory) to assert that 0.12.11 allowed each denied form.
+BASELINE_POLICY_01211="${HARNESS_TEST_BASELINE_POLICY_01211:-}"
+[ -n "$BASELINE_POLICY_01211" ] || echo "  (baseline controls skipped: set HARNESS_TEST_BASELINE_POLICY_01211 to the 0.12.11 harness-policy.py)"
+REMOTE_DENY='.decision == "deny" and .rule == "reviewer.git" and .diagnostic.reason == "hook.reviewer.git" and (.reason | test("only as bare `git remote`"))'
+for remote_form in 'git remote -v' 'git remote --verbose' 'git remote show -n origin' 'git remote get-url origin' \
+                   'git remote get-url --all origin' 'git remote get-url --push origin' 'git -P remote -v' \
+                   'git remote | head -n 1 && git remote get-url origin'; do
+  as_case "remote: $remote_form (prints the remote URL) is denied" "$REMOTE_DENY" reviewer "$CHILD" "$(bash_payload "$remote_form")"
+  [ -n "$BASELINE_POLICY_01211" ] || continue
+  REMOTE_OUT="$(POLICY="$BASELINE_POLICY_01211" run_as reviewer "$CHILD" "$(bash_payload "$remote_form")")"
+  if printf '%s' "$REMOTE_OUT" | jq -e '.decision == "allow"' >/dev/null 2>&1; then
+    pass "baseline control: 0.12.11 allowed it: $remote_form"
+  else
+    fail "baseline control: 0.12.11 allowed it: $remote_form" "$REMOTE_OUT"
+  fi
+done
+as_case "remote control: bare git remote (names only) is allowed" '.decision == "allow" and .role == "reviewer"' reviewer "$CHILD" "$(bash_payload 'git remote')"
+as_case "remote control: git -P remote is allowed" '.decision == "allow"' reviewer "$CHILD" "$(bash_payload 'git -P remote')"
+as_case "remote control: git remote in a pipeline is allowed" '.decision == "allow"' reviewer "$CHILD" "$(bash_payload 'git remote | wc -l')"
+as_case "remote: git remote NAME is denied" "$REMOTE_DENY" reviewer "$CHILD" "$(bash_payload 'git remote origin')"
+as_review "remote: git remote -v from the live reviewer pane is denied" "$(bash_payload 'git remote -v')" '.decision == "deny" and .rule == "reviewer.git"'
+as_review "remote control: git remote from the live reviewer pane is allowed" "$(bash_payload 'git remote')" '.decision == "allow"'
 
 echo "== role floor report (--floor-json / --probe-json) =="
 # report_policy ROLE PANE CWD CONFIG MODE FLAG [extra env...]: a read-only
