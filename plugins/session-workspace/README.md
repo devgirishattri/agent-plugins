@@ -739,10 +739,10 @@ them, and `workspace.json` cannot add to them.
   `git config --get-all remote.origin.fetch`; `git config --list` without
   it would print the global config, where credentials live. `git reflog`
   reads only as `git reflog [--oneline] [-n N]` or
-  `git reflog show [-n N] [--date=FORMAT] [REV]`, `git remote` only as
-  `git remote [-v]`, `git remote get-url [--all|--push] NAME` or
-  `git remote show -n NAME`, and `git tag` takes patterns (also after `--`)
-  only with `-l`/`--list`.
+  `git reflog show [-n N] [--date=FORMAT] [REV]`, `git remote` only bare
+  (0.12.12: `-v`, `get-url` and `show -n` print the remote URL, which can
+  hold a credential), and `git tag` takes patterns (also after `--`) only
+  with `-l`/`--list`.
 
 **Upgrading.** No config or store migration. Reviewer commands that 0.12.10
 allowed in a form outside the grammar are now refused with a reason that

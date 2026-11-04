@@ -1,5 +1,24 @@
 # Changelog
 
+## session-workspace 0.12.12 — 2026-11-04
+
+- **Reviewer `git remote` reads only as bare `git remote`.** `git remote -v`,
+  `git remote --verbose`, `git remote get-url [--all|--push] NAME` and
+  `git remote show -n NAME` print the remote URL, which can hold a
+  credential, and a reviewer does not need it. 0.12.11 allowed all of them.
+  `EXACT_GIT_REMOTE_FORMS` now holds only the empty word list, the `remote`
+  entry in `EXACT_GIT` lists no flags, and the refusal (`reviewer.git`) says
+  `git remote reads only as bare git remote`. Bare `git remote`, which prints
+  only remote names, is still allowed, also with `git -P` and in a pipeline.
+  Executor and orchestrator Git checks are unchanged.
+- Tests (`test-harness-policy.sh`, 0.12.12 section): each URL-printing form
+  is denied through `--decision-json --as-role reviewer --as-cwd CHECKOUT`,
+  next to allowed bare `git remote` controls. Set
+  `HARNESS_TEST_BASELINE_POLICY_01211` to the 0.12.11 `harness-policy.py` to
+  assert that 0.12.11 allowed each denied form.
+- **Upgrading.** No config migration. A reviewer that read the URL with these
+  forms now gets a refusal; list remote names with bare `git remote`.
+
 ## session-workspace 0.12.11 — 2026-11-04
 
 - **Reviewer panes run only exact read forms.** strict-v1 is the only
