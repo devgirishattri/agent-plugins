@@ -1143,6 +1143,12 @@ declare -a RULE_FIXTURES=(
   "idle-stop-not-service.json:idle_stop_minutes applies only to service panes"
   "idle-stop-no-port.json:idle_stop_minutes needs a port to watch"
   "idle-stop-range.json:idle_stop_minutes must be an integer in 1..1440"
+  "idle-activity-unknown.json:idle_activity has an unknown signal \"logs\""
+  "idle-activity-duplicate.json:idle_activity lists \"output\" more than once"
+  "idle-activity-empty.json:idle_activity must be a non-empty array"
+  "idle-activity-browser.json:idle_activity is not allowed on the browser pane"
+  "idle-activity-not-service.json:idle_activity applies only to service panes"
+  "idle-activity-no-idle-stop.json:idle_activity needs idle_stop_minutes"
 )
 for entry in "${RULE_FIXTURES[@]}"; do
   fx="${entry%%:*}"
@@ -3675,6 +3681,185 @@ else
     "names=[$(swt_od_names)] record=$(cat "$SWT_OD_RECORDS/sample-ondemand-web.json" 2>/dev/null) start=$SWT_OUT"
 fi
 
+# Idle stop, pane output (idle_activity). A dev server that closes every
+# connection after its response (Laravel's `php artisan serve` answers with
+# "Connection: close") is rarely caught with a connection open at a sample,
+# but it logs each request to its pane. Two panes run the same command, which
+# prints a line every second for 12 s and never listens: "logs" selects
+# ["connections","output"], "quiet" keeps the default. 2 configured minutes
+# = 4 s here.
+#   * quiet is stopped after the window (the negative control);
+#   * logs stays up past the window while it prints, reports
+#     observing connections+output, and once its output stops it is stopped
+#     with both signals in the reason;
+#   * "held" selects ["output"] alone: a held-open connection and repeated
+#     window resizes (which rewrap its text) are not use, so it is stopped;
+#   * on Linux, a default dev server whose requests all close at once stays
+#     up: its server-side TIME_WAIT sockets (60 s) count as recent use.
+SWT_PROJ_OO="$SWT_ROOT/sample-odout"
+SWT_OO_LPORT=47345
+SWT_OO_QPORT=47346
+SWT_OO_CPORT=47347
+SWT_OO_HPORT=47348
+mkdir -p "$SWT_PROJ_OO/.agent-workspace"
+# One line: the launcher reads a command's argv one element per line.
+SWT_OO_TICKS='["python3","-u","-c","import time; [(print(\"[server] GET / request\", i, flush=True), time.sleep(1)) for i in range(12)]; time.sleep(3600)"]'
+cat > "$SWT_PROJ_OO/.agent-workspace/workspace.json" <<EOF
+{"schema_version":1,"project":{"id":"sample-odout","root":"."},
+"runtimes":{},
+"roles":{"service":{"runtime":"shell","env_group":"none"}},
+"stores":{"pin":[]},
+"behavior":{"default_start_target":"all","attach":"never","stop_scope":"selected","session_chat_helper":{"resolve":"never"}},
+"sessions":[{"id":"services","name":"sample-odout-services","layout":{"kind":"standard","name":"tiled"},"panes":[
+  {"name":"sample-odout-logs","role":"service","cwd":".","command":$SWT_OO_TICKS,"port":$SWT_OO_LPORT,"idle_stop_minutes":2,"idle_activity":["connections","output"]},
+  {"name":"sample-odout-quiet","role":"service","cwd":".","command":$SWT_OO_TICKS,"port":$SWT_OO_QPORT,"idle_stop_minutes":2},
+  {"name":"sample-odout-close","role":"service","cwd":".","command":["python3","-m","http.server","$SWT_OO_CPORT","--bind","127.0.0.1"],"port":$SWT_OO_CPORT,"idle_stop_minutes":2},
+  {"name":"sample-odout-held","role":"service","cwd":".","command":["python3","-m","http.server","$SWT_OO_HPORT","--bind","127.0.0.1"],"port":$SWT_OO_HPORT,"idle_stop_minutes":2,"idle_activity":["output"]}
+]}]}
+EOF
+SWT_CFG_OO="$SWT_PROJ_OO/.agent-workspace/workspace.json"
+SWT_OO_RECORDS="$SWT_STATE/session-workspace/sample-odout/panes"
+swt_oo_pane() {
+  SWT_TMUX list-panes -t '=sample-odout-services:0' -F "#{pane_id}	#{@session_workspace_pane}" 2>/dev/null | awk -F'\t' -v n="$1" '$2 == n {print $1}'
+}
+swt_oo_wait_gone() {
+  local i=0 limit=$(( $2 * 10 ))
+  while [ "$i" -lt "$limit" ]; do
+    [ -z "$(swt_oo_pane "$1")" ] && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# The plan reports the signals in canonical order, ["connections"] by default.
+jq '.sessions[0].panes[0].idle_activity = ["output", "connections"]' "$SWT_CFG_OO" > "$SWT_PROJ_OO/.agent-workspace/reordered.json"
+if bash "$HERE/workspace-plan.sh" services --config "$SWT_PROJ_OO/.agent-workspace/reordered.json" --json 2>/dev/null | jq -e '
+     [.sessions[0].panes[] | {(.name): .idle_activity}] | add == {"sample-odout-logs":["connections","output"],
+       "sample-odout-quiet":["connections"],"sample-odout-close":["connections"],"sample-odout-held":["output"]}' >/dev/null 2>&1 &&
+   bash "$HERE/workspace-plan.sh" services --config "$SWT_CFG_OO" 2>/dev/null | grep -Fxq "    idle_activity: connections+output"; then
+  pass "plan: idle_activity in canonical order, [\"connections\"] by default for an idle-stop dev server"
+else
+  fail "plan: idle_activity in canonical order, [\"connections\"] by default for an idle-stop dev server" \
+    "$(bash "$HERE/workspace-plan.sh" services --config "$SWT_PROJ_OO/.agent-workspace/reordered.json" --json 2>&1 | head -c 2000)"
+fi
+
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane logs --pane quiet --config "$SWT_CFG_OO" 2>&1)"
+SWT_STATUS=$?
+sleep 6
+SWT_OO_ALIVE="$(swt_oo_pane sample-odout-logs)"
+SWT_OO_LIVE="$(swrun_od "$HERE/workspace-status.sh" services --pane logs --config "$SWT_CFG_OO" --json 2>/dev/null)"
+SWT_OO_LIVE_TEXT="$(swrun_od "$HERE/workspace-status.sh" services --pane logs --config "$SWT_CFG_OO" 2>/dev/null)"
+if [ "$SWT_STATUS" -eq 0 ] && [ -n "$SWT_OO_ALIVE" ] && swt_oo_wait_gone sample-odout-quiet 6 &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[idle-stop] sample-odout-services / sample-odout-logs — idle stop armed" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "stops after 2 min with no inbound connections to port $SWT_OO_LPORT and no new pane output" &&
+   printf '%s' "$SWT_OO_LIVE" | jq -e '.[0].idle_activity == ["connections","output"] and .[0].idle.activity == ["connections","output"]
+     and .[0].idle.observing == "connections+output" and .[0].idle.clients == 0' >/dev/null 2>&1 &&
+   printf '%s' "$SWT_OO_LIVE_TEXT" | grep -Fq "observing connections+output, clients=0, idle for" &&
+   jq -e --arg r "idle: no inbound connections to port $SWT_OO_QPORT for 2 minutes" '.state == "stopped" and .stop_reason == $r and .idle_activity == ["connections"]' \
+     "$SWT_OO_RECORDS/sample-odout-quiet.json" >/dev/null 2>&1; then
+  pass "idle stop (pane output): a pane that selects output stays up past the window while it prints; the same pane without idle_activity is stopped"
+else
+  fail "idle stop (pane output): a pane that selects output stays up past the window while it prints; the same pane without idle_activity is stopped" \
+    "status=$SWT_STATUS alive_at_6s=[$SWT_OO_ALIVE] live=$SWT_OO_LIVE text=$SWT_OO_LIVE_TEXT quiet=$(cat "$SWT_OO_RECORDS/sample-odout-quiet.json" 2>/dev/null) start=$SWT_OUT"
+fi
+if swt_oo_wait_gone sample-odout-logs 15 &&
+   jq -e --arg r "idle: no inbound connections to port $SWT_OO_LPORT and no new pane output for 2 minutes" '.state == "stopped" and .stop_reason == $r' \
+     "$SWT_OO_RECORDS/sample-odout-logs.json" >/dev/null 2>&1 &&
+   swrun_od "$HERE/workspace-status.sh" services --pane logs --config "$SWT_CFG_OO" 2>/dev/null | grep -Fq "idle stop: 2 min on connections+output (armed when the pane starts)"; then
+  pass "idle stop (pane output): once the pane stops printing it is stopped, and the reason names both signals"
+else
+  fail "idle stop (pane output): once the pane stops printing it is stopped, and the reason names both signals" \
+    "names=[$(SWT_TMUX list-panes -t '=sample-odout-services:0' -F '#{@session_workspace_pane}' 2>/dev/null | tr '\n' ' ')] record=$(cat "$SWT_OO_RECORDS/sample-odout-logs.json" 2>/dev/null)"
+fi
+
+# Output only: a client holds a connection open and the window is resized
+# every 0.5 s. Neither is use (a resize rewraps the pane's text and only
+# takes a new baseline), so the pane is stopped after the window.
+SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane held --config "$SWT_CFG_OO" 2>&1)"
+for _ in $(seq 1 50); do
+  python3 "$HERE/service-ports.py" probe "$SWT_OO_HPORT" | grep -qx listening && break
+  sleep 0.1
+done
+python3 -c 'import socket,sys,time
+s=socket.create_connection(("127.0.0.1", int(sys.argv[1]))); time.sleep(12); s.close()' "$SWT_OO_HPORT" &
+SWT_OO_CLIENT=$!
+SWT_OO_GONE=""
+for swt_oo_i in $(seq 1 20); do
+  if [ $((swt_oo_i % 2)) -eq 0 ]; then
+    SWT_TMUX resize-window -t '=sample-odout-services:0' -x 120 -y 40 2>/dev/null
+  else
+    SWT_TMUX resize-window -t '=sample-odout-services:0' -x 90 -y 28 2>/dev/null
+  fi
+  if [ -z "$(swt_oo_pane sample-odout-held)" ]; then
+    SWT_OO_GONE="$swt_oo_i"
+    break
+  fi
+  sleep 0.5
+done
+SWT_OO_HELD_CLIENTS="$(python3 "$HERE/service-ports.py" clients "$SWT_OO_HPORT" 2>/dev/null)"
+kill "$SWT_OO_CLIENT" 2>/dev/null
+wait "$SWT_OO_CLIENT" 2>/dev/null
+if [ -n "$SWT_OO_GONE" ] && printf '%s' "$SWT_OUT" | grep -Fq "stops after 2 min with no new pane output" &&
+   jq -e '.state == "stopped" and .stop_reason == "idle: no new pane output for 2 minutes" and .observing == "output"
+     and .clients == null and .idle_activity == ["output"]' "$SWT_OO_RECORDS/sample-odout-held.json" >/dev/null 2>&1; then
+  pass "idle stop (output only): a held connection and window resizes are not use; the pane is stopped after the window"
+else
+  fail "idle stop (output only): a held connection and window resizes are not use; the pane is stopped after the window" \
+    "gone_at_step=[$SWT_OO_GONE] clients_after=[$SWT_OO_HELD_CLIENTS] record=$(cat "$SWT_OO_RECORDS/sample-odout-held.json" 2>/dev/null) start=$SWT_OUT"
+fi
+
+if [ -r /proc/net/tcp ]; then
+  SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane close --config "$SWT_CFG_OO" 2>&1)"
+  for _ in $(seq 1 50); do
+    python3 "$HERE/service-ports.py" probe "$SWT_OO_CPORT" | grep -qx listening && break
+    sleep 0.1
+  done
+  # HTTP/1.0 requests: http.server closes each connection after its response,
+  # so every request leaves a server-side TIME_WAIT socket and almost never an
+  # open connection at a sample.
+  python3 -c 'import socket,sys,time
+for _ in range(12):
+    s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+    s.sendall(b"GET / HTTP/1.0\r\n\r\n")
+    while s.recv(65536):
+        pass
+    s.close()
+    time.sleep(0.5)' "$SWT_OO_CPORT" &
+  SWT_OO_CLIENT=$!
+  sleep 5
+  SWT_OO_ALIVE="$(swt_oo_pane sample-odout-close)"
+  SWT_OO_REC="$(cat "$SWT_OO_RECORDS/sample-odout-close.json" 2>/dev/null)"
+  wait "$SWT_OO_CLIENT" 2>/dev/null
+  if [ -n "$SWT_OO_ALIVE" ] && printf '%s' "$SWT_OO_REC" | jq -e '.observing == "connections" and (.recently_closed // 0) > 0' >/dev/null 2>&1; then
+    pass "idle stop (Linux): a dev server that closes every connection stays up while used; its server-side TIME_WAIT sockets count as recent connections"
+  else
+    fail "idle stop (Linux): a dev server that closes every connection stays up while used; its server-side TIME_WAIT sockets count as recent connections" \
+      "alive_at_5s=[$SWT_OO_ALIVE] record=$SWT_OO_REC start=$SWT_OUT"
+  fi
+  swrun_od "$HERE/workspace-stop.sh" services --pane close --confirmed --config "$SWT_CFG_OO" >/dev/null 2>&1
+else
+  pass "idle stop (Linux TIME_WAIT): skipped, no /proc/net/tcp on this host"
+fi
+
+# idle-watch.py's own argument check (argparse exits 2). No tmux server is
+# reachable here, so an accepted call exits 1 (not armed) without touching one.
+swt_oo_watch_rc() {
+  mkdir -p "$SWT_ROOT/odout-argcheck/tmux"
+  env -u TMUX TMUX_TMPDIR="$SWT_ROOT/odout-argcheck/tmux" python3 "$HERE/idle-watch.py" watch --config "$SWT_CFG_OO" \
+    --project sample-odout --session services --pane sample-odout-argcheck --pane-id %999999 --port 4000 --minutes 1 \
+    --state-dir "$SWT_ROOT/odout-argcheck" "$@" >/dev/null 2>&1
+  echo "$?"
+}
+SWT_OO_RCS="$(swt_oo_watch_rc --kind browser --activity output) $(swt_oo_watch_rc --kind browser --activity connections,output)"
+SWT_OO_RCS="$SWT_OO_RCS $(swt_oo_watch_rc --kind service --activity logs) $(swt_oo_watch_rc --kind service --activity output,output)"
+SWT_OO_RCS="$SWT_OO_RCS $(swt_oo_watch_rc --kind service --activity '') / $(swt_oo_watch_rc --kind service --activity output,connections)"
+if [ "$SWT_OO_RCS" = "2 2 2 2 2 / 1" ]; then
+  pass "idle-watch.py refuses an unknown, repeated or empty signal, and any signal but connections for the browser"
+else
+  fail "idle-watch.py refuses an unknown, repeated or empty signal, and any signal but connections for the browser" "exit codes: $SWT_OO_RCS (want 2 2 2 2 2 / 1)"
+fi
+
 # nettop parsing (macOS traffic source), against a captured-shape sample: only
 # rows whose LOCAL port is the watched port count, IPv6 "." ports included.
 if python3 - "$HERE/service-ports.py" <<'PYEOF' >/dev/null 2>&1
@@ -3699,7 +3884,7 @@ else
 fi
 SWT_OD_SPM=600
 sleep 1
-if ! pgrep -f "idle-watch.py spawn .*--project sample-ondemand " >/dev/null 2>&1; then
+if ! pgrep -f "idle-watch.py spawn .*--project sample-o(ndemand|dout) " >/dev/null 2>&1; then
   pass "idle stop: no watcher outlives the pane it watched"
 else
   fail "idle stop: no watcher outlives the pane it watched" "$(pgrep -af 'idle-watch.py spawn' 2>/dev/null)"

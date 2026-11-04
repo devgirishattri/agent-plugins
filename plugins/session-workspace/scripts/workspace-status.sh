@@ -123,8 +123,10 @@ _sw_pane_run_record() {
     | {
         idle: (if $running and $current and (.idle_stop_minutes != null) then {
                  minutes: .idle_stop_minutes,
+                 activity: (if .kind == "browser" then null else (.idle_activity // ["connections"]) end),
                  watcher: (if $alive then "watching" else "not running" end),
                  clients: .clients,
+                 recently_closed: (.recently_closed // null),
                  observing: (.observing // null),
                  idle_for_seconds: (if .last_active_epoch then ((now | floor) - .last_active_epoch) else null end),
                  stops_in_seconds: (if .last_active_epoch and .idle_window_seconds then
@@ -223,7 +225,8 @@ while IFS= read -r session_json; do
       --argjson session_exists "$session_exists" --argjson session_managed "$session_managed" \
       --argjson running "$running" --argjson endpoint "$endpoint" --argjson run_record "$run_record" \
       --argjson idle_stop_minutes "$(printf '%s' "$pane_json" | jq -c '.idle_stop_minutes // null')" \
-      '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, read_paths:$read_paths, pane_id:$pane_id, process:$process, health:$health, running:$running, readiness:$readiness, port:(if $port == "" then null else ($port|tonumber) end), idle_stop_minutes:$idle_stop_minutes, idle:$run_record.idle, last_stop:$run_record.last_stop}
+      --argjson idle_activity "$(printf '%s' "$pane_json" | jq -c '.idle_activity // null')" \
+      '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, read_paths:$read_paths, pane_id:$pane_id, process:$process, health:$health, running:$running, readiness:$readiness, port:(if $port == "" then null else ($port|tonumber) end), idle_stop_minutes:$idle_stop_minutes, idle_activity:$idle_activity, idle:$run_record.idle, last_stop:$run_record.last_stop}
        + (if $endpoint == null then {} else {endpoint:$endpoint} end)')"
     ROWS="$(printf '%s' "$ROWS" | jq -c --argjson r "$row" '. + [$r]')"
   done < <(printf '%s' "$session_json" | jq -c '.panes[]')
@@ -251,10 +254,15 @@ printf '%s\n' "$ROWS" | jq -r '
   (.[] | "  pane: \(.pane)  role=\(.role) runtime=\(.runtime) model=\(.model)\n    cwd=\(.cwd)\n    pane_id=\(.pane_id // "(none)")  process=\(.process // "(n/a)")  health=\(.health)  running=\(if .running then "yes" else "no" end)  readiness=\(.readiness)",
     (if (.read_paths | length) > 0 then "    read_paths (shell only): " + (.read_paths | tojson) else empty end),
     (if .idle != null then
-       "    idle stop: \(.idle.minutes) min — watcher \(.idle.watcher), observing \(.idle.observing // "nothing yet"), clients=\(.idle.clients // "?"), idle for \(.idle.idle_for_seconds | dur), stops in \(.idle.stops_in_seconds | dur)"
+       "    idle stop: \(.idle.minutes) min — watcher \(.idle.watcher), observing \(.idle.observing // "nothing yet"), "
+       + (if (.idle.activity // ["connections"]) | any(. == "connections") then
+            "clients=\(.idle.clients // "?")" + (if (.idle.recently_closed // 0) > 0 then " (+\(.idle.recently_closed) closed in the last 60s)" else "" end) + ", "
+          else "" end)
+       + "idle for \(.idle.idle_for_seconds | dur), stops in \(.idle.stops_in_seconds | dur)"
        + (if .idle.observation then " (" + .idle.observation + ")" else "" end)
        + (if .idle.stop_error then " (last stop attempt failed: " + .idle.stop_error + ")" else "" end)
-     elif .idle_stop_minutes != null then "    idle stop: \(.idle_stop_minutes) min (armed when the pane starts)"
+     elif .idle_stop_minutes != null then
+       "    idle stop: \(.idle_stop_minutes) min" + (if .idle_activity != null then " on \(.idle_activity | join("+"))" else "" end) + " (armed when the pane starts)"
      else empty end),
     (if .last_stop != null then "    last stop: \(.last_stop.at) — \(.last_stop.reason)" else empty end))
 '

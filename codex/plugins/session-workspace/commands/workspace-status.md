@@ -28,9 +28,10 @@ argument-hint: "[TARGET|all] [--config PATH] [--json] [--pane NAME...]"
      role, runtime, configured model, cwd, foreground process, and health
      (`missing`, `dead`, `healthy`, or `unmanaged-occupant`).
    - Each pane also reports `running=yes|no` (healthy and launched). A pane
-     with `idle_stop_minutes` adds an `idle stop:` line (watcher state, client
-     count, time until it stops) and, after a stop, a `last stop:` line with
-     the time and reason.
+     with `idle_stop_minutes` adds an `idle stop:` line (watcher state, what it
+     observes such as `connections` or `connections+output`, client count,
+     time until it stops) and, after a stop, a `last stop:` line with the time
+     and reason.
    - A session with a browser pane gets one CDP endpoint health line, for
      example `browser: browser http://127.0.0.1:9326 — up (Chrome/131.0)
      cdp_clients=1`. Check it says `up` before a browser smoke; when it says

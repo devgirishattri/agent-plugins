@@ -14,7 +14,25 @@ Idle, per kind, for the whole window:
            sends about 150 bytes. It reconnects on its next call once the
            pane is started again.
   service  no inbound connection to the dev server's port at any sample (an
-           open HMR or keep-alive connection is use).
+           open HMR or keep-alive connection is use). On Linux a server-side
+           TIME_WAIT socket on the port also counts: the server closed that
+           connection within the last 60 seconds, which is how a dev server
+           that answers every request with "Connection: close" looks between
+           samples.
+
+A service pane can select its signals with ``--activity`` (the pane's
+``idle_activity``): "connections" (the default, above), "output", or both.
+"output" fingerprints what the pane has printed through tmux at each sample
+(``#{history_size}`` plus a hash of the joined screen and the last
+OUTPUT_TAIL_LINES lines of history); a change since the previous sample is
+use, and the fingerprint taken when the watcher arms is the baseline. A sample
+at which the pane's size changed (a resize, a sibling pane started or closed,
+a client attaching at another size) only takes a new baseline: rewrapped text
+is not output. Use is the OR of the selected signals, so a dev server that
+logs each request stays up while it is used even when no connection is open
+at any sample. Any periodic output keeps the pane up too, which is why
+"output" is opt-in. The browser pane never selects it: Chrome writes to its
+pane on its own.
 
 Browser traffic is read per socket from the kernel (service-ports.py
 ``activity``: Linux sock_diag, macOS nettop). A sample counts as use when the
@@ -34,7 +52,8 @@ descriptor), so a stop that kills the pane cannot kill the watcher mid-step.
 
 The record of what happened lives in ``<state-dir>/<pane>.json`` (written by
 atomic rename): pane id, port, kind, window, last activity, client count, and
-once the pane is stopped, when and why. ``workspace-status`` reads it.
+the selected signals, and once the pane is stopped, when and why.
+``workspace-status`` reads it.
 
 Tuning (environment, inherited from the start that armed the watcher):
   SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS      seconds between samples (30)
@@ -48,6 +67,7 @@ Tuning (environment, inherited from the start that armed the watcher):
 Runs on the stock macOS python3 (3.9): stdlib only.
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -61,6 +81,8 @@ WATCH_OPTION = '@session_workspace_idle_watcher'
 MARKER_PROJECT = '@session_workspace_project'
 MARKER_PANE = '@session_workspace_pane'
 KEEPALIVE_BYTES = 32
+SIGNALS = ('connections', 'output')  # canonical order, also of the reported mode
+OUTPUT_TAIL_LINES = 50
 
 
 def _ports_module():
@@ -90,6 +112,29 @@ def tmux(*args):
     return run.stdout.rstrip('\n') if run.returncode == 0 else None
 
 
+def output_fingerprint(pane_id):
+    """What pane PANE_ID shows right now, as (geometry, content): geometry is
+    the pane's WIDTHxHEIGHT, content is tmux's history line count plus a hash
+    of the joined visible screen and the last OUTPUT_TAIL_LINES lines of
+    history. The count alone can repeat (tmux trims a full history in
+    chunks); the hash alone misses output that scrolls identical text. A
+    resize changes content without any output, which is why the caller
+    compares content only at an unchanged geometry. None when tmux cannot read
+    the pane. Bytes, not text: a pane may print anything."""
+    shape = tmux('display-message', '-p', '-t', pane_id, '#{pane_width}x#{pane_height} #{history_size}')
+    if shape is None or len(shape.split()) != 2:
+        return None
+    geometry, history = shape.split()
+    try:
+        run = subprocess.run(['tmux', 'capture-pane', '-p', '-J', '-t', pane_id, '-S', '-%d' % OUTPUT_TAIL_LINES],
+                             capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if run.returncode != 0:
+        return None
+    return geometry, '%s:%s' % (history, hashlib.sha256(run.stdout).hexdigest())
+
+
 def pane_option(pane_id, option):
     value = tmux('show-options', '-p', '-t', pane_id, '-v', option)
     return value if value is not None else ''
@@ -112,29 +157,38 @@ def write_record(path, record):
     os.replace(tmp, path)
 
 
-def idle_reason(kind, mode, port, minutes):
+def idle_reason(kind, mode, signals, port, minutes):
     unit = 'minute' if minutes == 1 else 'minutes'
     if kind == 'browser' and mode == 'traffic':
         return 'idle: no CDP commands to 127.0.0.1:%d for %d %s' % (port, minutes, unit)
     if kind == 'browser':
         return 'idle: no CDP client connections to 127.0.0.1:%d for %d %s' % (port, minutes, unit)
-    return 'idle: no inbound connections to port %d for %d %s' % (port, minutes, unit)
+    parts = []
+    if 'connections' in signals:
+        parts.append('no inbound connections to port %d' % port)
+    if 'output' in signals:
+        parts.append('no new pane output')
+    return 'idle: %s for %d %s' % (' and '.join(parts), minutes, unit)
 
 
-def observe(ports, port, use_traffic, previous, elapsed):
-    """One sample: (clients, mode, active, bytes_in|None). mode is "traffic",
-    "connections" or None (unobservable, which counts as active)."""
+def observe(ports, port, use_traffic, previous, elapsed, count_closed):
+    """One connections sample: (clients, mode, active, bytes_in|None, closed).
+    mode is "traffic", "connections" or None (unobservable, which counts as
+    active). closed is the number of server-side TIME_WAIT sockets on PORT
+    (connections the server closed in the last 60 seconds) when COUNT_CLOSED
+    and the host has a /proc socket table, else None; any counts as use."""
     seen = ports.activity(port) if use_traffic else None
     if seen is None or seen['mode'] != 'traffic':
         count = seen['clients'] if seen else ports.established_clients(port)
         if count is None:
-            return None, None, True, None
-        return count, 'connections', count > 0, None
+            return None, None, True, None, None
+        closed = ports.time_wait_clients(port) if count_closed else None
+        return count, 'connections', count > 0 or bool(closed), None, closed
     received = seen['bytes_in']
     # A connection opened since the last sample counts from zero; one that
     # closed contributes nothing (its bytes were seen while it was open).
     moved = sum(max(count - previous.get(name, 0), 0) for name, count in received.items())
-    return seen['clients'], 'traffic', moved > KEEPALIVE_BYTES + int(elapsed), received
+    return seen['clients'], 'traffic', moved > KEEPALIVE_BYTES + int(elapsed), received, None
 
 
 def watch(args, ready_fd=None):
@@ -144,6 +198,9 @@ def watch(args, ready_fd=None):
     window = args.minutes * scale
     sample = min(positive_env('SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS', 30.0), window)
     use_traffic = args.kind == 'browser' and os.environ.get('SESSION_WORKSPACE_IDLE_OBSERVE', '') != 'connections'
+    signals = args.activity
+    watch_connections = 'connections' in signals
+    watch_output = 'output' in signals
     ports = _ports_module()
 
     os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
@@ -167,6 +224,8 @@ def watch(args, ready_fd=None):
         'clients': None,
         'observing': None,
     }
+    if args.kind == 'service':
+        record['idle_activity'] = list(signals)
     if previous.get('stopped_at'):
         record['last_stop'] = {'at': previous['stopped_at'], 'reason': previous.get('stop_reason', '')}
     elif previous.get('last_stop'):
@@ -176,6 +235,9 @@ def watch(args, ready_fd=None):
         record.update(state='not-armed', stop_reason='could not register the watcher on pane %s' % args.pane_id)
         write_record(state_path, record)
         return 1
+    # The arm-time fingerprint is the baseline: only output printed after the
+    # watcher armed counts as use.
+    fingerprint = output_fingerprint(args.pane_id) if watch_output else None
     write_record(state_path, record)
     if ready_fd is not None:
         os.write(ready_fd, own.encode('ascii'))
@@ -200,19 +262,44 @@ def watch(args, ready_fd=None):
             return 0  # the pane id no longer carries the pane this watcher was armed for
 
         now = time.time()
-        clients, seen_mode, active, seen_bytes = observe(ports, args.port, use_traffic, received, now - last_sample)
+        clients, conn_mode, active, seen_bytes, closed = None, None, False, None, None
+        notes = []
+        if watch_connections:
+            clients, conn_mode, active, seen_bytes, closed = observe(
+                ports, args.port, use_traffic, received, now - last_sample, args.kind == 'service')
+            if conn_mode is None:
+                notes.append('unavailable: no socket table and no lsof; the pane is never stopped for idleness')
+            elif conn_mode == 'connections' and use_traffic:
+                notes.append('connections only: CDP traffic is not observable here, so an open chrome-devtools connection keeps the pane up')
+        out_mode = None
+        if watch_output:
+            current = output_fingerprint(args.pane_id)
+            if current is None:
+                # An unreadable pane counts as use, like an unobservable port.
+                active = True
+                notes.append('pane output unavailable: tmux could not read the pane, so it is not stopped for idleness while this lasts')
+            else:
+                out_mode = 'output'
+                # A changed size only takes a new baseline: rewrapped or
+                # reflowed text is not output.
+                if fingerprint is None or (current[0] == fingerprint[0] and current[1] != fingerprint[1]):
+                    active = True
+            fingerprint = current
+        seen_mode = '+'.join(m for m in (conn_mode, out_mode) if m) or None
         last_sample = now
         received = seen_bytes if seen_bytes is not None else {}
         if active:
             last_active = now
-        if seen_mode is not None:
-            mode = seen_mode
+        if conn_mode is not None:
+            mode = conn_mode
         record.update(clients=clients, observing=seen_mode, last_sample_at=iso(now),
                       last_active_at=iso(last_active), last_active_epoch=int(last_active))
-        if seen_mode is None:
-            record['observation'] = 'unavailable: no socket table and no lsof; the pane is never stopped for idleness'
-        elif seen_mode == 'connections' and use_traffic:
-            record['observation'] = 'connections only: CDP traffic is not observable here, so an open chrome-devtools connection keeps the pane up'
+        if closed is not None:
+            record['recently_closed'] = closed
+        else:
+            record.pop('recently_closed', None)
+        if notes:
+            record['observation'] = '; '.join(notes)
         else:
             record.pop('observation', None)
 
@@ -220,7 +307,7 @@ def watch(args, ready_fd=None):
             write_record(state_path, record)
             continue
 
-        reason = idle_reason(args.kind, mode, args.port, args.minutes)
+        reason = idle_reason(args.kind, mode, signals, args.port, args.minutes)
         record.update(state='stopping', stop_reason=reason)
         write_record(state_path, record)
         env = dict(os.environ, SESSION_WORKSPACE_STOP_REASON=reason)
@@ -300,9 +387,17 @@ def main(argv):
     parser.add_argument('--kind', required=True, choices=['browser', 'service'])
     parser.add_argument('--minutes', required=True, type=int)
     parser.add_argument('--state-dir', required=True)
+    parser.add_argument('--activity', default='connections',
+                        help='comma-separated signals that count as use: connections, output (default: connections)')
     args = parser.parse_args(argv)
     if not 0 < args.port < 65536 or args.minutes < 1 or not args.pane_id.startswith('%'):
         parser.error('invalid port, minutes, or pane id')
+    chosen = args.activity.split(',')
+    if not chosen or any(s not in SIGNALS for s in chosen) or len(set(chosen)) != len(chosen):
+        parser.error('--activity takes unique values from: %s' % ', '.join(SIGNALS))
+    if args.kind == 'browser' and chosen != ['connections']:
+        parser.error('the browser pane is watched for CDP use only (--activity connections)')
+    args.activity = tuple(s for s in SIGNALS if s in chosen)
     if args.mode == 'spawn':
         return spawn(args)
     return watch(args)

@@ -1,5 +1,55 @@
 # Changelog
 
+## session-workspace 0.12.9 — 2026-11-04
+
+- **Pane output as an idle-stop signal.** New optional pane field
+  `idle_activity`: unique values from `"connections"` and `"output"`, default
+  `["connections"]` (the behavior so far). It is allowed only on a service
+  pane that sets `idle_stop_minutes` and `port`, never on the browser pane,
+  where Chrome writes to its pane on its own. With `"output"` selected, the
+  watcher fingerprints the pane at each sample (tmux `#{history_size}` plus a
+  hash of the joined screen and the last 50 lines of history), and any change
+  since the previous sample counts as use. The fingerprint taken when the
+  watcher arms is the baseline. A sample at which the pane's size changed (a
+  resize, a sibling pane started or closed, a client attaching at another
+  size) only takes a new baseline, since rewrapped text is not output. Use is
+  either selected signal; `["output"]` alone ignores connections.
+  - This is for dev servers that close every connection after the response,
+    such as Laravel's `php artisan serve` with `Connection: close`. A
+    30-second sample almost never found a connection open, so a pane in
+    steady use was stopped as idle. Such a server logs each request to its
+    pane, which `"output"` sees.
+  - Any periodic output keeps the pane up too, such as a watcher's rebuild
+    line or a health-check log, which is why the signal is opt-in.
+  - `workspace status` shows `observing connections+output`, the plan and
+    status JSON carry `idle_activity`, and the stop reason names both
+    signals: `idle: no inbound connections to port 8000 and no new pane
+    output for 30 minutes`.
+- **Linux: recently closed connections count as use.** On Linux the
+  `connections` signal also counts server-side `TIME_WAIT` sockets on the
+  port, read from `/proc/net/tcp{,6}`. The kernel keeps one for 60 seconds
+  after the server closes a connection, so the same servers stay up there
+  without opting in. `status` adds `(+N closed in the last 60s)` to
+  `clients=`. **Behavior change:** on Linux a default dev-server pane stays up
+  for up to 60 seconds after its last request, and any short-lived
+  connection that repeats at least once a minute keeps it up for good, such
+  as a sibling polling a health URL. In 0.12.8 such a pane was usually
+  stopped. `["output"]` alone opts out of connection counting. On macOS the
+  watcher reads sockets through `lsof`, which never lists `TIME_WAIT`, so use
+  `"output"` there.
+- The validator refuses an unknown, repeated or empty signal,
+  `idle_activity` without `idle_stop_minutes`, on a non-service pane and on
+  the browser pane, with a fixture for each. The schema documents the field.
+- Tests (on-demand block): a pane that selects output and prints a line
+  every second stays up past the window and is stopped once it goes quiet;
+  the same pane without the field is stopped (negative control); an
+  output-only pane is stopped despite a held connection and window resizes;
+  on Linux a default dev server answering HTTP/1.0 requests stays up through
+  `TIME_WAIT`; the plan reports the signals in canonical order;
+  `idle-watch.py` refuses bad `--activity` values.
+- No config migration. To roll back, install 0.12.8 and remove any
+  `idle_activity` keys, which older releases reject.
+
 ## session-workspace 0.12.8 — 2026-11-03
 
 Security fix for the strict-v1 executor inline-code floor (executors and

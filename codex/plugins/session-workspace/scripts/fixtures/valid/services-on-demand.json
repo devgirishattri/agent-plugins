@@ -43,7 +43,8 @@
           "cwd": ".",
           "command": ["true", "dev"],
           "port": 3001,
-          "idle_stop_minutes": 20
+          "idle_stop_minutes": 20,
+          "idle_activity": ["connections", "output"]
         },
         {
           "name": "${PROJECT_ID}-api",

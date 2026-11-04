@@ -24,7 +24,9 @@ answering on the port is a conflict that would make the pane's command fail
 (EADDRINUSE) or, worse, silently move to another port.
 
 Connection counting reads /proc/net/tcp{,6} on Linux and falls back to lsof
-(always present on macOS). Holder lookup tries lsof first and then the Linux
+(always present on macOS). On Linux the same table also shows server-side
+TIME_WAIT sockets (connections the server closed in the last 60 seconds),
+which the idle watcher counts as recent use; lsof never lists TIME_WAIT. Holder lookup tries lsof first and then the Linux
 /proc socket table. Only processes this user may inspect can be named.
 
 Client traffic (the bytes each inbound connection has RECEIVED from its
@@ -42,6 +44,7 @@ import sys
 
 LISTEN_STATE = '0A'
 ESTABLISHED_STATE = '01'
+TIME_WAIT_STATE = '06'
 
 
 def listening(port):
@@ -108,6 +111,17 @@ def established_clients(port):
             if line[1:].split('->', 1)[0].rsplit(':', 1)[-1] == str(port):
                 count += 1
     return count
+
+
+def time_wait_clients(port):
+    """Count server-side TIME_WAIT sockets on PORT: connections whose LOCAL port
+    is PORT and that this side closed first, which Linux keeps for 60 seconds.
+    A dev server that answers every request with "Connection: close" leaves
+    one per request. None without a /proc socket table (macOS)."""
+    rows = _proc_rows(TIME_WAIT_STATE)
+    if rows is None:
+        return None
+    return sum(1 for local, _ in rows if local == port)
 
 
 # Linux NETLINK_SOCK_DIAG (linux/sock_diag.h, linux/inet_diag.h).

@@ -27,7 +27,7 @@ An unmanaged pane that occupies a planned slot always FAILS. A same-named tmux s
 
 Before it launches a dev-server pane (`port` plus `command`), `--pane` refuses when the port is already bound by another process and names the PID holding it, for example `service port occupied before launch: 3001 (web) is held by pid 4242 (node)`. Nothing is started for that pane. Relay that line and do not retry on another port.
 
-A pane with `idle_stop_minutes` prints an `[idle-stop]` line after it starts. A watcher then stops that pane once nothing has used its port for that many minutes and records why. For a dev server, use means an inbound connection. For the browser, use means CDP commands, so an open chrome-devtools connection that only pings does not keep it up. `workspace status SESSION --pane NAME` shows the watcher and the last stop.
+A pane with `idle_stop_minutes` prints an `[idle-stop]` line after it starts. A watcher then stops that pane once nothing has used its port for that many minutes and records why. For a dev server, use means an inbound connection, plus new pane output when the pane sets `"idle_activity": ["connections", "output"]` (for a server that closes every connection after its response). For the browser, use means CDP commands, so an open chrome-devtools connection that only pings does not keep it up. `workspace status SESSION --pane NAME` shows the watcher and the last stop.
 
 Relay the per-pane report lines and the summary count (`started/adopted: N  kept (already healthy): N  failed: N`) verbatim.
 

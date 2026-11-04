@@ -172,6 +172,12 @@ def coordination_var_name(store):
               # Opt-in idle stop (validated: service role, and a port or the
               # browser pane). null means the pane runs until stopped.
               idle_stop_minutes: ($p.idle_stop_minutes // null),
+              # What counts as use for an idle-stop dev server, in canonical
+              # order (default ["connections"]). null when the pane has no
+              # idle stop, and for the browser pane, whose watcher counts CDP
+              # commands (validated: idle_activity is refused there).
+              idle_activity: (if ($p.idle_stop_minutes // null) == null or ($browser != null and $s.id == $browser.session_id and $p.name == $browser_pane_name) then null
+                              else ($p.idle_activity // ["connections"]) as $a | [("connections", "output") | select(. as $v | $a | any(. == $v))] end),
               agent: {
                 model: resolve_field($p.agent.model; $role.agent.model),
                 effort: resolve_field($p.agent.effort; $role.agent.effort),
