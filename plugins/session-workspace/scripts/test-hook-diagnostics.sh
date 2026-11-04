@@ -3,7 +3,7 @@
 #
 # Claims, and what each does NOT claim:
 #   - Registry completeness: every deny rule id extracted from harness-policy.py by
-#     Python ast (+ hook.runtime.python from harness-hook.sh) is in
+#     Python ast (+ hook.runtime.args/python from harness-hook.sh) is in
 #     diagnostics/registry.json and vice versa. An unresolvable rule id FAILS the
 #     extractor (it never silently omits one); a negative control proves that.
 #   - Runtime coverage is claimed ONLY for the ids a case below actually triggers
@@ -196,10 +196,10 @@ fi
 
 HOOK_IDS="$TMPROOT/hook_ids.txt"
 grep -oE 'BLOCKED by session-workspace strict-v1 \[[a-z_.]+\]' "$HOOK" | sed -E 's/.*\[([a-z_.]+)\]/\1/' | sort -u > "$HOOK_IDS"
-if [ "$(cat "$HOOK_IDS")" = "runtime.python" ]; then
-  pass "harness-hook.sh contributes exactly runtime.python"
+if [ "$(cat "$HOOK_IDS")" = "$(printf 'runtime.args\nruntime.python')" ]; then
+  pass "harness-hook.sh contributes exactly runtime.args and runtime.python"
 else
-  fail "harness-hook.sh contributes exactly runtime.python" "$(cat "$HOOK_IDS")"
+  fail "harness-hook.sh contributes exactly runtime.args and runtime.python" "$(cat "$HOOK_IDS")"
 fi
 cat "$SRC_IDS" "$HOOK_IDS" | sort -u | sed 's/^/hook./' > "$TMPROOT/expected_codes.txt"
 if [ -f "$REGISTRY" ] && jq -e '.schema == "diag-registry/1" and .plugin == "session-workspace" and (.codes | type == "array")' "$REGISTRY" >/dev/null 2>&1; then
@@ -208,7 +208,7 @@ if [ -f "$REGISTRY" ] && jq -e '.schema == "diag-registry/1" and .plugin == "ses
   if [ "$(sort "$TMPROOT/registry_codes.txt" | uniq -d | wc -l | tr -d ' ')" = 0 ]; then pass "registry codes are unique"; else fail "registry codes are unique" "$(uniq -d "$TMPROOT/registry_codes.txt")"; fi
   if [ -z "$(grep -v '^hook\.' "$TMPROOT/registry_codes.txt")" ]; then pass "every registry code is prefixed hook."; else fail "registry prefix" "$(grep -v '^hook\.' "$TMPROOT/registry_codes.txt")"; fi
   if diff -q "$TMPROOT/expected_codes.txt" "$TMPROOT/registry_codes.txt" >/dev/null 2>&1; then
-    pass "registry set equals the source-extracted deny ids plus hook.runtime.python ($(wc -l < "$TMPROOT/registry_codes.txt" | tr -d ' ') codes)"
+    pass "registry set equals the source-extracted deny ids plus the hook wrapper ids ($(wc -l < "$TMPROOT/registry_codes.txt" | tr -d ' ') codes)"
   else
     fail "registry set equality" "diff: $(diff "$TMPROOT/expected_codes.txt" "$TMPROOT/registry_codes.txt" | tr '\n' ' ')"
   fi
@@ -373,7 +373,8 @@ deny_case "" bash-parse shell.privilege null "${E[@]}" "$(bash_payload 'sudo ls'
 deny_case "" bash-parse shell.sandbox_escape null "${E[@]}" '{"tool_name":"Bash","tool_input":{"command":"ls","dangerouslyDisableSandbox":true}}'
 deny_case "" bash-parse executor.inline_code null "${E[@]}" "$(bash_payload "bash -c 'ls'")"
 deny_case "" bash-parse reviewer.command null reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce '{"tool_name":"shell","tool_input":{"command":"touch x"}}'
-deny_case "" bash-parse reviewer.shell null "${R[@]}" "$(bash_payload 'pwd | cat')"
+deny_case "" bash-parse reviewer.shell null "${R[@]}" "$(bash_payload 'pwd > out')"
+deny_case "" bash-parse reviewer.form null "${R[@]}" "$(bash_payload 'cat README.md --')"
 deny_case "" bash-parse reviewer.git null "${R[@]}" "$(bash_payload 'git --exec-path=/tmp status')"
 deny_case "" bash-parse reviewer.sed null "${R[@]}" "$(bash_payload 'sed -i s/a/b/ README.md')"
 deny_case "" bash-parse reviewer.tail null "${R[@]}" "$(bash_payload 'tail -f README.md')"
@@ -504,7 +505,7 @@ nl_check() { # nl_check LABEL RULE HELPER PAYLOAD EXPECTED-DIAG-LINES [R]
   fi
 }
 nl_check "multi-line helper argument (fixed-text reason)" helper.argv send-message.sh "$(bash_payload "bash $SEND $MASTER_PANE 'x${NL}$FORGED'")" 1
-nl_check "quoted newline command name (name echoed in BLOCKED): ambiguity exists" reviewer.command null "$(bash_payload "\"touch${NL}$FORGED\" x")" 2 R
+nl_check "quoted newline in an outbound helper path (path echoed in BLOCKED): ambiguity exists" routing.master null "$(bash_payload "bash \"x${NL}$FORGED${NL}/send-message.sh\"")" 2 R
 if ! grep -qiE 'last (`)?DIAG|DIAG (line )?(is|comes) last|read the last' "$SCRIPTS/../skills/session-workspace/SKILL.md" \
    && grep -qi 'unauthenticated' "$SCRIPTS/../skills/session-workspace/SKILL.md"; then
   pass "skill text: DIAG lines are described as unauthenticated observations, with no positional authenticity rule"
@@ -546,8 +547,28 @@ else
   fail "adapter/protocol: Codex-flag enforce deny" "rc=$H_RC out=[$H_OUT] err=[$H_ERR]"
 fi
 # Inactive: no-op even for a payload that would be denied
-hrun hook reviewer "$REVIEW_PANE" "$CHILD" "" "" "$(edit_payload src/file.ts)"
+hrun hook executor "$EXEC_PANE" "$CHILD" "" "" "$(edit_payload src/file.ts)"
 if [ "$H_RC" = 0 ] && [ -z "$H_OUT" ] && [ -z "$H_ERR" ]; then pass "adapter/protocol: inactive (no SESSION_WORKSPACE_CONFIG) is a silent no-op"; else fail "adapter/protocol: inactive no config" "rc=$H_RC err=[$H_ERR]"; fi
+# A pane that claims the reviewer role is refused without a readable config.
+hrun hook reviewer "$REVIEW_PANE" "$CHILD" "" "" "$(edit_payload src/file.ts)"
+if [ "$H_RC" = 2 ] && [ -z "$H_OUT" ] && case "$H_ERR" in "BLOCKED by session-workspace strict-v1 [identity.reviewer]: "*$'\n'"DIAG {"*) true ;; *) false ;; esac \
+   && check_diag_json "$(printf '%s\n' "$H_ERR" | sed -n 2p | sed 's/^DIAG //')" identity.reviewer null; then
+  pass "adapter/protocol: a claimed reviewer with no SESSION_WORKSPACE_CONFIG is BLOCKED identity.reviewer, exit 2"
+  COVERED="$COVERED hook.identity.reviewer"
+else
+  fail "adapter/protocol: claimed reviewer without config" "rc=$H_RC out=[$H_OUT] err=[$H_ERR]"
+fi
+printf '%s' "$(edit_payload src/file.ts)" | "$BASH_REAL" "$HOOK" --decision-json > "$TMPROOT/h.out" 2> "$TMPROOT/h.err"
+H_RC=$?
+H_ERR="$(cat "$TMPROOT/h.err")"
+if [ "$H_RC" = 2 ] && [ ! -s "$TMPROOT/h.out" ] && case "$H_ERR" in "BLOCKED by session-workspace strict-v1 [runtime.args]: "*$'\n'"DIAG {"*) true ;; *) false ;; esac \
+   && [ "$(printf '%s\n' "$H_ERR" | sed -n 2p)" = 'DIAG {"schema":"diag/1","emitter":"workspace-hook","helper":null,"version":null,"subject":"admission","phase":"admission","reason":"hook.runtime.args","outcome":"refused","state_committed":false,"notification":null,"task":null,"generation":null,"event":null,"request":null,"also":[],"also_truncated":false}' ] \
+   && registry_has runtime.args; then
+  pass "adapter/protocol: the hook refuses a test-mode argument (--decision-json) with BLOCKED runtime.args, exit 2"
+  COVERED="$COVERED hook.runtime.args"
+else
+  fail "adapter/protocol: hook argument guard" "rc=$H_RC err=[$H_ERR]"
+fi
 hrun hook reviewer "$REVIEW_PANE" "$CHILD" "$OFF_CONFIG" "" "$(edit_payload src/file.ts)"
 if [ "$H_RC" = 0 ] && [ -z "$H_OUT" ] && [ -z "$H_ERR" ]; then pass "adapter/protocol: disabled config with no launcher mode is a silent no-op"; else fail "adapter/protocol: inactive disabled config" "rc=$H_RC err=[$H_ERR]"; fi
 

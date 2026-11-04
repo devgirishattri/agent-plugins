@@ -315,6 +315,19 @@
       "description": "The pane read paths are unavailable or do not match the validated config."
     },
     {
+      "code": "hook.identity.reviewer",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A pane that claims the reviewer role (engine role, engine pane name or tmux pane name) has no readable workspace config, so every tool call is refused."
+    },
+    {
       "code": "hook.identity.role",
       "subjects": [
         "admission"
@@ -601,6 +614,19 @@
       "description": "A reviewer find call uses a mutation or execution action."
     },
     {
+      "code": "hook.reviewer.form",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A reviewer command option or operand is not one of its listed exact read forms."
+    },
+    {
       "code": "hook.reviewer.git",
       "subjects": [
         "admission"
@@ -676,7 +702,7 @@
       "outcomes": [
         "refused"
       ],
-      "description": "A reviewer command is not one literal read-only segment without expansion, pipes, or redirection."
+      "description": "A reviewer command is not in the strict word form: a quote, metacharacter, redirection, substitution, control character, operator or assignment outside the listed forms."
     },
     {
       "code": "hook.reviewer.sort",
@@ -755,6 +781,19 @@
         "refused"
       ],
       "description": "A routing or environment selector escapes this coordinator's scope."
+    },
+    {
+      "code": "hook.runtime.args",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The hook wrapper was given an argument other than --codex-hook-output (hook wrapper deny)."
     },
     {
       "code": "hook.runtime.python",
