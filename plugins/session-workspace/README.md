@@ -88,7 +88,8 @@ panes running. Stopping the browser pane releases its port claim.
   a watcher when it starts, reported as `[idle-stop] ... armed (watcher pid
   N)`. The watcher samples the pane's port every 30 seconds. For a dev
   server, idle means no inbound connection to its `port` (an open HMR or
-  keep-alive connection is use). For the browser pane, idle means no CDP
+  keep-alive connection is use; on Linux, so is a connection the server
+  closed in the last 60 seconds). For the browser pane, idle means no CDP
   commands to `127.0.0.1:<browser.port>`: an open connection that only sends
   keepalive pings is idle (see below). After the whole window it runs
   `workspace stop SESSION --pane NAME` and records why, for example
@@ -97,6 +98,26 @@ panes running. Stopping the browser pane releases its port claim.
   stopped by an older watcher. A host where connections cannot be counted
   (no `/proc` socket table and no `lsof`) never stops a pane for idleness. The
   watcher needs `python3`.
+- **Pane output (`idle_activity`).** Some dev servers close every connection
+  right after the response: Laravel's `php artisan serve` answers each request
+  with `Connection: close`. A 30-second sample then almost never finds a
+  connection open, so steady use can look idle and the pane is stopped
+  mid-use. On Linux the watcher also counts the `TIME_WAIT` socket each such
+  request leaves on the server's port for 60 seconds, so there any short-lived
+  connection that repeats at least once a minute (a health-check poller, too)
+  keeps the pane up. macOS gives no reliable view of those (`lsof` never lists
+  `TIME_WAIT`), so for such a server set `"idle_activity": ["connections",
+  "output"]`: new output in the pane since the previous sample, such as the
+  server's request log line, then counts as use too. The watcher compares
+  tmux's history size and a hash of the pane's last lines at each sample;
+  output from before the watcher armed does not count, and a sample at which
+  the pane was resized only takes a new baseline. `status` shows `observing
+  connections+output`, and the stop reason names both signals: `idle: no
+  inbound connections to port 8000 and no new pane output for 30 minutes`. Any
+  periodic output keeps the pane up, such as a file watcher's rebuild line, a
+  health-check log or a ticking clock, which is why output is opt-in.
+  `["output"]` alone ignores connections. It is refused on the browser pane,
+  where Chrome writes to its pane on its own.
 - **Run record.** Each selected pane has a record at
   `${XDG_STATE_HOME:-$HOME/.local/state}/session-workspace/<project.id>/panes/<pane>.json`
   with the watcher state, the last activity, and the last stop and its reason.
@@ -1262,6 +1283,7 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].panes[].command` | array of strings, min 1 item | no | (agent argv, or interactive shell) | For a `shell`-runtime (typically `service`-role) pane: literal argv to run instead of an interactive shell. A bare string command is rejected — it must be an array, so there's never a shell re-parsing step. |
 | `sessions[].panes[].port` | integer, 1-65535 | no | — | First-class metadata (surfaced in `plan`/`status` output); does not change what gets launched or add a `--port` flag anywhere. A pane with `port` and `command` is refused by `start --pane` (and by a schema-v5 start) while another process holds the port, naming the holder's PID. |
 | `sessions[].panes[].idle_stop_minutes` | integer, 1-1440 | no | — (never stopped) | `service` panes only, and only one with a port to watch: the browser pane or a pane with `port`. A watcher stops the pane after this many minutes with no inbound connection to that port (for the browser, no CDP commands; keepalive pings on an open connection do not count) and records why. See "Single service panes on demand". |
+| `sessions[].panes[].idle_activity` | array of unique strings: `connections`, `output` | no | `["connections"]` | What counts as use for a pane with `idle_stop_minutes` and `port`; refused without `idle_stop_minutes`, on a non-`service` pane and on the browser pane. `connections`: an inbound connection to the port (on Linux, also one the server closed in the last 60 seconds). `output`: new output in the pane since the previous sample, for a dev server that closes every connection after its response but logs each request. Use is either selected signal. Any periodic output keeps the pane up, which is why `output` is opt-in. |
 | `sessions[].panes[].read_paths` | array of ≤16 strings | no | — (no extra reads) | Active strict-v1 **reviewer** or **executor** panes only (schema v2–5). Existing files/directories the pane's shell may read in addition to its cwd; see "Reviewer read paths" and "Executor read paths". Any other role, or an inactive harness, is a validation error. |
 | `sessions[].panes[].agent.*` | see `roles.<r>.agent.*` | no | role-level value, or no flag | Pane-level override of `model`/`effort`/`profile`/`permission_mode`, taking precedence over the role's own value. |
 

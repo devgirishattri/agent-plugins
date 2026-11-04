@@ -292,7 +292,7 @@ _sw_launch_pane() {
 SW_IDLE_NOTE=""
 _sw_arm_idle_watch() {
   local pane_id="$1" session_id="$2" pane_plan="$3"
-  local minutes port kind pane_name record_dir watcher_pid config_abs
+  local minutes port kind pane_name record_dir watcher_pid config_abs activity use
   SW_IDLE_NOTE=""
   minutes="$(printf '%s' "$pane_plan" | jq -r '.idle_stop_minutes // empty')"
   [ -n "$minutes" ] || return 0
@@ -300,6 +300,10 @@ _sw_arm_idle_watch() {
   port="$(printf '%s' "$pane_plan" | jq -r '.port // empty')"
   kind="service"
   [ "$(printf '%s' "$pane_plan" | jq -r '.browser // false')" = "true" ] && kind="browser"
+  # The signals that count as use (idle_activity; the browser pane always
+  # counts CDP commands, so it never gets one).
+  activity="connections"
+  [ "$kind" = "service" ] && activity="$(printf '%s' "$pane_plan" | jq -r '(.idle_activity // ["connections"]) | join(",")')"
   if ! command -v python3 >/dev/null 2>&1; then
     SW_IDLE_NOTE="idle stop NOT armed: python3 is required to watch port ${port:-?}; the pane keeps running until stopped"
     return 0
@@ -310,11 +314,16 @@ _sw_arm_idle_watch() {
   config_abs="$(cd "$(dirname "$CONFIG_PATH")" 2>/dev/null && pwd -P)/$(basename "$CONFIG_PATH")"
   if watcher_pid="$(python3 "$HERE/idle-watch.py" spawn --config "$config_abs" --project "$PROJECT_ID" \
       --session "$session_id" --pane "$pane_name" --pane-id "$pane_id" --port "$port" --kind "$kind" \
-      --minutes "$minutes" --state-dir "$record_dir" </dev/null 2>/dev/null)" && [ -n "$watcher_pid" ]; then
+      --minutes "$minutes" --activity "$activity" --state-dir "$record_dir" </dev/null 2>/dev/null)" && [ -n "$watcher_pid" ]; then
     if [ "$kind" = "browser" ]; then
       SW_IDLE_NOTE="idle stop armed (watcher pid $watcher_pid): stops after $minutes min with no CDP commands to 127.0.0.1:$port"
     else
-      SW_IDLE_NOTE="idle stop armed (watcher pid $watcher_pid): stops after $minutes min with no inbound connections to port $port"
+      case "$activity" in
+        connections) use="no inbound connections to port $port" ;;
+        output) use="no new pane output" ;;
+        *) use="no inbound connections to port $port and no new pane output" ;;
+      esac
+      SW_IDLE_NOTE="idle stop armed (watcher pid $watcher_pid): stops after $minutes min with $use"
     fi
   else
     SW_IDLE_NOTE="idle stop NOT armed: the watcher did not start; the pane keeps running until stopped"

@@ -227,6 +227,7 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
     p_command="$(printf '%s' "$pane" | jq -r 'if .command then (.command | join(" ")) else "" end')"
     p_port="$(printf '%s' "$pane" | jq -r '.port // ""')"
     p_idle="$(printf '%s' "$pane" | jq -r '.idle_stop_minutes // ""')"
+    p_idle_activity="$(printf '%s' "$pane" | jq -r '(.idle_activity // []) | join("+")')"
     p_running="$(printf '%s' "$pane" | jq -r 'if has("running") then (if .running == null then "unknown (tmux not installed)" elif .running then "yes" else "no" end) else "" end')"
 
     printf '  pane: %s' "$p_name"
@@ -240,6 +241,7 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
     [ -n "$p_command" ] && printf '    command: %s\n' "$p_command"
     [ -n "$p_port" ] && printf '    port: %s\n' "$p_port"
     [ -n "$p_idle" ] && printf '    idle_stop_minutes: %s\n' "$p_idle"
+    [ -n "$p_idle_activity" ] && printf '    idle_activity: %s\n' "$p_idle_activity"
     [ -n "$p_running" ] && printf '    running: %s\n' "$p_running"
     printf '    agent: model=%s effort=%s profile=%s permission_mode=%s\n' \
       "$(flag_or_none "$p_model")" "$(flag_or_none "$p_effort")" "$(flag_or_none "$p_profile")" "$(flag_or_none "$p_perm")"

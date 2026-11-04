@@ -967,6 +967,19 @@
                   "minimum": 1,
                   "maximum": 1440
                 },
+                "idle_activity": {
+                  "description": "Opt-in, default [\"connections\"]. What counts as use for a service pane with idle_stop_minutes and a port; not allowed on the browser pane. \"connections\": an inbound TCP connection to the port (on Linux, also one the server closed in the last 60 seconds). \"output\": new output in the pane since the previous sample, for a dev server that logs each request and closes every connection after the response. Use is either selected signal. Any periodic output keeps the pane up, which is why \"output\" is opt-in.",
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "connections",
+                      "output"
+                    ]
+                  }
+                },
                 "agent": {
                   "type": "object",
                   "additionalProperties": false,

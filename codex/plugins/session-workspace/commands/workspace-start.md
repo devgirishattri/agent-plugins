@@ -70,8 +70,11 @@ argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no
      starts. A watcher stops the pane once nothing has used its port for that
      many minutes and records why in the pane's run record, which
      `workspace-status` shows. For a dev server, use means an inbound
-     connection. For the browser, use means CDP commands, so an open
-     chrome-devtools connection that only pings does not keep it up.
+     connection, plus new pane output when the pane sets
+     `"idle_activity": ["connections", "output"]` (for a server that closes
+     every connection after its response). For the browser, use means CDP
+     commands, so an open chrome-devtools connection that only pings does not
+     keep it up.
    - Secrets for authorized panes travel through a private 0600 single-use file
      path in the launch script; secret values are not placed in argv, tmux
      history, or session environment.
