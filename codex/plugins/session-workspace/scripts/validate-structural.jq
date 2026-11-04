@@ -194,7 +194,7 @@ def harness_engine_vars: [
     (($s.value.layout.nodes // []) | to_entries[] | . as $n |
       chk($n.value; ["id", "from", "dir", "percent"]; ["id"]; "sessions." + $slabel + ".layout.nodes[" + ($n.key | tostring) + "]")),
     (($s.value.panes // []) | to_entries[] | . as $p | ($p.value.name // ("panes[" + ($p.key | tostring) + "]")) as $plabel | (
-      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths", "idle_stop_minutes"] + (if $cfg.schema_version == 5 then ["runtime"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
+      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths", "idle_stop_minutes", "idle_activity"] + (if $cfg.schema_version == 5 then ["runtime"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
       chk($p.value.agent // {}; ["model", "effort", "profile", "permission_mode"]; []; "sessions." + $slabel + ".panes." + $plabel + ".agent")
     ))
   )),
@@ -410,23 +410,47 @@ def harness_engine_vars: [
 
   # ---- opt-in idle stop: an integer window on a service pane that has
   #      something to observe -- its own port (a dev server) or the DevTools
-  #      port (the browser pane, which must omit port). Any schema version. ----
+  #      port (the browser pane, which must omit port). Any schema version.
+  #      idle_activity picks what counts as use on such a pane: unique values
+  #      from "connections" and "output", never on the browser pane (Chrome
+  #      writes to its pane on its own). ----
   (. as $cfg
    | ([$cfg.browser?, $cfg.browsers[]? | select(. != null) | . as $b
        | {session_id: $b.session_id,
           pane: ($b.pane_name // ([($cfg.sessions // [])[] | select(.id == $b.session_id) | (.panes // [])[].name] | if length == 1 then .[0] else null end))}]) as $browser_panes
    | ($cfg.sessions // [])[] | . as $s | ($s.panes // [])[] | . as $p
-   | select($p | type == "object" and has("idle_stop_minutes"))
-   | ("pane " + (($p.name // "?") | tostring) + ": idle_stop_minutes") as $l
-   | ($p.idle_stop_minutes) as $m
-   | if ($m | type) != "number" or ($m | floor) != $m or $m < 1 or $m > 1440 then
-       $l + " must be an integer in 1..1440"
-     elif ($p.role // "") != "service" then
-       $l + " applies only to service panes (role \"service\"), not role \"" + (($p.role // "") | tostring) + "\""
-     elif ($p | has("port")) | not then
-       (if any($browser_panes[]; .session_id == $s.id and .pane == $p.name) then empty
-        else $l + " needs a port to watch: set the pane's port (dev server) or select it as the browser pane" end)
-     else empty end),
+   | select($p | type == "object" and (has("idle_stop_minutes") or has("idle_activity")))
+   | any($browser_panes[]; .session_id == $s.id and .pane == $p.name) as $is_browser
+   | ("pane " + (($p.name // "?") | tostring) + ": ") as $pl
+   | (if $p | has("idle_stop_minutes") then
+        ($pl + "idle_stop_minutes") as $l
+        | ($p.idle_stop_minutes) as $m
+        | if ($m | type) != "number" or ($m | floor) != $m or $m < 1 or $m > 1440 then
+            $l + " must be an integer in 1..1440"
+          elif ($p.role // "") != "service" then
+            $l + " applies only to service panes (role \"service\"), not role \"" + (($p.role // "") | tostring) + "\""
+          elif ($p | has("port")) | not then
+            (if $is_browser then empty
+             else $l + " needs a port to watch: set the pane's port (dev server) or select it as the browser pane" end)
+          else empty end
+      else empty end),
+     (if $p | has("idle_activity") then
+        ($pl + "idle_activity") as $l
+        | ($p.idle_activity) as $a
+        | if ($a | type) != "array" or ($a | length) == 0 then
+            $l + " must be a non-empty array of \"connections\" and/or \"output\""
+          elif any($a[]; . as $v | ["connections", "output"] | any(. == $v) | not) then
+            $l + " has an unknown signal " + ([$a[] | . as $v | select(["connections", "output"] | any(. == $v) | not)][0] | tojson) + " (allowed: \"connections\", \"output\")"
+          elif ($a | unique | length) != ($a | length) then
+            $l + " lists " + ([$a[] as $v | select([$a[] | select(. == $v)] | length > 1) | $v][0] | tojson) + " more than once"
+          elif ($p | has("idle_stop_minutes")) | not then
+            $l + " needs idle_stop_minutes on the same pane: it only chooses what keeps an idle-stop pane up"
+          elif ($p.role // "") != "service" then
+            $l + " applies only to service panes (role \"service\"), not role \"" + (($p.role // "") | tostring) + "\""
+          elif $is_browser then
+            $l + " is not allowed on the browser pane: Chrome writes to its pane on its own, and the browser's idle stop counts CDP commands"
+          else empty end
+      else empty end)),
 
   # ---- commands must be argv arrays, never a command string ----
   ((.sessions // [])[] | (.panes // [])[] | . as $p |

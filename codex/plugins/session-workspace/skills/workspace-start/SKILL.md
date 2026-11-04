@@ -70,7 +70,9 @@ holding it, for example `service port occupied before launch: 3001 (web) is
 held by pid 4242 (node)`. Relay it and do not retry on another port. A pane
 with `idle_stop_minutes` prints an `[idle-stop]` line after it starts; a
 watcher then stops the pane once nothing has used its port for that many
-minutes and records why. For a dev server, use means an inbound connection.
+minutes and records why. For a dev server, use means an inbound connection,
+plus new pane output when the pane sets `"idle_activity": ["connections",
+"output"]` (for a server that closes every connection after its response).
 For the browser, use means CDP commands, so an open chrome-devtools
 connection that only pings does not keep it up.
 
