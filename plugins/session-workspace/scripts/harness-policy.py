@@ -3029,6 +3029,9 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
 # workspace.json cannot add to it.
 
 EXACT_PLAIN_RE = re.compile(r"\A[A-Za-z0-9_./:,+=@%-]+\Z")
+EXACT_OPERATOR_CHARS = frozenset(";&|()<>")
+# A git sort key (git tag --sort=-creatordate): the one value kind that may start with -.
+EXACT_SORTKEY_RE = re.compile(r"\A-?[a-z][a-z:()-]*\Z")
 EXACT_ASSIGNMENT_RE = re.compile(r"\A(?:LC_[A-Z]+|LANG|LANGUAGE|TZ|NO_COLOR|FORCE_COLOR|TERM|COLUMNS|LINES)=[A-Za-z0-9_.,:@+%-]*\Z")
 EXACT_NUM_RE = re.compile(r"\A\+?[0-9]{1,9}\Z")
 EXACT_SED_SCRIPT_RE = re.compile(r"\A(?:[1-9][0-9]{0,8}(?:,(?:[1-9][0-9]{0,8}|\$))?|\$)p\Z")
@@ -3044,11 +3047,12 @@ def _flags(text: str) -> frozenset:
 # Value kinds: "num" (digits, optional +), "text" (data), "enum:a,b".
 # Operand kinds: "paths" (checked paths), "text" (data), "none",
 # "pattern_paths" (grep/rg: the first operand is the pattern unless -e is
-# given), "jq" (the program, then checked paths), "diff" (two regular files),
-# "date" (+FORMAT only), "find", "sed".
-# Only options whose value is required on BOTH GNU and BSD are value options:
-# BSD grep `-C[num]`/`--context[=num]` takes an optional attached value, so
-# `grep -C 2 PATTERN FILE` would read PATTERN as a file there.
+# given), "diff" (two regular files), "date" (+FORMAT only), "find", "sed".
+# Only options whose value is required on BOTH GNU and BSD are value options.
+# `--context[=num]` takes an optional attached value on both, so it is a flag
+# and the next word is the pattern; short -C takes the next word on both
+# (getopt "C:" in FreeBSD and macOS grep). grep -f/--file and rg -f/--file
+# (patterns from a file) and jq (modules from a search path) are not listed.
 EXACT_FORMS = {
     "basename": (_flags(""), {}, "text", (1, 2)),
     "cat": (_flags("-n -b -s -v -e -t"), {}, "paths", (0, None)),
@@ -3062,25 +3066,28 @@ EXACT_FORMS = {
     "false": (_flags(""), {}, "none", (0, 0)),
     "file": (_flags("-b --mime-type"), {}, "paths", (1, None)),
     "find": (_flags(""), {}, "find", (1, None)),
-    "grep": (_flags("-n -i -v -c -l -L -h -H -w -x -F -E -s -q -o -r -rn -rl -ri -rni -rin -in -ni -nr -il -li --recursive"),
-             {"-e": "text", "-f": "path", "--file": "path", "-A": "num", "-B": "num", "-m": "num"},
+    "grep": (_flags("-n -i -v -c -l -L -h -H -w -x -F -E -s -q -o -r -I -rn -rl -ri -rni -rin -in -ni -nr -il -li"
+                    " --recursive --context --line-number --ignore-case --files-with-matches --count --word-regexp"
+                    " --fixed-strings --extended-regexp --with-filename --no-filename --only-matching --invert-match"
+                    " --no-messages"),
+             {"-e": "text", "-A": "num", "-B": "num", "-C": "num", "-m": "num", "--include": "text",
+              "--exclude": "text", "--exclude-dir": "text"},
              "pattern_paths", (0, None)),
     "head": (_flags(""), {"-n": "num", "-c": "num"}, "paths", (0, None)),
-    "jq": (_flags("-r -c -S -e -s -n -j --raw-output --compact-output --sort-keys --slurp --null-input --tab"),
-           {"--indent": "num"}, "jq", (1, None)),
     "ls": (_flags("-1 -a -A -d -F -h -l -p -r -R -S -t -i -la -al -lah -alh -lh -lt -ltr -lha -lA -Al -lR"), {}, "paths", (0, None)),
-    "nl": (_flags(""), {"-b": "enum:a,t,n"}, "paths", (0, None)),
+    "nl": (_flags("-ba"), {"-b": "enum:a,t,n"}, "paths", (0, None)),
     "printf": (_flags(""), {}, "text", (1, None)),
     "pwd": (_flags("-P"), {}, "none", (0, 0)),
     "realpath": (_flags(""), {}, "paths", (1, None)),
-    "rg": (_flags("--no-config -n -i -l -c -w -F -S -s -v -o -x --hidden --files --no-heading --line-number --ignore-case"
-                  " --files-with-matches --count --fixed-strings --word-regexp"),
-           {"-e": "text", "-f": "path", "--file": "path", "-g": "text", "-t": "text", "-T": "text", "-A": "num",
-            "-B": "num", "-C": "num", "-m": "num", "--glob": "text", "--type": "text", "--max-depth": "num",
-            "--max-count": "num"},
+    "rg": (_flags("--no-config -n -i -l -c -w -F -S -s -v -o -x -u --hidden --files --no-heading --heading --line-number"
+                  " --ignore-case --files-with-matches --count --fixed-strings --word-regexp --smart-case --case-sensitive"
+                  " --invert-match --only-matching"),
+           {"-e": "text", "-g": "text", "-t": "text", "-T": "text", "-A": "num", "-B": "num", "-C": "num", "-m": "num",
+            "--glob": "text", "--type": "text", "--type-not": "text", "--max-depth": "num", "--max-count": "num"},
            "pattern_paths", (0, None)),
     "sed": (_flags("-n"), {}, "sed", (1, None)),
     "shasum": (_flags(""), {"-a": "enum:1,224,256,384,512"}, "paths", (1, None)),
+    "sha256sum": (_flags(""), {}, "paths", (1, None)),
     "cksum": (_flags(""), {}, "paths", (1, None)),
     "sort": (_flags("-n -r -u -f -b -h -V -rn -nr"), {"-k": "text", "-t": "text"}, "paths", (0, None)),
     "stat": (_flags(""), {}, "paths", (1, None)),
@@ -3100,7 +3107,9 @@ EXACT_FIND_VALUES = {"-name": "text", "-iname": "text", "-path": "text", "-ipath
                      "-type": "enum:f,d,l", "-maxdepth": "num", "-mindepth": "num", "-size": "text",
                      "-mtime": "text", "-mmin": "text"}
 
-# git [--no-pager] [-C DIR] SUBCOMMAND ...
+# git [--no-pager|-P] [--literal-pathspecs] SUBCOMMAND ... (no -C: a repository
+# found elsewhere brings its own config, and core.fsmonitor or a pager there
+# runs a command).
 # Operand kinds: "paths" (pathspecs only), "revs_paths" (revisions, then
 # `--` and pathspecs), "revs" (revisions only), "patterns" (data, ref name
 # patterns), "list_patterns" (patterns only with -l/--list), "grep",
@@ -3115,7 +3124,8 @@ _GIT_DIFF_FLAGS = ("--stat --shortstat --numstat --name-only --name-status --sum
                    " -w -b --ignore-all-space --ignore-space-change --check -R --no-renames --patience --histogram"
                    " --minimal -p --patch --raw --no-index")
 EXACT_GIT = {
-    "status": (_flags("--short -s --porcelain --branch -b -sb --long --ignored"), {}, "paths"),
+    "status": (_flags("--short -s --porcelain --porcelain=v1 --branch -b -sb --long --ignored --untracked-files=no"
+                      " --untracked-files=all --no-renames"), {}, "paths"),
     "log": (_flags(_GIT_LOG_FLAGS), dict(_GIT_LOG_VALUES), "revs_paths"),
     "show": (_flags(_GIT_LOG_FLAGS), {}, "revs_paths"),
     "diff": (_flags(_GIT_DIFF_FLAGS), {}, "revs_paths"),
@@ -3134,7 +3144,7 @@ EXACT_GIT = {
     "show-ref": (_flags("--heads --tags -s --hash --abbrev"), {}, "patterns"),
     "for-each-ref": (_flags(""), {"--count": "num", "--sort": "text"}, "patterns"),
     "branch": (_flags("-a -r -v -vv --list -l --all --remotes --show-current --no-color --verbose"), {}, "list_patterns"),
-    "tag": (_flags("-l --list -n"), {}, "list_patterns"),
+    "tag": (_flags("-l --list -n"), {"--format": "text"}, "list_patterns"),
     "grep": (_flags("-n -i -l -c -w -v -E -F -I -h -H --cached --heading --break --line-number --ignore-case"
                     " --files-with-matches --count --word-regexp --fixed-strings"),
              {"-e": "text", "-A": "num", "-B": "num", "-C": "num"}, "grep"),
@@ -3142,11 +3152,23 @@ EXACT_GIT = {
     "reflog": (_flags("--oneline"), {"-n": "num"}, "reflog"),
     "remote": (_flags("-v --verbose"), {}, "remote"),
 }
+# Options spelled with an attached value, as a listed prefix: OPTION=VALUE.
+EXACT_GIT_EQ = {
+    "log": {"--format=": "text", "--pretty=": "text", "--max-count=": "num", "--since=": "text", "--until=": "text",
+            "--author=": "text", "--grep=": "text"},
+    "show": {"--format=": "text", "--pretty=": "text"},
+    "tag": {"--format=": "text", "--sort=": "sortkey"},
+    "reflog": {"--date=": "text"},
+}
 # git config without --file reads the user's global config, where credentials
 # live; only these two exact repository reads are allowed without it.
 EXACT_GIT_CONFIG_BARE = (("--get", "core.hooksPath"), ("--get-all", "remote.origin.fetch"))
 EXACT_GIT_CONFIG_ACTIONS = {"--list": 0, "-l": 0, "--get": 1, "--get-all": 1, "--get-regexp": 1}
-EXACT_GIT_CONFIG_FLAGS = _flags("--show-origin --null -z --name-only")
+EXACT_GIT_CONFIG_FLAGS = _flags("--show-origin --show-scope --null -z --name-only")
+# git remote reads: exactly these word lists after `remote`, NAME a plain
+# remote name (show -n and get-url read the config and never contact it).
+EXACT_GIT_REMOTE_FORMS = ((), ("-v",), ("--verbose",), ("get-url", "NAME"), ("get-url", "--all", "NAME"),
+                          ("get-url", "--push", "NAME"), ("show", "-n", "NAME"))
 
 # Tools whose script argument can write or execute. Only the exact sed form
 # `sed -n 'N[,M]p' FILE...` is listed; everything else keeps its old rule.
@@ -3191,7 +3213,10 @@ def exact_segments(command: str) -> List[List[Tuple[str, bool]]]:
                 break
             if end + 1 < length and command[end + 1] not in " |&;":
                 raise PolicyFailure("reviewer.shell", "a single-quoted reviewer word cannot have text attached after it")
-            out[-1].append(("'".join(parts), True))
+            text = "'".join(parts)
+            if not text or set(text) <= EXACT_OPERATOR_CHARS:
+                raise PolicyFailure("reviewer.shell", "a single-quoted reviewer word cannot be empty or made only of ; & | ( ) < >")
+            out[-1].append((text, True))
             index = end + 1
             continue
         end = index
@@ -3200,7 +3225,7 @@ def exact_segments(command: str) -> List[List[Tuple[str, bool]]]:
         word = command[index:end]
         if end < length and command[end] == "'":
             raise PolicyFailure("reviewer.shell", "a reviewer word cannot mix plain text and quotes: write it as one single-quoted word")
-        if not EXACT_PLAIN_RE.fullmatch(word) or word.startswith("="):
+        if not EXACT_PLAIN_RE.fullmatch(word) or word.startswith("=") or "==" in word:
             raise PolicyFailure("reviewer.shell", "reviewer words outside single quotes may hold only letters, digits and _ . / : , + = @ %% -: %s" % word)
         out[-1].append((word, False))
         index = end
@@ -3250,13 +3275,17 @@ def exact_value_ok(kind: str, value: str) -> bool:
         return bool(EXACT_NUM_RE.fullmatch(value))
     if kind.startswith("enum:"):
         return value in kind[5:].split(",")
+    if kind == "sortkey":
+        return bool(EXACT_SORTKEY_RE.fullmatch(value))
     return True
 
 
 def exact_options(argv: List[str], start: int, flags: frozenset, values: dict, rule: str,
-                  what: str) -> Tuple[int, set, dict, bool]:
+                  what: str, eq: Optional[dict] = None) -> Tuple[int, set, dict, bool]:
     """Read listed whole-word options from ARGV[START:]. Returns (index of
-    the first operand, flags seen, {option: [values]}, saw `--`)."""
+    the first operand, flags seen, {option: [values]}, saw `--`). EQ lists
+    the options spelled with an attached value (`--format=VALUE`) by prefix."""
+    eq = eq or {}
     seen_flags: set = set()
     seen_values: dict = {}
     index = start
@@ -3282,6 +3311,14 @@ def exact_options(argv: List[str], start: int, flags: frozenset, values: dict, r
                 raise PolicyFailure(rule, "%s %s value is not one of its listed forms: %s" % (what, word, value))
             seen_values.setdefault(word, []).append(value)
             index += 2
+            continue
+        prefix = next((p for p in eq if word.startswith(p)), None)
+        if prefix is not None:
+            value = word[len(prefix):]
+            if not value or (value.startswith("-") and eq[prefix] != "sortkey") or not exact_value_ok(eq[prefix], value):
+                raise PolicyFailure(rule, "%s %s value is not one of its listed forms: %s" % (what, prefix, value))
+            seen_values.setdefault(prefix, []).append(value)
+            index += 1
             continue
         raise PolicyFailure(rule, "%s option is not one of its listed exact forms (whole words, no clusters, attached values or abbreviations): %s" % (what, word))
     return index, seen_flags, seen_values, False
@@ -3340,44 +3377,9 @@ def exact_path(ctx: Context, word: str, base: Path, reads: Optional[ExactReads] 
     raise PolicyFailure("reviewer.path", "path operand resolves outside the reviewer's readable roots: %s" % word)
 
 
-def jq_program_ok(program: str) -> bool:
-    """A jq program that cannot load modules or read the environment: no
-    import/include (they read .jq/.json files from a search path the program
-    itself can set), no env/$ENV/$__loc__/get_search_list/modulemeta, and no
-    string interpolation, which would hide code inside a string."""
-    index = 0
-    length = len(program)
-    while index < length:
-        char = program[index]
-        if char == '"':
-            index += 1
-            while index < length and program[index] != '"':
-                if program[index] == "\\":
-                    if index + 1 < length and program[index + 1] == "(":
-                        return False
-                    index += 1
-                index += 1
-            index += 1
-            continue
-        match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", program[index:])
-        if match:
-            name = match.group(0)
-            before = program[index - 1] if index else ""
-            if before == "$":
-                if name in {"ENV", "__loc__", "__prog_args"}:
-                    return False
-            elif before != "." and name in {"import", "include", "env", "modulemeta", "get_search_list",
-                                            "get_prog_origin", "get_jq_origin", "input_filename"}:
-                return False
-            index += len(name)
-            continue
-        index += 1
-    return True
-
-
 # Git expands pathspec globs by itself, so shell quoting does not make them
 # literal: a glob-bearing pathspec is read only under a global
-# --literal-pathspecs (with at most `-C .`) on the subcommands listed here.
+# --literal-pathspecs (and no other global option) on the subcommands listed here.
 GIT_PATHSPEC_GLOB_CHARS = "*?[]{}\\"
 GIT_LITERAL_PATHSPEC_SUBS = {"diff", "ls-files", "status", "log", "show"}
 # A word git cannot resolve as a revision and that holds one of these is read
@@ -3391,7 +3393,7 @@ def exact_git_path(ctx: Context, word: str, base: Path, literal: bool = False) -
     if word.startswith(":"):
         raise PolicyFailure("path.dynamic", "git pathspec magic is outside the reviewer's exact forms: %s" % word)
     if not literal and any(char in word for char in GIT_PATHSPEC_GLOB_CHARS):
-        raise PolicyFailure("path.dynamic", "git globs pathspecs itself; a glob-bearing pathspec needs a global --literal-pathspecs (with at most -C .): %s" % word)
+        raise PolicyFailure("path.dynamic", "git globs pathspecs itself; a glob-bearing pathspec needs a global --literal-pathspecs and no other global option: %s" % word)
     exact_path(ctx, word, base, git=True)
 
 
@@ -3457,35 +3459,20 @@ def exact_git_config(ctx: Context, words: List[str], base: Path) -> None:
 
 
 def exact_git(ctx: Context, argv: List[str], base: Path) -> None:
-    """git [--no-pager] [--literal-pathspecs] [-C DIR] SUBCOMMAND as listed in
-    EXACT_GIT."""
+    """git [--no-pager|-P] [--literal-pathspecs] SUBCOMMAND as listed in
+    EXACT_GIT. No -C: git would read another repository's config there."""
     index = 1
-    seen_c = False
     literal = False
     grant_scope = True
     while index < len(argv) and argv[index].startswith("-"):
         word = argv[index]
-        if word == "--no-pager":
+        if word in {"--no-pager", "-P"}:
             grant_scope = False
             index += 1
             continue
         if word == "--literal-pathspecs" and not literal:
             literal = True
             index += 1
-            continue
-        if word == "-C" and not seen_c:
-            if index + 1 >= len(argv) or argv[index + 1].startswith("-"):
-                raise PolicyFailure("reviewer.git", "git -C needs a directory as the next word")
-            directory = argv[index + 1]
-            if any(char in directory for char in GIT_PATHSPEC_GLOB_CHARS):
-                raise PolicyFailure("path.dynamic", "git -C with glob characters is outside the reviewer's exact forms: %s" % directory)
-            base = exact_path(ctx, directory, base, git=True)
-            if not base.is_dir():
-                raise PolicyFailure("reviewer.git", "git -C must name an existing directory")
-            if directory != ".":
-                grant_scope = False
-            seen_c = True
-            index += 2
             continue
         raise PolicyFailure("reviewer.git", "git global option is outside the reviewer's exact forms: %s" % word)
     if index >= len(argv):
@@ -3500,22 +3487,29 @@ def exact_git(ctx: Context, argv: List[str], base: Path) -> None:
     if kind == "config":
         exact_git_config(ctx, argv[start:], base)
         return
+    if kind == "remote":
+        words = argv[start:]
+        if not any(len(form) == len(words) and all(want == got or (want == "NAME" and GIT_REMOTE_NAME_RE.fullmatch(got))
+                                                    for want, got in zip(form, words)) for form in EXACT_GIT_REMOTE_FORMS):
+            raise PolicyFailure("reviewer.git", "git remote reads only as `git remote [-v]`, `git remote get-url [--all|--push] NAME` or `git remote show -n NAME`")
+        return
     shown = kind == "reflog" and start < len(argv) and argv[start] == "show"
-    position, seen_flags, seen_values, dashdash = exact_options(argv, start + (1 if shown else 0), flags, values, "reviewer.git", what)
+    position, seen_flags, seen_values, dashdash = exact_options(argv, start + (1 if shown else 0), flags, values, "reviewer.git",
+                                                                what, EXACT_GIT_EQ.get(sub))
     rest = argv[position:]
-    if kind in {"paths", "patterns", "list_patterns", "remote", "reflog"}:
+    if kind in {"paths", "patterns", "list_patterns", "reflog"}:
         operands = exact_operands(argv, position, "reviewer.git", what, dashdash)
         if kind == "paths":
             for word in operands:
                 exact_git_path(ctx, word, base, literal)
             return
-        if dashdash:
+        listing = kind == "list_patterns" and bool(seen_flags & {"-l", "--list"})
+        if dashdash and not (sub == "tag" and listing):
             raise PolicyFailure("reviewer.git", "%s takes no pathspecs" % what)
-        if kind == "list_patterns" and operands and not seen_flags & {"-l", "--list"}:
+        if kind == "list_patterns" and operands and not listing:
             raise PolicyFailure("reviewer.git", "%s NAME creates it; list with -l/--list PATTERN" % what)
-        if kind == "remote" and operands and not (len(operands) == 2 and operands[0] == "get-url" and not seen_flags
-                                                  and GIT_REMOTE_NAME_RE.fullmatch(operands[1])):
-            raise PolicyFailure("reviewer.git", "git remote reads only as `git remote [-v]` or `git remote get-url NAME`")
+        if any(word.startswith("-") for word in operands):
+            raise PolicyFailure("reviewer.git", "%s: a pattern cannot start with -" % what)
         if kind == "reflog":
             # A word right after `reflog` is a subcommand (expire, delete,
             # drop, ...): a revision is read only after an explicit `show`.
@@ -3626,15 +3620,10 @@ def exact_form(ctx: Context, argv: List[str], base: Path, reads: ExactReads) -> 
         if values[option] == "path":
             for word in words:
                 exact_path(ctx, word, base, reads)
-    if kind == "pattern_paths" and not {"-e", "-f", "--file"} & set(seen_values) and "--files" not in seen_flags:
+    if kind == "pattern_paths" and "-e" not in seen_values and "--files" not in seen_flags:
         if not operands:
             raise PolicyFailure("reviewer.form", "%s needs a pattern" % program)
         operands = operands[1:]
-    if kind == "jq":
-        if not operands or not jq_program_ok(operands[0]):
-            raise PolicyFailure("reviewer.form", "jq needs a program without import, include, env, $ENV, $__loc__ or string interpolation")
-        operands = operands[1:]
-        minimum -= 1
     if len(operands) < minimum or (maximum is not None and len(operands) > maximum):
         if program == "uniq":
             raise PolicyFailure("reviewer.uniq", "reviewer uniq takes at most one input operand: a second operand is an output file it overwrites")

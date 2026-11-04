@@ -68,9 +68,10 @@ class Cases:
             for cmd in ("grep", "rg --no-config"):
                 for option in ("-f{}", "-nf{}", "-f {}", "--file={}", "--file {}"):
                     with self.subTest(role=role, cmd=cmd, option=option):
-                        if role == "reviewer" and " " not in option:
-                            # 0.12.11 exact forms: a value is the next word,
-                            # never attached or inside a cluster.
+                        if role == "reviewer":
+                            # 0.12.11 exact forms: grep and rg read no pattern
+                            # file (-f/--file is not listed), in any spelling.
+                            self.check(role, f"{cmd} -e x f.txt", "allow")
                             self.check(role, f"{cmd} {option.format(self.file)} f.txt", "deny", "reviewer.form")
                             self.check(role, f"{cmd} {option.format(self.outside)} f.txt", "deny", "reviewer.form")
                             continue
@@ -82,8 +83,9 @@ class Cases:
             for cmd in ("grep", "rg --no-config"):
                 with self.subTest(role=role, cmd=cmd):
                     if role == "reviewer":
-                        self.check(role, f"{cmd} -f f.txt f.txt", "allow")
-                        self.check(role, f"{cmd} -f escape f.txt", "deny", "reviewer.path")
+                        self.check(role, f"{cmd} -e x f.txt", "allow")
+                        self.check(role, f"{cmd} -f f.txt f.txt", "deny", "reviewer.form")
+                        self.check(role, f"{cmd} -f escape f.txt", "deny", "reviewer.form")
                         self.check(role, f"{cmd} -ff.txt f.txt", "deny", "reviewer.form")
                         continue
                     self.check(role, f"{cmd} -ff.txt f.txt", "allow")
@@ -93,9 +95,10 @@ class Cases:
         # Evaluate only: these strings never execute or read /etc/hosts.
         for command in ("grep -f /etc/hosts pat", "rg --no-config -f /etc/hosts pat"):
             with self.subTest(command=command):
-                self.check("reviewer", command.replace("/etc/hosts", "f.txt"), "allow")
-                self.check("reviewer", command, "deny", "reviewer.path")
-                # The reported attached form is outside the exact forms.
+                # 0.12.11: no pattern file at all, inside or outside, attached or not.
+                self.check("reviewer", command.replace("-f /etc/hosts", "-e x"), "allow")
+                self.check("reviewer", command.replace("/etc/hosts", "f.txt"), "deny", "reviewer.form")
+                self.check("reviewer", command, "deny", "reviewer.form")
                 self.check("reviewer", command.replace("-f ", "-f"), "deny", "reviewer.form")
 
     def test_sort_outputs(self):
@@ -142,7 +145,8 @@ class Cases:
         flagged = self.cwd / "zLR-patterns"; flagged.write_text("needle\n")
         for cmd in ("grep", "rg --no-config"):
             with self.subTest(cmd=cmd, option="-f"):
-                self.check("reviewer", f"{cmd} -f zLR-patterns f.txt", "allow")
+                # 0.12.11: no pattern file; the file name is never read as flags.
+                self.check("reviewer", f"{cmd} -f zLR-patterns f.txt", "deny", "reviewer.form")
             for option in ("-f", "-nf"):
                 with self.subTest(cmd=cmd, option=option):
                     # Refused as an attached value; the diagnostic may name

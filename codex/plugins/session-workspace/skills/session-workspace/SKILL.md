@@ -240,7 +240,9 @@ substitution, double quotes, backslashes, unlisted commands or ungranted
 sibling reads. `sed` runs only as `sed -n 'N[,M]p' FILE`. Quote `^`, `~`, globs
 and spaces: `git diff 'HEAD~1' -- src/x.ts`. A bracket pathspec needs
 `git --literal-pathspecs`, `git blame` runs as `git blame [REV] -- PATH`, and
-`git config` reads need `--file PATH`. A pane whose role, engine pane name or
+`git config` reads need `--file PATH`. There is no `git -C`, `grep -f`/`rg -f`
+or `jq`: run git from the checkout, search with `-e PATTERN` and read JSON with
+`cat` or `grep`. A pane whose role, engine pane name or
 tmux `@name` says reviewer is refused every tool call when no readable
 workspace config backs it (`identity.reviewer`).
 Schema v2–5 reviewers and executors may set `sessions[].panes[].read_paths` to up to 16

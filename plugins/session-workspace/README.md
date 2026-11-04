@@ -430,10 +430,10 @@ role floor is off. The floor:
   staging above. Shell is
   default-deny, with two carve-outs: (a) exact read forms (0.12.11, see
   "Reviewer exact read forms" below): listed read programs (`cat head tail
-  wc ls stat file diff grep rg find jq sort ...`, `sed -n 'N[,M]p'` and
+  wc ls stat file diff grep rg find sort ...`, `sed -n 'N[,M]p'` and
   listed read-only `git` forms) joined only by `|`, `||`, `&&` or `;`,
-  whose path operands — including bare `.`/`..`, `-C` values, option values
-  such as `grep -f FILE`, and git revision words — resolve through symlinks
+  whose path operands — including bare `.`/`..`, path option values such
+  as `git config --file FILE`, and git revision words — resolve through symlinks
   inside its own checkout, the coordination stores the plan grants it (a
   messages store or either provider's inbox only as scoped by "Message
   store access" below), or the *selected version* directory of an installed
@@ -684,9 +684,10 @@ them, and `workspace.json` cannot add to them.
   path holding an apostrophe; it is literal in bash and zsh alike. `^`, `~`, `*`,
   `?`, brackets, braces, spaces and `$` appear only inside single quotes
   (zsh `EXTENDED_GLOB` reads `^x` and `a~b` as globs; a leading `=` is zsh
-  `EQUALS` expansion and is refused). Double quotes, backslashes, control
-  characters, comments, redirection, grouping, substitution and `&` are
-  refused (`reviewer.shell`).
+  `EQUALS` expansion and is refused, as is `==` inside a word). A quoted
+  word is never empty or made only of `; & | ( ) < >`. Double quotes,
+  backslashes, control characters, comments, redirection, grouping,
+  substitution and `&` are refused (`reviewer.shell`).
 - **Composition.** Segments join only with `|`, `||`, `&&` and `;`, and
   every segment is judged on its own.
 - **Program and assignments.** The program word is a bare listed name, never
@@ -696,35 +697,40 @@ them, and `workspace.json` cannot add to them.
   `COLUMNS` and `LINES`, with a plain value that holds no `/`; `PATH=`,
   `LD_PRELOAD=`, `DYLD_*=` and `BASH_ENV=` are refused.
 - **Options.** Options are whole words spelled as listed: no clusters beyond
-  the listed ones (`ls -la`), no attached values (`head -n5`,
-  `--lines=5`), no abbreviations. A value option takes the next word, and
-  that value never starts with `-`. Options come before operands; `--` is
-  allowed only right after them (so BSD `cat x --` cannot open a file named
-  `--`), and a bare `-` is refused. Unlisted forms such as `grep --context`,
-  `grep -C`, `date -d`, `find -L/-E/-f/-newer/-samefile`, `jq -L` and
-  `--rawfile` are refused (`reviewer.form`), and known write, follow and
-  file-list forms keep their specific rules (`reviewer.sed`,
-  `reviewer.sort`, `reviewer.uniq`, `reviewer.symlink_follow`,
-  `reviewer.file_list`).
+  the listed ones (`ls -la`, `nl -ba`), no attached values (`head -n5`,
+  `--lines=5`) except the git ones listed as `OPTION=` (`--format=`,
+  `--pretty=`, `--sort=`, `--date=`, ...), no abbreviations. A value option
+  takes the next word, and that value never starts with `-`. Options come
+  before operands; `--` is allowed only right after them (so BSD `cat x --`
+  cannot open a file named `--`), and a bare `-` is refused.
+  `grep --context` takes only an attached value on GNU and BSD, so it is a
+  flag and the next word is the pattern; short `grep -C N` takes the next
+  word on both. `grep -f`/`--file`, `rg -f`/`--file`, `date -d` and
+  `find -L/-E/-f/-newer/-samefile` are refused (`reviewer.form`), and known
+  write, follow and file-list forms keep their specific rules
+  (`reviewer.sed`, `reviewer.sort`, `reviewer.uniq`,
+  `reviewer.symlink_follow`, `reviewer.file_list`).
 - **Programs with their own form.** `sed` runs only as
-  `sed -n 'N[,M]p' FILE...`. `jq` programs cannot use `import`, `include`,
-  `env`, `$ENV`, `$__loc__`, module metadata or string interpolation.
+  `sed -n 'N[,M]p' FILE...`. `jq` is not listed: a program can load
+  modules from a search path it sets itself (`include "x" {search:"/tmp"}`).
   `find` takes its starting paths first, then listed primaries only.
   `diff` compares two regular files (a directory diff follows leaf
   symlinks). `rg` must start with `rg --no-config`.
-- **Paths.** Every operand the grammar returns, including option values such
-  as `grep -f FILE`, `-C` directories and git revision words, is checked
+- **Paths.** Every operand the grammar returns, including path option values
+  such as `git config --file FILE` and git revision words, is checked
   with symlinks resolved: inside the pane checkout, a granted read path, the
   pane's own message files, or the selected plugin version. `$` and backtick
   stay dynamic even inside quotes (`path.dynamic`). A message file is read
   by one command on its own, never inside a pipeline or list.
-- **Git.** `git [--no-pager] [--literal-pathspecs] [-C DIR] SUBCOMMAND` with
-  the listed subcommands and options. Git reads a word it cannot resolve as a
+- **Git.** `git [--no-pager|-P] [--literal-pathspecs] SUBCOMMAND` with the
+  listed subcommands and options. `-C` is refused: git would read the
+  repository config found there, where `core.fsmonitor` or a pager runs a
+  command. Git reads a word it cannot resolve as a
   revision as a working-tree path (and `git diff A B` with an outside path
   as `--no-index`), so revision words are checked as paths too, and a
   revision part never starts with `.` or `/`, holds `//` or has a dot-led
   component. A glob-bearing pathspec, or a glob word outside `REV -- PATH`,
-  needs a global `--literal-pathspecs` (with at most `-C .`) on `diff`,
+  needs a global `--literal-pathspecs` (and no other global option) on `diff`,
   `ls-files`, `status`, `log` or `show`; pathspec magic (`:(top)`) is
   refused. `git blame` runs only as `git blame [REV] -- PATH`.
   `git diff --no-index` compares exactly two regular files. `git config`
@@ -733,16 +739,20 @@ them, and `workspace.json` cannot add to them.
   `git config --get-all remote.origin.fetch`; `git config --list` without
   it would print the global config, where credentials live. `git reflog`
   reads only as `git reflog [--oneline] [-n N]` or
-  `git reflog show [-n N] [REV]`, and `git remote` only as `git remote [-v]`
-  or `git remote get-url NAME`.
+  `git reflog show [-n N] [--date=FORMAT] [REV]`, `git remote` only as
+  `git remote [-v]`, `git remote get-url [--all|--push] NAME` or
+  `git remote show -n NAME`, and `git tag` takes patterns (also after `--`)
+  only with `-l`/`--list`.
 
 **Upgrading.** No config or store migration. Reviewer commands that 0.12.10
 allowed in a form outside the grammar are now refused with a reason that
 names the form; rewrite them in the listed spelling, for example
 `head -n 5 FILE` instead of `head -5 FILE`, `git diff 'HEAD~1' -- FILE`
 instead of `git diff HEAD~1 -- FILE`, and single quotes instead of double
-quotes. Pipelines of listed forms (`git log --oneline | head -n 5`) are now
-allowed. Executor, orchestrator and coordinator floors are unchanged.
+quotes. Reviewers lose `git -C DIR` (run git from the pane checkout),
+`grep -f FILE` (use `-e PATTERN`) and `jq` (read JSON with `cat`, `grep` or
+`sed -n`). Pipelines of listed forms (`git log --oneline | head -n 5`) are
+now allowed. Executor, orchestrator and coordinator floors are unchanged.
 Downgrading restores the 0.12.10 reviewer bypasses.
 
 ### Executor read paths
