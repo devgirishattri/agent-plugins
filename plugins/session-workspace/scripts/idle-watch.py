@@ -45,7 +45,7 @@ activity, so a host that cannot observe never stops a pane.
 Ownership is one tmux pane option, ``@session_workspace_idle_watcher``, set to
 the watcher's pid. A newer watcher for the same pane overwrites it and the
 older one exits on its next sample, so a relaunch never leaves two watchers
-and no lock is needed. The watcher also exits when its pane closes or stops
+and ownership needs no lock. The watcher also exits when its pane closes or stops
 carrying the managed markers it was started for. It never runs inside the
 pane (it is double-forked away from the caller and holds no inherited file
 descriptor), so a stop that kills the pane cannot kill the watcher mid-step.
@@ -53,7 +53,19 @@ descriptor), so a stop that kills the pane cannot kill the watcher mid-step.
 The record of what happened lives in ``<state-dir>/<pane>.json`` (written by
 atomic rename): pane id, port, kind, window, last activity, client count, and
 the selected signals, and once the pane is stopped, when and why.
-``workspace-status`` reads it.
+``workspace-status`` reads it. The watcher and ``workspace stop --pane``
+(``record-stop`` below, called from lib.sh) each read, change and write it
+under one exclusive flock on ``<pane>.json.lock``. A sample writes only while
+the record is still this watcher's own (same pane id and watcher pid, not
+stopped); otherwise the watcher exits and leaves it, so a stop recorded while
+a sample ran is kept. Without the lock a sample taken while a manual stop
+waited for the pane to exit overwrote the stop, and status showed no last
+stop. A stop that is interrupted after it recorded itself (before the pane
+is killed) leaves the pane running without a watcher; status then shows the
+watcher as not running.
+
+  idle-watch.py record-stop --record PATH --pane NAME --pane-id ID --reason TEXT
+      merge "stopped, when, why" into the record under its lock.
 
 Tuning (environment, inherited from the start that armed the watcher):
   SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS      seconds between samples (30)
@@ -67,6 +79,8 @@ Tuning (environment, inherited from the start that armed the watcher):
 Runs on the stock macOS python3 (3.9): stdlib only.
 """
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -157,6 +171,65 @@ def write_record(path, record):
     os.replace(tmp, path)
 
 
+@contextlib.contextmanager
+def record_lock(path, timeout=None):
+    """Hold the exclusive flock on PATH.lock for one read-change-write of the
+    pane record. Released when the descriptor closes, so a killed holder never
+    leaves it stale. With TIMEOUT (seconds), give up with TimeoutError instead
+    of waiting on a holder that hangs."""
+    fd = os.open(path + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if timeout is None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            deadline = time.time() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.time() >= deadline:
+                        raise TimeoutError('%s.lock is held' % path)
+                    time.sleep(0.05)
+        yield
+    finally:
+        os.close(fd)
+
+
+def owns(latest, pane_id, watcher_pid):
+    """Whether the record on disk is still this watcher's to write: empty, or
+    for its pane id and watcher pid and not stopped. A stop recorded since,
+    or a newer pane or watcher that took the record over, means it is not."""
+    if not latest:
+        return True
+    return (latest.get('pane_id') == pane_id and latest.get('watcher_pid', watcher_pid) == watcher_pid
+            and latest.get('state') != 'stopped')
+
+
+def publish(path, record, pane_id, watcher_pid):
+    """Write the watcher's RECORD while the record is still its own (see
+    owns). False when it is not: the caller exits and leaves it."""
+    with record_lock(path):
+        if not owns(read_record(path), pane_id, watcher_pid):
+            return False
+        write_record(path, record)
+        return True
+
+
+def record_stop(path, pane, pane_id, reason):
+    """`workspace stop --pane`'s write: merge stopped, when and why into the
+    record. A record for an earlier pane id takes the new id and loses its
+    watcher pid, which belonged to that earlier pane."""
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    with record_lock(path, timeout=5):
+        record = read_record(path)
+        record.update(pane=pane, state='stopped', stopped_at=iso(time.time()), stop_reason=reason)
+        if record.get('pane_id', '') != pane_id:
+            record['pane_id'] = pane_id
+            record.pop('watcher_pid', None)
+        write_record(path, record)
+
+
 def idle_reason(kind, mode, signals, port, minutes):
     unit = 'minute' if minutes == 1 else 'minutes'
     if kind == 'browser' and mode == 'traffic':
@@ -204,7 +277,6 @@ def watch(args, ready_fd=None):
     ports = _ports_module()
 
     os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
-    previous = read_record(state_path)
     started = time.time()
     record = {
         'pane': args.pane,
@@ -226,19 +298,28 @@ def watch(args, ready_fd=None):
     }
     if args.kind == 'service':
         record['idle_activity'] = list(signals)
-    if previous.get('stopped_at'):
-        record['last_stop'] = {'at': previous['stopped_at'], 'reason': previous.get('stop_reason', '')}
-    elif previous.get('last_stop'):
-        record['last_stop'] = previous['last_stop']
+
+    def carry_last_stop(previous):
+        if previous.get('stopped_at'):
+            record['last_stop'] = {'at': previous['stopped_at'], 'reason': previous.get('stop_reason', '')}
+        elif previous.get('last_stop'):
+            record['last_stop'] = previous['last_stop']
 
     if tmux('set-option', '-p', '-t', args.pane_id, WATCH_OPTION, own) is None:
         record.update(state='not-armed', stop_reason='could not register the watcher on pane %s' % args.pane_id)
-        write_record(state_path, record)
+        with record_lock(state_path):
+            carry_last_stop(read_record(state_path))
+            write_record(state_path, record)
         return 1
     # The arm-time fingerprint is the baseline: only output printed after the
     # watcher armed counts as use.
     fingerprint = output_fingerprint(args.pane_id) if watch_output else None
-    write_record(state_path, record)
+    # Arming is a fresh launch, so it replaces whatever the record said (its
+    # last stop is carried over). The start that spawns this watcher
+    # holds the project lock, so no stop of this pane runs meanwhile.
+    with record_lock(state_path):
+        carry_last_stop(read_record(state_path))
+        write_record(state_path, record)
     if ready_fd is not None:
         os.write(ready_fd, own.encode('ascii'))
         os.close(ready_fd)
@@ -251,10 +332,11 @@ def watch(args, ready_fd=None):
         time.sleep(sample)
         dead = tmux('display-message', '-p', '-t', args.pane_id, '#{pane_dead}')
         if dead is None or dead == '1':
-            latest = read_record(state_path)
-            if latest.get('watcher_pid') == int(own) and latest.get('state') != 'stopped':
-                latest.update(state='exited', stop_reason='pane closed by something other than its idle watcher (for example a whole-session stop)', stopped_at=iso(time.time()))
-                write_record(state_path, latest)
+            with record_lock(state_path):
+                latest = read_record(state_path)
+                if latest.get('watcher_pid') == int(own) and latest.get('state') != 'stopped':
+                    latest.update(state='exited', stop_reason='pane closed by something other than its idle watcher (for example a whole-session stop)', stopped_at=iso(time.time()))
+                    write_record(state_path, latest)
             return 0
         if pane_option(args.pane_id, WATCH_OPTION) != own:
             return 0  # superseded by a newer watcher, which owns the record now
@@ -304,12 +386,14 @@ def watch(args, ready_fd=None):
             record.pop('observation', None)
 
         if now - last_active < window:
-            write_record(state_path, record)
+            if not publish(state_path, record, args.pane_id, int(own)):
+                return 0  # stopped by `workspace stop --pane` (or taken over) while this sample ran
             continue
 
         reason = idle_reason(args.kind, mode, signals, args.port, args.minutes)
         record.update(state='stopping', stop_reason=reason)
-        write_record(state_path, record)
+        if not publish(state_path, record, args.pane_id, int(own)):
+            return 0
         env = dict(os.environ, SESSION_WORKSPACE_STOP_REASON=reason)
         try:
             run = subprocess.run(
@@ -321,10 +405,14 @@ def watch(args, ready_fd=None):
             rc, detail = 1, str(exc)
         if rc == 0:
             return 0  # workspace-stop.sh recorded stopped_at and the reason
-        latest = read_record(state_path) or record
-        latest.update(state='watching', stop_error=(detail.splitlines() or ['workspace-stop failed'])[-1])
-        record = latest
-        write_record(state_path, record)
+        with record_lock(state_path):
+            latest = read_record(state_path)
+            if not owns(latest, args.pane_id, int(own)):
+                return 0  # another stop recorded itself, or a newer watcher took over
+            latest = latest or record
+            latest.update(state='watching', stop_error=(detail.splitlines() or ['workspace-stop failed'])[-1])
+            record = latest
+            write_record(state_path, record)
 
 
 def spawn(args):
@@ -376,6 +464,20 @@ def spawn(args):
 
 
 def main(argv):
+    if argv[:1] == ['record-stop']:
+        stop = argparse.ArgumentParser(prog='idle-watch.py record-stop',
+                                       description='record a pane stop in its run record, under the record lock')
+        stop.add_argument('--record', required=True)
+        stop.add_argument('--pane', required=True)
+        stop.add_argument('--pane-id', required=True)
+        stop.add_argument('--reason', required=True)
+        opts = stop.parse_args(argv[1:])
+        try:
+            record_stop(opts.record, opts.pane, opts.pane_id, opts.reason)
+        except (OSError, TimeoutError) as exc:
+            print('ERROR: could not record the stop of %s: %s' % (opts.pane, exc), file=sys.stderr)
+            return 1
+        return 0
     parser = argparse.ArgumentParser(description='session-workspace idle-stop watcher')
     parser.add_argument('mode', choices=['spawn', 'watch'])
     parser.add_argument('--config', required=True)
