@@ -38,4 +38,6 @@ The `policy:` line is `harness-policy.py`'s own verdict for this process: `no-op
 
 `--json` emits the same object machine-readably. `floor` holds the role floor, `guards` holds only the optional packs, and `probe` is `null` without `--probe`.
 
+To judge one command for a role without a live pane, use the policy's read-only test mode: `python3 <plugin>/scripts/harness-policy.py --decision-json --as-role reviewer|executor --as-cwd DIR < payload.json`. It decides the stdin hook payload as that role working in `DIR` (a checkout) under enforce, with no read grants, message stores or workspace identity, and prints the same decision object as `--decision-json`. It reads no `SESSION_WORKSPACE_*` variable and never changes a live decision. The hook cannot reach it: `harness-hook.sh` refuses every argument except `--codex-hook-output` (`runtime.args`). `harness-status.sh --help` prints the exact line.
+
 Never suggest editing the identity variables by hand. They are an authorization boundary. Only the engine sets them, at launch.

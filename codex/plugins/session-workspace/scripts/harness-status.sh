@@ -19,6 +19,10 @@
 # through harness-policy.py --probe-json; it runs and writes nothing, and the
 # script exits 1 when any case is not decided as expected.
 #
+# To judge one payload for a role without a live pane (read-only, never the
+# hook), use the policy's test mode: harness-policy.py --decision-json
+# --as-role reviewer|executor --as-cwd DIR < payload.json
+#
 # Usage: harness-status.sh [--config PATH] [--json] [--probe]
 set -uo pipefail
 
@@ -36,6 +40,8 @@ while [ $# -gt 0 ]; do
     --probe) PROBE_MODE=1; shift ;;
     -h|--help)
       echo "Usage: harness-status.sh [--config PATH] [--json] [--probe]"
+      echo "Judge one payload for a role (read-only test mode, never the hook):"
+      echo "  python3 $HERE/harness-policy.py --decision-json --as-role reviewer|executor --as-cwd DIR < payload.json"
       exit 0
       ;;
     *) echo "ERROR: unknown argument: $1" >&2; exit 1 ;;

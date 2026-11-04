@@ -229,9 +229,22 @@ restores the executor staging failure and the reviewer transport-edit flaw.
 ### Reviewer
 
 For reviewers, other native edits remain blocked. Shell remains default-deny
-except one literal read-only command inside its checkout or explicit per-pane
-`read_paths` (no pipes, redirection, `sed`, or ungranted sibling reads), and
-trusted coordination helpers. Use `$session-chat:reply` for verdicts.
+except exact read forms (0.12.11) inside its checkout or explicit per-pane
+`read_paths`, and trusted coordination helpers. Use `$session-chat:reply` for
+verdicts. Each word is plain (letters, digits, `_ . / : , + = @ % -`) or one
+single-quoted run with nothing attached (a printed message path may join runs
+with `'\''`). Segments join only with `|`, `||`,
+`&&` or `;`. The program is a bare listed name, options are whole listed words
+before the operands, and a value option takes the next word. No redirection,
+substitution, double quotes, backslashes, unlisted commands or ungranted
+sibling reads. `sed` runs only as `sed -n 'N[,M]p' FILE`. Quote `^`, `~`, globs
+and spaces: `git diff 'HEAD~1' -- src/x.ts`. A bracket pathspec needs
+`git --literal-pathspecs`, `git blame` runs as `git blame [REV] -- PATH`, and
+`git config` reads need `--file PATH`. There is no `git -C`, `grep -f`/`rg -f`
+or `jq`: run git from the checkout, search with `-e PATTERN` and read JSON with
+`cat` or `grep`. A pane whose role, engine pane name or
+tmux `@name` says reviewer is refused every tool call when no readable
+workspace config backs it (`identity.reviewer`).
 Schema v2–5 reviewers and executors may set `sessions[].panes[].read_paths` to up to 16
 existing files/directories, relative to the project root or canonical absolute
 paths for external repositories. Files grant exact-file access, directories
@@ -257,7 +270,8 @@ Hooks are not an atomic filesystem sandbox against racing same-uid swaps.
 
 Executors and reviewers may read a complete
 delivered message addressed to or sent by their validated pane, or an existing
-own draft, using the existing single literal non-Git read grammar. Use the
+own draft, using one non-Git read command on its own (never in a pipeline or
+list). Use the
 quoted `cat '<absolute-path>'` command printed before the incoming body;
 inline truncation is not a task-size limit. Delivered files must sit directly
 in the plan's messages grant, be private owned regular single-link files,

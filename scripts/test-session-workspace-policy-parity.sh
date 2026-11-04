@@ -166,6 +166,18 @@ compare_case "reviewer Git remote mutation" reviewer "$REVIEW_PANE" "$CHILD" "$C
 compare_case "reviewer environment wrapper" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash "GIT_PAGER='touch reviewer-file' git log -1")"
 compare_case "reviewer sed mutation" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'sed -i s/a/b/ file')"
 compare_case "reviewer redirection" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash 'git status > out')"
+# 0.12.11 reviewer exact read forms: bypass classes and controls.
+for exact_deny in 'cat ^README.md' 'cat README~b' 'cat README.md --' 'ls -- -' 'PATH=/tmp cat README.md' \
+    "'LANG=./cat' cat README.md" '/tmp/cat README.md' 'sed -n r/etc/passwd README.md' 'sed -n wout README.md' \
+    'git config --list' 'git grep -f -q -- README.md' 'find -E . -name x' 'find . -samefile README.md' \
+    "jq 'include \"x\" {search:\"/tmp\"}; .' README.md" 'python3 -m json.tool README.md' 'head -n5 README.md' \
+    'git diff HEAD~1' 'git blame README.md' 'git ls-files -X/etc/passwd' 'git reflog expire'; do
+  compare_case "reviewer exact form refuses: $exact_deny" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash "$exact_deny")" deny
+done
+for exact_allow in "cat 'README~b'" 'LANG=C cat README.md' 'git log --oneline -n 3 | head -n 1' 'cat -- README.md' \
+    "sed -n '1,2p' README.md" 'git config --get core.hooksPath' "git diff 'HEAD~1' -- README.md" 'git blame HEAD -- README.md'; do
+  compare_case "reviewer exact form allows: $exact_allow" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(payload_bash "$exact_allow")"
+done
 compare_case "orchestrator root edit" master "$MASTER_PANE" "$PROJECT" "$CONFIG" enforce "$(payload_edit 'AGENTS.md')"
 compare_case "orchestrator child edit" master "$MASTER_PANE" "$PROJECT" "$CONFIG" enforce "$(payload_edit 'component-a/src/file.ts')"
 compare_case "orchestrator child read" master "$MASTER_PANE" "$PROJECT" "$CONFIG" enforce "$(payload_bash 'cat component-a/README.md')"
@@ -255,6 +267,33 @@ if [ "$(printf '%s' "$CODEX_INACTIVE" | normalize_decision 2>/dev/null)" = "$(pr
 else
   fail "no-env inactive no-op" "codex=$CODEX_INACTIVE claude=$CLAUDE_INACTIVE"
 fi
+
+echo "== 0.12.11 claimed reviewers and the read-only test mode =="
+claim_decision() {
+  printf '%s' "$(payload_bash 'rm -rf /')" | env -u TMUX -u TMUX_PANE -u SESSION_WORKSPACE_CONFIG -u SESSION_WORKSPACE_HARNESS_MODE \
+    SESSION_WORKSPACE_ROLE=reviewer python3 "$1" --decision-json 2>&1
+}
+CODEX_CLAIM="$(claim_decision "$CODEX_POLICY")"
+CLAUDE_CLAIM="$(claim_decision "$CLAUDE_POLICY")"
+if [ "$CODEX_CLAIM" = "$CLAUDE_CLAIM" ] && printf '%s' "$CODEX_CLAIM" | jq -e '.decision == "deny" and .rule == "identity.reviewer"' >/dev/null 2>&1; then
+  pass "claimed reviewer without a config is refused identically"
+else
+  fail "claimed reviewer without a config is refused identically" "codex=$CODEX_CLAIM claude=$CLAUDE_CLAIM"
+fi
+test_mode_decision() {
+  printf '%s' "$3" | env -u SESSION_WORKSPACE_CONFIG python3 "$1" --decision-json --as-role "$2" --as-cwd "$CHILD" 2>&1
+}
+for test_role in reviewer executor; do
+  for test_command in 'cat README.md' 'cat ^README.md' 'cat /etc/hosts' 'touch notes.md' 'git log --oneline -n 1 | head -n 1'; do
+    CODEX_TEST="$(test_mode_decision "$CODEX_POLICY" "$test_role" "$(payload_bash "$test_command")")"
+    CLAUDE_TEST="$(test_mode_decision "$CLAUDE_POLICY" "$test_role" "$(payload_bash "$test_command")")"
+    if [ "$CODEX_TEST" = "$CLAUDE_TEST" ] && printf '%s' "$CODEX_TEST" | jq -e --arg role "$test_role" '.role == $role and .pane == "as-role"' >/dev/null 2>&1; then
+      pass "test mode $test_role decides identically: $test_command"
+    else
+      fail "test mode $test_role decides identically: $test_command" "codex=$CODEX_TEST claude=$CLAUDE_TEST"
+    fi
+  done
+done
 
 printf '\n-----------------------------------------------\n'
 printf 'session-workspace policy parity: %d passed, %d failed\n' "$PASS" "$FAIL"
