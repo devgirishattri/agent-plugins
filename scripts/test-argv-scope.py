@@ -68,6 +68,12 @@ class Cases:
             for cmd in ("grep", "rg --no-config"):
                 for option in ("-f{}", "-nf{}", "-f {}", "--file={}", "--file {}"):
                     with self.subTest(role=role, cmd=cmd, option=option):
+                        if role == "reviewer" and " " not in option:
+                            # 0.12.11 exact forms: a value is the next word,
+                            # never attached or inside a cluster.
+                            self.check(role, f"{cmd} {option.format(self.file)} f.txt", "deny", "reviewer.form")
+                            self.check(role, f"{cmd} {option.format(self.outside)} f.txt", "deny", "reviewer.form")
+                            continue
                         self.check(role, f"{cmd} {option.format(self.file)} f.txt", "allow")
                         self.check(role, f"{cmd} {option.format(self.outside)} f.txt", "deny", rule)
 
@@ -75,15 +81,22 @@ class Cases:
         for role in ("reviewer", "executor"):
             for cmd in ("grep", "rg --no-config"):
                 with self.subTest(role=role, cmd=cmd):
+                    if role == "reviewer":
+                        self.check(role, f"{cmd} -f f.txt f.txt", "allow")
+                        self.check(role, f"{cmd} -f escape f.txt", "deny", "reviewer.path")
+                        self.check(role, f"{cmd} -ff.txt f.txt", "deny", "reviewer.form")
+                        continue
                     self.check(role, f"{cmd} -ff.txt f.txt", "allow")
                     self.check(role, f"{cmd} -fescape f.txt", "deny")
 
     def test_reported_reviewer_payloads(self):
         # Evaluate only: these strings never execute or read /etc/hosts.
-        for command in ("grep -f/etc/hosts pat", "rg --no-config -f/etc/hosts pat"):
+        for command in ("grep -f /etc/hosts pat", "rg --no-config -f /etc/hosts pat"):
             with self.subTest(command=command):
                 self.check("reviewer", command.replace("/etc/hosts", "f.txt"), "allow")
                 self.check("reviewer", command, "deny", "reviewer.path")
+                # The reported attached form is outside the exact forms.
+                self.check("reviewer", command.replace("-f ", "-f"), "deny", "reviewer.form")
 
     def test_sort_outputs(self):
         for option in ("-o{}", "-uo{}", "-o {}", "--output={}", "--out={}", "-T{}", "-uT{}", "--temporary-directory={}"):
@@ -109,22 +122,40 @@ class Cases:
                 (self.cwd / "--file=escape").unlink()
 
     def test_data_controls(self):
-        for role in ("reviewer", "executor"):
-            for command in ("grep -e/api/ f.txt", "grep -nepattern f.txt", "grep -A3 needle f.txt",
-                            "grep -n5 needle f.txt", "rg --no-config -g'*.md' needle .",
-                            "rg --no-config -e/api/ f.txt", "sort -k2 f.txt", "sort -t/ f.txt"):
-                with self.subTest(role=role, command=command):
-                    self.check(role, command, "allow")
+        attached = ("grep -e/api/ f.txt", "grep -nepattern f.txt", "grep -A3 needle f.txt",
+                    "grep -n5 needle f.txt", "rg --no-config -g'*.md' needle .",
+                    "rg --no-config -e/api/ f.txt", "sort -k2 f.txt", "sort -t/ f.txt")
+        for command in attached:
+            with self.subTest(role="executor", command=command):
+                self.check("executor", command, "allow")
+            with self.subTest(role="reviewer", command=command):
+                # 0.12.11 exact forms: values are the next word, and a quote
+                # attached to text is outside the strict word form.
+                self.check("reviewer", command, "deny", "reviewer.shell" if "'" in command else "reviewer.form")
+        for command in ("grep -e /api/ f.txt", "grep -n -e pattern f.txt", "grep -A 3 needle f.txt",
+                        "grep -n -B 5 needle f.txt", "rg --no-config -g '*.md' needle .",
+                        "rg --no-config -e /api/ f.txt", "sort -k 2 f.txt", "sort -t / f.txt"):
+            with self.subTest(role="reviewer", command=command):
+                self.check("reviewer", command, "allow")
 
     def test_option_values_do_not_become_flags(self):
         flagged = self.cwd / "zLR-patterns"; flagged.write_text("needle\n")
         for cmd in ("grep", "rg --no-config"):
+            with self.subTest(cmd=cmd, option="-f"):
+                self.check("reviewer", f"{cmd} -f zLR-patterns f.txt", "allow")
             for option in ("-f", "-nf"):
                 with self.subTest(cmd=cmd, option=option):
-                    self.check("reviewer", f"{cmd} {option}zLR-patterns f.txt", "allow")
-            for pattern in ("zLR", "--pre", "--hostname-bin"):
+                    # Refused as an attached value; the diagnostic may name
+                    # the follow letter the legacy scan sees in the cluster.
+                    self.check("reviewer", f"{cmd} {option}zLR-patterns f.txt", "deny")
+            for pattern in ("zLR", "pre", "hostname-bin"):
                 with self.subTest(cmd=cmd, pattern=pattern):
-                    self.check("reviewer", f"{cmd} -e{pattern} f.txt", "allow")
+                    self.check("reviewer", f"{cmd} -e {pattern} f.txt", "allow")
+            for pattern in ("--pre", "--hostname-bin"):
+                with self.subTest(cmd=cmd, pattern=pattern):
+                    # A value never starts with -, attached or not.
+                    self.check("reviewer", f"{cmd} -e {pattern} f.txt", "deny")
+                    self.check("reviewer", f"{cmd} -e{pattern} f.txt", "deny")
         for option, rule in (("-z", "reviewer.search"), ("-L", "reviewer.symlink_follow"),
                              ("--pre=cat", "reviewer.search"), ("--hostname-bin=cat", "reviewer.search")):
             with self.subTest(option=option):
@@ -168,13 +199,14 @@ class Cases:
         self.check("executor", "cd -- -dir/../.. && cat patterns", "deny", "executor.containment")
 
     def test_missing_option_values(self):
+        # The reviewer's exact forms (0.12.11) diagnose a missing value
+        # themselves; the executor keeps the message operand guard's rule.
+        reviewer_rules = {"grep -f": "reviewer.form", "rg --no-config --file": "reviewer.form", "sort -uo": "reviewer.sort"}
         for role in ("reviewer", "executor"):
             for command in ("grep -f", "rg --no-config --file", "sort -uo"):
                 with self.subTest(role=role, command=command):
                     self.check(role, "cat f.txt", "allow")
-                    # The message operand guard diagnoses missing values before
-                    # command-specific reviewer restrictions (including sort).
-                    self.check(role, command, "deny", "path.option")
+                    self.check(role, command, "deny", reviewer_rules[command] if role == "reviewer" else "path.option")
 
     def test_redirect_targets_are_not_option_data(self):
         self.check("executor", ">sub/out", "allow")

@@ -1,5 +1,76 @@
 # Changelog
 
+## session-workspace 0.12.11 — 2026-11-04
+
+- **Reviewer panes run only exact read forms.** strict-v1 is the only
+  read-only guard for a Claude reviewer, and per-tool option parsing kept
+  producing new bypasses. Every reviewer shell command now passes one
+  exact-form grammar, built into the immutable floor (`EXACT_FORMS`,
+  `EXACT_GIT`); `workspace.json` still cannot add commands or exceptions.
+  - Words are plain (letters, digits, `_ . / : , + = @ % -`) or one
+    single-quoted run with nothing attached. Segments join only with `|`,
+    `||`, `&&` and `;`. No redirection, grouping, substitution, comments,
+    control characters, double quotes or backslashes (`reviewer.shell`).
+  - The program is a bare listed name. Assignments only to `LC_*`, `LANG`,
+    `LANGUAGE`, `TZ`, `NO_COLOR`, `FORCE_COLOR`, `TERM`, `COLUMNS` and
+    `LINES`. Options are whole listed words before the operands; a value
+    option takes the next word, which never starts with `-`; `--` only right
+    after the options; a bare `-` is refused. An unlisted form is refused
+    (`reviewer.form`), and known write, follow and file-list forms keep their
+    old rules.
+  - Every operand, option value (`grep -f FILE`), `-C` directory and git
+    revision word is checked with symlinks resolved. `diff` and
+    `git diff --no-index` compare regular files only. Git revision parts
+    never start with `.` or `/`, hold `//` or have a dot-led component.
+    `git blame` runs only as `git blame [REV] -- PATH`, and `git config`
+    reads need `--file PATH`, except exactly `--get core.hooksPath` and
+    `--get-all remote.origin.fetch`.
+  - Closed bypasses: `sed -n r/etc/passwd x`, `sed -n wout x`,
+    `sed -n -e '{ r /etc/passwd' -e '}' x`, `ls -L`, `ls -RL`,
+    `sort -o out x`, `sort -m /etc/passwd x`, `uniq in out`,
+    `git diff --output x`, `git diff /etc/passwd /dev/null`,
+    `git diff a/../../etc/passwd x`, `git blame` through an outward symlink,
+    `git ls-files -X/etc/passwd`, `git grep -f -q -- x`, `git config --list`
+    and `--get-regexp` without `--file`, `git reflog expire`,
+    `jq 'include "x" {search:"/tmp"}; .' x`, `python3 -m json.tool x`,
+    `/tmp/cat x`, `PATH=/tmp cat x`, `LD_PRELOAD=`, `DYLD_*=` and `BASH_ENV=`
+    prefixes, `'LANG=./cat' cat x`, zsh `cat ^x` and `a~b`, BSD `cat x --`,
+    `ls -- -` (a symlink named `-`), `diff dirA dirB` with outward leaf
+    symlinks, `find -L`, `-E`, `-f`, `-Bnewer` and `-samefile`, and
+    `grep --context name /etc/passwd`. Of these, 0.12.10 allowed `cat ^x`,
+    `a~b`, `cat x --`, `ls -- -`, BSD `find -E`, `-f`, `-Bnewer` and
+    `-samefile`, `git grep -f -q -- x` and the `jq include` search path.
+  - Now allowed: pipelines and lists of listed forms, and
+    `sed -n 'N[,M]p' FILE`. A message file is still read by one command on
+    its own (`coordination.message_read`).
+  - Now refused: forms outside the listed spelling, for example `head -5`,
+    `head -n5`, `sort -k2`, `uniq -cf1`, `date -d`, `git log --format=...`,
+    `git reflog --date=...`, unquoted `HEAD~1`, double-quoted paths and
+    backslash escapes. Rewrite them as `head -n 5`, `sort -k 2`,
+    `git diff 'HEAD~1' -- FILE` and single quotes.
+- **Claimed reviewers fail closed.** Without `SESSION_WORKSPACE_CONFIG` the
+  hook stays a no-op, except when `SESSION_WORKSPACE_ROLE`,
+  `SESSION_WORKSPACE_PANE_NAME` or the tmux pane `@name` holds `reviewer` as
+  a word: then every gated call is refused (`identity.reviewer`) until a
+  readable config of a known schema backs the pane. The wrapper checks the
+  claim without Python.
+- **Read-only test mode.** `harness-policy.py --decision-json --as-role
+  reviewer|executor --as-cwd DIR` judges one stdin payload as that role in
+  `DIR`, under enforce, with no grants or workspace identity, and prints the
+  normal decision object. It reads no `SESSION_WORKSPACE_*` variable and
+  never changes a live decision. `--help` and `harness-status.sh --help`
+  document it. The hook wrapper now refuses any argument except
+  `--codex-hook-output` (`runtime.args`), so the hook cannot reach it.
+- New diag/1 codes: `hook.identity.reviewer`, `hook.reviewer.form` and
+  `hook.runtime.args`. Executor, orchestrator and coordinator floors and
+  their probe cases are unchanged, and both provider trees decide
+  identically.
+- Tests: every bypass class above with a working control, symlink cases on
+  temporary fixtures, claimed-reviewer and test-mode cases. Set
+  `HARNESS_TEST_BASELINE_POLICY_01210` to a 0.12.10 `harness-policy.py` to
+  check which cases 0.12.10 allowed.
+- No config migration. Update the plugin and restart reviewer panes.
+
 ## session-workspace 0.12.10 — 2026-11-04
 
 - **A manual stop's record is no longer lost to the idle watcher.** The

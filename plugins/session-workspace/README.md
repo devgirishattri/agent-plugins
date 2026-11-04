@@ -428,18 +428,19 @@ role floor is off. The floor:
   messages store or provider inbox follow "Message store access" below.
 - **Reviewer** — native edit/write/patch/notebook tools are limited to draft
   staging above. Shell is
-  default-deny, with two carve-outs: (a) one literal read-only command
-  (`cat head tail wc ls stat file diff grep rg find jq sort ...` and
-  read-only `git` subcommands without write/output/external-exec options)
-  whose path operands — including bare `.`/`..`, `-C` values, and quoted
-  paths containing spaces — resolve inside its own checkout, the
-  coordination stores the plan grants it (a messages store or either
-  provider's inbox only as scoped by "Message store access" below),
-  or the *selected version* directory of an installed plugin (a bare
-  operand naming a planted symlink is canonicalized) — no pipes,
-  redirection, expansion, unquoted globs, `cd`, wrappers or assignment
-  prefixes, path-written executables, `sed`/`awk`/`perl`, `tail -f`,
-  `find -exec`, or reads of sibling checkouts via `../`; (b) trusted
+  default-deny, with two carve-outs: (a) exact read forms (0.12.11, see
+  "Reviewer exact read forms" below): listed read programs (`cat head tail
+  wc ls stat file diff grep rg find jq sort ...`, `sed -n 'N[,M]p'` and
+  listed read-only `git` forms) joined only by `|`, `||`, `&&` or `;`,
+  whose path operands — including bare `.`/`..`, `-C` values, option values
+  such as `grep -f FILE`, and git revision words — resolve through symlinks
+  inside its own checkout, the coordination stores the plan grants it (a
+  messages store or either provider's inbox only as scoped by "Message
+  store access" below), or the *selected version* directory of an installed
+  plugin — no redirection, substitution, double quotes, backslashes,
+  unquoted `^`/`~`/globs, `cd`, wrappers or unlisted assignment prefixes,
+  path-written executables, `awk`/`perl`, `tail -f`, `find -exec`, or reads
+  of sibling checkouts via `../`; (b) trusted
   coordination helpers (below): session-chat send/dispatch/reply to the
   orchestrator only, scheduler `task-done`/`task-block` (never `--force`,
   never `task-new`/`task-assign`), context save/share/load/list/search/diff,
@@ -592,7 +593,8 @@ whole store.
   (`cat`, `head`, `tail`, `wc`, `rg --no-config`, ...): no pipes,
   redirection, expansion, globs, `sed`/`awk`/`perl`, or symlink-follow
   options. A piped or copied read of an own message falls back to the
-  executor floor and is refused there. NUL-separated file-list options
+  executor floor and is refused there; a reviewer's is refused by its exact
+  read forms (`coordination.message_read`, 0.12.11). NUL-separated file-list options
   (`sort`/`du`/`wc --files0-from` and every abbreviation, `find
   -files0-from`) are refused in the restricted read grammar for every
   reviewer and executor read (`reviewer.file_list`; `coordination.message_read`
@@ -666,6 +668,80 @@ A reviewer keeps its child checkout as `cwd`, and can be granted extra
   (a prompt, or a refusal under `permission_mode: dontAsk`). The hook check
   is not atomic against a same-uid process swapping the filesystem between
   the check and the read.
+
+### Reviewer exact read forms (0.12.11)
+
+Every reviewer shell command passes one exact-form grammar before any shell
+sees it. Per-tool option parsing kept producing new bypasses (option values
+read as files, BSD and GNU disagreeing on `--`, zsh globbing), so the floor
+now admits only forms it lists and refuses everything else. The tables are
+`EXACT_FORMS` and `EXACT_GIT` in `harness-policy.py`; `--floor-json` counts
+them, and `workspace.json` cannot add to them.
+
+- **Words.** Each word is plain (letters, digits and `_ . / : , + = @ % -`)
+  or exactly one single-quoted run with nothing attached. `^`, `~`, `*`,
+  `?`, brackets, braces, spaces and `$` appear only inside single quotes
+  (zsh `EXTENDED_GLOB` reads `^x` and `a~b` as globs; a leading `=` is zsh
+  `EQUALS` expansion and is refused). Double quotes, backslashes, control
+  characters, comments, redirection, grouping, substitution and `&` are
+  refused (`reviewer.shell`).
+- **Composition.** Segments join only with `|`, `||`, `&&` and `;`, and
+  every segment is judged on its own.
+- **Program and assignments.** The program word is a bare listed name, never
+  quoted and never a path (`/tmp/cat`, `./cat`), and wrappers (`env`,
+  `command`, `time`, ...) stay refused. Assignments are allowed only to
+  `LC_*`, `LANG`, `LANGUAGE`, `TZ`, `NO_COLOR`, `FORCE_COLOR`, `TERM`,
+  `COLUMNS` and `LINES`, with a plain value that holds no `/`; `PATH=`,
+  `LD_PRELOAD=`, `DYLD_*=` and `BASH_ENV=` are refused.
+- **Options.** Options are whole words spelled as listed: no clusters beyond
+  the listed ones (`ls -la`), no attached values (`head -n5`,
+  `--lines=5`), no abbreviations. A value option takes the next word, and
+  that value never starts with `-`. Options come before operands; `--` is
+  allowed only right after them (so BSD `cat x --` cannot open a file named
+  `--`), and a bare `-` is refused. Unlisted forms such as `grep --context`,
+  `grep -C`, `date -d`, `find -L/-E/-f/-newer/-samefile`, `jq -L` and
+  `--rawfile` are refused (`reviewer.form`), and known write, follow and
+  file-list forms keep their specific rules (`reviewer.sed`,
+  `reviewer.sort`, `reviewer.uniq`, `reviewer.symlink_follow`,
+  `reviewer.file_list`).
+- **Programs with their own form.** `sed` runs only as
+  `sed -n 'N[,M]p' FILE...`. `jq` programs cannot use `import`, `include`,
+  `env`, `$ENV`, `$__loc__`, module metadata or string interpolation.
+  `find` takes its starting paths first, then listed primaries only.
+  `diff` compares two regular files (a directory diff follows leaf
+  symlinks). `rg` must start with `rg --no-config`.
+- **Paths.** Every operand the grammar returns, including option values such
+  as `grep -f FILE`, `-C` directories and git revision words, is checked
+  with symlinks resolved: inside the pane checkout, a granted read path, the
+  pane's own message files, or the selected plugin version. `$` and backtick
+  stay dynamic even inside quotes (`path.dynamic`). A message file is read
+  by one command on its own, never inside a pipeline or list.
+- **Git.** `git [--no-pager] [--literal-pathspecs] [-C DIR] SUBCOMMAND` with
+  the listed subcommands and options. Git reads a word it cannot resolve as a
+  revision as a working-tree path (and `git diff A B` with an outside path
+  as `--no-index`), so revision words are checked as paths too, and a
+  revision part never starts with `.` or `/`, holds `//` or has a dot-led
+  component. A glob-bearing pathspec, or a glob word outside `REV -- PATH`,
+  needs a global `--literal-pathspecs` (with at most `-C .`) on `diff`,
+  `ls-files`, `status`, `log` or `show`; pathspec magic (`:(top)`) is
+  refused. `git blame` runs only as `git blame [REV] -- PATH`.
+  `git diff --no-index` compares exactly two regular files. `git config`
+  reads need `--file PATH` (or `-f PATH`) naming a checked regular file,
+  except exactly `git config --get core.hooksPath` and
+  `git config --get-all remote.origin.fetch`; `git config --list` without
+  it would print the global config, where credentials live. `git reflog`
+  reads only as `git reflog [--oneline] [-n N]` or
+  `git reflog show [-n N] [REV]`, and `git remote` only as `git remote [-v]`
+  or `git remote get-url NAME`.
+
+**Upgrading.** No config or store migration. Reviewer commands that 0.12.10
+allowed in a form outside the grammar are now refused with a reason that
+names the form; rewrite them in the listed spelling, for example
+`head -n 5 FILE` instead of `head -5 FILE`, `git diff 'HEAD~1' -- FILE`
+instead of `git diff HEAD~1 -- FILE`, and single quotes instead of double
+quotes. Pipelines of listed forms (`git log --oneline | head -n 5`) are now
+allowed. Executor, orchestrator and coordinator floors are unchanged.
+Downgrading restores the 0.12.10 reviewer bypasses.
 
 ### Executor read paths
 
@@ -816,6 +892,18 @@ touching Python whenever the harness is inactive; when it is active and
   [rule]: reason` line to stderr and exits 2, which blocks the tool call —
   on both providers.
 
+**Claimed reviewers fail closed (0.12.11).** Without
+`SESSION_WORKSPACE_CONFIG` the hook stays a no-op for ordinary sessions, but
+a pane whose `SESSION_WORKSPACE_ROLE`, `SESSION_WORKSPACE_PANE_NAME` or tmux
+`@name` holds `reviewer` as a word (`reviewer`, `code-reviewer`,
+`example-app-api-reviewer`; not `previewer`) is refused every gated tool call
+(`identity.reviewer`) when no readable config of a known schema backs it. A
+readable config with the harness off stays a no-op. The wrapper checks the
+claim without Python, so a claimed reviewer without `python3` is refused
+(`runtime.python`) instead of skipped. The wrapper also accepts no argument
+except `--codex-hook-output`; any other argument is refused
+(`runtime.args`), so the hook can never reach a policy test mode.
+
 `harness-policy.py --decision-json` (test/parity mode) prints exactly one
 compact, key-sorted JSON object —
 `{"active","decision","mode","pane","profile","reason","role","rule","tool"}`
@@ -823,6 +911,16 @@ with `decision` ∈ `allow | deny | audit` — so both provider trees can
 byte-compare decisions. Both Claude-shaped (`tool_name`/`tool_input`, string
 `command`) and Codex-shaped (`shell`/`apply_patch`, argv-list or `bash -lc`
 commands, `workdir`, JSON-string `tool_input`) payloads are understood.
+
+`harness-policy.py --decision-json --as-role reviewer|executor --as-cwd DIR`
+(read-only test mode, 0.12.11) judges one stdin payload as that role working
+in `DIR`, under `enforce`, with no read grants, message stores or workspace
+identity, and prints the same decision object. It reads no
+`SESSION_WORKSPACE_*` variable, runs and writes nothing, and never changes a
+live decision; use it to check a list of reviewer commands against a real
+checkout before relying on them. `--help` documents it, and
+`harness-status.sh --help` prints the exact line. An incomplete or repeated
+option is a usage error (exit 2, no decision).
 
 For guarded schema-v3–v5 launches, the same manifest also registers generic
 `SessionStart`/`UserPromptSubmit` reminders and the non-blocking Stop health
