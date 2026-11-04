@@ -10,18 +10,25 @@
   - Words are plain (letters, digits, `_ . / : , + = @ % -`) or one
     single-quoted run with nothing attached (runs may join only by the POSIX
     `'it'\''s'` idiom, which session-chat prints for a path holding an
-    apostrophe). Segments join only with `|`,
-    `||`, `&&` and `;`. No redirection, grouping, substitution, comments,
-    control characters, double quotes or backslashes (`reviewer.shell`).
+    apostrophe), never empty or made only of `; & | ( ) < >`. Segments join
+    only with `|`, `||`, `&&` and `;`. No redirection, grouping,
+    substitution, comments, control characters, double quotes, backslashes
+    or `==` (`reviewer.shell`).
   - The program is a bare listed name. Assignments only to `LC_*`, `LANG`,
     `LANGUAGE`, `TZ`, `NO_COLOR`, `FORCE_COLOR`, `TERM`, `COLUMNS` and
     `LINES`. Options are whole listed words before the operands; a value
     option takes the next word, which never starts with `-`; `--` only right
-    after the options; a bare `-` is refused. An unlisted form is refused
+    after the options; a bare `-` is refused. Git's listed `OPTION=` forms
+    (`--format=`, `--pretty=`, `--max-count=`, `--since=`, `--until=`,
+    `--author=`, `--grep=`, `tag --sort=`, `reflog --date=`) are the only
+    attached values. An unlisted form is refused
     (`reviewer.form`), and known write, follow and file-list forms keep their
     old rules.
-  - Every operand, option value (`grep -f FILE`), `-C` directory and git
-    revision word is checked with symlinks resolved. `diff` and
+  - Every operand, path option value (`git config --file FILE`) and git
+    revision word is checked with symlinks resolved. `git -C` is refused:
+    git would read the repository config found there, where
+    `core.fsmonitor` or a pager runs a command. `grep -f`/`--file`,
+    `rg -f`/`--file` and `jq` are not listed. `diff` and
     `git diff --no-index` compare regular files only. Git revision parts
     never start with `.` or `/`, hold `//` or have a dot-led component.
     `git blame` runs only as `git blame [REV] -- PATH`, and `git config`
@@ -42,14 +49,20 @@
     `grep --context name /etc/passwd`. Of these, 0.12.10 allowed `cat ^x`,
     `a~b`, `cat x --`, `ls -- -`, BSD `find -E`, `-f`, `-Bnewer` and
     `-samefile`, `git grep -f -q -- x` and the `jq include` search path.
-  - Now allowed: pipelines and lists of listed forms, and
-    `sed -n 'N[,M]p' FILE`. A message file is still read by one command on
-    its own (`coordination.message_read`).
+  - Now allowed: pipelines and lists of listed forms,
+    `sed -n 'N[,M]p' FILE`, `grep -C N`, `grep --context` (a flag; the next
+    word is the pattern), `grep --include/--exclude/--exclude-dir GLOB`,
+    `nl -ba`, `sha256sum`, `git -P`, `git status --porcelain=v1
+    --untracked-files=all --no-renames`, `git tag --list --sort=KEY
+    --format FORMAT -- PATTERN`, `git remote get-url --all|--push NAME` and
+    `git remote show -n NAME`. A message file is still read by one command
+    on its own (`coordination.message_read`).
   - Now refused: forms outside the listed spelling, for example `head -5`,
-    `head -n5`, `sort -k2`, `uniq -cf1`, `date -d`, `git log --format=...`,
-    `git reflog --date=...`, unquoted `HEAD~1`, double-quoted paths and
-    backslash escapes. Rewrite them as `head -n 5`, `sort -k 2`,
-    `git diff 'HEAD~1' -- FILE` and single quotes.
+    `head -n5`, `sort -k2`, `uniq -cf1`, `date -d`, unquoted `HEAD~1`,
+    double-quoted paths and backslash escapes, plus `git -C DIR`,
+    `grep -f FILE` and `jq`. Rewrite them as `head -n 5`, `sort -k 2`,
+    `git diff 'HEAD~1' -- FILE`, `grep -e PATTERN` and single quotes, and
+    run git from the pane checkout.
 - **Claimed reviewers fail closed.** Without `SESSION_WORKSPACE_CONFIG` the
   hook stays a no-op, except when `SESSION_WORKSPACE_ROLE`,
   `SESSION_WORKSPACE_PANE_NAME` or the tmux pane `@name` holds `reviewer` as

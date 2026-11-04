@@ -448,7 +448,7 @@ as_review "reviewer codex bypass flag is denied" "$(bash_payload 'codex --danger
 as_master "orchestrator nested agent with a bypass flag is denied (no escape hatch for any role)" "$(bash_payload 'codex --dangerously-bypass-approvals-and-sandbox exec "ls"')" '.decision == "deny" and .rule == "shell.sandbox_escape"'
 as_review "reviewer ls .. is denied" "$(bash_payload 'ls ..')" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer ls . is allowed" "$(bash_payload 'ls .')" '.decision == "allow"'
-as_review "reviewer git -C .. status is denied" "$(bash_payload 'git -C .. status')" '.decision == "deny" and .rule == "reviewer.path"'
+as_review "reviewer git -C .. status is denied" "$(bash_payload 'git -C .. status')" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "reviewer cat absolute path containing spaces outside its roots is denied" "$(bash_payload "cat '$TMPROOT/some dir/file.ts'")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer cat path containing spaces inside its checkout is allowed" "$(bash_payload "cat '$CHILD/sub dir/file.ts'")" '.decision == "allow"'
 as_review "reviewer double-quoted path is outside the strict word form" "$(bash_payload "cat \"$CHILD/sub dir/file.ts\"")" '.decision == "deny" and .rule == "reviewer.shell"'
@@ -680,7 +680,8 @@ as_review "reviewer git status is allowed" "$(bash_payload 'git status --short')
 as_review "reviewer git log with limits is allowed" "$(bash_payload 'git log --oneline -n 20')" '.decision == "allow"'
 as_review "reviewer git diff against a quoted ~ ref is allowed" "$(bash_payload "git diff 'HEAD~1' -- src/file.ts")" '.decision == "allow"'
 as_review "reviewer unquoted ~ is outside the strict word form" "$(bash_payload 'git diff HEAD~1 -- src/file.ts')" '.decision == "deny" and .rule == "reviewer.shell"'
-as_review "reviewer git -C inside its cwd is allowed" "$(bash_payload "git -C $CHILD log -n 3")" '.decision == "allow"'
+as_review "reviewer git -C inside its cwd is denied (no -C in the exact forms)" "$(bash_payload "git -C $CHILD log -n 3")" '.decision == "deny" and .rule == "reviewer.git"'
+as_review "reviewer git log in its cwd is allowed (control)" "$(bash_payload "git log -n 3")" '.decision == "allow"'
 as_review "reviewer git -c config injection is denied" "$(bash_payload 'git -c core.pager=touch log')" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "reviewer git diff --output is denied" "$(bash_payload 'git diff --output=/tmp/x')" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "reviewer git branch -d is denied" "$(bash_payload 'git branch -d topic')" '.decision == "deny" and .rule == "reviewer.git"'
@@ -702,7 +703,7 @@ as_review "reviewer git config write is denied" "$(bash_payload 'git config user
 as_review "reviewer cat inside cwd is allowed" "$(bash_payload 'cat README.md')" '.decision == "allow"'
 as_review "reviewer read of the workspace root is denied (only its own checkout)" "$(bash_payload "cat $ROOT/AGENTS.md")" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer sibling checkout read via ../ is denied" "$(bash_payload 'cat ../component-b/secret.ts')" '.decision == "deny" and .rule == "reviewer.path"'
-as_review "reviewer git -C sibling checkout is denied" "$(bash_payload "git -C $ROOT/component-b log")" '.decision == "deny" and .rule == "reviewer.path"'
+as_review "reviewer git -C sibling checkout is denied" "$(bash_payload "git -C $ROOT/component-b log")" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "reviewer cat outside the workspace/trusted roots is denied" "$(bash_payload 'cat /etc/hosts')" '.decision == "deny" and .rule == "reviewer.path"'
 as_review "reviewer reading an ungranted provider-inbox file is denied" "$(bash_payload "cat $FAKE_CLAUDE/messages/task.md")" '.decision == "deny" and .rule == "coordination.message_read"'
 as_review "reviewer reading a selected plugin cache file is allowed (operand, not execution)" "$(bash_payload "cat $SEND")" '.decision == "allow"'
@@ -1492,10 +1493,12 @@ GITD='.decision == "deny" and .rule == "reviewer.git"'
 as_review "reflog: bare git reflog is allowed" "$(bash_payload 'git reflog')" '.decision == "allow"'
 as_review "reflog: show with -n and a quoted ref is allowed" "$(bash_payload "git reflog show -n 5 'HEAD@{1}'")" '.decision == "allow"'
 as_review "reflog: --oneline -n on the implicit show is allowed" "$(bash_payload 'git reflog --oneline -n 5')" '.decision == "allow"'
-as_review "reflog: attached option values are outside the exact forms" "$(bash_payload "git reflog show --date=iso -n 5 'HEAD@{1}'")" "$GITD"
+as_review "reflog: show --date=FORMAT (a listed attached value) is allowed" "$(bash_payload "git reflog show --date=iso -n 5 'HEAD@{1}'")" '.decision == "allow"'
+as_review "reflog: an unlisted attached value is outside the exact forms" "$(bash_payload "git reflog show --format=%H 'HEAD@{1}'")" "$GITD"
 as_review "reflog: list and exists are not listed forms" "$(bash_payload 'git reflog list')" "$GITD"
 as_review "reflog: exists is not a listed form" "$(bash_payload 'git reflog exists HEAD')" "$GITD"
-as_review "reflog: --date on the implicit show is outside the exact forms" "$(bash_payload 'git reflog --date=relative')" "$GITD"
+as_review "reflog: --date=FORMAT on the implicit show is allowed" "$(bash_payload 'git reflog --date=relative')" '.decision == "allow"'
+as_review "reflog: a --date value starting with - is denied" "$(bash_payload 'git reflog --date=-x')" "$GITD"
 gap_case "reflog: expire --all --expire=now is denied" reviewer "$(bash_payload 'git reflog expire --all --expire=now')" "$GITD"
 gap_case "reflog: expire with an unquoted ref is denied" reviewer "$(bash_payload 'git reflog expire --expire=now main')" "$GITD"
 gap_case "reflog: delete with a single-quoted ref is denied" reviewer "$(bash_payload "git reflog delete 'HEAD@{0}'")" "$GITD"
@@ -1676,6 +1679,10 @@ as_review "word form control: runs joined by the POSIX \\' idiom are one literal
 as_review "word form: text after a \\' joined word is denied" "$(bash_payload "cat 'xf/it'\\''s.md'x")" "$(xd reviewer.shell)"
 as_review "word form: a \\' escape outside a join is denied" "$(bash_payload "cat 'xf/it'\\'")" "$(xd reviewer.shell)"
 as_review "word form: a leading = (zsh EQUALS expansion) is denied" "$(bash_payload 'cat =ls')" "$(xd reviewer.shell)"
+as_review "word form: == inside a word is denied" "$(bash_payload 'cat README==md')" "$(xd reviewer.shell)"
+as_review "word form: an empty quoted word is denied" "$(bash_payload "cat '' README.md")" "$(xd reviewer.shell)"
+as_review "word form: a quoted word made only of operator characters is denied" "$(bash_payload "grep -n ';' README.md")" "$(xd reviewer.shell)"
+as_review "word form control: a quoted word holding an operator character among others is allowed" "$(bash_payload "grep -n 'a;b' README.md")" "$XA"
 as_review "word form: a # comment is denied" "$(bash_payload 'cat README.md # x')" "$(xd reviewer.shell)"
 as_review "word form: a tab is denied" "$(bash_payload "cat${TAB}README.md")" "$(xd reviewer.shell)"
 as_review "word form: a newline is denied" "$(bash_payload "cat README.md${NL}ls")" "$(xd reviewer.shell)"
@@ -1721,9 +1728,18 @@ as_review "options: a value that starts with - is denied" "$(bash_payload 'grep 
 as_review "options: a non-numeric count is denied" "$(bash_payload 'head -n x README.md')" "$(xd reviewer.form)"
 as_review "options control: head -n N is allowed" "$(bash_payload 'head -n 5 README.md')" "$XA"
 as_review "options control: a listed cluster (ls -la) is allowed" "$(bash_payload 'ls -la xf')" "$XA"
-gap_case "options: grep --context NAME FILE (optional attached value) is denied" reviewer "$(bash_payload 'grep --context name README.md')" "$(xd reviewer.form)"
-as_review "options: grep --context name /etc/passwd is denied" "$(bash_payload 'grep --context name /etc/passwd')" '.decision == "deny"'
-as_review "options: grep -C N (BSD reads N as the pattern) is denied" "$(bash_payload 'grep -C 2 hello README.md')" "$(xd reviewer.form)"
+# --context[=N] takes only an attached value (GNU and BSD), so it is a flag
+# and the next word is the pattern; short -C takes the next word on both.
+as_review "options: grep --context name /etc/passwd (the file is checked) is denied" "$(bash_payload 'grep --context name /etc/passwd')" "$(xd reviewer.path)"
+as_review "options control: grep --context PATTERN FILE is allowed" "$(bash_payload 'grep --context name README.md')" "$XA"
+as_review "options: grep --context=N (attached value) is denied" "$(bash_payload 'grep --context=2 name README.md')" "$(xd reviewer.form)"
+as_review "options control: grep -C N PATTERN FILE is allowed" "$(bash_payload 'grep -C 2 hello README.md')" "$XA"
+as_review "options: grep -CN (attached value) is denied" "$(bash_payload 'grep -C2 hello README.md')" "$(xd reviewer.form)"
+as_review "options: grep -f FILE (patterns from a file) is denied" "$(bash_payload 'grep -f README.md README.md')" "$(xd reviewer.form)"
+as_review "options: grep --file FILE is denied" "$(bash_payload 'grep --file README.md README.md')" "$(xd reviewer.form)"
+as_review "options: rg -f FILE is denied" "$(bash_payload 'rg --no-config -f README.md README.md')" "$(xd reviewer.form)"
+as_review "options control: grep --include GLOB -r PATTERN DIR is allowed" "$(bash_payload "grep --include '*.md' -r hello xf")" "$XA"
+as_review "options control: nl -ba and sha256sum are allowed" "$(bash_payload 'nl -ba README.md && sha256sum README.md')" "$XA"
 as_review "options control: grep -A N and -B N are allowed" "$(bash_payload 'grep -A 2 -B 1 hello README.md')" "$XA"
 as_review "options control: grep -e PATTERN FILE is allowed" "$(bash_payload 'grep -n -e hello README.md')" "$XA"
 # Follow, output and write forms keep their specific rules.
@@ -1744,16 +1760,9 @@ as_review "sed: sed -n 'N,Mp' with no file is denied" "$(bash_payload "sed -n '1
 as_review "sed control: sed -n 'N,Mp' FILE is allowed" "$(bash_payload "sed -n '1,20p' README.md")" "$XA"
 as_review "sed control: sed -n '\$p' FILE is allowed" "$(bash_payload "sed -n '\$p' README.md")" "$XA"
 as_review "sed: sed -n 'N,Mp' on an outward file is denied" "$(bash_payload "sed -n '1p' /etc/hosts")" "$(xd reviewer.path)"
-# jq: no module loading, environment or interpolation.
-gap_case "jq: include with a search path (reads a .jq outside the checkout) is denied" reviewer "$(bash_payload "jq 'include \"x\" {search:\"/tmp\"}; .' README.md")" "$(xd reviewer.form)"
-as_review "jq: import is denied" "$(bash_payload "jq 'import \"x\" as x; .' README.md")" "$(xd reviewer.form)"
-as_review "jq: env is denied" "$(bash_payload "jq -n 'env'")" "$(xd reviewer.form)"
-as_review "jq: \$ENV is denied" "$(bash_payload "jq -n '\$ENV.HOME'")" "$(xd reviewer.form)"
-as_review "jq: string interpolation is denied" "$(bash_payload "jq -r '\"\\(.a)\"' README.md")" "$(xd reviewer.form)"
-as_review "jq: -L (module search path) is denied" "$(bash_payload "jq -L /tmp '.' README.md")" "$(xd reviewer.form)"
-as_review "jq: --rawfile is denied" "$(bash_payload "jq --rawfile x /etc/hosts '.' README.md")" "$(xd reviewer.form)"
-as_review "jq control: a field named env is allowed" "$(bash_payload "jq -r '.env' README.md")" "$XA"
-as_review "jq control: a string holding include is allowed" "$(bash_payload "jq -r '.[\"include\"]' README.md")" "$XA"
+# jq is not a reviewer read form: its programs load modules from a search path.
+gap_case "jq: include with a search path (reads a .jq outside the checkout) is denied" reviewer "$(bash_payload "jq 'include \"x\" {search:\"/tmp\"}; .' README.md")" "$(xd reviewer.command)"
+as_review "jq: a plain field read is denied too" "$(bash_payload "jq -r '.env' README.md")" "$(xd reviewer.command)"
 # find: starting paths first, listed primaries only.
 as_review "find: -L is denied" "$(bash_payload 'find -L xf')" "$(xd reviewer.symlink_follow)"
 gap_case "find: -E (BSD option before the paths) is denied" reviewer "$(bash_payload 'find -E xf -name f')" "$(xd reviewer.form)"
@@ -1822,7 +1831,20 @@ as_review "git control: reflog show REV is allowed" "$(bash_payload 'git reflog 
 as_review "git: remote show (contacts the remote) is denied" "$(bash_payload 'git remote show origin')" "$(xd reviewer.git)"
 as_review "git: -c is denied" "$(bash_payload 'git -c core.pager=cat log')" "$(xd reviewer.git)"
 as_review "git: --git-dir is denied" "$(bash_payload 'git --git-dir xf log')" "$(xd reviewer.git)"
-as_review "git control: -C DIR inside the checkout is allowed" "$(bash_payload 'git -C xf status --short')" "$XA"
+as_review "git: -C DIR is denied (git would read that repository's config)" "$(bash_payload 'git -C xf status --short')" "$(xd reviewer.git)"
+as_review "git: -C . is denied" "$(bash_payload 'git -C . status')" "$(xd reviewer.git)"
+as_review "git control: -P (no pager) is allowed" "$(bash_payload 'git -P log -n 1 --oneline')" "$XA"
+as_review "git control: log --format=FORMAT (a listed attached value) is allowed" "$(bash_payload 'git --no-pager log -n 1 --format=%H')" "$XA"
+as_review "git: log --format=VALUE starting with - is denied" "$(bash_payload 'git log --format=-x')" "$(xd reviewer.git)"
+as_review "git: an unlisted attached value is denied" "$(bash_payload 'git log --output=x')" "$(xd reviewer.git)"
+as_review "git control: status --porcelain=v1 --untracked-files=all --no-renames is allowed" "$(bash_payload 'git status --porcelain=v1 --untracked-files=all --no-renames')" "$XA"
+as_review "git control: tag --list --sort=-KEY --format FORMAT -- PATTERN is allowed" "$(bash_payload "git tag --list --sort=-creatordate --format refname -- 'v*'")" "$XA"
+as_review "git: tag --list -- PATTERN --force is denied" "$(bash_payload "git tag --list -- 'v*' --force")" "$(xd reviewer.git)"
+as_review "git: tag -- PATTERN without --list is denied" "$(bash_payload "git tag -- 'v*'")" "$(xd reviewer.git)"
+as_review "git: branch --list -- NAME is denied" "$(bash_payload 'git branch --list -- main')" "$(xd reviewer.git)"
+as_review "git control: reflog show --date=FORMAT REV is allowed" "$(bash_payload 'git reflog show --date=iso HEAD')" "$XA"
+as_review "git control: remote show -n NAME and get-url --push NAME are allowed" "$(bash_payload 'git remote show -n origin && git remote get-url --push origin')" "$XA"
+as_review "git: remote show -n NAME EXTRA is denied" "$(bash_payload 'git remote show -n origin extra')" "$(xd reviewer.git)"
 # Messages: the pane's own delivered files and drafts stay readable.
 as_review "messages control: an own draft is readable with the exact grammar" "$(bash_payload "cat '$NF_DIR/verdict.md'")" '.decision == "allow" and .rule == "coordination.message_read"'
 as_review "messages control: an own draft is readable with head -n N" "$(bash_payload "head -n 1 '$NF_DIR/verdict.md'")" '.decision == "allow" and .rule == "coordination.message_read"'
@@ -2247,7 +2269,8 @@ as_exec "H1 executor git -C outside the checkout stays denied with --literal-pat
 as_exec "H1 control: executor git -C outside the checkout with a plain pathspec is denied by containment" "$(bash_payload "git --literal-pathspecs -C ../component-b add -- x.txt")" '.decision == "deny" and .rule == "executor.containment"'
 as_review "H1 control: reviewer git log of a plain path is allowed" "$(bash_payload "git log -- src/app/i/page.tsx")" "$H1_ALLOW"
 as_review "H1 reviewer git --literal-pathspecs log of a quoted bracket path is allowed" "$(bash_payload "git --literal-pathspecs log --oneline -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
-as_review "H1 reviewer git -C . --literal-pathspecs diff of a quoted bracket path is allowed" "$(bash_payload "git -C . --literal-pathspecs diff -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+as_review "H1 reviewer git -C . --literal-pathspecs diff is denied (no -C in the exact forms)" "$(bash_payload "git -C . --literal-pathspecs diff -- 'src/app/[id]/page.tsx'")" '.decision == "deny" and .rule == "reviewer.git"'
+as_review "H1 reviewer git --literal-pathspecs diff of a quoted bracket path is allowed (control)" "$(bash_payload "git --literal-pathspecs diff -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
 as_review "H1 reviewer git log of a quoted bracket path without --literal-pathspecs is denied" "$(bash_payload "git log -- 'src/app/[id]/page.tsx'")" "$H1_DYN"
 as_review "H1 reviewer git --literal-pathspecs --glob-pathspecs log is denied (unlisted global option)" "$(bash_payload "git --literal-pathspecs --glob-pathspecs log -- 'src/app/[id]/page.tsx'")" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "H1 reviewer git --literal-pathspecs log of :(glob) magic is denied" "$(bash_payload "git --literal-pathspecs log -- ':(glob)src/*.tsx'")" "$H1_DYN"
@@ -2266,19 +2289,23 @@ printf 'p\n' > "$CHILD/plain.txt"; printf 'p\n' > "$CHILD/plain2.txt"; printf 'b
 # R1: -C changes the operand base; only no -C or `-C .` may use the grant.
 R1P="diff --no-index -- leak/probe.txt local.txt"
 for role in exec review; do
-  if [ "$role" = exec ]; then runner=as_exec; else runner=as_review; fi
-  "$runner" "R1 $role: --literal-pathspecs -C './sub[1]' diff --no-index through a symlink is refused" "$(bash_payload "git --literal-pathspecs -C './sub[1]' $R1P")" "$H1_DYN"
-  "$runner" "R1 $role: -C './sub[1]' before --literal-pathspecs is refused" "$(bash_payload "git -C './sub[1]' --literal-pathspecs $R1P")" "$H1_DYN"
-  "$runner" "R1 $role: bare -C 'sub[1]' (no slash, no --literal-pathspecs; escaped on the 1.3a baseline) is refused" "$(bash_payload "git -C 'sub[1]' $R1P")" "$H1_DYN"
-  "$runner" "R1 $role: bare -C 'sub[1]' with --literal-pathspecs is refused" "$(bash_payload "git --literal-pathspecs -C 'sub[1]' $R1P")" "$H1_DYN"
+  # The reviewer's exact git forms list no -C at all (reviewer.git); the
+  # executor keeps the grant-scope rules.
+  if [ "$role" = exec ]; then runner=as_exec; r1_c="$H1_DYN"; r1_c_ok="$H1_ALLOW"; else
+    runner=as_review; r1_c='.decision == "deny" and .rule == "reviewer.git"'; r1_c_ok="$r1_c"; fi
+  "$runner" "R1 $role: --literal-pathspecs -C './sub[1]' diff --no-index through a symlink is refused" "$(bash_payload "git --literal-pathspecs -C './sub[1]' $R1P")" "$r1_c"
+  "$runner" "R1 $role: -C './sub[1]' before --literal-pathspecs is refused" "$(bash_payload "git -C './sub[1]' --literal-pathspecs $R1P")" "$r1_c"
+  "$runner" "R1 $role: bare -C 'sub[1]' (no slash, no --literal-pathspecs; escaped on the 1.3a baseline) is refused" "$(bash_payload "git -C 'sub[1]' $R1P")" "$r1_c"
+  "$runner" "R1 $role: bare -C 'sub[1]' with --literal-pathspecs is refused" "$(bash_payload "git --literal-pathspecs -C 'sub[1]' $R1P")" "$r1_c"
   # The reviewer's strict word form refuses the attached quote first.
   if [ "$role" = exec ]; then r1_attached="$H1_DYN"; else r1_attached='.decision == "deny" and .rule == "reviewer.shell"'; fi
   "$runner" "R1 $role: attached -C'sub[1]' is refused" "$(bash_payload "git --literal-pathspecs -C'sub[1]' $R1P")" "$r1_attached"
-  "$runner" "R1 $role control: --literal-pathspecs -C . diff --no-index of contained files is allowed" "$(bash_payload "git --literal-pathspecs -C . diff --no-index -- local.txt local.txt")" "$H1_ALLOW"
-  "$runner" "R1 $role control: -C . before --literal-pathspecs is allowed" "$(bash_payload "git -C . --literal-pathspecs diff --no-index -- local.txt local.txt")" "$H1_ALLOW"
+  "$runner" "R1 $role control: --literal-pathspecs -C . diff --no-index of contained files (reviewer: no -C)" "$(bash_payload "git --literal-pathspecs -C . diff --no-index -- local.txt local.txt")" "$r1_c_ok"
+  "$runner" "R1 $role control: -C . before --literal-pathspecs (reviewer: no -C)" "$(bash_payload "git -C . --literal-pathspecs diff --no-index -- local.txt local.txt")" "$r1_c_ok"
   "$runner" "R1 $role control: plain contained diff --no-index is allowed" "$(bash_payload "git diff --no-index -- local.txt local.txt")" "$H1_ALLOW"
-  "$runner" "R1 $role control: -C . with a quoted bracket pathspec is allowed" "$(bash_payload "git --literal-pathspecs -C . diff -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
-  "$runner" "R1 $role: -C . leaves the symlink check on a bracket path through the symlink in force" "$(bash_payload "git --literal-pathspecs -C . diff --no-index -- 'sub[1]/leak/probe.txt' local.txt")" '.decision == "deny" and (.rule == "executor.containment" or .rule == "reviewer.path")'
+  "$runner" "R1 $role control: -C . with a quoted bracket pathspec (reviewer: no -C)" "$(bash_payload "git --literal-pathspecs -C . diff -- 'src/app/[id]/page.tsx'")" "$r1_c_ok"
+  "$runner" "R1 $role control: --literal-pathspecs with a quoted bracket pathspec is allowed" "$(bash_payload "git --literal-pathspecs diff -- 'src/app/[id]/page.tsx'")" "$H1_ALLOW"
+  "$runner" "R1 $role: -C . leaves the symlink check on a bracket path through the symlink in force" "$(bash_payload "git --literal-pathspecs -C . diff --no-index -- 'sub[1]/leak/probe.txt' local.txt")" '.decision == "deny" and (.rule == "executor.containment" or .rule == "reviewer.path" or .rule == "reviewer.git")'
   for opt in "--work-tree=sub" "--git-dir=.git" "--namespace=ns" "-c core.quotepath=off" "--no-pager" "--bare"; do
     # The reviewer's exact git forms list only --no-pager among these.
     r1_extra="$H1_DYN"
