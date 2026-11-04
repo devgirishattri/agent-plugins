@@ -107,9 +107,11 @@ class ReadPaths:
         env = self.launch()
         self.assertEqual(env[IDENTITY], json.dumps(paths, sort_keys=True, separators=(",", ":")))
         for cmd in ("cat ../docs/a.md", "cat '../docs/with space.md'", "cat ../AGENTS.md", "cat ../component-b/b.md",
-                    "cat " + shlex.quote(str(self.external / "README.md")), "rg --no-config sample ../docs", "git -C ../component-b status"):
+                    "cat " + shlex.quote(str(self.external / "README.md")), "rg --no-config sample ../docs"):
             self.assert_decision("allow", cmd, env=env)
-        for cmd in ("cat ../other.md", "ls ..", "cat ../docs-extra/no.md", "cat ../docs/../other.md"):
+        # A granted root is read with the listed tools; git -C is outside the
+        # reviewer's exact forms even there (another repository's config).
+        for cmd in ("cat ../other.md", "ls ..", "cat ../docs-extra/no.md", "cat ../docs/../other.md", "git -C ../component-b status"):
             self.assert_decision("deny", cmd, env=env)
         self.assert_decision("allow", tool="exec_command", inputs={"command": ["cat", "../docs/a.md"]}, env=env)
         self.assert_decision("allow", inputs={"command": "cat a.md", "cwd": str(self.root / "docs")}, env=env)

@@ -226,10 +226,25 @@ when a user hits them.
   staging above.
 - Shell writes remain denied.
 - Shell is default-deny. Two exceptions apply:
-  - One literal read-only command inside its own checkout or explicit per-pane
-    `read_paths`. No pipes, redirection, `sed`, or ungranted sibling reads.
+  - Exact read forms (0.12.11) inside its own checkout or explicit per-pane
+    `read_paths`. Each word is plain (letters, digits, `_ . / : , + = @ % -`)
+    or one single-quoted run with nothing attached (a printed message path
+    may join runs with `'\''`). Segments join only with
+    `|`, `||`, `&&` or `;`. The program is a bare listed name, options are
+    whole listed words before the operands, and a value option takes the next
+    word. No redirection, substitution, double quotes, backslashes, unlisted
+    commands or ungranted sibling reads. `sed` runs only as
+    `sed -n 'N[,M]p' FILE`.
   - Trusted coordination helpers: reply to the orchestrator,
     `task-done`/`task-block`, context and read-only knowledge helpers.
+- Quote `^`, `~`, globs and spaces: `git diff 'HEAD~1' -- src/x.ts`. A
+  bracket pathspec needs `git --literal-pathspecs`. `git blame` runs as
+  `git blame [REV] -- PATH`, and `git config` reads need `--file PATH`.
+  There is no `git -C`, `grep -f`/`rg -f` or `jq`: run git from the
+  checkout, search with `-e PATTERN` and read JSON with `cat` or `grep`.
+- A pane whose role, engine pane name or tmux `@name` says reviewer is refused
+  every tool call when no readable workspace config backs it
+  (`identity.reviewer`).
 - Send verdicts as a single-line `/session-chat:reply`, a scheduler note, or a
   staged file sent with `dispatch-to-session.sh`.
 
@@ -285,8 +300,8 @@ up to 16 files/directories.
 ### Message reads
 
 Executors and reviewers can read a complete delivered message addressed to or
-sent by their validated pane. They can also read an existing own draft. Use the
-existing single literal non-Git read grammar.
+sent by their validated pane. They can also read an existing own draft. Use one
+non-Git read command on its own, never inside a pipeline or list.
 
 - Use the quoted `cat '<absolute-path>'` command printed before the incoming
   body. Inline truncation is not a task-size limit.

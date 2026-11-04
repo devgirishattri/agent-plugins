@@ -6,8 +6,16 @@ the reviewed strict-v1 profile is active, its audit/enforce mode, semantic role
 names, and gate freshness values. It cannot add scripts, regexes, commands, or
 permission exceptions -- the safety floor below is immutable.
 
+The reviewer shell floor is a fixed table of exact read forms (EXACT_FORMS,
+EXACT_GIT): a reviewer command that is not a trusted helper runs only when
+every segment is a listed form. workspace.json can neither add to the table
+nor loosen it.
+
 Inputs (all engine-owned, emitted per pane by adapters.sh / lifecycle.sh):
-  SESSION_WORKSPACE_CONFIG        absolute workspace.json path (absent => no-op)
+  SESSION_WORKSPACE_CONFIG        absolute workspace.json path (absent => no-op,
+                                  except for a pane whose SESSION_WORKSPACE_ROLE,
+                                  SESSION_WORKSPACE_PANE_NAME or tmux @name says
+                                  reviewer: that pane is refused, identity.reviewer)
   SESSION_WORKSPACE_PROJECT_ROOT  canonical project root
   SESSION_WORKSPACE_PANE_NAME     this pane's configured name
   SESSION_WORKSPACE_ROLE          this pane's configured role name
@@ -34,6 +42,10 @@ audit only softens policy denials.
 ``--floor-json`` and ``--probe-json`` (read-only, for harness-status) print the
 strict-v1 role floor table and decide this pane's own floor probe cases; they
 read no stdin and run nothing.
+``--decision-json --as-role reviewer|executor --as-cwd DIR`` (test mode) decides
+one stdin payload as that role in checkout DIR, with no grants and no
+workspace identity, and prints the same decision object. It reads no
+SESSION_WORKSPACE_* variable, and harness-hook.sh never passes it.
 
 Runs on the stock macOS python3 (3.9): stdlib only, no 3.10+ syntax.
 """
@@ -463,20 +475,60 @@ def scheduler_store_root(pane: dict, owned_panes: List[dict], semantic: str) -> 
     return next(iter(shared)) if len(shared) == 1 else None
 
 
+# A pane claims the reviewer role when its engine role, its engine pane name or
+# its tmux pane name (@name) has "reviewer" as a word. Without a readable
+# config such a pane is refused instead of running unguarded: the reviewer
+# floor is its only read-only guard.
+REVIEWER_CLAIM_RE = re.compile(r"(?:\A|[^a-z0-9])reviewer(?:\Z|[^a-z0-9])")
+
+
+def tmux_pane_name() -> str:
+    """This process's tmux pane @name, or "" outside tmux or on any error."""
+    pane = os.environ.get("TMUX_PANE", "").strip()
+    if not pane or not os.environ.get("TMUX", "").strip():
+        return ""
+    try:
+        run = subprocess.run(["tmux", "display-message", "-p", "-t", pane, "#{@name}"],
+                             check=False, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return ""
+    return run.stdout.strip() if run.returncode == 0 else ""
+
+
+def claims_reviewer() -> bool:
+    names = [os.environ.get("SESSION_WORKSPACE_ROLE", ""), os.environ.get("SESSION_WORKSPACE_PANE_NAME", "")]
+    if not any(REVIEWER_CLAIM_RE.search(name.strip().lower()) for name in names):
+        names = [tmux_pane_name()]
+    return any(REVIEWER_CLAIM_RE.search(name.strip().lower()) for name in names)
+
+
+def reviewer_claim_denial(reason: str) -> Optional[Decision]:
+    if not claims_reviewer():
+        return None
+    return deny(None, "", "identity.reviewer", "this pane claims the reviewer role but %s; refusing every tool call" % reason,
+                "enforce", integrity=True)
+
+
 def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
     config_text = os.environ.get("SESSION_WORKSPACE_CONFIG", "").strip()
     env_mode = os.environ.get("SESSION_WORKSPACE_HARNESS_MODE", "").strip()
     tool = ""
     if not config_text:
-        return None, None
+        # Not a workspace pane: a true no-op, unless the pane claims the
+        # reviewer role (a nested agent with a stripped environment, say).
+        return None, reviewer_claim_denial("SESSION_WORKSPACE_CONFIG is not set")
 
     config_path = canonical(Path(config_text))
     raw_config = read_raw_config(config_path)
     raw_active, raw_mode = raw_harness_state(raw_config)
     if not raw_active and not env_mode:
         # A stale or user-exported config pointer on an inactive/unreadable
-        # config must never brick a shell: true no-op.
-        return None, None
+        # config must never brick a shell: true no-op. A readable config with
+        # a known schema that leaves the harness off stays a no-op for a
+        # claimed reviewer too; an unreadable one does not.
+        if raw_config is not None and raw_config.get("schema_version") in {1, 2, 3, 4, 5}:
+            return None, None
+        return None, reviewer_claim_denial("its workspace config is missing, unreadable or not a known schema")
     failure_mode = env_mode if env_mode in {"audit", "enforce"} else raw_mode
     if failure_mode not in {"audit", "enforce"}:
         failure_mode = "enforce"
@@ -2943,6 +2995,690 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Reviewer exact read forms (0.12.11)
+# ---------------------------------------------------------------------------
+# A reviewer's shell, outside trusted helpers, runs only the exact forms
+# listed below. Per-tool option parsing kept producing bypasses (zsh glob
+# operators, BSD `cat x --`, optional attached values, git falling back to
+# --no-index, sed/jq/python scripts that read other files), so the reviewer
+# floor no longer models what a tool might accept. It accepts only:
+#
+#   words     a plain word (letters, digits and `_ . / : , + = @ % -`, not
+#             starting with `=`), or exactly one single-quoted run with nothing
+#             attached. No double quotes, backslashes, `$`, backticks, globs,
+#             `^`/`~`/`#`/`!` outside quotes, redirection, grouping or control
+#             characters (newlines and tabs included).
+#   operators `|`, `||`, `&&` and `;` between non-empty segments. Every
+#             segment is judged on its own against the same cwd.
+#   prefix    assignments only to LC_*, LANG, LANGUAGE, TZ, NO_COLOR,
+#             FORCE_COLOR, TERM, COLUMNS and LINES, with a value of plain
+#             characters and no `/`.
+#   program   a bare, unquoted name from EXACT_FORMS (git: EXACT_GIT).
+#   options   whole words exactly as listed: no clusters unless the cluster
+#             itself is listed, no attached values, no abbreviations. A
+#             value-taking option takes the next word, which never starts with
+#             `-`. Options come before operands; `--` may follow them (git:
+#             after the revisions); a bare `-` and any later dash word are
+#             refused.
+#   operands  every path operand resolves (symlinks included) inside the pane
+#             checkout or a granted read root; diff operands are regular files;
+#             git revision words are checked as paths too.
+#
+# Anything not listed is refused. The table is part of the immutable floor:
+# workspace.json cannot add to it.
+
+EXACT_PLAIN_RE = re.compile(r"\A[A-Za-z0-9_./:,+=@%-]+\Z")
+EXACT_OPERATOR_CHARS = frozenset(";&|()<>")
+# A git sort key (git tag --sort=-creatordate): the one value kind that may start with -.
+EXACT_SORTKEY_RE = re.compile(r"\A-?[a-z][a-z:()-]*\Z")
+EXACT_ASSIGNMENT_RE = re.compile(r"\A(?:LC_[A-Z]+|LANG|LANGUAGE|TZ|NO_COLOR|FORCE_COLOR|TERM|COLUMNS|LINES)=[A-Za-z0-9_.,:@+%-]*\Z")
+EXACT_NUM_RE = re.compile(r"\A\+?[0-9]{1,9}\Z")
+EXACT_SED_SCRIPT_RE = re.compile(r"\A(?:[1-9][0-9]{0,8}(?:,(?:[1-9][0-9]{0,8}|\$))?|\$)p\Z")
+GIT_REMOTE_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+GIT_CONFIG_KEY_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9-]*(?:\.[^\s=]+)?\.[A-Za-z][A-Za-z0-9-]*\Z")
+
+
+def _flags(text: str) -> frozenset:
+    return frozenset(text.split())
+
+
+# program: (flags, value options {option: kind}, operand kind, (min, max) operands)
+# Value kinds: "num" (digits, optional +), "text" (data), "enum:a,b".
+# Operand kinds: "paths" (checked paths), "text" (data), "none",
+# "pattern_paths" (grep/rg: the first operand is the pattern unless -e is
+# given), "diff" (two regular files), "date" (+FORMAT only), "find", "sed".
+# Only options whose value is required on BOTH GNU and BSD are value options.
+# `--context[=num]` takes an optional attached value on both, so it is a flag
+# and the next word is the pattern; short -C takes the next word on both
+# (getopt "C:" in FreeBSD and macOS grep). grep -f/--file and rg -f/--file
+# (patterns from a file) and jq (modules from a search path) are not listed.
+EXACT_FORMS = {
+    "basename": (_flags(""), {}, "text", (1, 2)),
+    "cat": (_flags("-n -b -s -v -e -t"), {}, "paths", (0, None)),
+    "cut": (_flags("-s"), {"-d": "text", "-f": "text", "-c": "text", "-b": "text"}, "paths", (0, None)),
+    "date": (_flags("-u"), {}, "date", (0, 1)),
+    "df": (_flags("-h -k"), {}, "paths", (0, None)),
+    "diff": (_flags("-u -q -w -b -B -i -N --brief"), {"-U": "num"}, "diff", (2, 2)),
+    "dirname": (_flags(""), {}, "text", (1, None)),
+    "du": (_flags("-s -h -sh -a -k -c"), {"-d": "num"}, "paths", (0, None)),
+    "echo": (_flags("-n"), {}, "text", (0, None)),
+    "false": (_flags(""), {}, "none", (0, 0)),
+    "file": (_flags("-b --mime-type"), {}, "paths", (1, None)),
+    "find": (_flags(""), {}, "find", (1, None)),
+    "grep": (_flags("-n -i -v -c -l -L -h -H -w -x -F -E -s -q -o -r -I -rn -rl -ri -rni -rin -in -ni -nr -il -li"
+                    " --recursive --context --line-number --ignore-case --files-with-matches --count --word-regexp"
+                    " --fixed-strings --extended-regexp --with-filename --no-filename --only-matching --invert-match"
+                    " --no-messages"),
+             {"-e": "text", "-A": "num", "-B": "num", "-C": "num", "-m": "num", "--include": "text",
+              "--exclude": "text", "--exclude-dir": "text"},
+             "pattern_paths", (0, None)),
+    "head": (_flags(""), {"-n": "num", "-c": "num"}, "paths", (0, None)),
+    "ls": (_flags("-1 -a -A -d -F -h -l -p -r -R -S -t -i -la -al -lah -alh -lh -lt -ltr -lha -lA -Al -lR"), {}, "paths", (0, None)),
+    "nl": (_flags("-ba"), {"-b": "enum:a,t,n"}, "paths", (0, None)),
+    "printf": (_flags(""), {}, "text", (1, None)),
+    "pwd": (_flags("-P"), {}, "none", (0, 0)),
+    "realpath": (_flags(""), {}, "paths", (1, None)),
+    "rg": (_flags("--no-config -n -i -l -c -w -F -S -s -v -o -x -u --hidden --files --no-heading --heading --line-number"
+                  " --ignore-case --files-with-matches --count --fixed-strings --word-regexp --smart-case --case-sensitive"
+                  " --invert-match --only-matching"),
+           {"-e": "text", "-g": "text", "-t": "text", "-T": "text", "-A": "num", "-B": "num", "-C": "num", "-m": "num",
+            "--glob": "text", "--type": "text", "--type-not": "text", "--max-depth": "num", "--max-count": "num"},
+           "pattern_paths", (0, None)),
+    "sed": (_flags("-n"), {}, "sed", (1, None)),
+    "shasum": (_flags(""), {"-a": "enum:1,224,256,384,512"}, "paths", (1, None)),
+    "sha256sum": (_flags(""), {}, "paths", (1, None)),
+    "cksum": (_flags(""), {}, "paths", (1, None)),
+    "sort": (_flags("-n -r -u -f -b -h -V -rn -nr"), {"-k": "text", "-t": "text"}, "paths", (0, None)),
+    "stat": (_flags(""), {}, "paths", (1, None)),
+    "tail": (_flags(""), {"-n": "num", "-c": "num"}, "paths", (0, None)),
+    "tr": (_flags("-d -s -c"), {}, "text", (1, 2)),
+    "true": (_flags(""), {}, "none", (0, 0)),
+    "uniq": (_flags("-c -d -u -i"), {"-f": "num", "-s": "num"}, "paths", (0, 1)),
+    "wc": (_flags("-l -w -c -m"), {}, "paths", (0, None)),
+    "which": (_flags("-a"), {}, "text", (1, None)),
+}
+
+# find: PATH... then these primaries only. No -L/-H/-P/-E/-f/-s/-x (BSD -f
+# hides a path operand), no -samefile/-newer*/-Bnewer (they read another
+# file), no action that writes or executes.
+EXACT_FIND_FLAGS = _flags("-print -print0 -empty -o -a -not -prune")
+EXACT_FIND_VALUES = {"-name": "text", "-iname": "text", "-path": "text", "-ipath": "text",
+                     "-type": "enum:f,d,l", "-maxdepth": "num", "-mindepth": "num", "-size": "text",
+                     "-mtime": "text", "-mmin": "text"}
+
+# git [--no-pager|-P] [--literal-pathspecs] SUBCOMMAND ... (no -C: a repository
+# found elsewhere brings its own config, and core.fsmonitor or a pager there
+# runs a command).
+# Operand kinds: "paths" (pathspecs only), "revs_paths" (revisions, then
+# `--` and pathspecs), "revs" (revisions only), "patterns" (data, ref name
+# patterns), "list_patterns" (patterns only with -l/--list), "grep",
+# "blame", "config", "reflog", "remote".
+_GIT_LOG_FLAGS = ("--oneline --stat --shortstat --numstat --name-only --name-status -p --patch --no-patch -s"
+                  " --graph --decorate --no-decorate --all --reverse --first-parent --no-merges --merges"
+                  " --follow --no-color --abbrev-commit --summary --no-renames --date-order --topo-order")
+_GIT_LOG_VALUES = {"-n": "num", "--max-count": "num", "--skip": "num", "--since": "text", "--until": "text",
+                   "--after": "text", "--before": "text", "--author": "text", "--committer": "text",
+                   "--grep": "text", "-S": "text", "-G": "text"}
+_GIT_DIFF_FLAGS = ("--stat --shortstat --numstat --name-only --name-status --summary --cached --staged --no-color"
+                   " -w -b --ignore-all-space --ignore-space-change --check -R --no-renames --patience --histogram"
+                   " --minimal -p --patch --raw --no-index")
+EXACT_GIT = {
+    "status": (_flags("--short -s --porcelain --porcelain=v1 --branch -b -sb --long --ignored --untracked-files=no"
+                      " --untracked-files=all --no-renames"), {}, "paths"),
+    "log": (_flags(_GIT_LOG_FLAGS), dict(_GIT_LOG_VALUES), "revs_paths"),
+    "show": (_flags(_GIT_LOG_FLAGS), {}, "revs_paths"),
+    "diff": (_flags(_GIT_DIFF_FLAGS), {}, "revs_paths"),
+    "blame": (_flags("-w -M -C -s -e -l -c --porcelain --line-porcelain --show-name --show-number"), {"-L": "text"}, "blame"),
+    "ls-files": (_flags("--cached -c --modified -m --others -o --deleted -d --stage -s --exclude-standard --full-name"
+                        " -z --directory --ignored -i -t -v --unmerged -u"), {}, "paths"),
+    "ls-tree": (_flags("-r -t -d -l -z --name-only --name-status --full-tree --long"), {}, "revs_paths"),
+    "rev-parse": (_flags("--short --abbrev-ref --show-toplevel --git-dir --is-inside-work-tree --verify --quiet -q"
+                         " --symbolic-full-name --show-prefix --show-cdup --absolute-git-dir --is-shallow-repository"),
+                  {}, "revs_paths"),
+    "rev-list": (_flags("--count --all --left-right --first-parent --no-merges --merges --reverse"),
+                 {"-n": "num", "--max-count": "num"}, "revs_paths"),
+    "merge-base": (_flags("--is-ancestor --all --octopus"), {}, "revs"),
+    "name-rev": (_flags("--name-only --tags --always"), {}, "revs"),
+    "shortlog": (_flags("-s -n -e -sn -ns -sne --summary --numbered --email"), {}, "revs_paths"),
+    "show-ref": (_flags("--heads --tags -s --hash --abbrev"), {}, "patterns"),
+    "for-each-ref": (_flags(""), {"--count": "num", "--sort": "text"}, "patterns"),
+    "branch": (_flags("-a -r -v -vv --list -l --all --remotes --show-current --no-color --verbose"), {}, "list_patterns"),
+    "tag": (_flags("-l --list -n"), {"--format": "text"}, "list_patterns"),
+    "grep": (_flags("-n -i -l -c -w -v -E -F -I -h -H --cached --heading --break --line-number --ignore-case"
+                    " --files-with-matches --count --word-regexp --fixed-strings"),
+             {"-e": "text", "-A": "num", "-B": "num", "-C": "num"}, "grep"),
+    "config": (_flags(""), {}, "config"),
+    "reflog": (_flags("--oneline"), {"-n": "num"}, "reflog"),
+    "remote": (_flags("-v --verbose"), {}, "remote"),
+}
+# Options spelled with an attached value, as a listed prefix: OPTION=VALUE.
+EXACT_GIT_EQ = {
+    "log": {"--format=": "text", "--pretty=": "text", "--max-count=": "num", "--since=": "text", "--until=": "text",
+            "--author=": "text", "--grep=": "text"},
+    "show": {"--format=": "text", "--pretty=": "text"},
+    "tag": {"--format=": "text", "--sort=": "sortkey"},
+    "reflog": {"--date=": "text"},
+}
+# git config without --file reads the user's global config, where credentials
+# live; only these two exact repository reads are allowed without it.
+EXACT_GIT_CONFIG_BARE = (("--get", "core.hooksPath"), ("--get-all", "remote.origin.fetch"))
+EXACT_GIT_CONFIG_ACTIONS = {"--list": 0, "-l": 0, "--get": 1, "--get-all": 1, "--get-regexp": 1}
+EXACT_GIT_CONFIG_FLAGS = _flags("--show-origin --show-scope --null -z --name-only")
+# git remote reads: exactly these word lists after `remote`, NAME a plain
+# remote name (show -n and get-url read the config and never contact it).
+EXACT_GIT_REMOTE_FORMS = ((), ("-v",), ("--verbose",), ("get-url", "NAME"), ("get-url", "--all", "NAME"),
+                          ("get-url", "--push", "NAME"), ("show", "-n", "NAME"))
+
+# Tools whose script argument can write or execute. Only the exact sed form
+# `sed -n 'N[,M]p' FILE...` is listed; everything else keeps its old rule.
+SCRIPT_TOOLS = {"awk", "gawk", "mawk", "nawk", "perl", "sed"}
+
+
+def exact_segments(command: str) -> List[List[Tuple[str, bool]]]:
+    """COMMAND as segments of (word, quoted) under the strict word form, or a
+    reviewer.shell refusal. Decided on the raw text before any shell sees it."""
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in command):
+        raise PolicyFailure("reviewer.shell", "reviewer commands cannot contain control characters, newlines or tabs")
+    out: List[List[Tuple[str, bool]]] = [[]]
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+        if char == " ":
+            index += 1
+            continue
+        if char in "|&;":
+            operator = command[index:index + 2] if command[index:index + 2] in {"||", "&&"} else char
+            if operator == "&":
+                raise PolicyFailure("reviewer.shell", "reviewer commands cannot run in the background (&)")
+            if not out[-1]:
+                raise PolicyFailure("reviewer.shell", "reviewer operators need a command on both sides")
+            out.append([])
+            index += len(operator)
+            continue
+        if char == "'":
+            # One single-quoted run, or runs joined only by the POSIX \' idiom
+            # ('it'\''s') that session-chat prints for a path holding an
+            # apostrophe: literal in bash and zsh alike.
+            parts: List[str] = []
+            while True:
+                end = command.find("'", index + 1)
+                if end < 0:
+                    raise PolicyFailure("reviewer.shell", "reviewer command has an unterminated single quote")
+                parts.append(command[index + 1:end])
+                if command[end + 1:end + 4] == "\\''":
+                    index = end + 3
+                    continue
+                break
+            if end + 1 < length and command[end + 1] not in " |&;":
+                raise PolicyFailure("reviewer.shell", "a single-quoted reviewer word cannot have text attached after it")
+            text = "'".join(parts)
+            if not text or set(text) <= EXACT_OPERATOR_CHARS:
+                raise PolicyFailure("reviewer.shell", "a single-quoted reviewer word cannot be empty or made only of ; & | ( ) < >")
+            out[-1].append((text, True))
+            index = end + 1
+            continue
+        end = index
+        while end < length and command[end] not in " |&;'":
+            end += 1
+        word = command[index:end]
+        if end < length and command[end] == "'":
+            raise PolicyFailure("reviewer.shell", "a reviewer word cannot mix plain text and quotes: write it as one single-quoted word")
+        if not EXACT_PLAIN_RE.fullmatch(word) or word.startswith("=") or "==" in word:
+            raise PolicyFailure("reviewer.shell", "reviewer words outside single quotes may hold only letters, digits and _ . / : , + = @ %% -: %s" % word)
+        out[-1].append((word, False))
+        index = end
+    if not out[-1]:
+        raise PolicyFailure("reviewer.shell", "reviewer operators need a command on both sides")
+    return out
+
+
+def raise_legacy_rule(argv: List[str], reason: str) -> None:
+    """Raise the pre-0.12.11 rule for a form the exact grammar refuses, so a
+    known write, follow, exec or file-list form keeps its specific
+    diagnostic; return when none applies (the caller raises reviewer.form)."""
+    executable = argv[0] if argv else ""
+    if executable in SCRIPT_TOOLS:
+        raise PolicyFailure("reviewer.sed", reason)
+    try:
+        listed = file_list_read(argv)
+    except PolicyFailure:
+        listed = False
+    if listed:
+        raise PolicyFailure("reviewer.file_list", reason)
+    try:
+        check_read_command(argv)
+    except PolicyFailure as exc:
+        if exc.rule.startswith("reviewer."):
+            raise
+    short_follow = {"rg": "L", "grep": "RS", "du": "LH", "ls": "LH", "diff": "rR", "file": "L", "stat": "L"}.get(executable, "")
+    long_follow = {"rg": {"--follow"}, "grep": {"--dereference-recursive", "--dereference-files"}, "find": {"-follow", "-L", "-H"},
+                   "du": {"--dereference"}, "ls": {"--dereference"}, "diff": {"--recursive"},
+                   "file": {"--dereference"}, "stat": {"--dereference"}}.get(executable, set())
+    for token in argv[1:]:
+        if token == "--":
+            break
+        if token.split("=", 1)[0] in long_follow or (
+                short_follow and token.startswith("-") and not token.startswith("--") and any(c in token[1:] for c in short_follow)):
+            raise PolicyFailure("reviewer.symlink_follow", reason)
+    if executable == "tail" and any(token in {"-f", "-F", "--follow"} or token.startswith("--follow=") for token in argv[1:]):
+        raise PolicyFailure("reviewer.tail", reason)
+    if executable in {"rg", "grep"} and any(token.split("=", 1)[0] in {"--pre", "--pre-glob", "--hostname-bin", "--search-zip"}
+                                            or (executable == "rg" and token.startswith("-") and not token.startswith("--") and "z" in token)
+                                            for token in argv[1:]):
+        raise PolicyFailure("reviewer.search", reason)
+
+
+def exact_value_ok(kind: str, value: str) -> bool:
+    if kind == "num":
+        return bool(EXACT_NUM_RE.fullmatch(value))
+    if kind.startswith("enum:"):
+        return value in kind[5:].split(",")
+    if kind == "sortkey":
+        return bool(EXACT_SORTKEY_RE.fullmatch(value))
+    return True
+
+
+def exact_options(argv: List[str], start: int, flags: frozenset, values: dict, rule: str,
+                  what: str, eq: Optional[dict] = None) -> Tuple[int, set, dict, bool]:
+    """Read listed whole-word options from ARGV[START:]. Returns (index of
+    the first operand, flags seen, {option: [values]}, saw `--`). EQ lists
+    the options spelled with an attached value (`--format=VALUE`) by prefix."""
+    eq = eq or {}
+    seen_flags: set = set()
+    seen_values: dict = {}
+    index = start
+    while index < len(argv):
+        word = argv[index]
+        if word == "--":
+            return index + 1, seen_flags, seen_values, True
+        if not word.startswith("-"):
+            break
+        if word == "-":
+            raise PolicyFailure(rule, "%s: a bare - (stdin or a file named -) is outside the reviewer's exact forms" % what)
+        if word in flags:
+            seen_flags.add(word)
+            index += 1
+            continue
+        if word in values:
+            if index + 1 >= len(argv):
+                raise PolicyFailure(rule, "%s %s needs a value as the next word" % (what, word))
+            value = argv[index + 1]
+            if value.startswith("-"):
+                raise PolicyFailure(rule, "%s %s: an option value cannot start with -" % (what, word))
+            if not exact_value_ok(values[word], value):
+                raise PolicyFailure(rule, "%s %s value is not one of its listed forms: %s" % (what, word, value))
+            seen_values.setdefault(word, []).append(value)
+            index += 2
+            continue
+        prefix = next((p for p in eq if word.startswith(p)), None)
+        if prefix is not None:
+            value = word[len(prefix):]
+            if not value or (value.startswith("-") and eq[prefix] != "sortkey") or not exact_value_ok(eq[prefix], value):
+                raise PolicyFailure(rule, "%s %s value is not one of its listed forms: %s" % (what, prefix, value))
+            seen_values.setdefault(prefix, []).append(value)
+            index += 1
+            continue
+        raise PolicyFailure(rule, "%s option is not one of its listed exact forms (whole words, no clusters, attached values or abbreviations): %s" % (what, word))
+    return index, seen_flags, seen_values, False
+
+
+def exact_operands(argv: List[str], start: int, rule: str, what: str, dashdash: bool = False) -> List[str]:
+    """The operands after the options. A later dash word is an option after an
+    operand (GNU permutes it, BSD reads it as a file) and is refused; only
+    right after -- (DASHDASH) may an operand start with -. A bare - and a
+    second -- are refused everywhere."""
+    operands = argv[start:]
+    for word in operands:
+        if word == "--":
+            raise PolicyFailure(rule, "%s: -- is allowed only right after the options" % what)
+        if word == "-":
+            raise PolicyFailure(rule, "%s: a bare - (stdin or a file named -) is outside the reviewer's exact forms" % what)
+        if word.startswith("-") and not dashdash:
+            raise PolicyFailure(rule, "%s: options come before operands, and an operand cannot start with -: %s" % (what, word))
+    return operands
+
+
+class ExactReads(object):
+    """What one reviewer command reads: whether it touched this pane's own
+    message files, and the start paths of its recursive reads."""
+
+    def __init__(self) -> None:
+        self.touched = False
+        self.recursive_starts: List[Path] = []
+
+
+def exact_path(ctx: Context, word: str, base: Path, reads: Optional[ExactReads] = None, git: bool = False) -> Path:
+    """One path operand: resolved through symlinks, it must be readable by this
+    pane (its checkout, a granted root, its own message files, the selected
+    plugin version) or, outside git, an installed skill's content. A path in a
+    message store must be this pane's own delivered message or draft, and git
+    never reads one."""
+    if not word:
+        raise PolicyFailure("reviewer.form", "an empty path operand is outside the reviewer's exact forms")
+    if word == "/dev/null":
+        return Path(word)
+    # Kept from the pre-0.12.11 floor: $ and ` stay dynamic in a path even
+    # inside single quotes, and so does a glob-bearing path with a .. part.
+    if "$" in word or "`" in word or (any(char in word for char in "*?[]{}") and ".." in word.split("/")):
+        raise PolicyFailure("path.dynamic", "reviewer path operands cannot hold $ or `, or glob characters beside a .. component: %s" % word)
+    raw = Path(word) if word.startswith("/") else base / word
+    resolved = canonical(raw)
+    lexical = Path(os.path.abspath(str(raw)))
+    if any(within(resolved, root) or within(lexical, root) for root in guarded_message_roots(ctx)):
+        if git or not own_message_readable(ctx, raw, resolved):
+            raise PolicyFailure("coordination.message_read", "message reads require a private delivered file addressed to or sent by this validated pane, or its own draft; transport state, aliases, and peer files are forbidden")
+        if reads is not None:
+            reads.touched = True
+        return resolved
+    if reviewer_readable(ctx, resolved) or (not git and skill_content_readable(ctx, raw)):
+        return resolved
+    raise PolicyFailure("reviewer.path", "path operand resolves outside the reviewer's readable roots: %s" % word)
+
+
+# Git expands pathspec globs by itself, so shell quoting does not make them
+# literal: a glob-bearing pathspec is read only under a global
+# --literal-pathspecs (and no other global option) on the subcommands listed here.
+GIT_PATHSPEC_GLOB_CHARS = "*?[]{}\\"
+GIT_LITERAL_PATHSPEC_SUBS = {"diff", "ls-files", "status", "log", "show"}
+# A word git cannot resolve as a revision and that holds one of these is read
+# as a glob pathspec (looks_like_pathspec), so outside `REV -- PATH` it is one.
+GIT_REV_GLOB_CHARS = "*?[\\"
+
+
+def exact_git_path(ctx: Context, word: str, base: Path, literal: bool = False) -> None:
+    """A pathspec: no pathspec magic, no glob unless git reads it literally,
+    then the same containment as any other path operand."""
+    if word.startswith(":"):
+        raise PolicyFailure("path.dynamic", "git pathspec magic is outside the reviewer's exact forms: %s" % word)
+    if not literal and any(char in word for char in GIT_PATHSPEC_GLOB_CHARS):
+        raise PolicyFailure("path.dynamic", "git globs pathspecs itself; a glob-bearing pathspec needs a global --literal-pathspecs and no other global option: %s" % word)
+    exact_path(ctx, word, base, git=True)
+
+
+def git_rev_word_ok(word: str) -> bool:
+    """A revision word git can resolve only inside the repository: no part of
+    REV[..REV][:PATH] starts with . or /, holds //, or has a dot-led
+    component, and no index (:PATH) or message-search (:/TEXT) form."""
+    if not word or word.startswith(":"):
+        return False
+    for chunk in word.split(":", 1):
+        for part in re.split(r"\.\.\.?", chunk):
+            if part.startswith((".", "/")) or "//" in part or any(component.startswith(".") for component in part.split("/")):
+                return False
+    return True
+
+
+def exact_git_rev(ctx: Context, word: str, base: Path, separated: bool = False) -> None:
+    """Git reads a word that is not a revision as a working-tree path (and
+    `git diff A B` with a path outside the repository as --no-index), so a
+    revision word is checked as a path first, then for revision syntax.
+    Only a word before an explicit -- (SEPARATED) is never a pathspec."""
+    if word.startswith("-"):
+        raise PolicyFailure("reviewer.git", "git options come before revisions and operands: %s" % word)
+    if not separated and any(char in word for char in GIT_REV_GLOB_CHARS):
+        raise PolicyFailure("path.dynamic", "a glob-bearing word git cannot resolve is read as a pathspec; put revisions before --: %s" % word)
+    exact_path(ctx, word, base, git=True)
+    if not git_rev_word_ok(word):
+        raise PolicyFailure("reviewer.git", "git revision word is outside the reviewer's exact forms: %s" % word)
+
+
+def exact_git_config(ctx: Context, words: List[str], base: Path) -> None:
+    """git config reads: `--file PATH` / `-f PATH` naming a checked regular
+    file plus one of --list, -l, --get KEY, --get-all KEY, --get-regexp RE;
+    without --file only the two EXACT_GIT_CONFIG_BARE forms."""
+    if tuple(words) in EXACT_GIT_CONFIG_BARE:
+        return
+    index = 0
+    config_file: Optional[str] = None
+    action: Optional[str] = None
+    while index < len(words):
+        word = words[index]
+        if word in {"--file", "-f"} and config_file is None:
+            if index + 1 >= len(words) or words[index + 1].startswith("-"):
+                raise PolicyFailure("reviewer.git", "git config %s needs a file as the next word" % word)
+            config_file = words[index + 1]
+            index += 2
+            continue
+        if word in EXACT_GIT_CONFIG_ACTIONS and action is None:
+            action = word
+            arity = EXACT_GIT_CONFIG_ACTIONS[word]
+            if arity and (index + 1 >= len(words) or not words[index + 1] or words[index + 1].startswith("-")):
+                raise PolicyFailure("reviewer.git", "git config %s needs a key as the next word" % word)
+            index += 1 + arity
+            continue
+        if word in EXACT_GIT_CONFIG_FLAGS:
+            index += 1
+            continue
+        raise PolicyFailure("reviewer.git", "git config reads need --file PATH and one of --list, --get KEY, --get-all KEY or --get-regexp PATTERN, except exactly `git config --get core.hooksPath` and `git config --get-all remote.origin.fetch`: %s" % word)
+    if config_file is None or action is None:
+        raise PolicyFailure("reviewer.git", "git config without --file prints the global config, where credentials live; name the file with --file PATH and a read action")
+    if not exact_path(ctx, config_file, base, git=True).is_file():
+        raise PolicyFailure("reviewer.git", "git config --file must name an existing regular file")
+
+
+def exact_git(ctx: Context, argv: List[str], base: Path) -> None:
+    """git [--no-pager|-P] [--literal-pathspecs] SUBCOMMAND as listed in
+    EXACT_GIT. No -C: git would read another repository's config there."""
+    index = 1
+    literal = False
+    grant_scope = True
+    while index < len(argv) and argv[index].startswith("-"):
+        word = argv[index]
+        if word in {"--no-pager", "-P"}:
+            grant_scope = False
+            index += 1
+            continue
+        if word == "--literal-pathspecs" and not literal:
+            literal = True
+            index += 1
+            continue
+        raise PolicyFailure("reviewer.git", "git global option is outside the reviewer's exact forms: %s" % word)
+    if index >= len(argv):
+        raise PolicyFailure("reviewer.git", "reviewer git needs a listed subcommand")
+    sub = argv[index]
+    if sub not in EXACT_GIT:
+        raise PolicyFailure("reviewer.git", "git subcommand is outside the reviewer's exact forms: %s" % sub)
+    flags, values, kind = EXACT_GIT[sub]
+    what = "git " + sub
+    literal = literal and grant_scope and sub in GIT_LITERAL_PATHSPEC_SUBS
+    start = index + 1
+    if kind == "config":
+        exact_git_config(ctx, argv[start:], base)
+        return
+    if kind == "remote":
+        words = argv[start:]
+        if not any(len(form) == len(words) and all(want == got or (want == "NAME" and GIT_REMOTE_NAME_RE.fullmatch(got))
+                                                    for want, got in zip(form, words)) for form in EXACT_GIT_REMOTE_FORMS):
+            raise PolicyFailure("reviewer.git", "git remote reads only as `git remote [-v]`, `git remote get-url [--all|--push] NAME` or `git remote show -n NAME`")
+        return
+    shown = kind == "reflog" and start < len(argv) and argv[start] == "show"
+    position, seen_flags, seen_values, dashdash = exact_options(argv, start + (1 if shown else 0), flags, values, "reviewer.git",
+                                                                what, EXACT_GIT_EQ.get(sub))
+    rest = argv[position:]
+    if kind in {"paths", "patterns", "list_patterns", "reflog"}:
+        operands = exact_operands(argv, position, "reviewer.git", what, dashdash)
+        if kind == "paths":
+            for word in operands:
+                exact_git_path(ctx, word, base, literal)
+            return
+        listing = kind == "list_patterns" and bool(seen_flags & {"-l", "--list"})
+        if dashdash and not (sub == "tag" and listing):
+            raise PolicyFailure("reviewer.git", "%s takes no pathspecs" % what)
+        if kind == "list_patterns" and operands and not listing:
+            raise PolicyFailure("reviewer.git", "%s NAME creates it; list with -l/--list PATTERN" % what)
+        if any(word.startswith("-") for word in operands):
+            raise PolicyFailure("reviewer.git", "%s: a pattern cannot start with -" % what)
+        if kind == "reflog":
+            # A word right after `reflog` is a subcommand (expire, delete,
+            # drop, ...): a revision is read only after an explicit `show`.
+            if operands and (not shown or len(operands) > 1):
+                raise PolicyFailure("reviewer.git", "git reflog reads only as `git reflog [-n N]` or `git reflog show [-n N] [REV]`")
+            for word in operands:
+                exact_git_rev(ctx, word, base)
+        return
+    if kind == "grep" and "-e" not in seen_values:
+        if dashdash or not rest:
+            raise PolicyFailure("reviewer.git", "git grep needs a pattern (or -e PATTERN) before any --")
+        rest = rest[1:]
+    if dashdash:
+        revisions: List[str] = []
+        paths = list(rest)
+    elif "--" in rest:
+        revisions, paths = rest[:rest.index("--")], rest[rest.index("--") + 1:]
+    elif kind == "blame":
+        raise PolicyFailure("reviewer.git", "git blame reads only as `git blame [REV] -- PATH`")
+    else:
+        revisions, paths = list(rest), []
+    exact_operands(paths, 0, "reviewer.git", what, True)
+    if kind == "blame" and (len(revisions) > 1 or len(paths) != 1):
+        raise PolicyFailure("reviewer.git", "git blame reads only as `git blame [REV] -- PATH`")
+    if kind == "revs" and paths:
+        raise PolicyFailure("reviewer.git", "%s takes no pathspecs" % what)
+    if "--no-index" in seen_flags:
+        # Two files compared outside the index: no revisions, no pathspecs,
+        # and (like diff) regular files only, so no directory walk follows a
+        # leaf symlink out of the checkout.
+        operands = revisions + paths
+        if len(operands) != 2:
+            raise PolicyFailure("reviewer.git", "git diff --no-index compares exactly two files")
+        for word in operands:
+            path = exact_path(ctx, word, base, git=True)
+            if word != "/dev/null" and not path.is_file():
+                raise PolicyFailure("reviewer.symlink_follow", "git diff --no-index compares regular files only; directory comparison follows leaf symlinks")
+        return
+    separated = dashdash or "--" in rest
+    for word in revisions:
+        exact_git_rev(ctx, word, base, separated)
+    for word in paths:
+        exact_git_path(ctx, word, base, literal)
+
+
+def exact_find(ctx: Context, argv: List[str], base: Path, reads: ExactReads) -> None:
+    """find PATH... [primary ...] with EXACT_FIND_FLAGS / EXACT_FIND_VALUES."""
+    index = 1
+    starts: List[str] = []
+    while index < len(argv) and not argv[index].startswith("-") and argv[index] not in {"!", "(", ")"}:
+        starts.append(argv[index])
+        index += 1
+    if not starts:
+        reason = "reviewer find needs its starting paths first; -L/-H/-P/-E/-f and other find options are outside its exact forms"
+        raise_legacy_rule(argv, reason)
+        raise PolicyFailure("reviewer.form", reason)
+    while index < len(argv):
+        word = argv[index]
+        if word in EXACT_FIND_FLAGS:
+            index += 1
+            continue
+        if word in EXACT_FIND_VALUES:
+            if index + 1 >= len(argv) or argv[index + 1].startswith("-") or not exact_value_ok(EXACT_FIND_VALUES[word], argv[index + 1]):
+                raise PolicyFailure("reviewer.form", "find %s value is not one of its listed forms" % word)
+            index += 2
+            continue
+        reason = "find primary is outside the reviewer's exact forms: %s" % word
+        raise_legacy_rule(argv, reason)
+        raise PolicyFailure("reviewer.form", reason)
+    for word in starts:
+        reads.recursive_starts.append(exact_path(ctx, word, base, reads))
+
+
+EXACT_RECURSIVE_FLAGS = {"grep": {"-r", "-rn", "-rl", "-ri", "-rni", "-rin", "-nr", "--recursive"}, "ls": {"-R", "-lR"}}
+
+
+def exact_form(ctx: Context, argv: List[str], base: Path, reads: ExactReads) -> None:
+    """Judge one segment's argv (program first) against its exact form and
+    check every operand it names."""
+    program = argv[0]
+    if program == "git":
+        exact_git(ctx, argv, base)
+        return
+    if program in SCRIPT_TOOLS and program not in EXACT_FORMS:
+        raise PolicyFailure("reviewer.sed", "reviewer %s is not read-only: script-taking tools can write or execute" % program)
+    if program not in EXACT_FORMS:
+        raise PolicyFailure("reviewer.command", "reviewer program is not a listed read form: %s" % program)
+    flags, values, kind, (minimum, maximum) = EXACT_FORMS[program]
+    if kind == "find":
+        exact_find(ctx, argv, base, reads)
+        return
+    if kind == "sed":
+        if len(argv) < 4 or argv[1] != "-n" or not EXACT_SED_SCRIPT_RE.fullmatch(argv[2]):
+            raise PolicyFailure("reviewer.sed", "reviewer sed runs only as sed -n 'N[,M]p' FILE...; other scripts can read, write or execute")
+        for word in exact_operands(argv, 3, "reviewer.sed", program):
+            exact_path(ctx, word, base, reads)
+        return
+    if program == "rg" and (len(argv) < 2 or argv[1] != "--no-config"):
+        raise PolicyFailure("reviewer.search", "restricted ripgrep reads require rg --no-config as the command prefix")
+    try:
+        position, seen_flags, seen_values, dashdash = exact_options(argv, 1, flags, values, "reviewer.form", program)
+        operands = exact_operands(argv, position, "reviewer.form", program, dashdash)
+    except PolicyFailure as exc:
+        if exc.rule == "reviewer.form":
+            raise_legacy_rule(argv, exc.reason)
+        raise
+    for option, words in seen_values.items():
+        if values[option] == "path":
+            for word in words:
+                exact_path(ctx, word, base, reads)
+    if kind == "pattern_paths" and "-e" not in seen_values and "--files" not in seen_flags:
+        if not operands:
+            raise PolicyFailure("reviewer.form", "%s needs a pattern" % program)
+        operands = operands[1:]
+    if len(operands) < minimum or (maximum is not None and len(operands) > maximum):
+        if program == "uniq":
+            raise PolicyFailure("reviewer.uniq", "reviewer uniq takes at most one input operand: a second operand is an output file it overwrites")
+        raise PolicyFailure("reviewer.form", "%s takes %d to %s operands in its exact forms" % (program, minimum, "any" if maximum is None else maximum))
+    if kind == "date":
+        if any(not word.startswith("+") for word in operands):
+            raise PolicyFailure("reviewer.date", "reviewer date may only print: a non-+FORMAT operand sets the clock")
+        return
+    if kind in {"text", "none"}:
+        return
+    paths = [exact_path(ctx, word, base, reads) for word in operands]
+    if kind == "diff":
+        for path in paths:
+            if str(path) == "/dev/null":
+                continue
+            try:
+                regular = stat.S_ISREG(os.stat(str(path)).st_mode)
+            except OSError:
+                regular = False
+            if not regular:
+                raise PolicyFailure("reviewer.symlink_follow", "reviewer diff compares regular files only; directory comparison follows leaf symlinks")
+    if program in {"rg", "du"} or seen_flags & EXACT_RECURSIVE_FLAGS.get(program, set()):
+        reads.recursive_starts.extend(paths or [base])
+
+
+def validate_reviewer_exact(ctx: Context, command: str, base: Path) -> Optional[str]:
+    """The reviewer shell floor: every segment is an exact listed read form.
+    Returns coordination.message_read when it reads this pane's own message
+    files (a decision reason only)."""
+    reads = ExactReads()
+    segments = exact_segments(command)
+    for words in segments:
+        index = 0
+        while index < len(words) and not words[index][1] and ASSIGNMENT_RE.fullmatch(words[index][0]):
+            if not EXACT_ASSIGNMENT_RE.fullmatch(words[index][0]):
+                raise PolicyFailure("reviewer.shell", "reviewer assignments are limited to LC_*, LANG, LANGUAGE, TZ, NO_COLOR, FORCE_COLOR, TERM, COLUMNS and LINES with a plain value and no /: %s" % words[index][0].split("=", 1)[0])
+            index += 1
+        if index >= len(words):
+            raise PolicyFailure("reviewer.shell", "a reviewer segment needs a program after its assignments")
+        program, quoted = words[index]
+        if quoted:
+            raise PolicyFailure("reviewer.command", "the reviewer program word must be a bare listed name, never quoted")
+        if Path(program).name in WRAPPER_NAMES or Path(program).name in PRIVILEGE_WRAPPERS:
+            raise PolicyFailure("reviewer.shell", "reviewer launch wrappers are forbidden: %s" % program)
+        if "/" in program:
+            raise PolicyFailure("reviewer.command", "reviewer commands must be bare PATH names, never a path to an executable: %s" % program)
+        exact_form(ctx, [word for word, _ in words[index:]], base, reads)
+    roots = guarded_message_roots(ctx)
+    if any(path.is_dir() and any(within(root, path) for root in roots) for path in reads.recursive_starts):
+        raise PolicyFailure("coordination.message_traversal", "recursive reads may enter a message store; name explicit subdirectories outside the store (glob exclusions do not grant access)")
+    if reads.touched and len(segments) > 1:
+        raise PolicyFailure("coordination.message_read", "message files are read by one command on its own, never inside a list or pipeline")
+    return "coordination.message_read" if reads.touched else None
+
+
 def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: Optional[Path] = None) -> Optional[str]:
     base = ctx.pane_cwd if base is None else base
     if has_unquoted_expansion(command) or any(is_control(token) for token in tokens):
@@ -3738,7 +4474,7 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
                 return validate_orchestrator_gh(ctx, tokens, command, tool_input)
 
     if ctx.semantic_role == "reviewer":
-        return validate_reviewer_read(tokens, command, ctx, reviewer_base)
+        return validate_reviewer_exact(ctx, command, reviewer_base)
     if ctx.semantic_role == "executor" and reviewer_base is not None:
         # Selected plugin content and grants authorize only the existing
         # single-command read grammar, even when read_paths is empty.
@@ -3981,6 +4717,8 @@ FLOOR_TABLES = {
     "EDIT_TOOL_NAMES": EDIT_TOOL_NAMES,
     "READ_COMMANDS": READ_COMMANDS,
     "READ_GIT": READ_GIT,
+    "EXACT_FORMS": EXACT_FORMS,
+    "EXACT_GIT": EXACT_GIT,
     "CHILD_TMUX_DENIED": CHILD_TMUX_DENIED,
     "OUTBOUND_HELPER_BASENAMES": OUTBOUND_HELPER_BASENAMES,
     "INLINE_SHELLS": INLINE_SHELLS,
@@ -4017,11 +4755,11 @@ ROLE_FLOOR = {
     "reviewer": (
         ("readonly", "edit family denied, except this pane's own message drafts", ("reviewer.readonly", "coordination.draft"),
          _FLOOR_EDIT),
-        ("readonly", "shell default-deny except allowlisted reads",
-         ("reviewer.shell", "reviewer.command", "reviewer.git", "reviewer.path", "reviewer.sed", "reviewer.search",
-          "reviewer.symlink_follow", "reviewer.find", "reviewer.tail", "reviewer.sort", "reviewer.uniq",
-          "reviewer.file", "reviewer.date", "reviewer.file_list"),
-         (("READ_COMMANDS", "read commands"), ("READ_GIT", "git read subcommands"))),
+        ("readonly", "shell default-deny except listed exact read forms",
+         ("reviewer.shell", "reviewer.command", "reviewer.form", "reviewer.git", "reviewer.path", "reviewer.sed",
+          "reviewer.search", "reviewer.symlink_follow", "reviewer.find", "reviewer.tail", "reviewer.sort",
+          "reviewer.uniq", "reviewer.file", "reviewer.date", "reviewer.file_list"),
+         (("EXACT_FORMS", "read programs"), ("EXACT_GIT", "git read subcommands"))),
     ) + _FLOOR_TO_MASTER + (_FLOOR_LIFECYCLE,),
     "executor": _FLOOR_CONTAINMENT + _FLOOR_TO_MASTER + (_FLOOR_LIFECYCLE,),
     "orchestrator": (
@@ -4088,7 +4826,13 @@ FLOOR_PROBES = {
         ("shell", "reviewer.command", "touch", "touch {probe}"),
         ("shell", "reviewer.git", "git commit", "git commit -m probe"),
         ("shell", "reviewer.shell", "write redirection", "ls > {probe}"),
-        ("shell", "reviewer.sed", "sed", "sed -n 1p {probe}"),
+        ("shell", "reviewer.sed", "sed outside its one exact print form", "sed -i s/a/b/ {probe}"),
+        ("shell", "allow", "sed -n 'N,Mp' on a checkout file", "sed -n 1,2p {probe}"),
+        ("shell", "allow", "a pipeline of listed read forms", "git log --oneline -n 1 | head -n 1"),
+        ("shell", "reviewer.shell", "zsh extended-glob operator outside quotes", "cat ^probe"),
+        ("shell", "reviewer.shell", "assignment to a variable outside the locale/terminal list", "PATH=/tmp cat {probe}"),
+        ("shell", "reviewer.form", "an operand followed by -- (BSD cat opens a file named --)", "cat {probe} --"),
+        ("shell", "reviewer.git", "git config without --file", "git config --list"),
         ("shell", "allow", "uniq with one input operand", "uniq {probe}"),
         ("shell", "reviewer.uniq", "uniq with an output operand", "uniq {probe} {probe}"),
         ("shell", "allow", "git reflog", "git reflog"),
@@ -4326,7 +5070,72 @@ def emit_codex_system_message(message: str) -> None:
         return
 
 
+USAGE = """Usage: harness-policy.py [--decision-json] [--codex-hook-output]  (hook payload JSON on stdin)
+       harness-policy.py --floor-json | --probe-json
+       harness-policy.py --decision-json --as-role reviewer|executor --as-cwd DIR  (test mode)
+
+Hook mode reads the pane identity from the SESSION_WORKSPACE_* environment.
+--decision-json prints the normalized decision object and always exits 0.
+Test mode judges one stdin payload as ROLE working in DIR (a checkout), with
+no grants, message stores or workspace identity, and prints the same decision
+object. It reads no SESSION_WORKSPACE_* variable, runs and writes nothing,
+and is never reachable from the hook: harness-hook.sh refuses any argument
+other than --codex-hook-output."""
+TEST_ROLES = ("reviewer", "executor")
+TEST_PANE = "as-role"
+
+
+def test_context(role: str, cwd: Path) -> Context:
+    """The synthetic context of --as-role/--as-cwd: ROLE in checkout CWD and
+    nothing else (no grants, read paths, message stores or peers)."""
+    claude_home, codex_home = provider_homes()
+    return Context(mode="enforce", semantic_role=role, pane_name=TEST_PANE, pane_cwd=cwd, project_root=cwd,
+                   config_path=Path(os.devnull), orchestrator_pane="", executor_panes=frozenset(),
+                   reviewer_panes=frozenset(), child_roots=(cwd,), grant_roots=(), message_roots=(),
+                   claude_home=claude_home, codex_home=codex_home, guards={})
+
+
+def test_mode(argv: List[str]) -> int:
+    """--decision-json --as-role ROLE --as-cwd DIR: decide one stdin payload."""
+    options = {}
+    index = 0
+    while index < len(argv):
+        word = argv[index]
+        if word == "--decision-json" and word not in options:
+            options[word] = ""
+            index += 1
+        elif word in {"--as-role", "--as-cwd"} and word not in options and index + 1 < len(argv):
+            options[word] = argv[index + 1]
+            index += 2
+        else:
+            print(USAGE, file=sys.stderr)
+            return 2
+    cwd = Path(options.get("--as-cwd", "")).expanduser()
+    if set(options) != {"--decision-json", "--as-role", "--as-cwd"} or options["--as-role"] not in TEST_ROLES \
+            or not options["--as-cwd"] or not cwd.is_dir():
+        print(USAGE, file=sys.stderr)
+        return 2
+    try:
+        _note_parsed_helper_reset()
+        decision = evaluate_payload(test_context(options["--as-role"], canonical(cwd)), sys.stdin.read())
+    except Exception as exc:  # fail closed, exactly like the hook
+        _note_parsed_helper_reset()
+        decision = deny(None, "", "policy.internal", "strict-v1 policy error (%s); refusing" % type(exc).__name__, integrity=True)
+    normalized = decision.normalized()
+    try:
+        normalized["diagnostic"] = diagnostic_object(decision)
+    except Exception:
+        normalized["diagnostic"] = None
+    print(json.dumps(normalized, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
 def main(argv: List[str]) -> int:
+    if argv in (["--help"], ["-h"]):
+        print(USAGE)
+        return 0
+    if "--as-role" in argv or "--as-cwd" in argv:
+        return test_mode(argv)
     if argv in (["--floor-json"], ["--probe-json"]):
         # Read-only reports for harness-status. They read no stdin and never
         # change a hook decision.
@@ -4339,8 +5148,7 @@ def main(argv: List[str]) -> int:
         return 0
     allowed = {"--decision-json", "--codex-hook-output"}
     if len(argv) != len(set(argv)) or any(arg not in allowed for arg in argv):
-        print("Usage: harness-policy.py [--decision-json] [--codex-hook-output]  (hook payload JSON on stdin)\n"
-              "       harness-policy.py --floor-json | --probe-json", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     decision_json = "--decision-json" in argv
     codex_hook_output = "--codex-hook-output" in argv
