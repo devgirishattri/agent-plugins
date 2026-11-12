@@ -967,6 +967,14 @@
                   "minimum": 1,
                   "maximum": 1440
                 },
+                "launch": {
+                  "description": "Default \"always\". \"on_demand\": an active-harness executor or reviewer pane (schema v2-5) that a full start or reconcile leaves down. The orchestrator, or the user, starts it with workspace start SESSION --pane NAME, which waits for the agent's input line, and closes it with workspace stop SESSION --pane NAME --confirmed, which refuses while the worker has a task in progress, unread messages or a running turn. Not allowed in a split_tree session.",
+                  "type": "string",
+                  "enum": [
+                    "always",
+                    "on_demand"
+                  ]
+                },
                 "idle_activity": {
                   "description": "Opt-in, default [\"connections\"]. What counts as use for a service pane with idle_stop_minutes and a port; not allowed on the browser pane. \"connections\": an inbound TCP connection to the port (on Linux, also one the server closed in the last 60 seconds). \"output\": new output in the pane since the previous sample, for a dev server that logs each request and closes every connection after the response. Use is either selected signal. Any periodic output keeps the pane up, which is why \"output\" is opt-in.",
                   "type": "array",

@@ -33,11 +33,19 @@ Real flags:
   `behavior.attach`.
 - `--adopt --confirmed`: allow occupied unmanaged panes to be claimed.
 - `SESSION --pane NAME` (repeatable): start only the named service panes
-  (role `service`, such as the debug browser or a dev server) of one session.
+  (role `service`, such as the debug browser or a dev server) of one session,
+  or executor/reviewer panes marked `"launch": "on_demand"`.
   NAME is the pane name or the part after `<project.id>-`. The session is
   created if it is not running, with only those panes, and their declared
   commands run. Running panes are `[kept]`. `--pane` never attaches and cannot
   be combined with `--no-agents`, `--no-services` or `--adopt`.
+
+A full start leaves on-demand workers down and reports each as `[on-demand]
+... start it with: workspace start SESSION --pane NAME`. `--pane` for a worker
+waits until its agent shows its input line and prints `[ready]`. `[not ready]`
+means the agent did not get there in time, or shows a choice such as a folder
+trust question; the pane is left running and the start exits non-zero. Relay
+it, and do not send the worker a message until it is ready.
 
 Safety gates:
 

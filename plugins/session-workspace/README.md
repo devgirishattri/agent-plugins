@@ -39,11 +39,11 @@ the CLI contract string both entry points use for their compatibility check.
 |---|---|---|---|
 | `doctor` | `workspace-doctor [--config PATH] [--json]` | Never | Read-only health check: tooling versions, config validity, plugin dependency versions, pane cwds, secrets-file gates, state-dir writability, runtime resolution, coordination-base drift, session-chat helper resolution. |
 | `plan` | `workspace-plan [TARGET\|all] [--config PATH] [--json] [--running]` | Never | Deterministic dry-run: resolves and prints exactly what `start` would do (sessions, panes, argv, env var *names*, grants) without touching tmux. `--running` adds a read-only `running` field per pane, the only form that reads tmux. |
-| `start` | `workspace-start [TARGET\|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]`<br>`workspace-start SESSION --pane NAME [--pane NAME...] [--config PATH] [--no-attach]` | Yes | Creates only what is missing. A pane the engine already manages and is healthy is left alone (idempotent restart). `--pane` starts only the named service panes; see "Single service panes on demand". |
+| `start` | `workspace-start [TARGET\|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]`<br>`workspace-start SESSION --pane NAME [--pane NAME...] [--config PATH] [--no-attach]` | Yes | Creates only what is missing. A pane the engine already manages and is healthy is left alone (idempotent restart). `--pane` starts only the named service panes, or executor/reviewer panes marked `launch: "on_demand"`, which a full start leaves down; see "Single service panes on demand" and "On-demand workers". |
 | `status` | `workspace-status [TARGET\|all] [--config PATH] [--json] [--pane NAME...]` | Never | Reports session/pane/role/runtime/model/cwd/process/health/running for every planned pane, one CDP health line per browser, and each idle-stop pane's watcher and last stop. |
 | `restart` | `workspace-restart [TARGET\|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` | Yes | `stop --confirmed` followed by `start`, for the same target. Unlike the old launchers, `restart` accepts `--no-save`. |
 | `reconcile` | `workspace-reconcile [TARGET\|all] [--config PATH] [--apply] [--adopt --confirmed]` | Only with `--apply` | Dry-run by default; `--apply` repairs missing/misnamed managed resources without respawning healthy panes. Use `--adopt --confirmed` to preview adoption, then add `--apply` to perform it; `start --adopt --confirmed` is the direct lifecycle alternative. |
-| `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes and leaves the session running. |
+| `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes or on-demand workers and leaves the session running; a busy worker is left running unless `--force`. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
 | `harness-status` | `harness-status [--config PATH] [--json] [--probe]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates), the strict-v1 role floor for this pane's role (every role outside a pane), the optional guard packs, and whether this pane's engine identity matches the validated plan. `--probe` decides this pane's built-in floor cases without running them and exits 1 on any unexpected decision. |
@@ -70,8 +70,9 @@ grace period, closes only that pane, and leaves the session and its other
 panes running. Stopping the browser pane releases its port claim.
 
 - **Selection.** `NAME` is a pane name, or the part after `<project.id>-`
-  (`--pane browser` selects `example-browser`). Only role `service` panes can
-  be selected; agent panes are refused. `--pane` needs one explicit session,
+  (`--pane browser` selects `example-browser`). Only role `service` panes and
+  executor/reviewer panes marked `launch: "on_demand"` (see "On-demand
+  workers") can be selected; other agent panes are refused. `--pane` needs one explicit session,
   never attaches, and is refused together with `--no-agents`,
   `--no-services`, `--adopt` (start) or `--all`, `--no-save` (stop).
   `split_tree` layouts are not built for a subset start and `retain_layout` is
@@ -146,7 +147,56 @@ panes running. Stopping the browser pane releases its port claim.
   `workspace-start.sh SESSION --pane NAME... [--no-attach] [--config PATH]`
   and `workspace-stop.sh SESSION --pane NAME... --confirmed [--config PATH]`
   through the trusted helper path, for configured service panes of that
-  session only. Executors and reviewers stay refused, by any route.
+  session and the on-demand workers it coordinates. Executors and reviewers
+  stay refused, by any route.
+
+### On-demand workers (`launch: "on_demand"`)
+
+In an active strict-v1 harness (schema 2-5, `harness.enabled: true`), an
+executor or reviewer pane can be marked `"launch": "on_demand"`. A full
+`workspace start` or `reconcile --apply` then leaves it down, reported as
+`[on-demand] ... not started (launch on_demand); start it with: workspace
+start development --pane example-web-executor`, and keeps it when it is
+already running. The orchestrator starts the worker when it has a task for it
+and closes it when the worker is idle:
+
+```bash
+workspace start development --pane web-executor
+workspace stop development --pane web-executor --confirmed
+```
+
+- **Ready means ready to take a message.** `start --pane` for a worker
+  returns once the agent draws its input line (Codex's `›`, Claude Code's
+  `❯`), so a `session-chat` send right after it is not typed into a booting
+  agent. A numbered choice on that line, such as a first-run folder trust
+  question, is not ready. A worker that does not get there within
+  `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` seconds (default 120) is reported as
+  `[not ready] ... the pane is left running`, and the start exits non-zero.
+- **Closed only when idle.** `stop --pane` for a worker first checks that it
+  is idle. It leaves the worker running, reports `[busy] ... left running:
+  <reasons>` and exits 1 when a scheduler task assigned to it is still
+  `assigned`, a task it reviews is in `review`, its session-chat inbox queue
+  holds unread messages (the plan's messages store and both providers'
+  default inboxes), or its screen shows a running turn (`esc to interrupt`).
+  `--force` stops it anyway; it is the user's override, and the harness never
+  lets an agent pane pass it. After a pane stops, the session's standard
+  layout is applied again so the remaining panes share the window.
+- **Where it applies.** Only the harness executor and reviewer roles, and
+  never in a `split_tree` session, whose layout builds every pane at once
+  (validation refuses both). A session that holds only on-demand workers is
+  not created by a full start; `start --pane` creates it with the named
+  worker. `plan` marks each worker `(on demand: ...)`, `status` adds a
+  `launch: on demand` line with the start command while it is down, and the
+  Stop health check does not count a down worker as missing.
+- **The orchestrator's own session.** The orchestrator may start and stop the
+  on-demand workers it coordinates (environment-scoped orchestrators: the
+  workers of their own environment), and may stop or restart other sessions
+  such as `services`. It may not stop or restart the session that holds its
+  own pane, by any route (`stop` or `restart` of that session or `all`,
+  `--all`, an environment stop or restart covering it, or any stop while
+  `behavior.stop_scope` is `all`), under rule `orchestrator.self_stop`. That
+  would end its own turn and leave the workers it started without a
+  coordinator. `--pane` stops of workers and services stay allowed.
 
 ## Safety model
 
@@ -187,10 +237,16 @@ panes running. Stopping the browser pane releases its port claim.
   longer lists.
 - **Secrets never touch argv, `send-keys`, or tmux metadata — but they do
   transit one private file.** See "Secrets" below.
-- **Project-scoped locking.** `start`, `reconcile --apply`, and `stop`
-  acquire an `mkdir`-based lock (with pid file and stale-lock reclaiming) per
-  `project.id` under the state directory, so two concurrent invocations
-  can't race on the same splits or marker writes.
+- **Project-scoped locking.** `start`, `reconcile --apply`, `stop` and the
+  idle watcher's stops take one lock directory per `project.id` under the
+  state directory, so two concurrent invocations can't race on the same
+  splits or marker writes. Owning it takes an `O_EXCL` create of its `pid`
+  file, not just a successful `mkdir` (uutils `mkdir` can report success to
+  the process that lost a create race). A lock whose holder has died is taken
+  over in place, under a `reclaim` marker and only while it still names the
+  dead pid, and a release renames the directory aside before removing it, so
+  a waiter never deletes a newer holder's lock. On-demand workers make an
+  orchestrator take this lock far more often.
 
 ## Secrets
 
@@ -519,7 +575,10 @@ role floor is off. The floor:
   `messages-clean`, memory/docs writes, and every workspace mutator,
   including the single-pane `workspace-start.sh SESSION --pane NAME` and
   `workspace-stop.sh SESSION --pane NAME --confirmed` forms (configured
-  service panes of that session only). Executors and reviewers are refused
+  service panes of that session, and the on-demand workers it coordinates;
+  never `--force`). It may not stop or restart the session that holds its
+  own pane, by any route (rule `orchestrator.self_stop`; see "On-demand
+  workers"). Executors and reviewers are refused
   the lifecycle verbs (`start`, `stop`, `restart`, `reconcile`, `install`,
   `browser-config`) by any route, including the `workspace` dispatcher on
   `PATH`, under rule `coordination.write`.
@@ -1417,6 +1476,7 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].panes[].port` | integer, 1-65535 | no | — | First-class metadata (surfaced in `plan`/`status` output); does not change what gets launched or add a `--port` flag anywhere. A pane with `port` and `command` is refused by `start --pane` (and by a schema-v5 start) while another process holds the port, naming the holder's PID. |
 | `sessions[].panes[].idle_stop_minutes` | integer, 1-1440 | no | — (never stopped) | `service` panes only, and only one with a port to watch: the browser pane or a pane with `port`. A watcher stops the pane after this many minutes with no inbound connection to that port (for the browser, no CDP commands; keepalive pings on an open connection do not count) and records why. See "Single service panes on demand". |
 | `sessions[].panes[].idle_activity` | array of unique strings: `connections`, `output` | no | `["connections"]` | What counts as use for a pane with `idle_stop_minutes` and `port`; refused without `idle_stop_minutes`, on a non-`service` pane and on the browser pane. `connections`: an inbound connection to the port (on Linux, also one the server closed in the last 60 seconds). `output`: new output in the pane since the previous sample, for a dev server that closes every connection after its response but logs each request. Use is either selected signal. Any periodic output keeps the pane up, which is why `output` is opt-in. |
+| `sessions[].panes[].launch` | enum: `always`, `on_demand` | no | `always` | `on_demand`: an executor or reviewer pane of an active strict-v1 harness (schema 2-5) that a full `start`/`reconcile --apply` leaves down; the orchestrator starts it with `start --pane` (which waits for the agent's input line) and closes it with `stop --pane` (refused while it is busy). Refused on any other role and in a `split_tree` session. See "On-demand workers". |
 | `sessions[].panes[].read_paths` | array of ≤16 strings | no | — (no extra reads) | Active strict-v1 **reviewer** or **executor** panes only (schema v2–5). Existing files/directories the pane's shell may read in addition to its cwd; see "Reviewer read paths" and "Executor read paths". Any other role, or an inactive harness, is a validation error. |
 | `sessions[].panes[].agent.*` | see `roles.<r>.agent.*` | no | role-level value, or no flag | Pane-level override of `model`/`effort`/`profile`/`permission_mode`, taking precedence over the role's own value. |
 

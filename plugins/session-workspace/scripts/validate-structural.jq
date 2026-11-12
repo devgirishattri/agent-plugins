@@ -194,7 +194,7 @@ def harness_engine_vars: [
     (($s.value.layout.nodes // []) | to_entries[] | . as $n |
       chk($n.value; ["id", "from", "dir", "percent"]; ["id"]; "sessions." + $slabel + ".layout.nodes[" + ($n.key | tostring) + "]")),
     (($s.value.panes // []) | to_entries[] | . as $p | ($p.value.name // ("panes[" + ($p.key | tostring) + "]")) as $plabel | (
-      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths", "idle_stop_minutes", "idle_activity"] + (if $cfg.schema_version == 5 then ["runtime"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
+      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths", "idle_stop_minutes", "idle_activity", "launch"] + (if $cfg.schema_version == 5 then ["runtime"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
       chk($p.value.agent // {}; ["model", "effort", "profile", "permission_mode"]; []; "sessions." + $slabel + ".panes." + $plabel + ".agent")
     ))
   )),
@@ -451,6 +451,27 @@ def harness_engine_vars: [
             $l + " is not allowed on the browser pane: Chrome writes to its pane on its own, and the browser's idle stop counts CDP commands"
           else empty end
       else empty end)),
+
+  # ---- on-demand workers: launch "on_demand" keeps an active-harness
+  #      executor or reviewer pane out of a full start/reconcile, so the
+  #      orchestrator starts and stops it with `--pane` when it needs it.
+  #      Only the two worker roles (never the orchestrator, a service or a
+  #      non-harness pane), and never in a split_tree session, whose layout
+  #      builds every node at once. ----
+  (. as $cfg
+   | ($cfg.sessions // [])[] | . as $s | ($s.panes // [])[] | . as $p
+   | select($p | type == "object" and has("launch"))
+   | ("pane " + (($p.name // "?") | tostring) + ": launch") as $l
+   | if ($p.launch | type) != "string" or (["always", "on_demand"] | index($p.launch)) == null then
+       $l + " must be \"always\" or \"on_demand\""
+     elif $p.launch == "always" then empty
+     elif (([2, 3, 4, 5] | index($cfg.schema_version)) == null) or (($cfg.harness.enabled // false) != true) then
+       $l + " \"on_demand\" needs schema_version 2-5 with harness.enabled true: the orchestrator starts on-demand workers"
+     elif ([$cfg.harness.roles.executor, $cfg.harness.roles.reviewer] | index($p.role)) == null then
+       $l + " \"on_demand\" applies only to the harness executor or reviewer role, not role \"" + (($p.role // "") | tostring) + "\""
+     elif ($s.layout.kind // "standard") == "split_tree" then
+       $l + " \"on_demand\" is not supported in a split_tree session (" + (($s.id // "?") | tostring) + "): its layout builds every pane at once; use a standard layout"
+     else empty end),
 
   # ---- commands must be argv arrays, never a command string ----
   ((.sessions // [])[] | (.panes // [])[] | . as $p |

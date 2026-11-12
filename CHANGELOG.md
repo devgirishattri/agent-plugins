@@ -1,5 +1,71 @@
 # Changelog
 
+## session-workspace 0.13.0 — 2026-11-12
+
+- **On-demand workers.** In an active strict-v1 harness (schema 2-5), an
+  executor or reviewer pane can set `"launch": "on_demand"`. A full
+  `workspace start` or `reconcile --apply` then leaves it down, reported as
+  `[on-demand] ... start it with: workspace start SESSION --pane NAME`, and
+  keeps it when it is already running. A session that holds only on-demand
+  workers is not created by a full start. Validation refuses `launch` on any
+  other role, without an active harness, and in a `split_tree` session.
+  `plan` marks the pane `(on demand: ...)` and its `--json` pane carries
+  `launch`; `status` adds a `launch: on demand` line with the start command
+  while it is down; the Stop health check no longer counts a down worker as
+  missing.
+- **`start --pane` for a worker waits until it is ready.** `--pane` now
+  selects on-demand workers as well as service panes. For a worker it returns
+  once the agent draws its input line (Codex `›`, Claude Code `❯`), so a
+  message sent right after it is not typed into a booting agent; a numbered
+  choice on that line, such as a folder trust question, is not ready. After
+  `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` seconds (default 120) it reports
+  `[not ready] ... the pane is left running` and exits non-zero. The check is
+  `scripts/agent-pane.py ready`.
+- **`stop --pane` leaves a busy worker running.** Before it closes a worker,
+  `stop --pane` checks for a scheduler task assigned to it that is still
+  `assigned`, a task it reviews that is in `review`, unread rows in its
+  session-chat inbox queue (the plan's messages store and both providers'
+  default inboxes), and a running turn on its screen (`esc to interrupt`).
+  Any of them reports `[busy] ... left running: <reasons>` and exits 1; the
+  summary gains `busy: N`. `--force` (with `--pane` only) stops it anyway.
+  After a pane stops, the session's standard layout is applied again.
+- **strict-v1: the orchestrator starts and stops its workers, never its own
+  session.** The orchestrator may run `start --pane` and `stop --pane` for
+  the on-demand workers it coordinates (environment-scoped orchestrators: the
+  workers of their own environment), never with `--force`, and executors and
+  reviewers stay refused. It may no longer stop or restart the session that
+  holds its own pane, by any route: `stop`/`restart` of that session or
+  `all`, `--all`, an environment stop or restart that covers it, or any
+  session stop while `behavior.stop_scope` is `all` (rule
+  `orchestrator.self_stop`, in the floor, `harness-status --probe` and the
+  probe cases). Stops of other sessions and `--pane` stops stay allowed.
+- **Safe project lock.** The project lock that `start`, `reconcile --apply`,
+  `stop` and the idle watcher's stops share now uses the claim protocol of
+  the other plugins' locks: ownership is an `O_EXCL` create of its `pid`
+  file, not a successful `mkdir` (uutils `mkdir` can report success to the
+  process that lost a create race), a stale lock is taken over in place under
+  a `reclaim` marker only while it still names the dead pid, and a release
+  renames the directory aside before removing it. The wait polls every 0.1 s.
+  On-demand workers make an orchestrator take this lock far more often.
+- **workspace-orchestrator skill.** The lifecycle reference gains an
+  "On-demand workers" section: start a worker with `--pane` just before its
+  first packet and wait for `[ready]`, write packets that stand alone, close
+  it once its part is done, leave a `[busy]` worker running, never pass
+  `--force`, and never stop the session holding the orchestrator's own pane.
+- Tests: `scripts/test-session-workspace-locks.py` (new, run in the
+  release-checks job) covers lock contention with system and uutils-style
+  `mkdir`, a race-losing `mkdir`, in-place stale takeover, a reclaim that
+  must not take a newer holder's lock, and release by the holder only.
+  `test-session-workspace.sh` adds the `launch` fixtures and a lifecycle
+  section with a stand-in agent (full start, ready wait, kept worker, each
+  busy reason, `--force`, not-ready timeout, refusals, a workers-only
+  session). `test-harness-policy.sh` adds the on-demand and self-stop cases.
+- **Upgrading.** No config migration; every pane defaults to
+  `"launch": "always"`. An orchestrator that stopped or restarted its own
+  session (for example `workspace restart development` from the master pane)
+  now gets `orchestrator.self_stop`; run that from a terminal outside the
+  workspace, or stop the other sessions by name.
+
 ## session-workspace 0.12.13 — 2026-11-12
 
 - **Schema-v5 Stop health warnings run.** `guard-health.sh` continued only for

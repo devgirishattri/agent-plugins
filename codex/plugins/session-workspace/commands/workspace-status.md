@@ -19,7 +19,8 @@ argument-hint: "[TARGET|all] [--config PATH] [--json] [--pane NAME...]"
    - `TARGET|all`: optional session id filter; default is `all`.
    - `--config PATH`: use a specific workspace config instead of discovery.
    - `--json`: emit the status rows as JSON.
-   - `SESSION --pane NAME`: restrict the report to the named service panes.
+   - `SESSION --pane NAME`: restrict the report to the named service panes
+     or on-demand workers.
 
 4. Safety/behavior:
    - Status is read-only. It validates config and reads tmux state, but does not
@@ -32,6 +33,10 @@ argument-hint: "[TARGET|all] [--config PATH] [--json] [--pane NAME...]"
      observes such as `connections` or `connections+output`, client count,
      time until it stops) and, after a stop, a `last stop:` line with the time
      and reason.
+   - An executor/reviewer marked `"launch": "on_demand"` adds a `launch: on
+     demand` line; while it is down that line names the `workspace start
+     SESSION --pane NAME` command that starts it. A down on-demand worker is
+     expected, not a fault.
    - A session with a browser pane gets one CDP endpoint health line, for
      example `browser: browser http://127.0.0.1:9326 — up (Chrome/131.0)
      cdp_clients=1`. Check it says `up` before a browser smoke; when it says
