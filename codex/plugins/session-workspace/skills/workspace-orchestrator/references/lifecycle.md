@@ -141,6 +141,9 @@ The fixed Git floor permits only these operations: fetch/status/read checks,
 commit on work, normal pushes of the configured work/release refs, the reviewed
 `--no-ff` work-to-release merge, and optional `--ff-only` alignment. Never force,
 delete a ref, rewrite history, use `checkout -B` on release, or bypass verification.
+The strict-v1 hook does not refuse these executor Git commands. Put the floor
+in every executor packet, and describe it as this workflow's contract, never
+as harness enforcement.
 
 ## Selftest and prompt preview
 

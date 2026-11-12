@@ -270,9 +270,11 @@ restarted. Only `enabled: true` with `mode` (`audit` | `enforce`),
 
 ### Per-pane engine identity
 
-Every pane the engine launches receives six base **engine-owned** variables;
-a guarded schema-v3–v5 launch receives `SESSION_WORKSPACE_GUARDS_JSON` as a
-seventh. They live in the pane's own process environment — never mirrored into the tmux
+Every pane the engine launches receives seven base **engine-owned** variables
+(the six identity values plus `SESSION_WORKSPACE_READ_PATHS_JSON`, exported
+empty when the pane has no read paths); a guarded schema-v3–v5 launch also
+receives `SESSION_WORKSPACE_GUARDS_JSON`, and a schema-v5 config with
+`environments` adds `SESSION_WORKSPACE_SCOPE_JSON`. They live in the pane's own process environment — never mirrored into the tmux
 session env, never settable from `env.groups`/`pane_name_aliases` (both are
 validation errors) — and `workspace-plan` lists their names:
 
@@ -286,6 +288,7 @@ validation errors) — and `workspace-plan` lists their names:
 | `SESSION_WORKSPACE_HARNESS_MODE` | `audit` or `enforce` when active; empty for v1, no `harness`, or `enabled: false` |
 | `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3–v5 launch; absent for v1/v2 and v3–v5 without guards |
 | `SESSION_WORKSPACE_READ_PATHS_JSON` | canonical `[{path, kind}]` for a reviewer or executor with `read_paths`; exported empty for every other pane so an inherited value is cleared |
+| `SESSION_WORKSPACE_SCOPE_JSON` | canonical environment scope for a pane of a schema-v5 config with `environments`; absent otherwise |
 
 The policy cross-checks this identity against the validated config on every
 gated tool call and **fails closed** on any disagreement: unknown pane, role
@@ -318,6 +321,11 @@ health/lifecycle packs only add non-blocking context. Today they provide:
   changes; `.warn_missing_panes`: report missing **non-optional**, non-service
   agent panes; `.branch_ahead`: for executor child roots with both configured
   local branches, report the neutral fact that `release` is ahead of `base`.
+  In a schema-v5 config with `environments`, the orchestrator panes whose cwd
+  is the project root (and the unbound root orchestrator) report it; a
+  coordinator confined to a control directory does not. Before 0.12.13 the
+  Stop wrapper accepted only schema 3 or 4, so a v5 config's
+  `workspace_health` warnings never appeared.
 
 The lifecycle/health wrappers exit silently before jq/Python when the guarded
 v3–v5 launcher identity is absent or the feature is off. Lifecycle reminders use
@@ -374,7 +382,12 @@ coordinates only: every Git mutation runs in the target's executor pane under
 a fixed Git floor (fetch/status reads, commit on work, normal pushes of the
 configured work/release refs, the reviewed `--no-ff` work-to-release merge,
 optional `--ff-only` alignment — never a force push, leading `+`, ref
-deletion, history rewrite, or `checkout -B` on release). Deploy is gated by a
+deletion, history rewrite, or `checkout -B` on release). That Git floor is
+the workflow's contract, which the skill follows; the strict-v1 hook does not
+check it. The hook keeps the orchestrator from pushing or mutating a child
+checkout, but an executor's `git push --force`, `git reset --hard` or
+`git checkout -B` is not refused, so protect release branches on the remote
+where a force push must be impossible. Deploy is gated by a
 six-check executor preflight: both branches exist locally and at the remote,
 release-to-work has commits to ship, work-to-release is empty, both local
 branches exactly equal their remote refs, and the tree is clean. The pinned
@@ -918,8 +931,9 @@ except `--codex-hook-output`; any other argument is refused
 
 `harness-policy.py --decision-json` (test/parity mode) prints exactly one
 compact, key-sorted JSON object —
-`{"active","decision","mode","pane","profile","reason","role","rule","tool"}`
-with `decision` ∈ `allow | deny | audit` — so both provider trees can
+`{"active","decision","diagnostic","mode","pane","profile","reason","role","rule","tool"}`
+with `decision` ∈ `allow | deny | audit` and `diagnostic` the diag/1 object
+of a deny (null otherwise) — so both provider trees can
 byte-compare decisions. Both Claude-shaped (`tool_name`/`tool_input`, string
 `command`) and Codex-shaped (`shell`/`apply_patch`, argv-list or `bash -lc`
 commands, `workdir`, JSON-string `tool_input`) payloads are understood.
@@ -994,6 +1008,11 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   only by the child-root floor, the `git push` denial, and (0.9.0) the
   closed `gh` grammar; project release/build rules stay in `AGENTS.md` and
   project hooks.
+- An executor's Git is not narrowed by the floor. The reviewed-git-v1 Git
+  floor (no force push, ref deletion, history rewrite or `checkout -B` on
+  release) is the `workspace-orchestrator` workflow's contract, so the hook
+  allows `git push --force`, `git reset --hard` and `git checkout -B` in an
+  executor checkout. Protect release branches on the remote.
 - The 0.9.0 `gh` rules are an argv guardrail for root *and* confined
   orchestrators, not subprocess isolation: a script file the pane may run,
   an interpreter fed on stdin, or (root only) `sh -c`/inline interpreter
@@ -1110,8 +1129,9 @@ every invocation it:
 **Then, per project:**
 
 3. Create `.agent-workspace/workspace.json` (`schema_version: 1`, `2` for the
-   harness, `3` for optional shared guards, or `4` for reviewed Git
-   orchestration — see "Harness" above) describing
+   harness, `3` for optional shared guards, `4` for reviewed Git
+   orchestration, or `5` for scoped environments — see "Harness" above and
+   "Schema v5 root-scoped environment orchestrators" below) describing
    the project's runtimes, roles, stores, sessions/panes, and behavior — see
    `scripts/workspace.schema.json` for the documented shape, or copy one of
    `scripts/fixtures/valid/*.json` as a starting point, and the
@@ -1218,9 +1238,10 @@ roadmap items — read them before depending on the behavior they describe.
 
 ## Configuration reference
 
-`.agent-workspace/workspace.json`, `schema_version: 1`, `2`, `3`, or `4` (v2
-adds the harness; v3 adds optional shared guards; v4 adds optional reviewed
-Git orchestration). `validate-config.sh` is the runtime authority: it
+`.agent-workspace/workspace.json`, `schema_version: 1`, `2`, `3`, `4`, or `5`
+(v2 adds the harness; v3 adds optional shared guards; v4 adds optional
+reviewed Git orchestration; v5 adds scoped environments, described at the end
+of this file). `validate-config.sh` is the runtime authority: it
 enforces its explicit key, safety, and cross-field checks
 (`validate-structural.jq` for the pure-jq structural half — unknown/missing
 keys, uniqueness, charset/safety rules, the harness/guards/orchestration
