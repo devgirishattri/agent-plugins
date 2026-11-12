@@ -2042,6 +2042,83 @@ as_case "remote: git remote NAME is denied" "$REMOTE_DENY" reviewer "$CHILD" "$(
 as_review "remote: git remote -v from the live reviewer pane is denied" "$(bash_payload 'git remote -v')" '.decision == "deny" and .rule == "reviewer.git"'
 as_review "remote control: git remote from the live reviewer pane is allowed" "$(bash_payload 'git remote')" '.decision == "allow"'
 
+echo "== 0.13.1 executor bare {} (the find -exec placeholder) =="
+# An unquoted word that is exactly {} is not a brace expansion in bash, dash or
+# zsh, so the executor floor decides it like its '{}' spelling. Only an
+# argument of an ordinary command gets that: in zsh a {} that can start a
+# command is an empty { } group (`then {} else CMD` runs CMD), so that position
+# keeps path.dynamic. Decided through the read-only test mode as the executor
+# of the checkout. Set HARNESS_TEST_BASELINE_POLICY_0130 to the 0.13.0
+# harness-policy.py (inside a copy of its scripts directory) to assert that
+# 0.13.0 denied each newly allowed form with path.dynamic.
+BASELINE_POLICY_0130="${HARNESS_TEST_BASELINE_POLICY_0130:-}"
+[ -n "$BASELINE_POLICY_0130" ] || echo "  (baseline controls skipped: set HARNESS_TEST_BASELINE_POLICY_0130 to the 0.13.0 harness-policy.py)"
+mkdir -p "$CHILD/src/generated/prisma" "$CHILD/brace-cwd"
+printf 'x\n' > "$CHILD/src/generated/prisma/index.js"
+ln -s "$ROOT/component-b" "$CHILD/brace-cwd/{}"
+BRACE_DYN='.decision == "deny" and .rule == "path.dynamic"'
+BRACE_QUOTED="'{}'"
+# brace_pair LABEL EXPECTED COMMAND [CWD]: COMMAND as written (bare {}) and
+# with every {} written '{}' get the same decision and rule, matching EXPECTED.
+brace_pair() {
+  local label="$1" expression="$2" bare="$3" cwd="${4:-$CHILD}" quoted bare_out quoted_out
+  quoted="${bare//\{\}/$BRACE_QUOTED}"
+  bare_out="$(run_as executor "$cwd" "$(bash_payload "$bare")")"
+  quoted_out="$(run_as executor "$cwd" "$(bash_payload "$quoted")")"
+  if printf '%s' "$bare_out" | jq -e "$expression" >/dev/null 2>&1 &&
+     [ "$(printf '%s' "$bare_out" | jq -c '[.decision, .rule]')" = "$(printf '%s' "$quoted_out" | jq -c '[.decision, .rule]')" ]; then
+    pass "$label"
+  else
+    fail "$label" "bare=$bare_out quoted=$quoted_out"
+  fi
+}
+for brace_form in 'find src/generated/prisma -type f -exec shasum -a 256 {} + | LC_ALL=C sort' \
+                  'find src/generated/prisma -type f -exec shasum -a 256 {} +' \
+                  'find src -type f -exec shasum -a 256 {} \;' \
+                  'find src -type f -execdir shasum -a 256 {} +' \
+                  'ls {}' 'echo {}' \
+                  'LC_ALL=C find src -type f -exec shasum -a 256 {} +' \
+                  'find src -type f -exec shasum -a 256 {} + 2>/dev/null' \
+                  'cd src && find . -type f -exec shasum -a 256 {} \; > sums.txt'; do
+  brace_pair "bare {}: $brace_form is allowed, like its '{}' spelling" '.decision == "allow" and .role == "executor"' "$brace_form"
+  [ -n "$BASELINE_POLICY_0130" ] || continue
+  BRACE_OUT="$(POLICY="$BASELINE_POLICY_0130" run_as executor "$CHILD" "$(bash_payload "$brace_form")")"
+  if printf '%s' "$BRACE_OUT" | jq -e "$BRACE_DYN" >/dev/null 2>&1; then
+    pass "baseline control: 0.13.0 denied it with path.dynamic: $brace_form"
+  else
+    fail "baseline control: 0.13.0 denied it with path.dynamic: $brace_form" "$BRACE_OUT"
+  fi
+done
+# The other rules see the same {} token in both spellings.
+brace_pair "bare {}: find -exec cat {} + on a sibling checkout is denied by containment, like '{}'" '.decision == "deny" and .rule == "executor.containment"' 'find ../component-b -type f -exec cat {} +'
+brace_pair "bare {}: find -exec through a symlink escape is denied by containment, like '{}'" '.decision == "deny" and .rule == "executor.containment"' 'find escape-link/ -type f -exec cat {} +'
+brace_pair "bare {}: a later find on a sibling checkout is denied by containment, like '{}'" '.decision == "deny" and .rule == "executor.containment"' 'find src -type f -exec cat {} + && find ../component-b -type f -exec cat {} +'
+brace_pair "bare {}: find -exec python3 -c is denied as inline code, like '{}'" '.decision == "deny" and .rule == "executor.inline_code"' "find src -type f -exec python3 -c 'print(1)' {} +"
+brace_pair "bare {}: find -exec sh -c is denied as inline code, like '{}'" '.decision == "deny" and .rule == "executor.inline_code"' "find src -type f -exec sh -c 'cat \"\$1\"' sh {} \\;"
+brace_pair "bare {}: a file named {} that is an escaping symlink is denied by containment, like '{}'" '.decision == "deny" and .rule == "executor.containment"' 'cat {}' "$CHILD/brace-cwd"
+# Spellings that were already allowed.
+as_case "bare {} control: '{}' is allowed" '.decision == "allow"' executor "$CHILD" "$(bash_payload "find src -type f -exec shasum -a 256 '{}' +")"
+as_case "bare {} control: \"{}\" is allowed" '.decision == "allow"' executor "$CHILD" "$(bash_payload 'find src -type f -exec shasum -a 256 "{}" \;')"
+as_case "bare {} control: \\{\\} is allowed" '.decision == "allow"' executor "$CHILD" "$(bash_payload 'find src -type f -exec shasum -a 256 \{\} +')"
+# Words that are not exactly {}, and real expansions, stay refused.
+for brace_form in 'find src -type f -exec shasum -a 256 {}.bak +' 'find src -type f -exec shasum -a 256 {a,b} +' \
+                  'find src -type f -exec shasum -a 256 x{} +' 'find src -type f -exec shasum -a 256 {}{} +' \
+                  'cat src/{}' 'cat escape-*' '{ git status; }' \
+                  'find src -type f -exec shasum -a 256 {}>sums.txt +' 'cat >{}'; do
+  as_case "bare {}: $brace_form stays denied (path.dynamic)" "$BRACE_DYN" executor "$CHILD" "$(bash_payload "$brace_form")"
+done
+# A {} that zsh can read as an empty { } group keeps its refusal.
+for brace_form in '{}' 'echo a; {}' 'X=1 {} echo hi' '2>/dev/null {} ls' \
+                  "if false; then {} else python3 -c 'print(1)'; fi" \
+                  "if false; then >&2 {} else python3 -c 'print(1)'; fi" \
+                  "$(printf 'if false; then\n{} else python3 -c %s; fi' "'print(1)'")" \
+                  "$(printf 'if false; then th\\\nen {} else python3 -c %s; fi' "'print(1)'")" \
+                  'time find src -type f -exec shasum -a 256 {} +'; do
+  as_case "bare {} in a command position stays denied: $(printf '%s' "$brace_form" | tr '\n' ' ')" "$BRACE_DYN" executor "$CHILD" "$(bash_payload "$brace_form")"
+done
+as_case "bare {}: the reviewer exact forms still refuse an unquoted {}" '.decision == "deny" and .rule == "reviewer.shell"' reviewer "$CHILD" "$(bash_payload 'ls {}')"
+as_exec "bare {}: the live executor pane allows the find -exec form too" "$(bash_payload 'find src/generated/prisma -type f -exec shasum -a 256 {} + | LC_ALL=C sort')" '.decision == "allow"'
+
 echo "== role floor report (--floor-json / --probe-json) =="
 # report_policy ROLE PANE CWD CONFIG MODE FLAG [extra env...]: a read-only
 # report mode in one pane identity. Reads no stdin.

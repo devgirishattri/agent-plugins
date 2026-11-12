@@ -1,5 +1,53 @@
 # Changelog
 
+## session-workspace 0.13.1 — 2026-11-12
+
+- **Executors may write the `find -exec` placeholder as a bare `{}`.** The
+  executor floor refused `find src -type f -exec shasum -a 256 {} +` with
+  `path.dynamic`: `has_unquoted_glob` counted the word `{}` as a brace
+  expansion, although bash, dash and zsh (also with `braceccl` or
+  `ignorebraces`) pass it through unchanged. The same command with `'{}'`,
+  `"{}"` or `\{\}` was allowed. `has_unquoted_glob(command, bare_pair=True)`
+  now exempts an unquoted word that is exactly `{}` when all of these hold:
+  - it is a whole word: unquoted whitespace before it, and unquoted
+    whitespace, `;`, `&`, `|` or the end after it. `{}.bak`, `x{}`, `{}{}`,
+    `src/{}`, `{a,b}`, `>{}` and `{}>file` stay refused, as do a lone `{`
+    or `}`;
+  - an earlier word of the same simple command is its program word: the
+    first word that is not an assignment, with no redirection before it;
+  - that program word is not a reserved word or zsh precommand keyword
+    (`BARE_PAIR_BLOCKERS`: `then`, `else`, `do`, `if`, `while`, `time`,
+    `!`, `nocorrect`, ...).
+
+  The last two rules exist because zsh reads a `{}` that can start a command
+  as an empty `{ }` group: `if false; then {} else python3 -c CODE; fi` runs
+  `python3` in zsh, while the floor would see it as operands of `{}`. Those
+  positions keep `path.dynamic`, so an executor that writes `time find ...
+  {} +` still needs `'{}'`.
+
+  With the exemption the argv is the one `'{}'` gives, so the per-segment
+  path, containment, inline-code and xargs checks see the same `{}` token as
+  before (the H1 premise). Both `has_unquoted_glob` call sites that serve the
+  executor use it: the executor floor (also run by a confined orchestrator)
+  and the read path in `validate_reviewer_read`, which `validate_bash` calls
+  only for executors. Reviewer panes keep the exact word form, which refuses
+  `{` outside single quotes, and the orchestrator `gh` path is unchanged.
+  Without `bare_pair` the scanner returns what it returned before for every
+  input.
+- Tests (`test-harness-policy.sh`, 0.13.1 section): every command is decided
+  with `--decision-json --as-role executor --as-cwd CHECKOUT`. A bare `{}`
+  command and its `'{}'` spelling get the same decision and rule, for allowed
+  forms and for forms another rule refuses (containment through `../`, a
+  symlink, a later segment or a file named `{}`; inline code). Words that are
+  not exactly `{}`, and `{}` in a command position, stay `path.dynamic`. Set
+  `HARNESS_TEST_BASELINE_POLICY_0130` to the 0.13.0 `harness-policy.py` to
+  assert that 0.13.0 refused each newly allowed form. `test-environments.py`
+  covers the same split for a confined orchestrator.
+- **Docs.** The plugin README (executor containment) and the session-workspace
+  skill (quoted literal paths) describe the exemption and the positions it
+  leaves refused.
+- **Upgrading.** No config migration.
+
 ## session-workspace 0.13.0 — 2026-11-12
 
 - **On-demand workers.** In an active strict-v1 harness (schema 2-5), an
