@@ -25,6 +25,9 @@ reply is pending.
 
 1. Use session-chat pane discovery and health to verify the configured
    orchestrator, target executor, and target reviewer are live and not locked.
+   An executor or reviewer whose plan pane has `"launch": "on_demand"` may be
+   down; report it as on demand, not missing, and start it as in "On-demand
+   workers" before you send it anything.
 2. Verify harness status/identity and run harness doctor when identity or hook
    health is uncertain.
 3. Inspect the root read-only. Inspect the target checkout read-only from the
@@ -74,6 +77,37 @@ Report exact changed paths and verification results.
    identity, reviewed diff/SHA, and timestamp freshness within `audit_ttl_minutes`.
    Also verify an explicit `APPROVE` token in the closing note or correlated reply. A `done`
    status alone proves closure, not a clean verdict.
+
+## On-demand workers
+
+A target executor or reviewer whose normalized plan pane has
+`"launch": "on_demand"` runs only while it has work. `<session>` below is the
+plan session that holds the pane.
+
+1. Just before its first packet or scheduler assignment, start it with
+   `workspace start <session> --pane <pane>` and wait for `[ready]`: the
+   reviewer before plan review and again before the audit, the executor before
+   the assignment and before each authorized commit, push, or deploy step.
+   `[kept]` means it is already running.
+2. On `[not ready]`, the pane is running but its agent shows no input line.
+   Read the pane: a first-run question such as folder trust needs the user.
+   Do not dispatch until a later start reports `[ready]`.
+3. A started worker has an empty conversation. Every packet must stand alone;
+   the shared packet, the scheduler task, and the session-chat archive are the
+   record, never the worker's memory of an earlier step.
+4. Close it with `workspace stop <session> --pane <pane> --confirmed` once its
+   part is done: the reviewer after it has replied to a plan review or closed
+   the task with its verdict, the executor after the audit closes its task and
+   after each authorized step it ran. Leave a worker running when its next
+   step follows right away.
+5. `[busy] ... left running` (exit 1) names why: a task still `assigned` to
+   it, a task it reviews in `review`, unread messages, or a running turn.
+   Leave it and check again later. Never pass `--force`; that is the user's
+   override, and the harness denies it.
+6. Never stop or restart the session that holds your own pane, or `all`,
+   `--all`, or an environment that covers it. The harness denies it under
+   `orchestrator.self_stop`: it would end your own turn and leave the workers
+   you started without a coordinator.
 
 ## Commit
 

@@ -26,9 +26,11 @@ sw_require_available_read_paths() {
 # for one session of a computed plan. A value names a pane exactly, or by the
 # part after "<project.id>-" (the "${PROJECT_ID}-" prefix most configs give
 # pane names), so `--pane browser` selects "example-browser" in project
-# "example". Only service panes (role "service": dev servers, the browser,
-# other shell services) can be selected; agent panes stay whole-session
-# topology. Prints one resolved pane name per line, in argument order,
+# "example". Service panes (role "service": dev servers, the browser, other
+# shell services) can be selected, and so can an executor or reviewer marked
+# launch "on_demand" (the orchestrator starts and stops those workers); every
+# other agent pane stays whole-session topology. Prints one resolved pane
+# name per line, in argument order,
 # de-duplicated; when any value does not resolve it prints every reason on
 # stderr, prints nothing on stdout, and returns 1. harness-policy.py resolves
 # the same way (resolve_service_panes) so the argv it admits is exactly the
@@ -46,10 +48,10 @@ sw_select_panes() {
           | ([$s.panes[] | select(.name == $w)]
              | if length == 1 then . else [$s.panes[] | select(.name == ($pid + "-" + $w))] end) as $m
           | if ($m | length) != 1 then
-              {error: ("no pane \"" + $w + "\" in session " + $sid + " (service panes: "
-                       + ([$s.panes[] | select(.role == "service") | .name] | if length == 0 then "none" else join(", ") end) + ")")}
-            elif $m[0].role != "service" then
-              {error: ("pane " + $m[0].name + " has role " + $m[0].role + "; --pane selects service panes only")}
+              {error: ("no pane \"" + $w + "\" in session " + $sid + " (service and on-demand panes: "
+                       + ([$s.panes[] | select(.role == "service" or (.launch // "always") == "on_demand") | .name] | if length == 0 then "none" else join(", ") end) + ")")}
+            elif $m[0].role != "service" and ($m[0].launch // "always") != "on_demand" then
+              {error: ("pane " + $m[0].name + " has role " + $m[0].role + "; --pane selects service panes only, or an executor/reviewer marked launch on_demand")}
             else {name: $m[0].name} end
         ] as $r
         | {errors: [$r[] | .error // empty],

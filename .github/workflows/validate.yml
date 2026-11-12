@@ -56,11 +56,12 @@ jobs:
       - name: Run release validation
         run: bash scripts/validate-release.sh
 
-      - name: Test scheduler, context, and session-chat lock interleavings
+      - name: Test scheduler, context, session-chat, and session-workspace lock interleavings
         run: |
           python3 -B scripts/test-scheduler-locks.py
           python3 -B scripts/test-context-locks.py
           python3 -B scripts/test-session-chat-locks.py
+          python3 -B scripts/test-session-workspace-locks.py
 
       - name: Run cross-provider scheduler/context parity test
         run: |

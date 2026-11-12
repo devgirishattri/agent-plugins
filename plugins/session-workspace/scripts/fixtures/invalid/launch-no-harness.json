@@ -1,0 +1,4 @@
+{"schema_version":1,"project":{"id":"p","root":"."},"runtimes":{"codex":{"program":"codex"}},
+"roles":{"executor":{"runtime":"codex"}},"stores":{"pin":[]},
+"sessions":[{"id":"development","name":"p-development","panes":[
+  {"name":"p-executor","role":"executor","cwd":".","launch":"on_demand"}]}]}

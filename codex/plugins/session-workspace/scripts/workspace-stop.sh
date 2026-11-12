@@ -11,8 +11,13 @@
 # --all widens to every managed session for this project. Either way,
 # --confirmed is required or the command refuses outright.
 #
-# `--pane NAME` (repeatable) stops only the named service panes of ONE
-# session (a NAME is the full pane name or the part after "<project.id>-"):
+# `--pane NAME` (repeatable) stops only the named service panes, or
+# executor/reviewer panes marked launch "on_demand", of ONE session (a NAME is
+# the full pane name or the part after "<project.id>-"). An on-demand worker
+# is refused, and left running, while it is busy: a scheduler task assigned to
+# it is still `assigned`, a task it reviews is in `review`, its session-chat
+# inbox holds unread messages, or its screen shows a running turn. `--force`
+# stops it anyway (the user's override; the harness never admits it).
 # each pane carrying this project's markers for that name is asked to stop
 # (C-c), given up to the grace period to exit, then its pane is killed. The
 # rest of the session keeps running; killing a session's last pane ends the
@@ -24,7 +29,7 @@
 # (a different tmux pane id) is left running.
 #
 # Usage: workspace-stop.sh [TARGET|all] [--config PATH] [--no-save] --confirmed [--all]
-#        workspace-stop.sh SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed
+#        workspace-stop.sh SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -35,7 +40,7 @@ source "$HERE/tmux-lib.sh"
 
 usage() {
   echo "Usage: workspace-stop.sh [TARGET|all] [--config PATH] [--no-save] --confirmed [--all]" >&2
-  echo "       workspace-stop.sh SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed" >&2
+  echo "       workspace-stop.sh SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]" >&2
 }
 
 TARGET="all"
@@ -44,6 +49,7 @@ CONFIG_OVERRIDE=""
 NO_SAVE=0
 CONFIRMED_FLAG=0
 WIDEN_ALL=0
+FORCE_BUSY=0
 EXPECT_PANE_ID=""
 GRACE_SECONDS="${SESSION_WORKSPACE_STOP_GRACE_SECONDS:-5}"
 declare -a PANE_ARGS=()
@@ -64,6 +70,7 @@ while [ $# -gt 0 ]; do
     --no-save) NO_SAVE=1; shift ;;
     --confirmed) CONFIRMED_FLAG=1; shift ;;
     --all) WIDEN_ALL=1; shift ;;
+    --force) FORCE_BUSY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     all) TARGET="all"; TARGET_GIVEN=1; shift ;;
     -*) echo "ERROR: unknown option: $1" >&2; usage; exit 1 ;;
@@ -94,6 +101,9 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
   fi
 elif [ -n "$EXPECT_PANE_ID" ]; then
   echo "ERROR: --expect-pane-id requires --pane" >&2
+  exit 1
+elif [ "$FORCE_BUSY" -eq 1 ]; then
+  echo "ERROR: --force applies only to --pane (it stops a busy on-demand worker)" >&2
   exit 1
 fi
 
@@ -139,6 +149,24 @@ _sw_wait_pane_idle() {
   return 0
 }
 
+# _sw_worker_busy PANE_ID PANE_NAME — print why an on-demand worker is busy
+# and return 1, or return 0. Reads the plan's scheduler task store and every
+# inbox queue a session-chat send to this pane can land in: the plan's
+# messages store and both providers' default messages directories.
+_sw_worker_busy() {
+  local pane_id="$1" pane_name="$2" tasks_dir="" dir
+  local -a busy_args=()
+  tasks_dir="$(printf '%s' "$PLAN_JSON" | jq -r --arg n "$pane_name" '
+    ([.sessions[].panes[] | select(.name == $n) | .grants[]? | select(.store == "scheduler") | .path]
+     + [.sessions[].panes[].grants[]? | select(.store == "scheduler") | .path])[0] // empty')"
+  [ -n "$tasks_dir" ] && busy_args+=(--tasks-dir "$tasks_dir/tasks")
+  while IFS= read -r dir; do
+    [ -n "$dir" ] && busy_args+=(--queue "$dir/queue/$pane_name.tsv")
+  done < <({ printf '%s' "$PLAN_JSON" | jq -r '[.sessions[].panes[].grants[]? | select(.store == "messages") | .path] | unique[]'
+             printf '%s\n' "$HOME/.claude/messages" "${CODEX_HOME:-$HOME/.codex}/messages"; } | awk '!seen[$0]++')
+  python3 "$HERE/agent-pane.py" busy --pane-id "$pane_id" --pane "$pane_name" "${busy_args[@]}"
+}
+
 if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
   PLAN_JSON="$(bash "$HERE/workspace-plan.sh" --config "$CONFIG_PATH" --json)" || exit 1
   SELECTED_LIST="$(sw_select_panes "$PLAN_JSON" "$TARGET" "${PANE_ARGS[@]}")" || exit 1
@@ -152,6 +180,7 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
   STOPPED=0
   NOT_RUNNING=0
   SKIPPED=0
+  BUSY=0
   if ! tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then
     while IFS= read -r pane_name; do
       [ -n "$pane_name" ] || continue
@@ -182,6 +211,20 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
         SKIPPED=$((SKIPPED + 1))
         continue
       fi
+      # An on-demand worker (an agent pane) is closed only when it is idle.
+      if [ "$FORCE_BUSY" -eq 0 ] &&
+         [ "$(printf '%s' "$PLAN_JSON" | jq -r --arg n "$pane_name" '[.sessions[].panes[] | select(.name == $n) | .runtime.name][0] // "shell"')" != "shell" ]; then
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "  [busy]   $SESSION_NAME / $pane_name — python3 is needed to check that the worker is idle; left running (--force stops it anyway)"
+          BUSY=$((BUSY + 1))
+          continue
+        fi
+        if ! busy_out="$(_sw_worker_busy "$found" "$pane_name")"; then
+          echo "  [busy]   $SESSION_NAME / $pane_name — left running: $(printf '%s' "$busy_out" | paste -sd ';' - | sed 's/;/; /g') (--force stops it anyway)"
+          BUSY=$((BUSY + 1))
+          continue
+        fi
+      fi
       # Record before C-c, not just before the kill: a pane whose command is
       # the service itself closes the moment C-c ends it, and anything that
       # sees the pane gone (status, its idle watcher) must already find this
@@ -203,9 +246,16 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
     done <<<"$SELECTED_LIST"
   fi
 
+  # Re-apply a standard layout so the panes left share the window again.
+  if [ "$STOPPED" -gt 0 ] && tmux has-session -t "=$SESSION_NAME" 2>/dev/null &&
+     [ "$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '.sessions[] | select(.id == $t) | .layout.kind // "standard"')" != "split_tree" ]; then
+    tmux select-layout -t "=$SESSION_NAME:$WINDOW_INDEX" \
+      "$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '.sessions[] | select(.id == $t) | .layout.name // "tiled"')" 2>/dev/null || true
+  fi
   echo
-  echo "stopped: $STOPPED  not running: $NOT_RUNNING  skipped: $SKIPPED"
+  echo "stopped: $STOPPED  not running: $NOT_RUNNING  skipped: $SKIPPED  busy: $BUSY"
   sw_lock_release
+  [ "$BUSY" -eq 0 ] || exit 1
   exit 0
 fi
 

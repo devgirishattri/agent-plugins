@@ -22,7 +22,8 @@ Real flags:
 - `TARGET|all`: optional session id filter; default is `all`.
 - `--config PATH`: use a specific workspace config instead of discovery.
 - `--json`: emit status rows as JSON.
-- `SESSION --pane NAME`: restrict the report to the named service panes.
+- `SESSION --pane NAME`: restrict the report to the named service panes or
+  on-demand workers.
 
 Status is read-only. It validates config and reads tmux state, but does not
 create sessions, write state files, repair panes, or kill anything. For each
@@ -37,6 +38,11 @@ pane gets one CDP endpoint health line, such as `browser: browser
 http://127.0.0.1:9326 — up (Chrome/131.0)  cdp_clients=1`. Check it says `up`
 before a browser smoke; when it says `down`, start the pane with
 `workspace start SESSION --pane browser`.
+
+An executor/reviewer marked `"launch": "on_demand"` adds a `launch: on demand`
+line. While it is down, that line names the `workspace start SESSION --pane
+NAME` command that starts it. A down on-demand worker is expected, not a
+fault.
 
 For schema-v5 `--environment ID` selection, invoke the installed dispatcher as
 `bash <PLUGIN_ROOT>/scripts/workspace.sh status --environment ID [flags]`

@@ -16,6 +16,10 @@
 #              --adopt --confirmed, after printing the adoption plan
 #   skipped  — an optional pane whose cwd never resolved, or a pane whose
 #              launch this run suppresses
+#   on-demand — a pane with launch "on_demand" that a full start/reconcile
+#              leaves down (no slot is claimed or split for it); only a
+#              `start --pane` run (SW_PANE_SUBSET=1) launches it, and a full
+#              run keeps it when it is already running
 #   failed   — an unmanaged pane occupies the slot and adoption was not
 #              requested/confirmed: the slot is left completely untouched
 #   planned  — DRY_RUN mode: nothing mutated, only reported
@@ -543,6 +547,21 @@ _sw_split_extra_pane() {
   SW_LAST_SPLIT_PANE="$new_pane"
 }
 
+# _sw_on_demand_left_down PANE_PLAN_JSON — true when this run leaves the pane
+# down because it is an on-demand worker (launch "on_demand") and the run is a
+# full start/reconcile, not a `start --pane` that selected it.
+_sw_on_demand_left_down() {
+  [ "$SW_PANE_SUBSET" -eq 0 ] || return 1
+  [ "$(printf '%s' "$1" | jq -r '.launch // "always"')" = "on_demand" ]
+}
+
+# _sw_on_demand_hint SESSION_JSON PANE_NAME — the report detail for a pane a
+# full run left down.
+_sw_on_demand_hint() {
+  printf 'not started (launch on_demand); start it with: workspace start %s --pane %s' \
+    "$(printf '%s' "$1" | jq -r '.id')" "$2"
+}
+
 # _sw_process_session SESSION_JSON — the per-session slot-filling loop.
 _sw_process_session() {
   local session_json="$1"
@@ -553,6 +572,24 @@ _sw_process_session() {
   window_index="$(printf '%s' "$session_json" | jq -r '.window_index // 0')"
   retain="$(printf '%s' "$session_json" | jq -r '.retain_layout // false')"
 
+  # A full run never creates a session in which no pane would start: a
+  # session holding only on-demand workers (and optional panes whose cwd is
+  # missing) would otherwise come up as one stray blank shell.
+  if [ "$SW_PANE_SUBSET" -eq 0 ] &&
+     printf '%s' "$session_json" | jq -e 'all(.panes[]; (.launch // "always") == "on_demand" or (.skip_unresolved // false))' >/dev/null &&
+     ! tmux has-session -t "=$(printf '%s' "$session_json" | jq -r '.name')" 2>/dev/null; then
+    local idle_json idle_name
+    while IFS= read -r idle_json; do
+      idle_name="$(printf '%s' "$idle_json" | jq -r '.name')"
+      if [ "$(printf '%s' "$idle_json" | jq -r '.skip_unresolved // false')" = "true" ]; then
+        _sw_report "skipped" "$(printf '%s' "$session_json" | jq -r '.name')" "$idle_name" "optional, cwd unavailable"
+      else
+        _sw_report "on-demand" "$(printf '%s' "$session_json" | jq -r '.name')" "$idle_name" "$(_sw_on_demand_hint "$session_json" "$idle_name")"
+      fi
+    done < <(printf '%s' "$session_json" | jq -c '.panes[]')
+    return 0
+  fi
+
   session_name="$(_sw_ensure_session "$session_json")" || { SW_FAILED_SLOTS=$((SW_FAILED_SLOTS + 1)); return 0; }
   if [ "$DRY_RUN" -eq 1 ] && ! tmux has-session -t "=$session_name" 2>/dev/null; then
     # Nothing more can be planned for a session that does not exist yet.
@@ -562,6 +599,10 @@ _sw_process_session() {
       pskip="$(printf '%s' "$pane_json" | jq -r '.skip_unresolved // false')"
       if [ "$pskip" = "true" ]; then
         _sw_report "skipped" "$session_name" "$pn" "optional, cwd unavailable"
+        continue
+      fi
+      if _sw_on_demand_left_down "$pane_json"; then
+        _sw_report "on-demand" "$session_name" "$pn" "$(_sw_on_demand_hint "$session_json" "$pn")"
         continue
       fi
       _sw_report "would-create" "$session_name" "$pn" "fresh session"
@@ -674,7 +715,7 @@ _sw_process_session() {
       # "skipped" regardless of whether a candidate would have been found.
       pane_json="$(printf '%s' "$panes_json" | jq -c ".[$i]")"
       slot_skip="$(printf '%s' "$pane_json" | jq -r '.skip_unresolved // false')"
-      if [ "$slot_skip" = "true" ]; then
+      if [ "$slot_skip" = "true" ] || _sw_on_demand_left_down "$pane_json"; then
         i=$((i + 1))
         continue
       fi
@@ -756,6 +797,13 @@ _sw_process_session() {
         _sw_report "skipped" "$session_name" "$pane_name" "optional, cwd unavailable"
         continue
       fi
+    fi
+
+    # An on-demand worker in a full start/reconcile: keep it when it is
+    # running, otherwise leave it down (no slot was claimed or split for it).
+    if _sw_on_demand_left_down "$pane_json" && { [ -z "$pane_id" ] || sw_pane_dead "$pane_id"; }; then
+      _sw_report "on-demand" "$session_name" "$pane_name" "$(_sw_on_demand_hint "$session_json" "$pane_name")"
+      continue
     fi
 
     if [ -z "$pane_id" ]; then

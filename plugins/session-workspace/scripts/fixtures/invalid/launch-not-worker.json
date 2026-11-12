@@ -1,0 +1,7 @@
+{"schema_version":2,"project":{"id":"p","root":"."},"runtimes":{"codex":{"program":"codex"}},
+"roles":{"master":{"runtime":"codex"},"executor":{"runtime":"codex"},"reviewer":{"runtime":"codex"}},"stores":{"pin":[]},
+"sessions":[{"id":"development","name":"p-development","panes":[
+  {"name":"p-master","role":"master","cwd":".","launch":"on_demand"},
+  {"name":"p-executor","role":"executor","cwd":"."},
+  {"name":"p-reviewer","role":"reviewer","cwd":"."}]}],
+"harness":{"enabled":true,"mode":"enforce","profile":"strict-v1","roles":{"orchestrator":"master","executor":"executor","reviewer":"reviewer"}}}
