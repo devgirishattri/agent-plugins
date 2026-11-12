@@ -1,5 +1,27 @@
 # Changelog
 
+## session-workspace 0.12.13 — 2026-11-12
+
+- **Schema-v5 Stop health warnings run.** `guard-health.sh` continued only for
+  `schema_version` 3 or 4, so a v5 config with `harness.guards.workspace_health`
+  launched its panes with the guard identity but never reached
+  `guard-health.py`, and no dirty-root, missing-pane or branch-ahead warning
+  appeared. The wrapper now accepts 3 to 5, like `guard-lifecycle.sh`.
+  `guard-health.py` already handled v5 scope: an orchestrator whose cwd is the
+  project root, or the unbound root orchestrator, reports; a coordinator
+  confined to a control directory does not. New tests in both
+  `test-session-workspace.sh` copies cover an unscoped v5 config and a
+  shared-root v5 config with one root-scoped and one confined coordinator; both
+  failed before the fix.
+- **README.** The orchestration section and the harness known gaps now say that
+  the reviewed-git-v1 Git floor is the workflow's contract and the hook does not
+  refuse an executor's `git push --force`, `git reset --hard` or
+  `git checkout -B`. The engine identity section lists
+  `SESSION_WORKSPACE_READ_PATHS_JSON` and `SESSION_WORKSPACE_SCOPE_JSON`, the
+  `--decision-json` key list includes `diagnostic`, and the adoption steps and
+  configuration reference list schema 5. The `workspace-orchestrator` lifecycle
+  reference says the same about the Git floor.
+
 ## session-workspace 0.12.12 — 2026-11-04
 
 - **Reviewer `git remote` reads only as bare `git remote`.** `git remote -v`,
