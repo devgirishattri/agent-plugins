@@ -219,6 +219,7 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
     p_prog="$(printf '%s' "$pane" | jq -r '.runtime.program // "(none)"')"
     p_cwd="$(printf '%s' "$pane" | jq -r '.cwd // ("(unresolved: " + (.cwd_raw // "?") + ")")')"
     p_optional="$(printf '%s' "$pane" | jq -r '.optional')"
+    p_launch="$(printf '%s' "$pane" | jq -r '.launch // "always"')"
     p_skip="$(printf '%s' "$pane" | jq -r '.skip_unresolved // false')"
     p_model="$(printf '%s' "$pane" | jq -r '.agent.model // ""')"
     p_effort="$(printf '%s' "$pane" | jq -r '.agent.effort // ""')"
@@ -232,6 +233,7 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
 
     printf '  pane: %s' "$p_name"
     [ "$p_optional" = "true" ] && printf ' (optional)'
+    [ "$p_launch" = "on_demand" ] && printf ' (on demand: a full start leaves it down; start it with --pane)'
     [ "$p_skip" = "true" ] && printf ' [SKIPPED: cwd unavailable — will not be launched]'
     printf '\n'
     printf '    role=%s  runtime=%s  program=%s\n' "$p_role" "$p_rt" "$p_prog"

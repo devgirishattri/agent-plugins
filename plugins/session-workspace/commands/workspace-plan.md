@@ -20,6 +20,8 @@ Lead with the result. Add text only for errors or the follow-ups below. Report t
 
 The plan marks an optional pane whose declared `cwd` does not resolve on disk (an un-cloned child repo) as `[SKIPPED: cwd unavailable — will not be launched]`. This is expected, not a config error. It mirrors what the lifecycle verbs will actually do with the pane.
 
+It marks an executor/reviewer with `"launch": "on_demand"` as `(on demand: a full start leaves it down; start it with --pane)`, and its `--json` pane carries `"launch": "on_demand"` (every other pane `"always"`).
+
 Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
 Group selection cannot be combined with a positional session or `--all`; it never
 attaches automatically. See the session-workspace environment reference.

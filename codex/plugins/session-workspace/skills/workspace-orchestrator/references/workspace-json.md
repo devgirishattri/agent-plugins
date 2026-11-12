@@ -55,3 +55,12 @@ defaults to false and can authorize only a post-release fast-forward. There are
 no command, script, regex, free-form prompt, custom gate, or permission-bypass
 fields. Use repository `AGENTS.md` for product-specific checks; use another
 future reviewed profile when a different Git strategy is required.
+
+A target's executor or reviewer pane may set `"launch": "on_demand"` (schema
+2-5 with an active harness, standard layout only). A full `workspace start`
+then leaves that pane down, and the orchestrator starts and closes it with
+`--pane` as in [lifecycle.md](lifecycle.md) "On-demand workers":
+
+```json
+{ "name": "${PROJECT_ID}-component-executor", "role": "executor", "cwd": "component-a", "launch": "on_demand" }
+```

@@ -510,6 +510,19 @@
       "description": "An orchestrator ran git push; it must route the push to the owning executor."
     },
     {
+      "code": "hook.orchestrator.self_stop",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The orchestrator tried to stop or restart the session that holds its own pane."
+    },
+    {
       "code": "hook.path.dynamic",
       "subjects": [
         "admission"

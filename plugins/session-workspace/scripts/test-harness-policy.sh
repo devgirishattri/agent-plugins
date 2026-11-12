@@ -1056,7 +1056,7 @@ as_exec "auto-capture foreign store is denied" "$(bash_payload "bash $KNOW/memor
 as_exec "auto-capture batch directory is outside reviewed grammar" "$(bash_payload "bash $KNOW/memory-auto-capture.sh --batch-dir $CHILD")" '.decision == "deny" and .rule == "helper.argv"'
 as_exec "auto-capture purge is outside reviewed grammar" "$(bash_payload "bash $KNOW/memory-auto-capture.sh --purge --confirm $ROOT/.agents/memory")" '.decision == "deny" and .rule == "helper.argv"'
 as_exec "auto-capture missing staged value is denied" "$(bash_payload "bash $KNOW/memory-auto-capture.sh --staged")" '.decision == "deny" and .rule == "helper.argv"'
-as_master "orchestrator workspace-stop --confirmed is allowed" "$(bash_payload "bash $WS/workspace-stop.sh development --confirmed")" '.decision == "allow"'
+as_master "orchestrator stop of the session holding its own pane is denied" "$(bash_payload "bash $WS/workspace-stop.sh development --confirmed")" '.decision == "deny" and .rule == "orchestrator.self_stop"'
 as_master "orchestrator workspace.sh start via dispatcher is allowed" "$(bash_payload "bash $WS/workspace.sh start --no-attach")" '.decision == "allow"'
 as_master "orchestrator workspace start with a foreign --config is denied" "$(bash_payload "bash $WS/workspace-start.sh --config /tmp/other.json")" '.decision == "deny" and .rule == "helper.argv"'
 echo "== single service panes (--pane) =="
@@ -1117,6 +1117,43 @@ as_exec_svc "executor read verb via the PATH dispatcher stays allowed" "$(bash_p
 as_exec_svc "executor plan via the PATH dispatcher stays allowed" "$(bash_payload "workspace plan --json --running")" '.decision == "allow"'
 as_exec_svc "executor naming a lifecycle script as an operand is a read, not a run" "$(bash_payload "cat workspace-start.sh")" '.decision == "allow"'
 as_master_svc "orchestrator PATH dispatcher keeps its free shell" "$(bash_payload "workspace start services --pane browser")" '.decision == "allow"'
+echo "== on-demand workers and the orchestrator's own session =="
+# The golden workers marked launch on_demand: the orchestrator starts and
+# stops exactly them with --pane, and never stops or restarts the session its
+# own pane runs in, by any route.
+OD_CONFIG="$ROOT/.agent-workspace/on-demand.json"
+jq '(.sessions[] | select(.id == "development") | .panes[] | select(.role == "executor" or .role == "reviewer")) |= (. + {launch: "on_demand"})' \
+  "$SVC_CONFIG" > "$OD_CONFIG"
+STOPALL_CONFIG="$ROOT/.agent-workspace/stop-scope-all.json"
+jq '.behavior.stop_scope = "all"' "$OD_CONFIG" > "$STOPALL_CONFIG"
+as_master_od() { expect "$1" master "$MASTER_PANE" "$ROOT" "$OD_CONFIG" enforce "$2" "$3"; }
+as_exec_od() { expect "$1" executor "$EXEC_PANE" "$CHILD" "$OD_CONFIG" enforce "$2" "$3"; }
+as_review_od() { expect "$1" reviewer "$REVIEW_PANE" "$CHILD" "$OD_CONFIG" enforce "$2" "$3"; }
+as_master_od "orchestrator start --pane of an on-demand executor is allowed" "$(bash_payload "bash $WS/workspace-start.sh development --pane component-executor --no-attach")" '.decision == "allow"'
+as_master_od "orchestrator start --pane of both on-demand workers via the dispatcher is allowed" "$(bash_payload "bash $WS/workspace.sh start development --pane component-executor --pane $REVIEW_PANE")" '.decision == "allow"'
+as_master_od "orchestrator stop --pane of an on-demand reviewer is allowed" "$(bash_payload "bash $WS/workspace-stop.sh development --pane $REVIEW_PANE --confirmed")" '.decision == "allow"'
+as_master_od "orchestrator stop --pane --force (the user's override) is outside the grammar" "$(bash_payload "bash $WS/workspace-stop.sh development --pane component-executor --confirmed --force")" '.decision == "deny" and .rule == "helper.argv"'
+as_master_od "orchestrator start --pane of itself is denied" "$(bash_payload "bash $WS/workspace-start.sh development --pane master")" '.decision == "deny" and .rule == "helper.argv" and (.reason | contains("service panes only"))'
+as_master_svc "orchestrator start --pane of a worker not marked on_demand is denied" "$(bash_payload "bash $WS/workspace-start.sh development --pane component-executor")" '.decision == "deny" and .rule == "helper.argv" and (.reason | contains("launch on_demand"))'
+as_exec_od "executor start --pane of its own on-demand pane is denied" "$(bash_payload "bash $WS/workspace-start.sh development --pane component-executor")" '.decision == "deny" and .rule == "coordination.write"'
+as_review_od "reviewer stop --pane of an on-demand worker is denied" "$(bash_payload "workspace stop development --pane component-executor --confirmed")" '.decision == "deny" and .rule == "coordination.write"'
+as_master_od "orchestrator stop of another session is allowed" "$(bash_payload "bash $WS/workspace-stop.sh services --confirmed")" '.decision == "allow"'
+as_master_od "orchestrator reconcile --apply of its own session stays allowed" "$(bash_payload "bash $WS/workspace-reconcile.sh development --apply")" '.decision == "allow"'
+as_master_od "orchestrator start of its own session stays allowed" "$(bash_payload "bash $WS/workspace-start.sh development --no-attach")" '.decision == "allow"'
+for route in "bash $WS/workspace-stop.sh --confirmed" "bash $WS/workspace-stop.sh all --confirmed" "bash $WS/workspace-stop.sh services --confirmed --all" \
+             "bash $WS/workspace-stop.sh --config $OD_CONFIG development --confirmed" "bash $WS/workspace-restart.sh development" "bash $WS/workspace-restart.sh" \
+             "bash $WS/workspace.sh stop development --confirmed" "bash $WS/workspace.sh restart --no-save" \
+             "workspace stop development --confirmed" "workspace restart" "env FOO=1 workspace restart development" \
+             "ls && bash ./workspace-stop.sh --confirmed" "nohup workspace-restart.sh development"; do
+  as_master_od "orchestrator self-stop via '$route' is denied" "$(bash_payload "$route")" '.decision == "deny" and .rule == "orchestrator.self_stop"'
+done
+as_master_od "orchestrator self-stop on a second line is denied" "$(bash_payload $'ls\nworkspace restart development')" '.decision == "deny" and .rule == "orchestrator.self_stop"'
+as_master_od "orchestrator PATH dispatcher stop of another session is allowed" "$(bash_payload "workspace stop services --confirmed")" '.decision == "allow"'
+as_master_od "orchestrator PATH dispatcher stop --pane of a worker is allowed" "$(bash_payload "workspace stop development --pane component-executor --confirmed")" '.decision == "allow"'
+expect "orchestrator stop of another session under stop_scope all is denied" master "$MASTER_PANE" "$ROOT" "$STOPALL_CONFIG" enforce \
+  "$(bash_payload "bash $WS/workspace-stop.sh services --confirmed")" '.decision == "deny" and .rule == "orchestrator.self_stop" and (.reason | contains("stop_scope"))'
+expect "orchestrator stop --pane under stop_scope all stays allowed" master "$MASTER_PANE" "$ROOT" "$STOPALL_CONFIG" enforce \
+  "$(bash_payload "bash $WS/workspace-stop.sh development --pane component-executor --confirmed")" '.decision == "allow"'
 as_master "orchestrator workspace install --target is allowed" "$(bash_payload "bash $WS/workspace-install.sh --target /usr/local/bin/workspace --dry-run")" '.decision == "allow"'
 as_master "orchestrator browser-config with a bad provider is denied" "$(bash_payload "bash $WS/workspace-browser-config.sh --provider vim")" '.decision == "deny" and .rule == "helper.argv"'
 as_master "orchestrator session delete requires --confirmed" "$(bash_payload "bash $SM/delete-session.sh 123e4567-e89b-12d3-a456-426614174000")" '.decision == "deny" and .rule == "helper.argv"'

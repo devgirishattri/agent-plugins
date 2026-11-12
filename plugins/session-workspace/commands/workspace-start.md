@@ -23,7 +23,9 @@ An unmanaged pane that occupies a planned slot always FAILS. A same-named tmux s
 
 `--no-attach` suppresses the post-start attach. Otherwise `start` attaches per `behavior.attach` and prints one `attach: ...` line that says what it did. With no positional `TARGET`, the target is `behavior.default_start_target` (default `all`).
 
-`SESSION --pane NAME` (repeatable) starts only the named service panes (role `service`, such as the debug browser or a dev server) of one session. It creates the session if it is not running, with only those panes, and runs their declared commands. Panes that are already running are `[kept]`. NAME is the pane name or the part after `<project.id>-`. `--pane` never attaches, and it cannot be combined with `--no-agents`, `--no-services` or `--adopt`.
+`SESSION --pane NAME` (repeatable) starts only the named service panes (role `service`, such as the debug browser or a dev server) of one session, or executor/reviewer panes marked `"launch": "on_demand"`. It creates the session if it is not running, with only those panes, and runs their declared commands. Panes that are already running are `[kept]`. NAME is the pane name or the part after `<project.id>-`. `--pane` never attaches, and it cannot be combined with `--no-agents`, `--no-services` or `--adopt`.
+
+A full start leaves on-demand workers down and reports each as `[on-demand] ... start it with: workspace start SESSION --pane NAME`. `--pane` for a worker waits until its agent shows its input line and prints `[ready]`. `[not ready]` means the agent did not get there in time (or shows a choice, such as a folder trust question); the pane is left running and the start exits non-zero. Relay it, and do not send the worker a message until it is ready.
 
 Before it launches a dev-server pane (`port` plus `command`), `--pane` refuses when the port is already bound by another process and names the PID holding it, for example `service port occupied before launch: 3001 (web) is held by pid 4242 (node)`. Nothing is started for that pane. Relay that line and do not retry on another port.
 

@@ -306,9 +306,13 @@ class Context:
     plan_panes: frozenset = frozenset()
     plan_message_roots: tuple = ()
     project_id: str = ""
-    # (session id, pane name, role name) for every planned pane: the table
-    # `--pane NAME` resolves against (resolve_service_panes).
+    # (session id, pane name, role name, launch) for every planned pane: the
+    # table `--pane NAME` resolves against (resolve_service_panes) and the one
+    # orchestrator_self_stop finds this pane's own session in.
     session_panes: tuple = ()
+    # behavior.stop_scope "all": every full stop/restart widens to all of this
+    # project's sessions, this pane's own included.
+    stop_scope_all: bool = False
 
     @property
     def confined_orchestrator(self):
@@ -707,9 +711,10 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         message_roots=tuple(sorted(message_paths, key=str)),
         plan_panes=frozenset(p["name"] for p in panes),
         project_id=str(project.get("id", "")),
-        session_panes=tuple((str(s.get("id", "")), str(p.get("name", "")), str(p.get("role", "")))
+        session_panes=tuple((str(s.get("id", "")), str(p.get("name", "")), str(p.get("role", "")), str(p.get("launch", "always")))
                             for s in plan.get("sessions", []) if isinstance(s, dict)
                             for p in s.get("panes", []) if isinstance(p, dict)),
+        stop_scope_all=configured_stop_scope(config_path) == "all",
         plan_message_roots=tuple(sorted({canonical(Path(g["path"])) for p in panes
                                         for g in p.get("grants", []) if g.get("store") == "messages"}, key=str)),
         claude_home=claude_home,
@@ -2645,11 +2650,22 @@ WORKSPACE_VERB_SCRIPT = {
 }
 
 
+def configured_stop_scope(config_path: Path) -> str:
+    """behavior.stop_scope of the config workspace-plan just validated."""
+    try:
+        config = json.loads(config_path.read_text())
+        return str(config.get("behavior", {}).get("stop_scope", "selected"))
+    except (OSError, ValueError, AttributeError):
+        return "all"  # unknown: assume the widest stop
+
+
 def resolve_service_panes(ctx: Context, script: str, session: str, values: List[str]) -> None:
-    """`--pane NAME` admits only a service pane (role "service") of the named
-    session, named exactly or by the part after "<project.id>-" -- the same
-    resolution as lib.sh's sw_select_panes, so the argv admitted here is the
-    argv the engine accepts. Repeating a pane is outside the reviewed shape."""
+    """`--pane NAME` admits a service pane (role "service") of the named
+    session, or an executor/reviewer marked launch "on_demand" that this
+    orchestrator coordinates, named exactly or by the part after
+    "<project.id>-" -- the same resolution as lib.sh's sw_select_panes, so the
+    argv admitted here is the argv the engine accepts. Repeating a pane is
+    outside the reviewed shape."""
     rows = [row for row in ctx.session_panes if row[0] == session]
     if not rows:
         raise PolicyFailure("helper.argv", "%s --pane requires a configured session id" % script)
@@ -2658,8 +2674,12 @@ def resolve_service_panes(ctx: Context, script: str, session: str, values: List[
         match = [row for row in rows if row[1] == value] or [row for row in rows if row[1] == "%s-%s" % (ctx.project_id, value)]
         if len(match) != 1:
             raise PolicyFailure("helper.argv", "%s --pane %s is not a pane of session %s" % (script, value, session))
-        if match[0][2] != "service":
-            raise PolicyFailure("helper.argv", "%s --pane selects service panes only; %s has role %s" % (script, match[0][1], match[0][2]))
+        on_demand = len(match[0]) > 3 and match[0][3] == "on_demand"
+        if match[0][2] != "service" and not on_demand:
+            raise PolicyFailure("helper.argv", "%s --pane selects service panes only, or an executor/reviewer marked launch on_demand; %s has role %s"
+                                % (script, match[0][1], match[0][2]))
+        if on_demand and match[0][1] not in ctx.executor_panes | ctx.reviewer_panes:
+            raise PolicyFailure("routing.scope", "%s --pane %s names an on-demand worker this orchestrator does not coordinate" % (script, match[0][1]))
         if match[0][1] in resolved:
             raise PolicyFailure("helper.argv", "%s --pane names each pane once (%s)" % (script, match[0][1]))
         resolved.append(match[0][1])
@@ -2719,6 +2739,72 @@ def workspace_args(ctx: Context, script: str, args: List[str], bare_flags: Tuple
         resolve_service_panes(ctx, script, target, panes)
 
 
+def own_session_id(ctx: Context) -> str:
+    return next((row[0] for row in ctx.session_panes if row[1] == ctx.pane_name), "")
+
+
+def orchestrator_self_stop(ctx: Context, script: str, args: List[str]) -> None:
+    """An orchestrator never stops or restarts the session holding its own
+    pane: that kills it mid-turn. Judged on every route into the engine (the
+    reviewed helper, the `workspace` dispatcher on PATH, a lifecycle script
+    run by name). A `--pane` stop selects only service panes and on-demand
+    workers, never an orchestrator, so it is not a self-stop."""
+    if ctx.semantic_role != "orchestrator" or script not in {"workspace-stop.sh", "workspace-restart.sh"} or "--pane" in args:
+        return
+    own = own_session_id(ctx)
+    if not own:
+        return
+    target = "all"
+    remaining = list(args)
+    while remaining:
+        arg = remaining.pop(0)
+        if arg in {"--config", "--expect-pane-id"}:
+            remaining[:1] = []
+            continue
+        if not arg.startswith("-"):
+            target = arg
+            break
+    verb = "stop" if script == "workspace-stop.sh" else "restart"
+    if target in {"all", own} or "--all" in args:
+        raise PolicyFailure("orchestrator.self_stop", "%s %s would end this orchestrator's own session %s; run it from a terminal outside the harness"
+                            % (verb, target, own))
+    if ctx.stop_scope_all:
+        raise PolicyFailure("orchestrator.self_stop", "%s %s widens to every session under behavior.stop_scope \"all\", this orchestrator's %s included; run it from a terminal outside the harness"
+                            % (verb, target, own))
+
+
+def orchestrator_self_stop_environment(ctx: Context, args: List[str]) -> None:
+    """`workspace stop|restart --environment E` covers E's development
+    sessions unless it is narrowed to --services; an environment coordinator
+    sits in a development session of its own environment."""
+    if ctx.semantic_role != "orchestrator" or not args or args[0] not in {"stop", "restart"}:
+        return
+    if "--services" in args and "--development" not in args:
+        return
+    own = own_session_id(ctx)
+    if own and own in ctx.session_ids:
+        raise PolicyFailure("orchestrator.self_stop", "%s --environment %s would end this orchestrator's own session %s; add --services, or run it from a terminal outside the harness"
+                            % (args[0], ctx.environment, own))
+
+
+def orchestrator_lifecycle_routes(ctx: Context, tokens: List[str]) -> None:
+    """Apply the self-stop rule to lifecycle routes in an orchestrator's free
+    shell (the reviewed helper path is judged in validate_helper)."""
+    for segment in segments(tokens):
+        argv = parse_wrappers(segment).argv
+        for token in executable_tokens(segment):
+            name = Path(token).name
+            index = argv.index(token)
+            rest = argv[index + 1:]
+            if name in WORKSPACE_VERB_DISPATCHERS and rest:
+                if "--environment" in rest:
+                    orchestrator_self_stop_environment(ctx, rest)
+                elif rest[0] in {"stop", "restart"}:
+                    orchestrator_self_stop(ctx, "workspace-%s.sh" % rest[0], rest[1:])
+            elif name in {"workspace-stop.sh", "workspace-restart.sh"}:
+                orchestrator_self_stop(ctx, name, rest)
+
+
 def workspace_read(ctx: Context, script: str, args: List[str]) -> None:
     if script == "workspace-plan.sh":
         workspace_args(ctx, script, args, ("--json", "--running"))
@@ -2774,6 +2860,7 @@ def environment_command(ctx: Context, script: str, args: List[str]) -> None:
         raise PolicyFailure("helper.argv", "environment requires a literal id")
     if ctx.environment and rest[i+1] != ctx.environment:
         raise PolicyFailure("routing.scope", "environment selector escapes this coordinator scope")
+    orchestrator_self_stop_environment(ctx, args)
     workspace_args(ctx, script, rest, ("--services", "--development", "--json", "--confirmed", "--no-save", "--no-agents", "--no-services", "--no-attach", "--apply"), allow_target=False, value_flags=("--environment",))
 
 
@@ -2969,6 +3056,8 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
         raise PolicyFailure("coordination.write", "%s is not a %s operation in strict-v1" % (script, ctx.semantic_role))
     if ctx.scoped and plugin == "session-scheduler":
         scoped_task(ctx, script, args)
+    if plugin == "session-workspace":
+        orchestrator_self_stop(ctx, script, args)
     if ctx.environment and plugin == "session-workspace":
         mutating = {"workspace-start.sh", "workspace-stop.sh", "workspace-restart.sh", "workspace-reconcile.sh"}
         if script in mutating and (not args or args[0] not in ctx.session_ids or "--all" in args):
@@ -4460,6 +4549,10 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
         lifecycle = child_lifecycle_bypass(tokens)
         if lifecycle is not None:
             raise PolicyFailure("coordination.write", "workspace lifecycle is an orchestrator operation in strict-v1 (%s)" % lifecycle)
+    else:
+        orchestrator_lifecycle_routes(ctx, tokens)
+        if line_tokens is not tokens:
+            orchestrator_lifecycle_routes(ctx, line_tokens)
 
     if ctx.semantic_role == "orchestrator":
         # shlex otherwise folds newlines into whitespace. Detection must also
@@ -4751,6 +4844,7 @@ _FLOOR_TO_PANES = ("routing", "outbound coordination only through the selected h
 # Child panes never run start/stop/restart/reconcile/install/browser-config,
 # whether through a helper, the `workspace` dispatcher on PATH or a copy.
 _FLOOR_LIFECYCLE = ("lifecycle", "workspace lifecycle verbs denied by any route", ("coordination.write",), ())
+_FLOOR_SELF_STOP = ("self_stop", "no stop or restart of the session holding this pane", ("orchestrator.self_stop",), ())
 ROLE_FLOOR = {
     "reviewer": (
         ("readonly", "edit family denied, except this pane's own message drafts", ("reviewer.readonly", "coordination.draft"),
@@ -4765,11 +4859,11 @@ ROLE_FLOOR = {
     "orchestrator": (
         ("child_write", "no edit or mutating shell against a child checkout", ("orchestrator.child_write",), ()),
         ("push", "no git push", ("orchestrator.push",), ()),
-    ) + _FLOOR_GH + (_FLOOR_TO_PANES,),
+    ) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_SELF_STOP),
     # An environment coordinator whose cwd is not the project root.
     "confined_orchestrator": _FLOOR_CONTAINMENT + (
         ("git", "no local Git mutation, push included", ("orchestrator.git",), (("READ_GIT", "git read subcommands"),)),
-    ) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_TMUX),
+    ) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_TMUX, _FLOOR_SELF_STOP),
 }
 COMMON_FLOOR = (
     ("helpers", "selected installed version only, reviewed argv, gated by role",
@@ -4818,6 +4912,8 @@ _PROBE_CONTAINMENT = (
     ("shell", "allow", "a script file run behind timeout", "timeout 5 python3 {probe}"),
     ("shell", "path.dynamic", "shell expansion", "ls $HOME"),
 )
+_PROBE_SELF_STOP = ("shell", "orchestrator.self_stop", "stop of its own session through the PATH dispatcher",
+                    "workspace stop {session} --confirmed")
 FLOOR_PROBES = {
     "reviewer": (
         ("edit", "reviewer.readonly", "edit inside the pane checkout", "{probe}"),
@@ -4852,12 +4948,14 @@ FLOOR_PROBES = {
         ("shell", "orchestrator.push", "git push", "git push"),
         ("shell", "orchestrator.gh_mutation", "gh pr merge", "gh pr merge 1"),
         ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
+        _PROBE_SELF_STOP,
     ),
     "confined_orchestrator": _PROBE_CONTAINMENT + (
         ("shell", "orchestrator.git", "git commit", "git commit -m probe"),
         ("shell", "orchestrator.git", "git push", "git push"),
         ("shell", "orchestrator.git", "git reflog expire", "git reflog expire --all --expire=now"),
         ("shell", "orchestrator.gh_mutation", "gh pr merge", "gh pr merge 1"),
+        _PROBE_SELF_STOP,
     ) + _PROBE_TO_MASTER,
 }
 COMMON_PROBES = (
@@ -4936,6 +5034,7 @@ def probe_payloads(ctx: Context, case: tuple) -> List[Tuple[str, str, str]]:
         "child": str((child or ctx.pane_cwd) / FLOOR_PROBE_NAME),
         "messages": str((messages or ctx.pane_cwd) / FLOOR_PROBE_NAME),
         "cwd": str(ctx.pane_cwd),
+        "session": own_session_id(ctx) or "all",
     }
     if kind == "shell":
         command = value.format(**{k: shlex.quote(v) for k, v in places.items()})

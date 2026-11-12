@@ -10,13 +10,17 @@
 # unless --no-attach is passed. An unresolvable session-chat helper aborts the
 # run when behavior.session_chat_helper.on_missing is "fail".
 #
-# `--pane NAME` (repeatable) starts only the named service panes of ONE
-# session: the session is created if needed with just those panes, their
-# declared commands run, and no other pane of the session is created or
-# touched. A NAME is a pane's full name or the part after "<project.id>-".
-# Each selected dev server's port must be free (or held by that pane's own
-# live launch) or nothing is started and the holder's PID is named. A --pane
-# start never attaches: it brings a service up in the background.
+# `--pane NAME` (repeatable) starts only the named service panes, or
+# executor/reviewer panes marked launch "on_demand", of ONE session: the
+# session is created if needed with just those panes, their declared commands
+# or agents run, and no other pane of the session is created or touched. A
+# NAME is a pane's full name or the part after "<project.id>-". Each selected
+# dev server's port must be free (or held by that pane's own live launch) or
+# nothing is started and the holder's PID is named. Each selected agent pane
+# must show its input line within SESSION_WORKSPACE_AGENT_READY_TIMEOUT
+# seconds (default 120) or the run fails, leaving the pane running. A --pane
+# start never attaches: it brings panes up in the background. A full start
+# leaves on-demand panes down (and keeps them when they already run).
 #
 # Usage: workspace-start.sh [TARGET|all] [--config PATH]
 #          [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]
@@ -216,6 +220,36 @@ for BROWSER_PORT in "${BROWSER_PORTS[@]:-}"; do
   fi
 done
 
+# An on-demand worker is ready when its agent shows an input line, so a
+# message sent right after this command lands in it. A pane that does not get
+# there in time is reported and left running for a look, and the run fails.
+if [ "$SW_PANE_SUBSET" -eq 1 ] && [ "$SW_FAILED_SLOTS" -eq 0 ]; then
+  AGENT_SELECTED="$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '.sessions[] | select(.id == $t) | .panes[] | select(.runtime.name != "shell") | .name')"
+  if [ -n "$AGENT_SELECTED" ]; then
+    SEL_SESSION_NAME="$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '.sessions[] | select(.id == $t) | .name')"
+    SEL_WINDOW="$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '.sessions[] | select(.id == $t) | .window_index // 0')"
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "ERROR: python3 is required to wait for an on-demand worker's agent to be ready" >&2
+      SW_FAILED_SLOTS=$((SW_FAILED_SLOTS + 1))
+    else
+      while IFS= read -r agent_pane; do
+        [ -n "$agent_pane" ] || continue
+        agent_pane_id="$(tmux list-panes -t "=$SEL_SESSION_NAME:$SEL_WINDOW" -F "$(printf '#{pane_id}\t#{%s}' "$MARKER_PANE")" 2>/dev/null |
+          awk -F'\t' -v n="$agent_pane" '$2 == n {print $1; exit}')"
+        if [ -z "$agent_pane_id" ]; then
+          echo "  [not ready] $SEL_SESSION_NAME / $agent_pane — no pane carries its marker" >&2
+          SW_FAILED_SLOTS=$((SW_FAILED_SLOTS + 1))
+        elif ready_out="$(python3 "$HERE/agent-pane.py" ready --pane-id "$agent_pane_id" 2>&1)"; then
+          echo "  [ready] $SEL_SESSION_NAME / $agent_pane — agent input line on screen"
+        else
+          echo "  [not ready] $SEL_SESSION_NAME / $agent_pane — ${ready_out:-agent did not become ready}; the pane is left running" >&2
+          SW_FAILED_SLOTS=$((SW_FAILED_SLOTS + 1))
+        fi
+      done <<<"$AGENT_SELECTED"
+    fi
+  fi
+fi
+
 echo
 echo "started/adopted: $SW_CHANGED  kept (already healthy): $SW_KEPT  failed: $SW_FAILED_SLOTS"
 
@@ -231,7 +265,7 @@ fi
 if [ "$NO_ATTACH" -eq 1 ]; then
   echo "attach: suppressed by --no-attach"
 elif [ "$SW_PANE_SUBSET" -eq 1 ]; then
-  echo "attach: skipped (--pane starts services in the background)"
+  echo "attach: skipped (--pane starts panes in the background)"
 else
   if [ "$TARGET" != "all" ]; then
     ATTACH_SESSION="$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" 'first(.sessions[] | select(.id == $t) | .name) // ""')"
