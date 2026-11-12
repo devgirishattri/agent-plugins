@@ -329,6 +329,21 @@ class Environments(unittest.TestCase):
                 p.validate_bash(ctx, 'cat /outside/selected-plugin/SKILL.md', {})
             self.assertEqual(caught.exception.rule, 'executor.containment')
 
+    def test_confined_orchestrator_bare_brace_pair(self):
+        # A confined coordinator runs the executor floor, so it decides a bare
+        # {} argument like '{}' and refuses a {} that zsh reads as a group.
+        p, ctx, _ = self.context('web-master')
+        self.assertTrue(ctx.confined_orchestrator)
+        for command in ('find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort', "find . -type f -exec shasum -a 256 '{}' +"):
+            self.assertIsNone(p.validate_bash(ctx, command, {}), command)
+        for command, rule in (('find . -type f -exec shasum -a 256 {}.bak +', 'path.dynamic'),
+                              ("if false; then {} else python3 -c 'print(1)'; fi", 'path.dynamic'),
+                              ('find ../component-b -type f -exec cat {} +', 'executor.containment'),
+                              ("find ../component-b -type f -exec cat '{}' +", 'executor.containment')):
+            with self.subTest(command=command), self.assertRaises(p.PolicyFailure) as caught:
+                p.validate_bash(ctx, command, {})
+            self.assertEqual(caught.exception.rule, rule, command)
+
     def test_role_floor_probe_for_every_pane(self):
         # Each pane resolves its own floor (confined for control-directory
         # coordinators) and every built-in case is decided as expected.

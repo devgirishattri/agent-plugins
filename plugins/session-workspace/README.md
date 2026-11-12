@@ -525,7 +525,12 @@ role floor is off. The floor:
   directory the shell would actually be in, and a `cd` whose target leaves
   the cwd (or `cd -`, a bare `cd`, `pushd` with no operand) is refused;
   operands that only exist after a shell expansion (`"$TARGET"`, backticks,
-  unquoted globs/braces) fail closed; redirection targets (`> file`,
+  unquoted globs/braces) fail closed; from 0.13.1 an unquoted word that is
+  exactly `{}` (the `find -exec` placeholder) is decided like `'{}'` when it
+  is an argument of an ordinary command, because no shell expands it, while a
+  `{}` that can start a command (first word, after `then`, `else`, `do`,
+  `time`, an assignment or a redirection) stays refused, because zsh reads it
+  there as an empty `{ }` group; redirection targets (`> file`,
   `>> "escape link"`, `2> /tmp/x`, `< ../x`) are path operands too;
   attached `-C..`/`-Cdir` and `--chdir=` values are resolved; from 0.7.4,
   paths attached to short options (`-f/x`, `-o/x`, `-t/x`, clustered
