@@ -3523,7 +3523,7 @@ SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane browser --config 
 SWT_STATUS=$?
 if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_od_names)" = "sample-ondemand-browser " ] &&
    printf '%s' "$SWT_OUT" | grep -Fq "[ready]  browser DevTools endpoint http://127.0.0.1:$SWT_OD_BPORT" &&
-   printf '%s' "$SWT_OUT" | grep -Fq "attach: skipped (--pane starts services in the background)" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "attach: skipped (--pane starts panes in the background)" &&
    printf '%s' "$SWT_OUT" | grep -Fq "[idle-stop] sample-ondemand-services / sample-ondemand-browser — idle stop armed" &&
    [ "$(sed -n '1p' "$SWT_OD_OWNER" 2>/dev/null)" = "sample-ondemand" ]; then
   pass "start --pane browser: creates the session with only the browser pane, launches Chrome, claims and awaits its port, never attaches"
