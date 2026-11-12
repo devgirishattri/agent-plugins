@@ -27,6 +27,12 @@ Stop if the target is absent/ambiguous, identity does not match, a configured
 pane is unhealthy, or the plan/config changed after evidence was collected.
 Never infer missing coordinates or fall back to a project-local command.
 
+A target executor or reviewer whose plan pane has `"launch": "on_demand"` is
+down until you need it, and that is not unhealthy. Start it with `--pane`
+before its first packet and close it once its part is done, as in
+[references/lifecycle.md](references/lifecycle.md) "On-demand workers". Never
+stop or restart the session that holds your own pane.
+
 ## Immutable boundary
 
 - Follow this order: status → plan → independent plan

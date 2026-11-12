@@ -289,7 +289,7 @@ else
 fi
 
 echo "== golden fixtures validate clean =="
-for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3 orchestration-v4 browser browser-multipane services-on-demand; do
+for fx in project-a project-d harness-v2 harness-disabled-v2 harness-v3 orchestration-v4 browser browser-multipane services-on-demand on-demand-workers; do
   OUT="$(bash "$HERE/validate-config.sh" --config "$HERE/fixtures/valid/$fx.json" 2>&1)"
   STATUS=$?
   if [ "$STATUS" -eq 0 ] && printf '%s' "$OUT" | grep -q "^OK:"; then
@@ -1194,6 +1194,10 @@ declare -a RULE_FIXTURES=(
   "idle-activity-browser.json:idle_activity is not allowed on the browser pane"
   "idle-activity-not-service.json:idle_activity applies only to service panes"
   "idle-activity-no-idle-stop.json:idle_activity needs idle_stop_minutes"
+  "launch-bad-value.json:launch must be \"always\" or \"on_demand\""
+  "launch-not-worker.json:applies only to the harness executor or reviewer role, not role \"master\""
+  "launch-no-harness.json:needs schema_version 2-5 with harness.enabled true"
+  "launch-split-tree.json:is not supported in a split_tree session \(development\)"
 )
 for entry in "${RULE_FIXTURES[@]}"; do
   fx="${entry%%:*}"
@@ -3519,7 +3523,7 @@ SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane browser --config 
 SWT_STATUS=$?
 if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_od_names)" = "sample-ondemand-browser " ] &&
    printf '%s' "$SWT_OUT" | grep -Fq "[ready]  browser DevTools endpoint http://127.0.0.1:$SWT_OD_BPORT" &&
-   printf '%s' "$SWT_OUT" | grep -Fq "attach: skipped (--pane starts services in the background)" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "attach: skipped (--pane starts panes in the background)" &&
    printf '%s' "$SWT_OUT" | grep -Fq "[idle-stop] sample-ondemand-services / sample-ondemand-browser — idle stop armed" &&
    [ "$(sed -n '1p' "$SWT_OD_OWNER" 2>/dev/null)" = "sample-ondemand" ]; then
   pass "start --pane browser: creates the session with only the browser pane, launches Chrome, claims and awaits its port, never attaches"
@@ -3993,6 +3997,244 @@ else
 fi
 swrun_od "$HERE/workspace-stop.sh" services --config "$SWT_CFG_ODT" --confirmed >/dev/null 2>&1
 swrun_od "$HERE/workspace-stop.sh" services --config "$SWT_CFG_OD" --confirmed >/dev/null 2>&1
+
+# --- 12x. on-demand harness workers (launch "on_demand") -------------------
+# An orchestrator starts its executor/reviewer only when it has work for
+# them and closes them when they are idle. Covered against the real engine:
+#   * a full start leaves on-demand workers down and says how to start them;
+#     plan and status mark them on demand;
+#   * start --pane waits until the agent draws its input line, and reports a
+#     pane whose agent never does without killing it;
+#   * a later full start keeps a running worker;
+#   * stop --pane refuses, and leaves running, a worker with an assigned
+#     task, a task waiting for its review, unread inbox rows or a running
+#     turn; --force stops it anyway; the window is re-tiled after a stop;
+#   * a session holding only on-demand workers is not created by a full start;
+#   * --pane refuses the orchestrator and a worker that is not on demand.
+SWT_PROJ_W="$SWT_ROOT/sample-workers"
+mkdir -p "$SWT_PROJ_W/.agent-workspace" "$SWT_PROJ_W/component-a"
+jq '.project.id = "sample-workers"' "$HERE/fixtures/valid/on-demand-workers.json" > "$SWT_PROJ_W/.agent-workspace/workspace.json"
+SWT_CFG_W="$SWT_PROJ_W/.agent-workspace/workspace.json"
+SWT_W_WIN='=sample-workers-development:0'
+SWT_W_EXEC=sample-workers-component-executor
+SWT_W_REV=sample-workers-component-reviewer
+SWT_W_TASKS="$SWT_PROJ_W/.tmp/scheduler/tasks"
+SWT_W_QUEUE="$SWT_PROJ_W/.tmp/messages/queue/$SWT_W_EXEC.tsv"
+mkdir -p "$SWT_W_TASKS" "$(dirname "$SWT_W_QUEUE")"
+# A stand-in agent: after the boot delay in worker-boot it draws Codex's input
+# line, and while worker-turn exists it shows a running turn.
+rm -f "$SWT_ROOT/worker-boot" "$SWT_ROOT/worker-turn"
+cat > "$SWT_BIN/codex" <<EOF
+#!/usr/bin/env bash
+sleep "\$(cat "$SWT_ROOT/worker-boot" 2>/dev/null || echo 0)"
+shown=""
+while :; do
+  if [ -e "$SWT_ROOT/worker-turn" ]; then now=turn; else now=idle; fi
+  if [ "\$now" != "\$shown" ]; then
+    shown="\$now"
+    printf '\033[2J\033[Hstand-in agent\n\n'
+    [ "\$now" = turn ] && printf '• Working (2s • esc to interrupt)\n\n'
+    printf '› \n'
+  fi
+  sleep 0.1
+done
+EOF
+chmod +x "$SWT_BIN/codex"
+swt_w_names() {
+  SWT_TMUX list-panes -t "$SWT_W_WIN" -F '#{@session_workspace_pane}' 2>/dev/null | sort | tr '\n' ' '
+}
+swt_w_pane() {
+  SWT_TMUX list-panes -t "$SWT_W_WIN" -F "#{pane_id}	#{@session_workspace_pane}" 2>/dev/null | awk -F'\t' -v n="$1" '$2 == n {print $1}'
+}
+# swt_w_wait_screen NAME TEXT — true once NAME's pane shows TEXT (3 s at most).
+swt_w_wait_screen() {
+  local i=0 pane
+  while [ "$i" -lt 30 ]; do
+    pane="$(swt_w_pane "$1")"
+    [ -n "$pane" ] && SWT_TMUX capture-pane -p -t "$pane" 2>/dev/null | grep -Fq "$2" && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+SWT_OUT="$(swrun "$HERE/workspace-start.sh" --config "$SWT_CFG_W" --no-attach 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_w_names)" = "sample-workers-master " ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[on-demand] sample-workers-development / $SWT_W_EXEC — not started (launch on_demand); start it with: workspace start development --pane $SWT_W_EXEC" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[on-demand] sample-workers-development / $SWT_W_REV — not started (launch on_demand)"; then
+  pass "on-demand workers: a full start runs only the orchestrator and says how to start each worker"
+else
+  fail "on-demand workers: a full start runs only the orchestrator and says how to start each worker" \
+    "status=$SWT_STATUS names=[$(swt_w_names)] output=$SWT_OUT"
+fi
+SWT_W_STATUS_TXT="$(swrun "$HERE/workspace-status.sh" development --config "$SWT_CFG_W" 2>&1)"
+SWT_W_STATUS_JSON="$(swrun "$HERE/workspace-status.sh" development --config "$SWT_CFG_W" --json 2>&1)"
+SWT_W_PLAN="$(swrun "$HERE/workspace-plan.sh" --config "$SWT_CFG_W" 2>&1)"
+if printf '%s' "$SWT_W_STATUS_TXT" | grep -Fq "launch: on demand — not running; start it with: workspace start development --pane $SWT_W_EXEC" &&
+   printf '%s' "$SWT_W_STATUS_JSON" | jq -e --arg e "$SWT_W_EXEC" '
+     (.[] | select(.pane == $e) | .launch == "on_demand" and .running == false)
+     and (.[] | select(.pane == "sample-workers-master") | .launch == "always" and .running == true)' >/dev/null 2>&1 &&
+   printf '%s' "$SWT_W_PLAN" | grep -Fq "pane: $SWT_W_EXEC (on demand: a full start leaves it down; start it with --pane)"; then
+  pass "on-demand workers: plan and status mark the workers on demand and how to start them"
+else
+  fail "on-demand workers: plan and status mark the workers on demand and how to start them" \
+    "status=$SWT_W_STATUS_TXT json=$SWT_W_STATUS_JSON plan=$SWT_W_PLAN"
+fi
+
+SWT_OUT="$(swrun "$HERE/workspace-start.sh" development --pane component-executor --config "$SWT_CFG_W" 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_w_names)" = "sample-workers-component-executor sample-workers-master " ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[ready] sample-workers-development / $SWT_W_EXEC — agent input line on screen" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "attach: skipped (--pane starts panes in the background)"; then
+  pass "on-demand workers: start --pane starts one worker beside the orchestrator and waits for its input line"
+else
+  fail "on-demand workers: start --pane starts one worker beside the orchestrator and waits for its input line" \
+    "status=$SWT_STATUS names=[$(swt_w_names)] output=$SWT_OUT"
+fi
+SWT_OUT="$(swrun "$HERE/workspace-start.sh" --config "$SWT_CFG_W" --no-attach 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_w_names)" = "sample-workers-component-executor sample-workers-master " ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[kept] sample-workers-development / $SWT_W_EXEC" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[on-demand] sample-workers-development / $SWT_W_REV"; then
+  pass "on-demand workers: a later full start keeps the running worker and leaves the other one down"
+else
+  fail "on-demand workers: a later full start keeps the running worker and leaves the other one down" \
+    "status=$SWT_STATUS names=[$(swt_w_names)] output=$SWT_OUT"
+fi
+
+# Busy: each reason alone keeps the worker running.
+SWT_W_EXEC_ID="$(swt_w_pane "$SWT_W_EXEC")"
+printf '{"id":"task-1","status":"assigned","assignee":"%s","reviewer":"%s"}\n' "$SWT_W_EXEC" "$SWT_W_REV" > "$SWT_W_TASKS/task-1.json"
+SWT_OUT="$(swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 1 ] && [ "$(swt_w_pane "$SWT_W_EXEC")" = "$SWT_W_EXEC_ID" ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[busy]   sample-workers-development / $SWT_W_EXEC — left running: task task-1 is assigned to it and not finished (--force stops it anyway)" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "stopped: 0  not running: 0  skipped: 0  busy: 1"; then
+  pass "on-demand workers: stop --pane leaves a worker with an assigned task running and exits 1"
+else
+  fail "on-demand workers: stop --pane leaves a worker with an assigned task running and exits 1" \
+    "status=$SWT_STATUS pane=$(swt_w_pane "$SWT_W_EXEC") output=$SWT_OUT"
+fi
+printf '{"id":"task-1","status":"done","assignee":"%s","reviewer":"%s"}\n' "$SWT_W_EXEC" "$SWT_W_REV" > "$SWT_W_TASKS/task-1.json"
+printf '1\torchestrator\tplease pick up task-2\n' > "$SWT_W_QUEUE"
+SWT_OUT="$(swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 1 ] && [ -n "$(swt_w_pane "$SWT_W_EXEC")" ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "1 unread message(s) in $SWT_W_QUEUE"; then
+  pass "on-demand workers: stop --pane leaves a worker with unread inbox messages running"
+else
+  fail "on-demand workers: stop --pane leaves a worker with unread inbox messages running" "status=$SWT_STATUS output=$SWT_OUT"
+fi
+: > "$SWT_W_QUEUE"
+touch "$SWT_ROOT/worker-turn"
+if swt_w_wait_screen "$SWT_W_EXEC" "esc to interrupt"; then
+  SWT_OUT="$(swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed 2>&1)"
+  SWT_STATUS=$?
+else
+  SWT_OUT="the stand-in agent never showed its turn"; SWT_STATUS=99
+fi
+if [ "$SWT_STATUS" -eq 1 ] && [ -n "$(swt_w_pane "$SWT_W_EXEC")" ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq 'a turn is running (its screen shows "esc to interrupt")'; then
+  pass "on-demand workers: stop --pane leaves a worker in the middle of a turn running"
+else
+  fail "on-demand workers: stop --pane leaves a worker in the middle of a turn running" "status=$SWT_STATUS output=$SWT_OUT"
+fi
+rm -f "$SWT_ROOT/worker-turn"
+swt_w_wait_screen "$SWT_W_EXEC" "stand-in agent" >/dev/null
+sleep 0.3
+SWT_OUT="$(swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed 2>&1)"
+SWT_STATUS=$?
+SWT_W_LAYOUT="$(SWT_TMUX list-panes -t "$SWT_W_WIN" -F '#{pane_width}x#{pane_height}' 2>/dev/null | tr '\n' ' ')"
+SWT_W_WIN_SIZE="$(SWT_TMUX display-message -p -t "$SWT_W_WIN" '#{window_width}x#{window_height}' 2>/dev/null)"
+if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_w_names)" = "sample-workers-master " ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "stopped: 1  not running: 0  skipped: 0  busy: 0" &&
+   [ "$SWT_W_LAYOUT" = "$SWT_W_WIN_SIZE " ]; then
+  pass "on-demand workers: an idle worker stops, and the orchestrator gets the whole window back"
+else
+  fail "on-demand workers: an idle worker stops, and the orchestrator gets the whole window back" \
+    "status=$SWT_STATUS names=[$(swt_w_names)] layout=[$SWT_W_LAYOUT] window=$SWT_W_WIN_SIZE output=$SWT_OUT"
+fi
+
+# The reviewer's task in review keeps it up; --force is the override.
+printf '{"id":"task-1","status":"review","assignee":"%s","reviewer":"%s"}\n' "$SWT_W_EXEC" "$SWT_W_REV" > "$SWT_W_TASKS/task-1.json"
+swrun "$HERE/workspace-start.sh" development --pane component-reviewer --config "$SWT_CFG_W" >/dev/null 2>&1
+SWT_OUT="$(swrun "$HERE/workspace-stop.sh" development --pane component-reviewer --config "$SWT_CFG_W" --confirmed 2>&1)"
+SWT_STATUS=$?
+SWT_OUT2="$(swrun "$HERE/workspace-stop.sh" development --pane component-reviewer --config "$SWT_CFG_W" --confirmed --force 2>&1)"
+SWT_STATUS2=$?
+if [ "$SWT_STATUS" -eq 1 ] && printf '%s' "$SWT_OUT" | grep -Fq "task task-1 is waiting for its review" &&
+   [ "$SWT_STATUS2" -eq 0 ] && printf '%s' "$SWT_OUT2" | grep -Fq "stopped: 1" && [ "$(swt_w_names)" = "sample-workers-master " ]; then
+  pass "on-demand workers: a task in review keeps its reviewer up; --force stops a busy worker"
+else
+  fail "on-demand workers: a task in review keeps its reviewer up; --force stops a busy worker" \
+    "status=$SWT_STATUS/$SWT_STATUS2 names=[$(swt_w_names)] out=$SWT_OUT out2=$SWT_OUT2"
+fi
+rm -f "$SWT_W_TASKS/task-1.json"
+
+# An agent that never draws its input line is reported and left running.
+echo 5 > "$SWT_ROOT/worker-boot"
+SWT_OUT="$(SESSION_WORKSPACE_AGENT_READY_TIMEOUT=1 swrun "$HERE/workspace-start.sh" development --pane component-executor --config "$SWT_CFG_W" 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -ne 0 ] && [ -n "$(swt_w_pane "$SWT_W_EXEC")" ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[not ready] sample-workers-development / $SWT_W_EXEC — no agent input line on screen after 1s; the pane is left running"; then
+  pass "on-demand workers: start --pane reports an agent that never shows its input line, and leaves the pane running"
+else
+  fail "on-demand workers: start --pane reports an agent that never shows its input line, and leaves the pane running" \
+    "status=$SWT_STATUS names=[$(swt_w_names)] output=$SWT_OUT"
+fi
+rm -f "$SWT_ROOT/worker-boot"
+swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed --force >/dev/null 2>&1
+
+# Refusals that never touch tmux.
+SWT_OUT="$(swrun "$HERE/workspace-start.sh" development --pane master --config "$SWT_CFG_W" 2>&1)"
+SWT_STATUS=$?
+SWT_OUT2="$(swrun "$HERE/workspace-start.sh" development --pane component-executor --config "$SWT_CFG_H" 2>&1)"
+SWT_STATUS2=$?
+SWT_OUT3="$(swrun "$HERE/workspace-stop.sh" development --config "$SWT_CFG_W" --confirmed --force 2>&1)"
+SWT_STATUS3=$?
+if [ "$SWT_STATUS" -ne 0 ] && printf '%s' "$SWT_OUT" | grep -Fq "has role master; --pane selects service panes only, or an executor/reviewer marked launch on_demand" &&
+   [ "$SWT_STATUS2" -ne 0 ] && printf '%s' "$SWT_OUT2" | grep -Fq "has role executor; --pane selects service panes only, or an executor/reviewer marked launch on_demand" &&
+   [ "$SWT_STATUS3" -ne 0 ] && printf '%s' "$SWT_OUT3" | grep -Fq -- "--force applies only to --pane" &&
+   [ "$(swt_w_names)" = "sample-workers-master " ]; then
+  pass "on-demand workers: --pane refuses the orchestrator and a worker that is not on demand; --force needs --pane"
+else
+  fail "on-demand workers: --pane refuses the orchestrator and a worker that is not on demand; --force needs --pane" \
+    "status=$SWT_STATUS/$SWT_STATUS2/$SWT_STATUS3 out=$SWT_OUT out2=$SWT_OUT2 out3=$SWT_OUT3"
+fi
+
+# A session that holds only on-demand workers is not created by a full start.
+SWT_PROJ_WS="$SWT_ROOT/sample-worker-session"
+mkdir -p "$SWT_PROJ_WS/.agent-workspace" "$SWT_PROJ_WS/component-a"
+jq '.project.id = "sample-wsplit"
+  | .sessions = [(.sessions[0] | .panes |= map(select(.role == "master"))),
+                 (.sessions[0] | .id = "workers" | .name = "${PROJECT_ID}-workers" | .panes |= map(select(.role != "master")))]' \
+  "$HERE/fixtures/valid/on-demand-workers.json" > "$SWT_PROJ_WS/.agent-workspace/workspace.json"
+SWT_CFG_WS="$SWT_PROJ_WS/.agent-workspace/workspace.json"
+SWT_OUT="$(swrun "$HERE/workspace-start.sh" all --config "$SWT_CFG_WS" --no-attach 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 0 ] && ! SWT_TMUX has-session -t '=sample-wsplit-workers' 2>/dev/null &&
+   SWT_TMUX has-session -t '=sample-wsplit-development' 2>/dev/null &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[on-demand] sample-wsplit-workers / sample-wsplit-component-executor"; then
+  pass "on-demand workers: a full start does not create a session that holds only on-demand workers"
+else
+  fail "on-demand workers: a full start does not create a session that holds only on-demand workers" \
+    "status=$SWT_STATUS sessions=$(SWT_TMUX list-sessions -F '#{session_name}' 2>/dev/null | tr '\n' ' ') output=$SWT_OUT"
+fi
+SWT_OUT="$(swrun "$HERE/workspace-start.sh" workers --pane component-reviewer --config "$SWT_CFG_WS" 2>&1)"
+SWT_STATUS=$?
+if [ "$SWT_STATUS" -eq 0 ] &&
+   [ "$(SWT_TMUX list-panes -t '=sample-wsplit-workers:0' -F '#{@session_workspace_pane}' 2>/dev/null | tr '\n' ' ')" = "sample-wsplit-component-reviewer " ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[ready] sample-wsplit-workers / sample-wsplit-component-reviewer"; then
+  pass "on-demand workers: start --pane creates the workers session with only the named worker"
+else
+  fail "on-demand workers: start --pane creates the workers session with only the named worker" "status=$SWT_STATUS output=$SWT_OUT"
+fi
+swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG_WS" --confirmed --all >/dev/null 2>&1
+swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG_W" --confirmed --all >/dev/null 2>&1
+printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$SWT_BIN/codex"
+chmod +x "$SWT_BIN/codex"
+rm -f "$SWT_ROOT/worker-boot" "$SWT_ROOT/worker-turn"
 
 # --- 13. teardown + leak check -------------------------------------------
 swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG" --confirmed --all >/dev/null 2>&1

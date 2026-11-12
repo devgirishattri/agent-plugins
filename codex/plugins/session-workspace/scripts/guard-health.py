@@ -90,7 +90,8 @@ def main(argv: List[str]) -> int:
             pass
 
     if health.get("warn_missing_panes") is True:
-        expected = sorted(str(p.get("name")) for p in panes if not p.get("optional", False) and p.get("runtime", {}).get("name") != "shell")
+        expected = sorted(str(p.get("name")) for p in panes if not p.get("optional", False) and p.get("launch", "always") != "on_demand"
+                          and p.get("runtime", {}).get("name") != "shell")
         try:
             listed = run(["tmux", "list-panes", "-a", "-F", "#{@name}"])
             if listed.returncode == 0:

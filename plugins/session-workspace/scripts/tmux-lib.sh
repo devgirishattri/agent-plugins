@@ -144,46 +144,111 @@ sw_ensure_state_dir() {
   printf '%s\n' "$dir"
 }
 
+# Project lock. `start`, `reconcile --apply`, `stop` and the idle watcher's
+# stops serialize on one lock directory per project, with the protocol the
+# session-chat, scheduler and knowledge locks use. None of it trusts mkdir as
+# a test-and-set (uutils mkdir can report success to two racing callers):
+#   claim   — after mkdir, the holder pid file is created exclusively
+#             (noclobber, O_EXCL); that create, not mkdir, is ownership.
+#   reclaim — a lock whose holder pid is dead is taken over IN PLACE under an
+#             exclusively created `reclaim` marker, from a subshell anchored to
+#             the directory with `cd -P`; it is never deleted, because the dead
+#             holder's lock may already have been released and claimed again.
+#   release — only by the holder, with one rename of the whole directory into
+#             a private retirement directory beside it.
+
+# _sw_claim_lock LOCK_DIR: 0 claimed; 1 another acquirer claimed it first or
+# it vanished (keep waiting); 2 the pid file cannot be written.
+_sw_claim_lock() {
+  local path="$1" _
+  for _ in 1 2; do
+    ( set -o noclobber; printf '%s\n' "$$" > "$path/pid" ) 2>/dev/null && return 0
+    if [ -e "$path/pid" ] || [ -L "$path/pid" ] || [ ! -d "$path" ]; then
+      return 1
+    fi
+  done
+  rmdir "$path" 2>/dev/null || true
+  return 2
+}
+
+# _sw_reclaim_lock LOCK_DIR EXPECTED_DEAD_PID: 0 only on a takeover. Of
+# several waiters that saw the same dead pid, one succeeds; none touches a
+# newer holder's lock.
+_sw_reclaim_lock() (
+  path="$1" expected="$2" result=1
+  [ ! -L "$path" ] && cd -P "$path" 2>/dev/null || exit 1
+  set -o noclobber
+  { : > reclaim; } 2>/dev/null || exit 1
+  if [ "$(cat pid 2>/dev/null)" = "$expected" ]; then
+    printf '%s\n' "$$" >| pid 2>/dev/null && result=0
+  fi
+  rm -f reclaim 2>/dev/null || true
+  exit "$result"
+)
+
+# _sw_release_lock LOCK_DIR: release a lock this process holds (pid == $$).
+_sw_release_lock() {
+  local path="$1" retired
+  [ ! -L "$path" ] && [ ! -L "$path/pid" ] || return 1
+  [ "$(cat "$path/pid" 2>/dev/null)" = "$$" ] || return 1
+  retired=$(mktemp -d "$(dirname "$path")/.release.XXXXXXXX") || return 1
+  if ! mv "$path" "$retired/lock" 2>/dev/null; then
+    rmdir "$retired" 2>/dev/null || true
+    return 1
+  fi
+  rm -rf "$retired"
+}
+
 # sw_lock_acquire PROJECT_ID [TIMEOUT_SECONDS]
 # On success, sets SW_LOCK_DIR/SW_LOCK_ACQUIRED and installs an EXIT/INT/TERM
-# trap that releases the lock. A pre-existing lock dir whose recorded pid is
-# no longer alive is reclaimed immediately (no wait).
+# trap that releases the lock. A lock whose recorded holder is no longer
+# alive is taken over at once (no wait).
 sw_lock_acquire() {
   local project_id="$1"
   local timeout="${2:-${SESSION_WORKSPACE_LOCK_TIMEOUT:-30}}"
-  local state_dir lock_dir pid_file waited=0 holder_pid
+  local state_dir lock_dir waited=0 holder_pid claim
   state_dir="$(sw_ensure_state_dir "$project_id")"
   lock_dir="$state_dir/lock"
-  pid_file="$lock_dir/pid"
+  # Wait in 0.1 s steps; the timeout stays in seconds.
+  local ticks=$((timeout * 10))
 
   while :; do
     if mkdir "$lock_dir" 2>/dev/null; then
-      printf '%s\n' "$$" >"$pid_file"
-      SW_LOCK_DIR="$lock_dir"
-      SW_LOCK_ACQUIRED=1
-      trap 'sw_lock_release' EXIT INT TERM
-      return 0
+      claim=0; _sw_claim_lock "$lock_dir" || claim=$?
+      if [ "$claim" -eq 0 ]; then
+        SW_LOCK_DIR="$lock_dir"
+        SW_LOCK_ACQUIRED=1
+        trap 'sw_lock_release' EXIT INT TERM
+        return 0
+      elif [ "$claim" -eq 2 ]; then
+        echo "ERROR: could not record the workspace lock holder in $lock_dir" >&2
+        return 1
+      fi
     fi
 
-    holder_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    holder_pid="$( { tr -d '[:space:]' < "$lock_dir/pid"; } 2>/dev/null )"
     if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
-      echo "WARNING: reclaiming stale workspace lock for \"$project_id\" (held by dead pid $holder_pid)" >&2
-      rm -rf "$lock_dir" 2>/dev/null
-      continue
+      if _sw_reclaim_lock "$lock_dir" "$holder_pid"; then
+        echo "WARNING: reclaiming stale workspace lock for \"$project_id\" (held by dead pid $holder_pid); taken over in place" >&2
+        SW_LOCK_DIR="$lock_dir"
+        SW_LOCK_ACQUIRED=1
+        trap 'sw_lock_release' EXIT INT TERM
+        return 0
+      fi
     fi
 
-    if [ "$waited" -ge "$timeout" ]; then
+    if [ "$waited" -ge "$ticks" ]; then
       echo "ERROR: could not acquire workspace lock for project \"$project_id\" within ${timeout}s (held by pid ${holder_pid:-unknown})" >&2
       return 1
     fi
-    sleep 1
+    sleep 0.1
     waited=$((waited + 1))
   done
 }
 
 sw_lock_release() {
   [ "$SW_LOCK_ACQUIRED" -eq 1 ] || return 0
-  [ -n "$SW_LOCK_DIR" ] && rm -rf "$SW_LOCK_DIR" 2>/dev/null
+  [ -n "$SW_LOCK_DIR" ] && _sw_release_lock "$SW_LOCK_DIR"
   SW_LOCK_ACQUIRED=0
 }
 

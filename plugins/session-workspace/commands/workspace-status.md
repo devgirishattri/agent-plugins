@@ -29,9 +29,9 @@ It locates a slot ONLY by its pane marker: a pane in the session whose `@session
 | `unmanaged-occupant` | A pane carries the planned name's marker but fails the full project/pane ownership check. Example: another project's or an orphaned session's leftover marker. |
 | `missing` | No pane carries the planned marker. An ordinary unmarked pane in the planned positional slot also reports `missing`. |
 
-Each pane also reports `running=yes|no` (healthy and launched). A pane with `idle_stop_minutes` adds an `idle stop:` line (watcher state, what it observes such as `connections` or `connections+output`, current client count, time until it stops) and, once it has been stopped, a `last stop:` line with the time and reason.
+Each pane also reports `running=yes|no` (healthy and launched). A pane with `idle_stop_minutes` adds an `idle stop:` line (watcher state, what it observes such as `connections` or `connections+output`, current client count, time until it stops) and, once it has been stopped, a `last stop:` line with the time and reason. An executor/reviewer marked `"launch": "on_demand"` adds a `launch: on demand` line; while it is down that line names the `workspace start SESSION --pane NAME` command that starts it. A down on-demand worker is expected, not a fault.
 
-For a session with a browser pane, status prints one health line for the CDP endpoint, for example `browser: browser http://127.0.0.1:9326 — up (Chrome/131.0)  cdp_clients=1`. Before a browser smoke, check that line says `up`; when it says `down`, start the pane with `workspace start SESSION --pane browser`. `SESSION --pane NAME` restricts the report to those panes.
+For a session with a browser pane, status prints one health line for the CDP endpoint, for example `browser: browser http://127.0.0.1:9326 — up (Chrome/131.0)  cdp_clients=1`. Before a browser smoke, check that line says `up`; when it says `down`, start the pane with `workspace start SESSION --pane browser`. `SESSION --pane NAME` restricts the report to those panes (service panes or on-demand workers).
 
 Positional gap and adoption-candidate analysis belongs to `start`/`reconcile`, not to `status`.
 

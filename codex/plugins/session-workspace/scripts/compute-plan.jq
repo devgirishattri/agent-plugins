@@ -145,6 +145,11 @@ def coordination_var_name(store):
                 root_orchestrator: ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name | select(. as $n | [$cfg.environments[].orchestrator] | index($n) | not)][0] // null)
               } else null end),
               optional: ($p.optional // false),
+              # "on_demand": a full start/reconcile leaves this worker pane
+              # down; the orchestrator (or the user) starts and stops it with
+              # `start/stop SESSION --pane NAME` (validated: active-harness
+              # executor or reviewer only). "always" for every other pane.
+              launch: ($p.launch // "always"),
               cwd_raw: ($p.cwd // null),
               cwd: ($cwd_map[$p.name] // null),
               # true when this pane is optional AND declares a cwd AND that

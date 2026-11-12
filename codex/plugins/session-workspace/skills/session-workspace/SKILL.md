@@ -80,6 +80,13 @@ A project opts in by creating `.agent-workspace/workspace.json`. Set
   `idle_stop_minutes` stops an unused one, and `start --pane` names the PID
   holding a taken port instead of colliding. See the README section "Single
   service panes on demand".
+- Executor and reviewer panes marked `"launch": "on_demand"` (active strict-v1
+  harness, standard layout) stay down on a full start. The orchestrator starts
+  one with `workspace start SESSION --pane NAME`, which waits until its agent
+  shows its input line, and closes it with `workspace stop SESSION --pane NAME
+  --confirmed`, which leaves a busy worker running. The orchestrator may not
+  stop or restart the session holding its own pane (`orchestrator.self_stop`).
+  See the README section "On-demand workers".
   - The idle watcher reads these variables when `start` arms it, so a change
     applies from the next start. `SESSION_WORKSPACE_IDLE_OBSERVE=connections`
     makes the browser count client connections instead of CDP traffic.
@@ -428,7 +435,8 @@ guidance adds no permission rule or executable capability.
   health warnings.
 - Guard changes require a workspace restart, because their canonical JSON is
   launcher identity.
-- `warn_missing_panes` ignores `optional:true` and shell/service panes.
+- `warn_missing_panes` ignores `optional:true`, shell/service panes and
+  on-demand workers.
 - Workspace-health diagnostics emit only from the configured orchestrator.
 - `branch_ahead` is a neutral local-branch fact, not deploy authorization.
 - After a Codex plugin upgrade that changes hook entries, accept/re-trust the
