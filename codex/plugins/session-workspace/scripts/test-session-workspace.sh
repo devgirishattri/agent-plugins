@@ -504,6 +504,51 @@ if printf '%s' "$GL_V4" | jq -e '.hookSpecificOutput.hookEventName == "UserPromp
 else
   fail "schema-v4 guard lifecycle and health fast paths remain active" "lifecycle=$GL_V4 health=$GH_V4"
 fi
+# 0.12.13: guard-health.sh stopped at schema 3 or 4, so a v5 config's
+# workspace_health warnings never reached guard-health.py.
+GH_V5_CONFIG="$GH_ROOT/.agent-workspace/workspace-schema-v5.json"
+jq '.schema_version = 5' "$GH_CONFIG" > "$GH_V5_CONFIG"
+GH_V5_ENV=(env PATH="$GH_BIN:$PATH" SESSION_WORKSPACE_CONFIG="$GH_V5_CONFIG" SESSION_WORKSPACE_PROJECT_ROOT="$GH_ROOT" \
+  SESSION_WORKSPACE_PANE_NAME=harness-sample-master SESSION_WORKSPACE_ROLE=master SESSION_WORKSPACE_PANE_CWD="$GH_ROOT" \
+  SESSION_WORKSPACE_HARNESS_MODE=enforce SESSION_WORKSPACE_GUARDS_JSON="$GH_GUARDS")
+GL_V5="$("${GH_V5_ENV[@]}" bash "$HERE/guard-lifecycle.sh" --event prompt)"
+GH_V5="$(printf '{}' | "${GH_V5_ENV[@]}" bash "$HERE/guard-health.sh")"
+GH_V5_CODEX="$(printf '{}' | "${GH_V5_ENV[@]}" bash "$HERE/guard-health.sh" --codex-hook-output)"
+if printf '%s' "$GL_V5" | jq -e '.hookSpecificOutput.hookEventName == "UserPromptSubmit"' >/dev/null 2>&1 && \
+   printf '%s' "$GH_V5" | jq -e '.systemMessage | contains("uncommitted") and contains("production is ahead of main by 1")' >/dev/null 2>&1 && \
+   printf '%s' "$GH_V5_CODEX" | jq -e 'keys == ["systemMessage"] and (.systemMessage | contains("session-workspace health"))' >/dev/null 2>&1; then
+  pass "schema-v5 guard lifecycle and health fast paths are active"
+else
+  fail "schema-v5 guard lifecycle and health fast paths are active" "lifecycle=$GL_V5 health=$GH_V5 codex=$GH_V5_CODEX"
+fi
+# Scoped v5: a root-scoped master reports health; a coordinator confined to a
+# control directory does not (guard-health.py's own scope rule).
+GH5_ROOT="$TMPROOT/guard-health-v5-project"
+GH5_BIN="$TMPROOT/guard-health-v5-bin"
+mkdir -p "$GH5_ROOT/.agent-workspace" "$GH5_ROOT/component-a" "$GH5_ROOT/component-b" "$GH5_ROOT/control-web" "$GH5_BIN"
+git -C "$GH5_ROOT" init -q
+git -C "$GH5_ROOT" config user.email test@example.invalid
+git -C "$GH5_ROOT" config user.name Test
+printf 'root\n' > "$GH5_ROOT/README.md"
+git -C "$GH5_ROOT" add README.md
+git -C "$GH5_ROOT" commit -qm root
+printf 'dirty\n' >> "$GH5_ROOT/README.md"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" sample-master sample-vue3-master' > "$GH5_BIN/tmux"
+chmod +x "$GH5_BIN/tmux"
+GH5_CONFIG="$GH5_ROOT/.agent-workspace/workspace.json"
+jq '.harness.guards.workspace_health = {"warn_root_dirty": true, "warn_missing_panes": true} | .sessions[0].panes[0].cwd = "control-web"' \
+  "$HERE/fixtures/valid/shared-root-orchestrators-v5.json" > "$GH5_CONFIG"
+GH5_GUARDS="$(jq -cS '.harness.guards' "$GH5_CONFIG")"
+GH5_ROOTED="$(printf '{}' | env PATH="$GH5_BIN:$PATH" SESSION_WORKSPACE_CONFIG="$GH5_CONFIG" SESSION_WORKSPACE_PANE_NAME=sample-vue3-master \
+  SESSION_WORKSPACE_GUARDS_JSON="$GH5_GUARDS" bash "$HERE/guard-health.sh")"
+GH5_CONFINED="$(printf '{}' | env PATH="$GH5_BIN:$PATH" SESSION_WORKSPACE_CONFIG="$GH5_CONFIG" SESSION_WORKSPACE_PANE_NAME=sample-master \
+  SESSION_WORKSPACE_GUARDS_JSON="$GH5_GUARDS" bash "$HERE/guard-health.sh")"
+if printf '%s' "$GH5_ROOTED" | jq -e '.systemMessage | contains("uncommitted") and contains("sample-vue3-executor")' >/dev/null 2>&1 && \
+   [ -z "$GH5_CONFINED" ]; then
+  pass "schema-v5 Stop health runs for a root-scoped master, not a confined coordinator"
+else
+  fail "schema-v5 Stop health runs for a root-scoped master, not a confined coordinator" "rooted=$GH5_ROOTED confined=$GH5_CONFINED"
+fi
 
 echo "== schema v4 reviewed orchestration is closed, additive, and normalized =="
 ORCH_V4="$HERE/fixtures/valid/orchestration-v4.json"
