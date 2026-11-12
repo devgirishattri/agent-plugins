@@ -1120,7 +1120,8 @@ def candidate_path(token: str, base: Path, child_rel_names: Tuple[str, ...] = ()
 
     GLOBS_QUOTED (default False) is the H1 permission: the caller proved on
     the RAW command text (has_unquoted_glob) that every `*?{}[` in the argv
-    was quoted or backslash-escaped, so the shell passes it through literally.
+    was quoted or backslash-escaped, or (executor floor) is a bare `{}`
+    argument word, so the shell passes it through literally.
     Only then are those characters ordinary path text; the path is resolved,
     contained and symlink-checked exactly like any other literal. `$` or a
     backtick in a token read as a path operand is dynamic in every mode (the
@@ -1824,21 +1825,67 @@ def ensure_paths_within(tokens: List[str], base: Path, allowed: Callable[[Path],
             raise PolicyFailure(rule, "path operand escapes the allowed scope: %s" % token)
 
 
-def has_unquoted_glob(command: str) -> bool:
+# First words of a simple command after which a bare `{}` is not an argument.
+# zsh reads a `{}` that can start a command as an empty `{ }` group: after one
+# of these words (`then {} else python3 -c ...`, `if true {}`, `while x {}`,
+# `repeat 3 {}`, `function f {}`, `nocorrect {}`) the words after the group
+# run as a command the policy would read as operands of `{}`.
+BARE_PAIR_BLOCKERS = frozenset({
+    "!", "-", "[[", "{", "}", "always", "case", "coproc", "do", "done", "elif", "else", "end", "esac",
+    "fi", "for", "foreach", "function", "if", "in", "nocorrect", "repeat", "select", "then", "time",
+    "until", "while",
+})
+BARE_PAIR_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
+
+
+def has_unquoted_glob(command: str, bare_pair: bool = False) -> bool:
     """True when a glob/brace character sits outside quotes: the shell would
-    expand it into operands the policy cannot see (`cat escape-*`)."""
+    expand it into operands the policy cannot see (`cat escape-*`).
+
+    BARE_PAIR (the executor floor) exempts one word that no shell expands: an
+    unquoted `{}`, find's -exec placeholder, as an argument of an ordinary
+    command. bash, dash and zsh (also with braceccl or ignorebraces) pass it
+    through unchanged, so the program gets the argv that '{}' gives it. The
+    exemption needs all three:
+      - the whole word is `{}`: unquoted whitespace before it and unquoted
+        whitespace, `;`, `&`, `|` or the end after it (`x{}`, `{}.bak`,
+        `{}{}`, `src/{}`, `>{}`, `{}>f` and `{}(` stay refused);
+      - an earlier word of the same simple command is its command word: the
+        first word that is not an assignment, with no redirection before
+        it. A `{}` in command position is an empty group in zsh;
+      - that command word, without quotes, backslashes and line
+        continuations, is not in BARE_PAIR_BLOCKERS.
+    Every other character is decided exactly as without BARE_PAIR."""
     in_single = False
     in_double = False
+    word = ""  # raw text of the current word, quotes and escapes included
+    after_blank = True  # the previous character was unquoted whitespace, or none
+    command_word: Optional[str] = None
+    irregular = False  # a redirection or a sole `}` came before the command word
+
+    def close_word() -> None:
+        nonlocal word, command_word, irregular
+        if word == "}":
+            irregular = True  # zsh: a sole } is syntax anywhere on the line
+        elif word and command_word is None and not BARE_PAIR_ASSIGNMENT_RE.match(word):
+            command_word = re.sub(r"['\"\\]", "", word.replace("\\\n", ""))
+        word = ""
+
     index = 0
-    while index < len(command):
+    length = len(command)
+    while index < length:
         char = command[index]
         if in_single:
+            word += char
             if char == "'":
                 in_single = False
-        elif char == "\\" and index + 1 < len(command):
+        elif char == "\\" and index + 1 < length:
+            word += command[index:index + 2]
+            after_blank = False
             index += 2
             continue
         elif in_double:
+            word += char
             if char == '"':
                 in_double = False
         else:
@@ -1847,7 +1894,42 @@ def has_unquoted_glob(command: str) -> bool:
             elif char == '"':
                 in_double = True
             elif char in "*?[{":
-                return True
+                if not (bare_pair and char == "{" and not word and after_blank
+                        and command[index + 1:index + 2] == "}"
+                        and (index + 2 == length or command[index + 2] in " \t\n;&|")
+                        and command_word is not None and not irregular
+                        and command_word not in BARE_PAIR_BLOCKERS):
+                    return True
+                word = "{}"
+                after_blank = False
+                index += 2
+                continue
+            elif char in " \t\n":
+                close_word()
+                after_blank = True
+                if char == "\n":
+                    command_word, irregular = None, False
+                index += 1
+                continue
+            elif char in "<>" or (char == "&" and command[index + 1:index + 2] == ">"):
+                if word.isdigit():
+                    word = ""  # a file descriptor number, not a word
+                close_word()
+                if command_word is None:
+                    irregular = True
+                while index + 1 < length and command[index + 1] in "<>&|":
+                    index += 1
+                after_blank = False
+                index += 1
+                continue
+            elif char in ";&|()":
+                close_word()
+                command_word, irregular = None, False
+                after_blank = False
+                index += 1
+                continue
+            word += char
+            after_blank = False
         index += 1
     return False
 
@@ -3772,16 +3854,19 @@ def validate_reviewer_read(tokens: List[str], command: str, ctx: Context, base: 
     base = ctx.pane_cwd if base is None else base
     if has_unquoted_expansion(command) or any(is_control(token) for token in tokens):
         raise PolicyFailure("reviewer.shell", "reviewer commands must be one literal read-only segment without expansion, pipes, or redirection")
-    if has_unquoted_glob(command):
+    if has_unquoted_glob(command, bare_pair=True):
         raise PolicyFailure("path.dynamic", "unquoted glob/brace expansion produces operands the policy cannot resolve; quote the pattern or name the files")
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0]) or Path(tokens[0]).name in WRAPPER_NAMES or Path(tokens[0]).name in PRIVILEGE_WRAPPERS:
         raise PolicyFailure("reviewer.shell", "reviewer launch wrappers and environment assignments are forbidden")
     if "/" in tokens[0] or tokens[0].startswith("~"):
         raise PolicyFailure("reviewer.command", "reviewer commands must be bare PATH names, never a path to an executable: %s" % tokens[0])
-    # H1 call site 1/2 (reviewer read path): has_unquoted_glob(command) above
-    # was False for this exact one-segment raw command, so every `*?{}[` in
-    # its argv is quoted or escaped and reaches the tool literally. Only the
-    # reviewer's own read-path checks below receive that permission.
+    # H1 call site 1/2 (read path): has_unquoted_glob(command, bare_pair=True)
+    # above was False for this exact one-segment raw command, so every `*?{}[`
+    # in its argv is quoted or escaped, or is a bare `{}` argument word that
+    # no shell expands, and reaches the tool literally. Only the read-path
+    # checks below receive that permission. validate_bash calls this path for
+    # executors only (reviewers use validate_reviewer_exact), so a bare `{}`
+    # gets the decision its '{}' spelling gets here as on the floor.
     quoted_globs = True
     executable = command_basename(tokens)
     message_read = message_read_guard(ctx, tokens, base, globs_quoted=quoted_globs)
@@ -4591,12 +4676,15 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
         # so this floor is enforced identically on both providers.
         if has_expansion(command):
             raise PolicyFailure("path.dynamic", "executor operands must be literal; shell expansion cannot be resolved by the policy")
-        if has_unquoted_glob(command):
+        if has_unquoted_glob(command, bare_pair=True):
             raise PolicyFailure("path.dynamic", "unquoted glob/brace expansion produces operands the policy cannot resolve; quote the pattern or name the files")
-        # H1 call site 2/2 (executor floor): has_unquoted_glob(command) above
-        # was False for the full raw command, a superset of every segment's
-        # raw text, so each segment's `*?{}[` is quoted or escaped. The
-        # permission is used only by the two per-segment path checks below.
+        # H1 call site 2/2 (executor floor): has_unquoted_glob(command,
+        # bare_pair=True) above was False for the full raw command, a superset
+        # of every segment's raw text, so each segment's `*?{}[` is quoted or
+        # escaped, or is a bare `{}` argument word. Both reach the program as
+        # the literal token `{}`, so the token below is the one the quoted
+        # '{}' produces. The permission is used only by the two per-segment
+        # path checks below.
         quoted_globs = True
         floor_base = (reviewer_base or ctx.pane_cwd) if ctx.semantic_role == "executor" else ctx.pane_cwd
         walks = [walk_segments(tokens, floor_base)]

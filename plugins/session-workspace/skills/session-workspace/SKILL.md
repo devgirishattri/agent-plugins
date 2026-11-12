@@ -510,6 +510,12 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
 - An unquoted `*`, `?`, `{`, or `[` is still refused (`path.dynamic`). So is a
   glob-bearing path with a `..` part. So is a `$` or backtick inside a token the
   policy reads as a path. The shell-level check refuses real expansions first.
+- One exception for executors: a bare `{}` word, as in
+  `find src -type f -exec shasum -a 256 {} +`, is decided like `'{}'`. It must
+  be a whole word after the program name of an ordinary command. `{}.bak`,
+  `x{}`, `src/{}`, `>{}`, and a `{}` that starts a command or follows `then`,
+  `else`, `do`, `time`, an assignment or a redirection stay refused. Quote it
+  (`'{}'`) when in doubt.
 - Shell quoting does not stop Git from globbing a pathspec. For Git, a path with
   those characters is allowed only when ALL of these are true:
   - The subcommand is one of `add`, `rm`, `diff`, `ls-files`, `status`, `restore`,
