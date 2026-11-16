@@ -225,6 +225,7 @@ def coordination_var_name(store):
                 (($group.values // {}) | keys)
                 + $aliases
                 + $engine_always
+                + (if $harness_active then ["CLAUDE_CODE_DISABLE_FILE_MENTIONS"] else [] end)
                 + (if $pin_to_session then [$pin[] | coordination_var_name(.)] else [] end)
                 | unique
                 | sort

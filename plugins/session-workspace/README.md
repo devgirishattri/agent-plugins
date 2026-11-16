@@ -350,6 +350,17 @@ validation errors) — and `workspace-plan` lists their names:
 | `SESSION_WORKSPACE_READ_PATHS_JSON` | canonical `[{path, kind}]` for a reviewer or executor with `read_paths`; exported empty for every other pane so an inherited value is cleared |
 | `SESSION_WORKSPACE_SCOPE_JSON` | canonical scope identity for a pane of a schema-v5 config with `environments`: its environment, the root orchestrator's name, and its own environment entry (`own`), or for the unbound root orchestrator the environments it coordinates directly (`direct`); absent otherwise |
 
+A pane launched while the harness is `audit` or `enforce` also gets
+`CLAUDE_CODE_DISABLE_FILE_MENTIONS=1`. A Claude Code `@file` mention inserts
+the file's contents while the prompt is built, without a tool call, so no
+PreToolUse hook sees it, and a dispatched message carrying `@<path>` could pull
+a file from outside the pane's checkout into its context. With mentions off,
+Claude gets only the path and has to read it with its file tools, where Claude
+Code's permission checks and PreToolUse hooks apply. The engine sets this after
+`env.groups`, so a configured value cannot turn mentions back on, and
+`workspace-plan` lists it in each pane's `env_names`. Codex ignores it, and an
+inactive harness leaves mentions alone.
+
 The policy cross-checks this identity against the validated config on every
 gated tool call and **fails closed** on any disagreement: unknown pane, role
 or cwd mismatch, project-root mismatch, `SESSION_CHAT_PANE_NAME` /
@@ -1040,7 +1051,9 @@ option is a usage error (exit 2, no decision).
 
 For guarded schema-v3–v5 launches, the same manifest also registers generic
 `SessionStart`/`UserPromptSubmit` reminders and the non-blocking Stop health
-check. Claude and Codex health output is a top-level `systemMessage` JSON
+check. The `SessionStart` reminder matches `startup`, `resume`, `clear`,
+`compact`, and `fork`, so a forked session gets the same reminder as the
+session it came from. Claude and Codex health output is a top-level `systemMessage` JSON
 object; Codex rejects non-empty plain-text Stop stdout. Codex trusts each hook entry by hash, so upgrading to a
 release that adds or changes these entries requires accepting/re-trusting the
 new session-workspace hook hashes before relying on them.
@@ -1432,6 +1445,13 @@ and `start` is reproducible.
 |---|---|---|---|---|
 | `runtimes.<name>.program` | string | yes | — | Executable name or path (looked up on `PATH` if not absolute). |
 | `runtimes.<name>.args` | array of strings | no | `[]` | Static argv appended after `program`, before any engine-built flags. Validated to never contain a dangerous flag (see below). |
+
+A Codex pane also gets `-c tui.disable_paste_burst=true` after its other
+engine-built flags. Codex's paste burst turns an Enter that arrives inside
+fast input into a newline, so a session-chat message typed into the pane
+could stay in the input line without being submitted. If
+`runtimes.<name>.args` already mentions `disable_paste_burst`, the engine adds
+nothing and the configured value stands. Claude panes never get this flag.
 
 The runtime *key* itself (e.g. `claude`, `codex`) is what a role's
 `roles.<r>.runtime` field references. A `roles.<r>.runtime` of `shell`
