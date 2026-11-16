@@ -116,8 +116,73 @@ report_fail() {
 report_refuse() {
     local label="$1"
     local path="$2"
-    echo "  REFUSED $label: $path (resolves outside the real ~/.claude boundary — symlinked ancestor?)" >&2
+    local reason="${3:-resolves outside the real ~/.claude boundary — symlinked ancestor?}"
+    echo "  REFUSED $label: $path ($reason)" >&2
     failed_count=$(( failed_count + 1 ))
+}
+
+# delete_in_claude <label> <path> — remove one per-session file or directory
+# under ~/.claude with the same guards as the sections below: absent is a
+# no-op, a target reached through a symlinked ancestor is refused, and a
+# symlink leaf is only unlinked (rm never follows it).
+delete_in_claude() {
+    local label="$1" path="$2"
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    if ! safe_target "$path"; then
+        report_refuse "$label" "$path"; return 0
+    fi
+    if rm -rf "$path" 2>/dev/null; then
+        report_delete "$label" "$path"
+    else
+        report_fail "$label" "$path"
+    fi
+}
+
+# Claude Code's temp root: ${CLAUDE_CODE_TMPDIR}/claude-<uid> when set, else
+# /tmp/claude-<uid> on macOS and ${TMPDIR:-/tmp}/claude-<uid> on Linux. The
+# session that wrote the files may have run with a different environment than
+# this shell, so every distinct candidate is checked.
+temp_roots() {
+    local uid base seen="" real
+    uid="$(id -u)"
+    for base in "${CLAUDE_CODE_TMPDIR:-}" "${TMPDIR:-}" /tmp; do
+        [ -n "$base" ] || continue
+        base="${base%/}"
+        [ -n "$base" ] || continue
+        [ -d "$base/claude-$uid" ] || continue
+        real="$(canonical_dir "$base/claude-$uid")"
+        [ -n "$real" ] || continue
+        case "$seen" in *"|$real|"*) continue ;; esac
+        seen="$seen|$real|"
+        printf '%s\n' "$base/claude-$uid"
+    done
+}
+
+# temp_root_safe <root> — the root must be a real directory (not a symlink)
+# owned by this user, because it sits in a shared, world-writable location.
+temp_root_safe() {
+    local root="$1"
+    [ -d "$root" ] && [ ! -L "$root" ] && [ -O "$root" ]
+}
+
+# delete_in_temp <root> <label> <path> — like delete_in_claude, bounded by the
+# canonical temp root instead of ~/.claude.
+delete_in_temp() {
+    local root="$1" label="$2" path="$3" root_real parent_real
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    if ! temp_root_safe "$root"; then
+        report_refuse "$label" "$path" "temp root $root is a symlink or not owned by you"; return 0
+    fi
+    root_real="$(canonical_dir "$root")"
+    parent_real="$(canonical_dir "$(dirname "$path")")"
+    if [ -z "$root_real" ] || [ -z "$parent_real" ] || ! within_boundary "$root_real" "$parent_real"; then
+        report_refuse "$label" "$path" "resolves outside the temp root $root — symlinked ancestor?"; return 0
+    fi
+    if rm -rf "$path" 2>/dev/null; then
+        report_delete "$label" "$path"
+    else
+        report_fail "$label" "$path"
+    fi
 }
 
 echo "Deleting session: $SESSION_ID"
@@ -207,7 +272,34 @@ for todo_file in "$CLAUDE_DIR/todos/${SESSION_ID}-agent-"*.json; do
     fi
 done
 
-# 7. Clean history.jsonl entries (using grep -F for fixed string matching)
+# 7. Set-aside transcripts: earlier copies Claude Code kept instead of
+#    overwriting or deleting them. They hold the same content as the live one.
+for aside in "$CLAUDE_DIR/projects"/*/"${SESSION_ID}.orphaned-"*.jsonl \
+             "$CLAUDE_DIR/projects"/*/"${SESSION_ID}.jsonl.superseded-"*; do
+    [ -e "$aside" ] || [ -L "$aside" ] || continue
+    delete_in_claude "Set-aside transcript" "$aside"
+done
+
+# 8. Other per-session directories under ~/.claude: images saved by Claude
+#    Code 2.1.274 and earlier, Remote Control uploads, mods Claude wrote, and
+#    the session's task list.
+delete_in_claude "Image cache" "$CLAUDE_DIR/image-cache/$SESSION_ID"
+delete_in_claude "Uploads" "$CLAUDE_DIR/uploads/$SESSION_ID"
+delete_in_claude "Session mods" "$CLAUDE_DIR/dev-mods/$SESSION_ID"
+delete_in_claude "Task list" "$CLAUDE_DIR/tasks/$SESSION_ID"
+
+# 9. The session's temp directory (scratchpad, images, task output) under
+#    Claude Code's temp root, outside ~/.claude.
+while IFS= read -r temp_root; do
+    [ -n "$temp_root" ] || continue
+    for temp_dir in "$temp_root"/*/"$SESSION_ID"; do
+        [ -e "$temp_dir" ] || [ -L "$temp_dir" ] || continue
+        delete_in_temp "$temp_root" "Temp directory" "$temp_dir"
+    done
+    delete_in_temp "$temp_root" "Temp state" "$temp_root/cache-break-state-$SESSION_ID.json"
+done < <(temp_roots)
+
+# 10. Clean history.jsonl entries (using grep -F for fixed string matching)
 HISTORY_FILE="$CLAUDE_DIR/history.jsonl"
 LOCK_FILE="$CLAUDE_DIR/history.jsonl.lock"
 if [ -e "$HISTORY_FILE" ]; then
