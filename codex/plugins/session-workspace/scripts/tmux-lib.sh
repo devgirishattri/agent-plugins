@@ -38,6 +38,11 @@ MARKER_RUNTIME="@session_workspace_runtime"
 #     exec chain (bash -> runtime), so a `start` run moments after another
 #     could see "bash" and needlessly respawn a perfectly healthy pane.
 MARKER_LAUNCHED="@session_workspace_launched"
+# MARKER_STARTED_BY names the harness pane whose `start`/`reconcile` launched
+# this pane (its SESSION_WORKSPACE_PANE_NAME), so `status` can say which
+# environment brought a shared service up. Unset when the run came from
+# outside a harness pane. Informational only: nothing authorizes on it.
+MARKER_STARTED_BY="@session_workspace_started_by"
 
 # NOTE on session-scoped option targeting: `set-option`/`show-options` take a
 # target-PANE (tmux infers the option's scope from its name), NOT a
@@ -91,6 +96,20 @@ sw_pane_is_managed() {
 # sw_set_pane_launched PANE_ID RUNTIME — record a successful launch.
 sw_set_pane_launched() {
   tmux set-option -p -t "$1" "$MARKER_LAUNCHED" "$2" || return 1
+}
+
+# sw_set_pane_started_by PANE_ID NAME — record (or, with an empty NAME, clear)
+# the harness pane that launched PANE_ID. Best effort: informational only.
+sw_set_pane_started_by() {
+  if [ -n "$2" ]; then
+    tmux set-option -p -t "$1" "$MARKER_STARTED_BY" "$2" 2>/dev/null || true
+  else
+    tmux set-option -p -t "$1" -u "$MARKER_STARTED_BY" 2>/dev/null || true
+  fi
+}
+
+sw_pane_started_by() {
+  sw_get_pane_option "$1" "$MARKER_STARTED_BY"
 }
 
 # sw_pane_launched PANE_ID — true if this pane's runtime was really launched

@@ -1098,6 +1098,14 @@
           },
           "orchestrator": {
             "type": "string"
+          },
+          "shared_sessions": {
+            "type": "array",
+            "uniqueItems": true,
+            "description": "Schema v5. Unbound sessions of service shells that this environment's orchestrator may start panes of (start SESSION --pane NAME) but never stop, restart or reconcile (routing.shared_stop). Requires orchestrator.",
+            "items": {
+              "type": "string"
+            }
           }
         }
       }

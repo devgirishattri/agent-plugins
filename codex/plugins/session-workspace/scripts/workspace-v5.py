@@ -54,7 +54,7 @@ def validate(cfg, root):
     require(all(isinstance(name, str) for name in declared) and len(declared) == len(set(declared)), 'environment orchestrator requires a unique pane')
     seen_ids, seen_sessions, seen_roots, coordinators, control_roots = set(), set(), [], set(), []
     for e in envs:
-        shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator'], ['id', 'cwd', 'development', 'services'], 'environment')
+        shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator', 'shared_sessions'], ['id', 'cwd', 'development', 'services'], 'environment')
         require(isinstance(e['id'], str) and re.fullmatch(r'[a-z0-9][a-z0-9-]*', e['id']), 'invalid environment id')
         require(e['id'] != 'root' and e['id'] not in seen_ids, 'reserved or duplicate environment id')
         seen_ids.add(e['id'])
@@ -95,6 +95,15 @@ def validate(cfg, root):
             workers = [p for p in selected if p['role'] in [roles['executor'], roles['reviewer']]]
             require(len([p for p in workers if p['role'] == roles['executor']]) == 1 and len([p for p in workers if p['role'] == roles['reviewer']]) == 1, 'each environment requires one executor/reviewer pair')
             require(all((root / p['cwd']).resolve() == cwd and p['cwd'] == e['cwd'] for p in workers), 'environment workers must bind exactly to repository root')
+    for e in envs:
+        # A shared services session is started by several environments and
+        # stopped only by the root coordinator, the user or its idle watcher.
+        shared = e.get('shared_sessions', [])
+        require(isinstance(shared, list) and all(isinstance(i, str) for i in shared) and len(shared) == len(set(shared)), 'shared_sessions must contain unique session ids')
+        require(not shared or 'orchestrator' in e, 'shared_sessions requires an environment orchestrator')
+        for sid in shared:
+            require(sid in sessions and sid not in seen_sessions, 'shared_sessions must name a configured session that no environment owns')
+            require(all(pane_runtime(cfg, p) == 'shell' and p['role'] not in roles.values() for p in sessions[sid]['panes']), 'shared sessions must contain only service shell panes')
     if envs:
         require(cfg.get('behavior', {}).get('stop_scope', 'selected') == 'selected', 'environments require stop_scope selected')
         require(not any(inside(c, r) or inside(r, c) for c in control_roots for r in seen_roots), 'coordinator directories must not overlap repositories')

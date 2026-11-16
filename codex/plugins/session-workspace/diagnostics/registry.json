@@ -796,6 +796,19 @@
       "description": "A routing or environment selector escapes this coordinator's scope."
     },
     {
+      "code": "hook.routing.shared_stop",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An environment coordinator tried to stop, restart or reconcile a shared services session; it may only start its service panes."
+    },
+    {
       "code": "hook.runtime.args",
       "subjects": [
         "admission"

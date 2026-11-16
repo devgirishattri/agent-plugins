@@ -167,7 +167,7 @@ while IFS= read -r session_json; do
     p_browser="$(printf '%s' "$pane_json" | jq -r '.browser // false')"
     p_port="$(printf '%s' "$pane_json" | jq -r '.port // empty')"
 
-    found_pane="" cur_cmd="" managed=0 dead=0 launched=0
+    found_pane="" cur_cmd="" started_by="" managed=0 dead=0 launched=0
     if [ "$session_exists" -eq 1 ]; then
       # Scoped to THIS session's window, never `-a` (server-wide): a stale
       # same-named marker left on a pane in some OTHER session (an old
@@ -185,6 +185,7 @@ while IFS= read -r session_json; do
         sw_pane_dead "$found_pane" && dead=1
         sw_pane_launched "$found_pane" && launched=1
         cur_cmd="$(sw_pane_current_command "$found_pane")"
+        started_by="$(sw_pane_started_by "$found_pane")"
       fi
     fi
 
@@ -227,7 +228,8 @@ while IFS= read -r session_json; do
       --argjson idle_stop_minutes "$(printf '%s' "$pane_json" | jq -c '.idle_stop_minutes // null')" \
       --argjson idle_activity "$(printf '%s' "$pane_json" | jq -c '.idle_activity // null')" \
       --arg launch "$(printf '%s' "$pane_json" | jq -r '.launch // "always"')" \
-      '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, read_paths:$read_paths, pane_id:$pane_id, process:$process, health:$health, running:$running, readiness:$readiness, port:(if $port == "" then null else ($port|tonumber) end), idle_stop_minutes:$idle_stop_minutes, idle_activity:$idle_activity, launch:$launch, idle:$run_record.idle, last_stop:$run_record.last_stop}
+      --arg started_by "${started_by:-}" \
+      '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, read_paths:$read_paths, pane_id:$pane_id, process:$process, health:$health, running:$running, readiness:$readiness, port:(if $port == "" then null else ($port|tonumber) end), idle_stop_minutes:$idle_stop_minutes, idle_activity:$idle_activity, launch:$launch, started_by:(if $running and $started_by != "" then $started_by else null end), idle:$run_record.idle, last_stop:$run_record.last_stop}
        + (if $endpoint == null then {} else {endpoint:$endpoint} end)')"
     ROWS="$(printf '%s' "$ROWS" | jq -c --argjson r "$row" '. + [$r]')"
   done < <(printf '%s' "$session_json" | jq -c '.panes[]')
@@ -254,6 +256,7 @@ printf '%s\n' "$ROWS" | jq -r '
   "== session: \(.[0].session_name) == (exists=\(.[0].session_exists) managed=\(.[0].session_managed))",
   (.[] | "  pane: \(.pane)  role=\(.role) runtime=\(.runtime) model=\(.model)\n    cwd=\(.cwd)\n    pane_id=\(.pane_id // "(none)")  process=\(.process // "(n/a)")  health=\(.health)  running=\(if .running then "yes" else "no" end)  readiness=\(.readiness)",
     (if (.read_paths | length) > 0 then "    read_paths (shell only): " + (.read_paths | tojson) else empty end),
+    (if .started_by != null then "    started by: \(.started_by)" else empty end),
     (if .launch == "on_demand" then
        "    launch: on demand" + (if .running then "" else " — not running; start it with: workspace start \(.session) --pane \(.pane)" end)
      else empty end),
