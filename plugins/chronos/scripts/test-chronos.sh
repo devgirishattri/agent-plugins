@@ -148,17 +148,17 @@ run UserPromptSubmit empty-tz AGENT_PLUGINS_TIME_ZONE=
 check "empty timezone exits 0" "0" "$RUN_RC"
 if [ -n "$RUN_OUT" ]; then pass; else fail "empty timezone falls back to the default and still emits" "empty"; fi
 
-# --- 6. PreToolUse throttling --------------------------------------------------
+# --- 6. PostToolBatch throttling --------------------------------------------------
 # Long autonomous turns must stay time-aware without a timestamp per tool call.
-run PreToolUse throttle-a
-if [ -n "$RUN_OUT" ]; then pass; else fail "first PreToolUse emits" "empty"; fi
-check "PreToolUse echoes its own event name" "PreToolUse" \
+run PostToolBatch throttle-a
+if [ -n "$RUN_OUT" ]; then pass; else fail "first PostToolBatch emits" "empty"; fi
+check "PostToolBatch echoes its own event name" "PostToolBatch" \
 	"$(printf '%s' "$RUN_OUT" | jq -r '.hookSpecificOutput.hookEventName // empty')"
-run PreToolUse throttle-a
-if [ -z "$RUN_OUT" ]; then pass; else fail "second PreToolUse within the interval is throttled" "$RUN_OUT"; fi
+run PostToolBatch throttle-a
+if [ -z "$RUN_OUT" ]; then pass; else fail "second PostToolBatch within the interval is throttled" "$RUN_OUT"; fi
 
 # throttle state is per session, not global
-run PreToolUse throttle-b
+run PostToolBatch throttle-b
 if [ -n "$RUN_OUT" ]; then pass; else fail "a different session is not throttled by the first" "empty"; fi
 
 # UserPromptSubmit is never throttled — every prompt gets a fresh timestamp
@@ -166,13 +166,13 @@ run UserPromptSubmit throttle-a
 if [ -n "$RUN_OUT" ]; then pass; else fail "UserPromptSubmit is never throttled" "empty"; fi
 
 # --- 7. CHRONOS_INTERVAL_MIN ---------------------------------------------------
-run PreToolUse interval-zero CHRONOS_INTERVAL_MIN=0
-run PreToolUse interval-zero CHRONOS_INTERVAL_MIN=0
+run PostToolBatch interval-zero CHRONOS_INTERVAL_MIN=0
+run PostToolBatch interval-zero CHRONOS_INTERVAL_MIN=0
 if [ -n "$RUN_OUT" ]; then pass; else fail "CHRONOS_INTERVAL_MIN=0 disables throttling" "empty"; fi
 
 # a non-numeric interval must fall back to the 5-minute default, not to 0
-run PreToolUse interval-bad CHRONOS_INTERVAL_MIN=not-a-number
-run PreToolUse interval-bad CHRONOS_INTERVAL_MIN=not-a-number
+run PostToolBatch interval-bad CHRONOS_INTERVAL_MIN=not-a-number
+run PostToolBatch interval-bad CHRONOS_INTERVAL_MIN=not-a-number
 if [ -z "$RUN_OUT" ]; then pass; else fail "a non-numeric CHRONOS_INTERVAL_MIN falls back to the default" "$RUN_OUT"; fi
 
 # --- 8. degenerate input never breaks the turn ---------------------------------
@@ -238,14 +238,14 @@ if jq -e . "$HOOKS" >/dev/null 2>&1; then pass; else fail "hooks.json is valid J
 bad=$(jq -r '[.hooks[]?[]?.hooks[]?.command // empty] | map(select(test("CLAUDE_PLUGIN_ROOT") | not)) | join(" | ")' "$HOOKS" 2>/dev/null)
 check "every hook command goes through \${CLAUDE_PLUGIN_ROOT}" "" "$bad"
 
-# --- 13. cross-session PreToolUse throttling never leaks between sessions -----
-run PreToolUse cross-a
-if [ -n "$RUN_OUT" ]; then pass; else fail "cross-a first PreToolUse emits" "empty"; fi
-run PreToolUse cross-b
-if [ -n "$RUN_OUT" ]; then pass; else fail "cross-b first PreToolUse emits (not suppressed by cross-a)" "empty"; fi
-run PreToolUse cross-a
+# --- 13. cross-session PostToolBatch throttling never leaks between sessions -----
+run PostToolBatch cross-a
+if [ -n "$RUN_OUT" ]; then pass; else fail "cross-a first PostToolBatch emits" "empty"; fi
+run PostToolBatch cross-b
+if [ -n "$RUN_OUT" ]; then pass; else fail "cross-b first PostToolBatch emits (not suppressed by cross-a)" "empty"; fi
+run PostToolBatch cross-a
 if [ -z "$RUN_OUT" ]; then pass; else fail "cross-a second call within the interval is throttled" "$RUN_OUT"; fi
-run PreToolUse cross-b
+run PostToolBatch cross-b
 if [ -z "$RUN_OUT" ]; then pass; else fail "cross-b second call within the interval is throttled" "$RUN_OUT"; fi
 
 # --- 14. jq parses structurally: key order and nested/escaped text never win --
@@ -255,11 +255,11 @@ if [ -z "$RUN_OUT" ]; then pass; else fail "cross-b second call within the inter
 # ever address the top level regardless of where in the byte stream it sits.
 top_session_a="top-real-a"
 payload_a=$(jq -cn --arg top "$top_session_a" \
-	'{tool_input: {session_id: "nested-x", hook_event_name: "UserPromptSubmit"}, hook_event_name: "PreToolUse", session_id: $top}')
+	'{tool_input: {session_id: "nested-x", hook_event_name: "UserPromptSubmit"}, hook_event_name: "PostToolBatch", session_id: $top}')
 printf '%s' "$payload_a" | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
 rc=$?
 check "reordered/nested payload exits 0" "0" "$rc"
-check "top-level hook_event_name wins over a nested one" "PreToolUse" \
+check "top-level hook_event_name wins over a nested one" "PostToolBatch" \
 	"$(printf '%s' "$(cat "$TMPROOT/out")" | jq -r '.hookSpecificOutput.hookEventName // empty')"
 if [ -f "$TMPROOT/xdg/chronos/last-$top_session_a" ]; then
 	pass
@@ -277,7 +277,7 @@ fi
 # value must not be mistaken for a real key.
 top_session_b="top-real-b"
 payload_b=$(jq -cn --arg top "$top_session_b" \
-	'{hook_event_name: "PreToolUse", session_id: $top, tool_input: {command: "echo \"session_id\":\"fake\""}}')
+	'{hook_event_name: "PostToolBatch", session_id: $top, tool_input: {command: "echo \"session_id\":\"fake\""}}')
 printf '%s' "$payload_b" | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" >"$TMPROOT/out" 2>"$TMPROOT/err"
 rc=$?
 check "escaped-text payload exits 0" "0" "$rc"
@@ -295,7 +295,7 @@ fi
 
 # (c) malformed JSON still exits 0 and falls back to today's defaults
 # (UserPromptSubmit, last-default) rather than breaking the turn.
-malformed='{"hook_event_name":"PreToolUse", "session_id":'
+malformed='{"hook_event_name":"PostToolBatch", "session_id":'
 out=$(printf '%s' "$malformed" | env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" 2>"$TMPROOT/err")
 rc=$?
 check "malformed JSON exits 0" "0" "$rc"
@@ -315,7 +315,7 @@ done
 if ( hash -r; PATH="$TMPROOT/nojqbin" command -v jq >/dev/null 2>&1 ); then
 	fail "control setup: jq unexpectedly reachable on the stripped PATH" ""
 else
-	out=$(printf '{"hook_event_name":"PreToolUse"}' |
+	out=$(printf '{"hook_event_name":"PostToolBatch"}' |
 		env PATH="$TMPROOT/nojqbin" TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" "$(command -v bash)" "$SCRIPT" 2>"$TMPROOT/err")
 	rc=$?
 	check "jq-hidden, no-session_id control exits 0" "0" "$rc"
@@ -377,11 +377,30 @@ else
 	mode=$(stat -f '%Lp' "$TMPROOT/xdg/chronos")
 fi
 check "control state dir is owner-only (0700)" "700" "$mode"
-run PreToolUse ctrl-a
-check "control throttle: PreToolUse inside the window emits nothing" "" "$(ctx)"
+run PostToolBatch ctrl-a
+check "control throttle: PostToolBatch inside the window emits nothing" "" "$(ctx)"
 printf '0' >"$TMPROOT/xdg/chronos/last-ctrl-a"
-run PreToolUse ctrl-a
-if [ -n "$(ctx)" ]; then pass; else fail "control throttle: PreToolUse after the window emits" "empty"; fi
+run PostToolBatch ctrl-a
+if [ -n "$(ctx)" ]; then pass; else fail "control throttle: PostToolBatch after the window emits" "empty"; fi
+
+# --- 14. PostToolBatch wiring and legacy PreToolUse ----------------------------
+# The refresh is registered on PostToolBatch (once per batch of tool calls), not
+# on a PreToolUse "*" matcher (once per tool call).
+HOOKS="$HERE/../hooks/hooks.json"
+check "hooks.json registers PostToolBatch" "1" "$(jq '[.hooks.PostToolBatch[]?.hooks[]?] | length' "$HOOKS")"
+check "hooks.json no longer registers PreToolUse" "0" "$(jq '[.hooks.PreToolUse[]?.hooks[]?] | length' "$HOOKS")"
+# A real PostToolBatch payload carries every tool result; a large one must still
+# parse and emit.
+out=$(python3 -c 'import json; print(json.dumps({"hook_event_name": "PostToolBatch", "session_id": "batch-big", "tool_calls": [{"tool_name": "Read", "tool_input": {"file_path": "/x"}, "tool_use_id": "t1", "tool_response": "x" * 300000}]}))' |
+	env TMPDIR="$TMPROOT" XDG_RUNTIME_DIR="$TMPROOT/xdg" bash "$SCRIPT" 2>/dev/null)
+check "a large PostToolBatch payload emits PostToolBatch context" "PostToolBatch" \
+	"$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // empty' 2>/dev/null)"
+# A configuration from before 0.1.5 that still sends PreToolUse is throttled the
+# same way, never once per tool call.
+run PreToolUse legacy-pre
+if [ -n "$RUN_OUT" ]; then pass; else fail "legacy PreToolUse first call emits" "empty"; fi
+run PreToolUse legacy-pre
+if [ -z "$RUN_OUT" ]; then pass; else fail "legacy PreToolUse within the interval is throttled" "$RUN_OUT"; fi
 
 printf 'chronos tests: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
