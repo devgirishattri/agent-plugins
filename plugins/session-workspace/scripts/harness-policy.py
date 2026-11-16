@@ -118,7 +118,7 @@ DELEGATING_TOOL_NAMES = {
     "workflow",
     "subagenthandback",
 }
-# Audit-only rules (0.14.2): a worker pane's EnterWorktree, Codex spawn_agent
+# Audit-only rules (0.15.1): a worker pane's EnterWorktree, Codex spawn_agent
 # and Codex MCP calls are reported in audit AND enforce mode and never blocked,
 # until the audit record shows they can be denied without breaking real work.
 WORKER_ROLES = frozenset({"executor", "reviewer"})
@@ -340,6 +340,10 @@ class Context:
     # An environment orchestrator's environments[].shared_sessions: unbound
     # service sessions it may start panes of, never stop (routing.shared_stop).
     shared_session_ids: frozenset = frozenset()
+    # environments[].branch: this executor's own lane branch (git.lane_ref
+    # allowlist) and every declared lane branch (the orchestrator denylist).
+    lane_branch: str = ""
+    lane_branches: frozenset = frozenset()
 
     @property
     def confined_orchestrator(self):
@@ -802,6 +806,9 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         read_paths=tuple((Path(entry["path"]), entry["kind"]) for entry in read_paths) if semantic in {"reviewer", "executor"} else (),
         session_ids=frozenset(own["development"] + own["services"]) if scoped and own else frozenset(),
         shared_session_ids=frozenset(own.get("shared_sessions", [])) if scoped and own and semantic == "orchestrator" else frozenset(),
+        lane_branch=str(own["branch"]) if scoped and own and semantic == "executor" and isinstance(own.get("branch"), str) else "",
+        lane_branches=frozenset(str(e["branch"]) for e in (scope.get("environments", []) if scoped else [])
+                                if isinstance(e, dict) and isinstance(e.get("branch"), str)) if semantic == "orchestrator" else frozenset(),
         scheduler_root=scheduler_store_root(pane, owned_panes, semantic),
     )
     return context, None
@@ -4684,6 +4691,514 @@ def validate_orchestrator_gh(ctx: Context, tokens: List[str], command: str, tool
     return "orchestrator.gh_read"
 
 
+# ---------------------------------------------------------------------------
+# Lane ref floor (git.lane_ref)
+# ---------------------------------------------------------------------------
+#
+# Environments on linked worktrees of one repository share every ref, the
+# repository config and the stash. An environment that declares `branch`
+# (required when it shares a git common dir) is a lane: its executor may
+# write that one local branch and push only it, and every orchestrator is
+# refused Git commands that would write any lane's branch. Like every shell
+# rule here this reads argv: a script or build tool the pane runs can still
+# invoke Git, so keep the release branch protected on the remote as well.
+
+LANE_GIT_GLOBAL_FLAGS = frozenset({
+    "--glob-pathspecs", "--icase-pathspecs", "--literal-pathspecs", "--no-advice", "--no-lazy-fetch",
+    "--no-optional-locks", "--no-pager", "--no-replace-objects", "--noglob-pathspecs", "--paginate", "-P", "-p",
+})
+LANE_GIT_INFO_FLAGS = frozenset({"--version", "--help", "--html-path", "--man-path", "--info-path"})
+# Subcommands that write no ref and no shared repository setting. Their
+# operands stay under the ordinary executor containment.
+LANE_GIT_FREE = frozenset("""
+    add apply archive blame bundle cat-file check-attr check-ignore check-mailmap check-ref-format cherry
+    clean clone column commit-tree count-objects describe diff diff-files diff-index diff-tree difftool
+    for-each-ref format-patch fsck grep hash-object help init interpret-trailers log ls-files ls-remote
+    ls-tree merge-base merge-file merge-tree mktree mv name-rev range-diff read-tree request-pull rerere
+    restore rev-list rev-parse rm shortlog show show-branch show-ref status stripspace update-index var
+    verify-commit verify-pack verify-tag version whatchanged write-tree
+""".split())
+# Subcommands with a safe subset; the rest write shared config, hooks or
+# the shared object and module stores.
+LANE_GIT_SUBSETS = {
+    "lfs": frozenset({"checkout", "env", "fetch", "fsck", "logs", "ls-files", "pointer", "pull", "status", "track", "untrack", "version"}),
+    "submodule": frozenset({"foreach", "status", "summary"}),
+}
+# Programs that run the command they are given: a git argv after one of
+# them is judged like a direct one.
+LANE_GIT_RUNNERS = frozenset({"chrt", "find", "flock", "ionice", "nice", "setsid", "stdbuf", "taskset", "timeout", "unbuffer", "watch"})
+# Subcommands that write the branch HEAD is on: allowed while HEAD is the
+# lane branch or detached.
+LANE_GIT_HEAD_WRITERS = frozenset({"am", "bisect", "cherry-pick", "commit", "merge", "pull", "rebase", "reset", "revert"})
+LANE_GIT_REFUSED = {
+    "tag": "tags are shared by every lane; tag releases from the integration step",
+    "stash": "the stash is shared by every worktree of the repository; commit work in progress on the lane branch",
+    "worktree": "worktrees are created and removed by the user or the root coordinator",
+    "notes": "notes refs are shared by every lane",
+    "replace": "replace refs are shared by every lane",
+    "reflog": "reflog expiry and deletion reach other lanes' refs",
+    "remote": "remotes are shared repository config",
+    "config": "the repository config is shared by every lane",
+    "symbolic-ref": "a symbolic ref can point HEAD at another branch",
+    "sparse-checkout": "sparse-checkout setup writes shared repository config",
+}
+LANE_GIT_MAINTENANCE = frozenset({"fast-import", "filter-branch", "filter-repo", "gc", "http-push", "maintenance",
+                                  "pack-refs", "prune", "prune-packed", "receive-pack", "repack", "send-pack"})
+LANE_GIT_ENV_RE = re.compile(r"\AGIT_[A-Za-z0-9_]*=")
+LANE_ENV_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local"})
+LANE_PUSH_FLAGS = frozenset({"-u", "--set-upstream", "-n", "--dry-run", "-q", "--quiet", "-v", "--verbose", "--porcelain",
+                             "--progress", "--no-progress", "--verify", "--no-verify", "--atomic", "--no-atomic", "--no-signed",
+                             "-4", "--ipv4", "-6", "--ipv6", "--no-recurse-submodules", "--recurse-submodules=check",
+                             "--recurse-submodules=no"})
+LANE_FETCH_VALUES = frozenset({"--depth", "--deepen", "--shallow-since", "--shallow-exclude", "-j", "--jobs", "-o",
+                               "--server-option", "--negotiation-tip", "-s", "--strategy", "-X", "--strategy-option"})
+LANE_FETCH_REFUSED = ("--upload-pack", "--refmap", "--update-head-ok", "-u")
+LANE_REBASE_VALUES = frozenset({"--onto", "-s", "--strategy", "-X", "--strategy-option", "-x", "--exec"})
+LANE_CONFIG_READ_FLAGS = frozenset({"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "-l", "--list"})
+LANE_CONFIG_VALUES = frozenset({"-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"})
+LANE_CONFIG_WRITE = frozenset({"--add", "--unset", "--unset-all", "--replace-all", "--rename-section", "--remove-section", "-e", "--edit",
+                               "set", "unset", "rename-section", "remove-section", "edit"})
+
+
+def worktree_git_dir(root: Path) -> Optional[Path]:
+    """The git dir of the checkout at ROOT (`.git`, or the gitdir a linked
+    worktree's `.git` file names), or None."""
+    marker = root / ".git"
+    try:
+        if marker.is_symlink():
+            return None
+        if marker.is_dir():
+            return marker
+        if not marker.is_file():
+            return None
+        with marker.open("r", encoding="utf-8") as handle:
+            first = handle.readline(4096).strip()
+    except (OSError, UnicodeError):
+        return None
+    if not first.startswith("gitdir:"):
+        return None
+    gitdir = Path(first[len("gitdir:"):].strip())
+    if not str(gitdir):
+        return None
+    return gitdir if gitdir.is_absolute() else root / gitdir
+
+
+def worktree_head(root: Path) -> Optional[str]:
+    """The branch HEAD of the checkout at ROOT is on, "" when HEAD is
+    detached, None when it cannot be read."""
+    gitdir = worktree_git_dir(root)
+    if gitdir is None:
+        return None
+    try:
+        with (gitdir / "HEAD").open("r", encoding="utf-8") as handle:
+            text = handle.read(4096).strip()
+    except (OSError, UnicodeError):
+        return None
+    if text.startswith("ref: refs/heads/"):
+        return text[len("ref: refs/heads/"):]
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", text):
+        return ""
+    return None
+
+
+def lane_refusal(ctx: Context, what: str, why: str) -> PolicyFailure:
+    return PolicyFailure("git.lane_ref", "%s: environment %s may write only its branch %s; %s" % (what, ctx.environment, ctx.lane_branch, why))
+
+
+def lane_own(ctx: Context, word: str) -> bool:
+    return word in {ctx.lane_branch, "refs/heads/" + ctx.lane_branch, "heads/" + ctx.lane_branch}
+
+
+def lane_head_check(ctx: Context, what: str) -> None:
+    head = worktree_head(ctx.pane_cwd)
+    if head is None:
+        raise lane_refusal(ctx, what, "HEAD of %s cannot be read" % ctx.pane_cwd)
+    if head not in {"", ctx.lane_branch}:
+        raise lane_refusal(ctx, what, "this checkout is on %s; run git switch %s first" % (head, ctx.lane_branch))
+
+
+def lane_env_assignments(ctx: Context, segment: List[str]) -> None:
+    """GIT_* variables (GIT_DIR, GIT_COMMON_DIR, GIT_CONFIG_*, ...) point Git at
+    another repository or config; a lane executor may not set them, as a
+    command prefix, through env, or with export and its relatives."""
+    argv = unwrap_prefixes(segment)
+    words = list(segment)
+    builtin = bool(argv) and Path(argv[0]).name in LANE_ENV_BUILTINS
+    if argv and not builtin:
+        for token in argv[1:]:
+            if token in words:
+                words.remove(token)  # the command's own arguments are data
+    for word in words:
+        if LANE_GIT_ENV_RE.match(word) or (builtin and re.fullmatch(r"GIT_[A-Za-z0-9_]*", word)):
+            raise lane_refusal(ctx, word.split("=", 1)[0], "GIT_* variables can point Git at another repository")
+
+
+def lane_refspec_dst(ctx: Context, what: str, refspec: str, remote_tracking_ok: bool) -> None:
+    forced = refspec.startswith("+")
+    spec = refspec[1:] if forced else refspec
+    if ":" not in spec:
+        return
+    dst = spec.split(":", 1)[1]
+    if not dst:
+        return  # fetch into FETCH_HEAD only
+    if remote_tracking_ok and dst.startswith("refs/remotes/"):
+        return
+    if lane_own(ctx, dst) and not forced:
+        return
+    raise lane_refusal(ctx, what, "refspec %s writes %s" % (refspec, dst))
+
+
+def lane_fetch_like(ctx: Context, sub: str, rest: List[str]) -> None:
+    what = "git " + sub
+    positionals: List[str] = []
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        index += 1
+        if token == "--":
+            positionals += rest[index:]
+            break
+        if token in LANE_FETCH_REFUSED or any(token.startswith(option + "=") for option in LANE_FETCH_REFUSED if option.startswith("--")):
+            raise lane_refusal(ctx, what, "%s can write local branches" % token.split("=", 1)[0])
+        if token in LANE_FETCH_VALUES:
+            index += 1
+            continue
+        if token.startswith("-"):
+            continue
+        positionals.append(token)
+    for refspec in positionals[1:]:
+        lane_refspec_dst(ctx, what, refspec, remote_tracking_ok=True)
+
+
+def lane_push(ctx: Context, rest: List[str]) -> None:
+    positionals: List[str] = []
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        index += 1
+        if token == "--":
+            positionals += rest[index:]
+            break
+        if token in {"-o", "--push-option"}:
+            index += 1
+            continue
+        if token.startswith("--push-option="):
+            continue
+        if token.startswith("-"):
+            if token in LANE_PUSH_FLAGS:
+                continue
+            raise lane_refusal(ctx, "git push " + token, "only a normal push of the lane branch is allowed (no force, delete, --all, --mirror or --tags)")
+        positionals.append(token)
+    if len(positionals) < 2:
+        raise lane_refusal(ctx, "git push", "name the remote and the lane branch: git push REMOTE %s" % ctx.lane_branch)
+    if not GIT_REMOTE_NAME_RE.fullmatch(positionals[0]):
+        raise lane_refusal(ctx, "git push " + positionals[0], "push to a configured remote by name")
+    for refspec in positionals[1:]:
+        if refspec.startswith("+"):
+            raise lane_refusal(ctx, "git push " + refspec, "a leading + forces the push")
+        if ":" in refspec:
+            src, dst = refspec.split(":", 1)
+            if not src:
+                raise lane_refusal(ctx, "git push " + refspec, "an empty source deletes the remote ref")
+            if lane_own(ctx, dst) and not has_glob_char(src):
+                continue
+            raise lane_refusal(ctx, "git push " + refspec, "the destination must be %s" % ctx.lane_branch)
+        if lane_own(ctx, refspec):
+            continue
+        if refspec == "HEAD" and worktree_head(ctx.pane_cwd) == ctx.lane_branch:
+            continue
+        raise lane_refusal(ctx, "git push " + refspec, "push only %s" % ctx.lane_branch)
+
+
+def lane_switch(ctx: Context, sub: str, rest: List[str], cwd: Path) -> None:
+    """checkout and switch: creating, resetting or attaching to any branch but
+    the lane's is refused; restoring files and detaching are not."""
+    create_short = "bB" if sub == "checkout" else "cC"
+    create_long = {"--orphan"} | ({"--create", "--force-create"} if sub == "switch" else set())
+    created: Optional[str] = None
+    detach = track = patch = False
+    positionals: List[str] = []
+    paths: Optional[List[str]] = None
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        index += 1
+        if paths is not None:
+            paths.append(token)
+            continue
+        if token == "--":
+            paths = []
+            continue
+        if token == "--ignore-other-worktrees":
+            raise lane_refusal(ctx, "git %s %s" % (sub, token), "it lifts Git's own guard on other worktrees' branches")
+        if token in create_long or (len(token) == 2 and token[0] == "-" and token[1] in create_short):
+            if index >= len(rest):
+                raise lane_refusal(ctx, "git %s %s" % (sub, token), "the new branch name is missing")
+            created = rest[index]
+            index += 1
+            continue
+        if any(token.startswith(option + "=") for option in create_long):
+            created = token.split("=", 1)[1]
+            continue
+        if token.startswith("-") and not token.startswith("--") and len(token) > 2:
+            if token[1] in create_short:
+                created = token[2:]
+                continue
+            if any(letter in create_short for letter in token[1:]):
+                raise lane_refusal(ctx, "git %s %s" % (sub, token), "spell the branch option on its own")
+        if token == "--detach" or (sub == "switch" and token == "-d"):
+            detach = True
+            continue
+        if token in {"-t", "--track"} or token.startswith("--track="):
+            track = True
+            continue
+        if sub == "checkout" and token in {"-p", "--patch"}:
+            patch = True
+            continue
+        if token.startswith("-"):
+            continue
+        positionals.append(token)
+    what = "git " + sub
+    if created is not None:
+        if created != ctx.lane_branch:
+            raise lane_refusal(ctx, "%s %s" % (what, created), "create or reset only %s" % ctx.lane_branch)
+        return
+    if detach:
+        return
+    if track:
+        raise lane_refusal(ctx, what + " --track", "it creates a local branch; use -%s %s --track" % (create_short[0], ctx.lane_branch))
+    if sub == "checkout":
+        if paths:
+            return  # restore paths, HEAD stays
+        if paths is None and (patch or not positionals or len(positionals) > 1):
+            return  # patch mode, a no-op, or TREE-ISH PATH...
+        if paths is None and os.path.lexists(str(cwd / positionals[0])):
+            return  # a path (Git refuses a name that is both)
+    target = positionals[0] if positionals else ""
+    if lane_own(ctx, target):
+        return
+    raise lane_refusal(ctx, "%s %s" % (what, target or "(no branch)"),
+                       "switching leaves the lane branch; use git switch --detach REV to inspect another revision")
+
+
+def lane_branch_write(ctx: Context, rest: List[str]) -> None:
+    mode = "create"
+    names: List[str] = []
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        index += 1
+        if token == "--":
+            names += rest[index:]
+            break
+        if token in {"-m", "-M", "--move", "-c", "-C", "--copy"}:
+            raise lane_refusal(ctx, "git branch " + token, "renaming or copying branches reaches other lanes' names")
+        if token in {"-d", "-D", "--delete"}:
+            mode = "delete"
+            continue
+        if token in {"-u", "--set-upstream-to"}:
+            index += 1
+            mode = "upstream"
+            continue
+        if token.startswith("--set-upstream-to=") or token in {"--unset-upstream", "--edit-description"}:
+            mode = "upstream"
+            continue
+        if token == "--recurse-submodules":
+            raise lane_refusal(ctx, "git branch " + token, "it writes branches in submodules")
+        if token.startswith("-") and not token.startswith("--") and len(token) > 2:
+            letters = set(token[1:])
+            if letters & set("mMcCu"):
+                raise lane_refusal(ctx, "git branch " + token, "spell the branch option on its own")
+            if letters & set("dD"):
+                mode = "delete"
+            continue
+        if token.startswith("-"):
+            continue
+        names.append(token)
+    if mode == "upstream" and not names:
+        lane_head_check(ctx, "git branch")
+        return
+    if mode == "delete":
+        raise lane_refusal(ctx, "git branch " + " ".join(rest), "no executor deletes a branch")
+    if mode in {"create", "upstream"} and names and lane_own(ctx, names[0]) and len(names) <= (2 if mode == "create" else 1):
+        return
+    raise lane_refusal(ctx, "git branch " + " ".join(rest), "change only %s" % ctx.lane_branch)
+
+
+def lane_rebase(ctx: Context, rest: List[str]) -> None:
+    positionals: List[str] = []
+    root = False
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        index += 1
+        if token == "--update-refs":
+            raise lane_refusal(ctx, "git rebase --update-refs", "it moves every branch that points into the rebased commits")
+        if token in LANE_REBASE_VALUES:
+            index += 1
+            continue
+        if token == "--root":
+            root = True
+            continue
+        if token.startswith("-"):
+            continue
+        positionals.append(token)
+    branch = positionals[0] if root and positionals else positionals[1] if len(positionals) > 1 else None
+    if branch is not None and not lane_own(ctx, branch):
+        raise lane_refusal(ctx, "git rebase ... " + branch, "rebase only %s" % ctx.lane_branch)
+
+
+def lane_config_read(rest: List[str]) -> bool:
+    positionals: List[str] = []
+    read_flag = False
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        index += 1
+        if token in LANE_CONFIG_WRITE or token.split("=", 1)[0] in LANE_CONFIG_WRITE:
+            return False
+        if token in LANE_CONFIG_READ_FLAGS:
+            read_flag = True
+            continue
+        if token in LANE_CONFIG_VALUES:
+            index += 1
+            continue
+        if token.startswith("-"):
+            continue
+        positionals.append(token)
+    if positionals and positionals[0] in {"get", "list"}:
+        return True
+    return read_flag or len(positionals) == 1
+
+
+def lane_git_floor(ctx: Context, argv: List[str], cwd: Path) -> None:
+    """The lane executor's Git floor (git.lane_ref) for one git ARGV running
+    in CWD."""
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if token in LANE_GIT_GLOBAL_FLAGS:
+            index += 1
+            continue
+        if token == "-C":
+            index += 2  # the directory is a path operand under containment
+            continue
+        if token.startswith("-C") and len(token) > 2:
+            index += 1
+            continue
+        if token in LANE_GIT_INFO_FLAGS:
+            return
+        if token.startswith("-"):
+            raise lane_refusal(ctx, "git " + token, "this global option can point Git at another repository, worktree or config")
+        break
+    if index >= len(argv):
+        return
+    sub = argv[index]
+    rest = argv[index + 1 :]
+    what = "git " + sub
+    if git_is_read_only(argv) or sub in LANE_GIT_FREE:
+        return
+    if sub in LANE_GIT_MAINTENANCE:
+        raise lane_refusal(ctx, what, "repository maintenance and history rewriting belong to the integration step")
+    if sub in LANE_GIT_SUBSETS:
+        if rest and rest[0] in LANE_GIT_SUBSETS[sub]:
+            return
+        raise lane_refusal(ctx, what + (" " + rest[0] if rest else ""), "only git %s %s are reviewed for lanes" % (sub, ", ".join(sorted(LANE_GIT_SUBSETS[sub]))))
+    if sub == "config" and lane_config_read(rest):
+        return
+    if sub == "stash" and rest and rest[0] in {"list", "show"}:
+        return
+    if sub == "worktree" and rest and rest[0] == "list":
+        return
+    if sub == "notes" and (not rest or rest[0] in {"list", "show"}):
+        return
+    if sub == "replace" and (not rest or rest[0] in {"-l", "--list"} or rest[0].startswith("--format=")):
+        return
+    if sub == "symbolic-ref" and not any(t in {"-d", "--delete", "-m"} for t in rest) and len([t for t in rest if not t.startswith("-")]) == 1:
+        return
+    if sub in LANE_GIT_REFUSED:
+        raise lane_refusal(ctx, what, LANE_GIT_REFUSED[sub])
+    if sub == "push":
+        lane_push(ctx, rest)
+        return
+    if sub == "fetch":
+        lane_fetch_like(ctx, sub, rest)
+        return
+    if sub in {"checkout", "switch"}:
+        lane_switch(ctx, sub, rest, cwd)
+        return
+    if sub == "branch":
+        lane_branch_write(ctx, rest)
+        return
+    if sub == "update-ref":
+        options = [t for t in rest if t.startswith("-")]
+        operands = [t for i, t in enumerate(rest) if not t.startswith("-") and not (i and rest[i - 1] == "-m")]
+        if all(t in {"-m", "--no-deref", "--create-reflog"} for t in options) and 2 <= len(operands) <= 3 and operands[0] == "refs/heads/" + ctx.lane_branch:
+            return
+        raise lane_refusal(ctx, what, "update only refs/heads/%s" % ctx.lane_branch)
+    if sub in LANE_GIT_HEAD_WRITERS:
+        lane_head_check(ctx, what)
+        if sub == "pull":
+            lane_fetch_like(ctx, sub, rest)
+        elif sub == "rebase":
+            lane_rebase(ctx, rest)
+        elif sub == "bisect" and len(rest) > 1 and rest[0] == "reset" and not lane_own(ctx, rest[1]):
+            raise lane_refusal(ctx, "git bisect reset " + rest[1], "return to %s" % ctx.lane_branch)
+        return
+    raise lane_refusal(ctx, what, "this subcommand is not on the lane floor's reviewed list; spell aliases out")
+
+
+def lane_names(ctx: Context, word: str) -> bool:
+    for part in word.lstrip("+").split(":"):
+        for branch in ctx.lane_branches:
+            if part in {branch, "refs/heads/" + branch, "heads/" + branch}:
+                return True
+    return False
+
+
+def orchestrator_lane_refs(ctx: Context, segment: List[str]) -> None:
+    """An orchestrator never writes a lane's branch: those belong to that
+    lane's executor. Reads (log, diff, merge from a lane) stay free."""
+    argv = unwrap_prefixes(segment)
+    if not argv or Path(argv[0]).name != "git" or git_is_read_only(argv):
+        return
+    sub_index, _, _, _, _ = git_globals(argv)
+    if sub_index is None:
+        words = argv[1:]
+        sub = ""
+    else:
+        sub = argv[sub_index]
+        words = argv[sub_index + 1 :]
+        if sub == "checkout" and "--" in words and words.index("--") < len(words) - 1:
+            return  # restores files from a revision
+        if sub in {"fetch", "pull"}:
+            words = [w for w in words if ":" in w]
+        elif sub not in {"branch", "checkout", "switch", "update-ref", "symbolic-ref", "reflog", "worktree", "tag", "notes", "replace", "rebase"}:
+            return
+        elif sub == "rebase":
+            positionals = [w for w in words if not w.startswith("-")]
+            words = positionals[1:2]
+    for word in words:
+        if lane_names(ctx, word):
+            raise PolicyFailure("git.lane_ref", "git %s %s: lane branches are written only by their own lane's executor" % (sub, word))
+
+
+def lane_executor_segment(ctx: Context, segment: List[str], cwd: Path) -> None:
+    """Apply the lane floor to one segment of a lane executor's command."""
+    lane_env_assignments(ctx, segment)
+    argv = unwrap_prefixes(segment)
+    if not argv:
+        return
+    exec_cwd = segment_exec_cwd(segment, cwd)
+    if Path(argv[0]).name == "git":
+        lane_git_floor(ctx, argv, exec_cwd)
+    elif Path(argv[0]).name in LANE_GIT_RUNNERS:
+        for index in range(1, len(argv)):
+            if Path(argv[index]).name == "git":
+                lane_git_floor(ctx, argv[index:], exec_cwd)
+                break
+
+
 def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]:
     if ctx.semantic_role != "orchestrator" or ctx.confined_orchestrator:
         if tool_input.get("dangerouslyDisableSandbox") is True or tool_input.get("with_escalated_permissions") is True:
@@ -4808,6 +5323,8 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
         for segment, cwd, after in itertools.chain(*walks):
             if ctx.semantic_role == "executor":
                 message_read_guard(ctx, segment, cwd, globs_quoted=quoted_globs)
+                if ctx.lane_branch:
+                    lane_executor_segment(ctx, segment, cwd)
             if ctx.semantic_role == "orchestrator" and command_basename(segment) == "git" and not git_is_read_only(segment):
                 raise PolicyFailure("orchestrator.git", "local coordinator Git mutations belong to its executor")
             if executor_inline_code(segment):
@@ -4820,11 +5337,14 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
                 within(p, root) for root in ctx.message_roots), "executor.containment", globs_quoted=quoted_globs)
         return
 
-    # Orchestrator: shell is free apart from two floor rules. (1) It never
+    # Orchestrator: shell is free apart from three floor rules. (1) It never
     # pushes: pushes go through the owning executor and the project's own
     # release gate (shared adopter rule). (2) A mutating (non read-only)
     # segment that names a child root, or that RUNS inside one after a cd,
-    # is refused.
+    # is refused. (3) Git never writes a declared lane branch (git.lane_ref).
+    if ctx.lane_branches:
+        for segment in segments(tokens) + (segments(line_tokens) if line_tokens is not tokens else []):
+            orchestrator_lane_refs(ctx, segment)
     for segment, cwd, after in walk_segments(tokens, ctx.pane_cwd):
         argv = unwrap_prefixes(segment)
         if argv and Path(argv[0]).name == "git":

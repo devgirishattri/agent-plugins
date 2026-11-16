@@ -72,8 +72,9 @@ share one git common dir, and the policy treats it, and the main checkout that
 holds it, as child content: an orchestrator cannot edit them or run a mutating
 command against them (`orchestrator.child_write`). A main checkout that holds
 the project root or the orchestrator's own cwd stays writable for it; its
-`.git` does not. Git commands run from such a checkout still reach shared
-refs; a per-lane ref floor is not enforced yet.
+`.git` does not. Each environment on a shared repository declares its
+`branch`, and Git commands that would write another lane's branch are refused
+(`git.lane_ref`, see Lane branches).
 
 
 ## Root-scoped environment orchestrators
@@ -185,6 +186,53 @@ stop it, so a service another environment still uses never goes down under it.
 from a harness pane, so you can see which environment brought it up. A dev
 server serves one checkout: keep it in its environment's own `services`
 session on its own port, not in a shared one.
+
+## Lane branches (0.15.0)
+
+Environments on linked worktrees of one repository (or a worktree and its main
+checkout) share every ref, the repository config and the stash. Each such
+environment declares the one branch its executor works on:
+
+```json
+{"id":"web","cwd":"worktrees/web","development":["dev-web"],"services":["service-web"],
+ "orchestrator":"sample-web-master","branch":"lane/web"}
+```
+
+`branch` is required when the environment's checkout shares its git
+repository with another checkout, optional otherwise, and unique across
+environments. An orchestration target in that environment must use it as its
+`work_branch`. It is part of the environment's pinned entry, so changing it
+restarts only that environment's panes.
+
+In that environment's executor the hook applies `git.lane_ref`:
+
+- It may create, reset (`checkout -B`, `switch -C`, `branch -f`, `update-ref`)
+  and set the upstream of only its branch, deletes no branch, and switches
+  only to its branch or a detached HEAD (`git switch --detach REV` to inspect
+  another revision).
+  Restoring files (`git checkout REV -- PATH`, `git restore`) is unaffected.
+- Commands that write the current branch (`commit`, `merge`, `rebase`,
+  `reset`, `pull`, `cherry-pick`, `revert`, `am`, `bisect`) need its branch or
+  a detached HEAD checked out.
+- `git push REMOTE BRANCH` (or `HEAD`, `HEAD:BRANCH`) is the only push: no
+  force, leading `+`, delete, `--all`, `--mirror`, `--tags`, URL, or bare push.
+- `fetch` and `pull` may write only remote-tracking refs or its branch.
+- Refused outright: `tag`, `stash` (except `list`/`show`), `worktree` (except
+  `list`), notes, replace and reflog writes, config and remote writes,
+  `symbolic-ref` writes, `gc`, `prune`, `filter-branch`, `rebase
+  --update-refs`, `-c`/`--git-dir`/`--work-tree`, and `GIT_*` variables.
+  Subcommands outside the reviewed list (aliases included) are refused; spell
+  the subcommand out.
+
+Every orchestrator is refused Git commands that would write a declared lane
+branch (`branch -D`, `checkout`, `switch`, `update-ref`, a fetch refspec, rebasing
+it); reading and merging a lane branch stay allowed. Lanes do not
+deploy: their executors cannot write the release branch. Merge lane branches
+into it in the main checkout, by hand or, when that checkout is the project
+root, through the root coordinator (which still cannot push).
+These are argv rules: a script or build tool can still run Git, and a
+`rebase.updateRefs` config still applies, so keep release branches protected
+on the remote.
 
 ## Removed Jev integration
 

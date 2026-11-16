@@ -14,6 +14,43 @@ def pane_runtime(cfg, pane):
     return pane.get('runtime', cfg['roles'][pane['role']]['runtime'])
 
 
+def git_common_dir(path):
+    """(common git dir, is a linked worktree) for the checkout whose root is
+    PATH, or (None, False) when PATH holds no readable `.git`."""
+    marker = path / '.git'
+    try:
+        if marker.is_symlink():
+            return None, False
+        if marker.is_dir():
+            return marker.resolve(), False
+        if not marker.is_file():
+            return None, False
+        with marker.open('r', encoding='utf-8') as handle:
+            first = handle.readline(4096).strip()
+        if not first.startswith('gitdir:') or not first[len('gitdir:'):].strip():
+            return None, False
+        gitdir = Path(first[len('gitdir:'):].strip())
+        gitdir = gitdir if gitdir.is_absolute() else path / gitdir
+        commondir = gitdir / 'commondir'
+        text = ''
+        if commondir.is_file():
+            with commondir.open('r', encoding='utf-8') as handle:
+                text = handle.readline(4096).strip()
+    except (OSError, UnicodeError):
+        return None, False
+    if not text:
+        return gitdir.resolve(), False  # a submodule keeps its own git dir
+    common = Path(text)
+    return (common if common.is_absolute() else gitdir / common).resolve(), True
+
+
+def branch_name_valid(name):
+    return (isinstance(name, str) and name != 'HEAD' and len(name) <= 200
+            and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', name) is not None
+            and '..' not in name and '//' not in name and not name.endswith(('/', '.', '.lock'))
+            and not any(part.startswith('.') or part.endswith('.lock') for part in name.split('/')))
+
+
 REMOVED = 'was removed in session-workspace 0.12.0; delete it from the config'
 
 
@@ -54,7 +91,7 @@ def validate(cfg, root):
     require(all(isinstance(name, str) for name in declared) and len(declared) == len(set(declared)), 'environment orchestrator requires a unique pane')
     seen_ids, seen_sessions, seen_roots, coordinators, control_roots = set(), set(), [], set(), []
     for e in envs:
-        shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator', 'shared_sessions'], ['id', 'cwd', 'development', 'services'], 'environment')
+        shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator', 'shared_sessions', 'branch'], ['id', 'cwd', 'development', 'services'], 'environment')
         require(isinstance(e['id'], str) and re.fullmatch(r'[a-z0-9][a-z0-9-]*', e['id']), 'invalid environment id')
         require(e['id'] != 'root' and e['id'] not in seen_ids, 'reserved or duplicate environment id')
         seen_ids.add(e['id'])
@@ -104,6 +141,22 @@ def validate(cfg, root):
         for sid in shared:
             require(sid in sessions and sid not in seen_sessions, 'shared_sessions must name a configured session that no environment owns')
             require(all(pane_runtime(cfg, p) == 'shell' and p['role'] not in roles.values() for p in sessions[sid]['panes']), 'shared sessions must contain only service shell panes')
+    # Environments on one repository (linked worktrees, or a worktree and its
+    # main checkout) share every ref. Each such lane declares the one branch
+    # its executor may write (git.lane_ref).
+    commons = {e['id']: git_common_dir((root / e['cwd']).resolve()) for e in envs}
+    shared_repos = [c for c, _ in commons.values() if c is not None]
+    declared_branches = [e['branch'] for e in envs if 'branch' in e]
+    require(all(branch_name_valid(b) for b in declared_branches), 'environment branch must be a safe literal branch name')
+    require(len(declared_branches) == len(set(declared_branches)), 'environment branches must be unique')
+    targets = cfg.get('orchestration', {}).get('targets', []) if isinstance(cfg.get('orchestration'), dict) else []
+    for e in envs:
+        common, linked = commons[e['id']]
+        if common is not None and (linked or shared_repos.count(common) > 1):
+            require('branch' in e, 'environments that share a git repository must each declare branch')
+        for t in targets if 'branch' in e else []:
+            if isinstance(t, dict) and t.get('cwd') == e['cwd']:
+                require(t.get('work_branch') == e['branch'], 'an orchestration target in an environment with branch must use it as work_branch')
     if envs:
         require(cfg.get('behavior', {}).get('stop_scope', 'selected') == 'selected', 'environments require stop_scope selected')
         require(not any(inside(c, r) or inside(r, c) for c in control_roots for r in seen_roots), 'coordinator directories must not overlap repositories')
