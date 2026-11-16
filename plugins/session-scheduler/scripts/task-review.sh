@@ -192,14 +192,19 @@ EOF
   # delivery (do NOT re-dispatch — would duplicate) from a failed one (retry OK).
   _rv_now=$(iso_now)
   case "$dc" in
-    0|3)
+    0|3|"$SESSION_CHAT_UNSUBMITTED")
       # A queued dispatch (rc 3, or the dispatch's own "Queued dispatch to"
-      # stdout line) is recorded as queued, not delivered.
+      # stdout line) is recorded as queued, not delivered. So is an unsubmitted
+      # one (rc 4): its durable copy is queued, and a retry would duplicate it.
       _rv_queued=0
-      if [ "$dc" = "3" ] || printf '%s\n' "$_rv_out" | grep -q '^Queued dispatch to '; then
+      if [ "$dc" = "3" ] || [ "$dc" = "$SESSION_CHAT_UNSUBMITTED" ] || printf '%s\n' "$_rv_out" | grep -q '^Queued dispatch to '; then
         _rv_queued=1
       fi
       [ "$dc" = "3" ] && ROUTED="$REVIEWER (queued to durable inbox)" || ROUTED="$REVIEWER"
+      if [ "$dc" = "$SESSION_CHAT_UNSUBMITTED" ]; then
+        ROUTED="$REVIEWER (unsubmitted in its input line; press Enter there)"
+        sched_warn_unsubmitted "$REVIEWER" "review packet"
+      fi
       _rv_status=$([ "$_rv_queued" = "1" ] && echo queued || echo delivered)
       # Delivered packet: the success stamp MUST persist, or a later
       # /task-review would re-dispatch and duplicate delivery. Report loudly.

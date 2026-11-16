@@ -90,7 +90,7 @@ it rather than replacing it.
   `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default 8) is the additional backstop.
 - **Consolidation nudge.** The plugin's default `Stop` hook,
   `scripts/nudge-consolidate.sh`, is separate and still opt-in via
-  `KNOWLEDGE_CONSOLIDATE_NUDGE=1`; it surfaces a non-blocking reminder when the
+  `KNOWLEDGE_CONSOLIDATE_NUDGE=1`; it shows the user a reminder (a Stop `systemMessage`) when the
   inbox has pending candidates and never blocks or errors.
 - **Codex.** Codex plugin hooks support only `type: "command"`, which cannot
   return the silent `ok:false` shape, so autonomous Stop-capture is **not**

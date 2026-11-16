@@ -101,12 +101,17 @@ json_escape() {
   fi
 }
 
-# Cap the emitted context. Claude's UserPromptSubmit systemMessage / Stop reason
-# are injected into the agent's context; an unbounded dispatch body (now inlined
-# in auto mode, below) or a large batch of queued items could otherwise crowd
-# out the real conversation. 10k matches the Codex additionalContext limit so
-# both runtimes truncate identically.
-emit_system_message() {
+# Cap the emitted context. Claude's UserPromptSubmit additionalContext and Stop
+# reason are injected into the agent's context; an unbounded dispatch body (now
+# inlined in auto mode, below) or a large batch of queued items could otherwise
+# crowd out the real conversation. 10k is also Claude's per-field hook output
+# cap and the Codex additionalContext limit, so both runtimes truncate alike.
+#
+# The UserPromptSubmit output must be hookSpecificOutput.additionalContext.
+# Claude Code shows a top-level systemMessage only to the user, and "block" is
+# the only valid top-level decision (hooks reference, checked on 2.1.325: a
+# systemMessage never reached the model, additionalContext did).
+emit_prompt_context() {
   local message="$1"
   local suffix=" [truncated by session-chat]"
   local max_len=10000
@@ -115,7 +120,7 @@ emit_system_message() {
     message="$(printf '%s' "$message" | utf8_char_head $((max_len - ${#suffix})))${suffix}"
   fi
   message=$(json_escape "$message")
-  printf '{"decision":"approve","systemMessage":"%s"}\n' "$message"
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$message"
 }
 
 emit_stop_block() {
@@ -424,7 +429,7 @@ if [ "${#LINES[@]}" -eq 0 ]; then
 fi
 
 # 4) Emit one combined message (single line; items separated by " · ").
-#    UserPromptSubmit: informational systemMessage alongside the prompt.
+#    UserPromptSubmit: informational additionalContext alongside the prompt.
 #    Stop: block the stop with the queued items as the reason, so the agent
 #    handles messages that arrived while it was working instead of going idle
 #    on top of a non-empty inbox.
@@ -449,7 +454,7 @@ build_combined() {
 if [ "$HOOK_EVENT" = "Stop" ]; then
   emit_stop_block "$(build_combined) — these queued message(s) arrived while you were working; address them per the trust guidance above before stopping." || exit 1
 else
-  emit_system_message "$(build_combined)" || exit 1
+  emit_prompt_context "$(build_combined)" || exit 1
 fi
 
 # 5) Now that the surfaced rows have been EMITTED, record reply-correlation +

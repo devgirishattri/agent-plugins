@@ -599,6 +599,41 @@ env -i HOME="$FAKE_HOME" PATH="$STUB_BIN:$NOJQ_BIN" TMUX=stub TMUX_PANE=%9 STUB_
 PY_RESULT="$(cat "$STUB_LOG")"
 if [ "$PY_RESULT" = "$JQ_RESULT" ] && log_has_name "@name $EXPECTED_ESCAPED"; then pass "case28 python3 path yields identical @name for escaped/multiline title"; else fail "case28 python3 path parity" "jq=[$JQ_RESULT] py=[$PY_RESULT]"; fi
 
+# --- Case 29: session_title in the payload names the pane with no transcript.
+# Claude Code sends it on SessionStart when the session has a custom title. ---
+new_case_home
+PAYLOAD=$(printf '{"session_id":"sess-29","cwd":"%s","session_title":"Review Lane B","hook_event_name":"SessionStart"}' "$FAKE_CWD")
+run_script "$PAYLOAD" >/dev/null 2>&1
+if log_has_name "@name Review-Lane-B"; then pass "case29 session_title names the pane without a transcript"; else fail "case29 session_title names the pane" "log: $(cat "$STUB_LOG")"; fi
+
+# --- Case 30: session_title wins over a bound transcript's custom title. ---
+new_case_home
+TFILE="$FAKE_HOME/.claude/projects/$SLUG/sess-30.jsonl"
+write_transcript "$TFILE" \
+  "$(binding_line "sess-30" "$FAKE_CWD")" \
+  "$(custom_title_line "Old Transcript Title" "sess-30")"
+PAYLOAD=$(printf '{"session_id":"sess-30","transcript_path":"%s","cwd":"%s","session_title":"payload-title"}' "$TFILE" "$FAKE_CWD")
+run_script "$PAYLOAD" >/dev/null 2>&1
+if log_has_name "@name payload-title" && ! log_has_name "Old-Transcript-Title"; then pass "case30 session_title wins over the transcript"; else fail "case30 session_title wins over the transcript" "log: $(cat "$STUB_LOG")"; fi
+
+# --- Case 31: session_title never overwrites an existing pane name. ---
+new_case_home
+STUB_NAME="manual-name"
+PAYLOAD=$(printf '{"session_id":"sess-31","cwd":"%s","session_title":"other-title"}' "$FAKE_CWD")
+run_script "$PAYLOAD" >/dev/null 2>&1
+if log_is_empty; then pass "case31 session_title keeps an existing @name"; else fail "case31 session_title keeps an existing @name" "log: $(cat "$STUB_LOG")"; fi
+STUB_NAME=""
+
+# --- Case 32: a non-string session_title falls back to the transcript. ---
+new_case_home
+TFILE="$FAKE_HOME/.claude/projects/$SLUG/sess-32.jsonl"
+write_transcript "$TFILE" \
+  "$(binding_line "sess-32" "$FAKE_CWD")" \
+  "$(custom_title_line "Fallback Title" "sess-32")"
+PAYLOAD=$(printf '{"session_id":"sess-32","transcript_path":"%s","cwd":"%s","session_title":42}' "$TFILE" "$FAKE_CWD")
+run_script "$PAYLOAD" >/dev/null 2>&1
+if log_has_name "@name Fallback-Title"; then pass "case32 non-string session_title falls back to the transcript"; else fail "case32 non-string session_title falls back" "log: $(cat "$STUB_LOG")"; fi
+
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -gt 0 ]; then

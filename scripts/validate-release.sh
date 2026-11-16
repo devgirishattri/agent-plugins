@@ -761,6 +761,9 @@ require_tokens(
     "bulk_delete_refuses_outside_projects",
     "delete_refuses_hardlinked_history_lock",
     "history_flock_failure_reported_not_removed",
+    "delete_removes_set_aside_transcripts_and_session_dirs",
+    "delete_refuses_symlinked_temp_project",
+    "delete_refuses_symlinked_temp_root",
 )
 require_order(root / "plugins/session-manager/commands/session-delete.md", "No, cancel (Recommended)", "Yes, delete all")
 require_order(root / "codex/plugins/session-manager/skills/session-delete/SKILL.md", "No, cancel (Recommended)", "Yes, delete it")
@@ -1145,7 +1148,7 @@ require_tokens(
 )
 require_order(
     root / "plugins/session-chat/scripts/detect-incoming-message.sh",
-    "emit_system_message", "claim_inbox_ids",
+    "emit_prompt_context", "claim_inbox_ids",
 )
 require_tokens(
     root / "codex/plugins/session-chat/scripts/detect-incoming-message.sh",

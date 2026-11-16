@@ -1,5 +1,144 @@
 # Changelog
 
+## session-manager 1.7.12 — 2026-11-16
+
+- **Deleting a Claude session now removes everything Claude Code keeps for
+  it.** The delete missed five kinds of per-session data that current Claude
+  Code writes: set-aside transcripts (`<session>.orphaned-*.jsonl` and
+  `<session>.jsonl.superseded-*`, which hold the same content as the live
+  transcript), `image-cache/<session>/`, `uploads/<session>/`,
+  `dev-mods/<session>/`, and the session's temp directory
+  (`claude-<uid>/<project>/<session>/` under `CLAUDE_CODE_TMPDIR`, `TMPDIR`
+  or `/tmp`, holding the scratchpad, images and task output). It now removes
+  those, the session's `tasks/<session>/` list and its temp-root
+  `cache-break-state-<session>.json` too. The bulk delete inherits this.
+- The same guards apply: a target reached through a symlinked directory is
+  refused and reported, and a temp root that is itself a symlink or owned by
+  another user is refused, since it sits in a shared location.
+- Tests: four new cases in `test-session-manager.sh` cover the removals with
+  another session's copies kept, and refusals for a symlinked temp project
+  directory, a symlinked temp root and a symlinked set-aside parent. All four
+  fail on 1.7.11.
+
+## session-workspace 0.14.1 — 2026-11-16
+
+- **An active harness turns off Claude Code `@file` mentions.** A mention
+  inserts a file's contents while the prompt is built, without a tool call,
+  so no PreToolUse hook sees it, and a dispatched message carrying `@<path>`
+  could pull a file from outside the pane's checkout into its context
+  (checked live on Claude Code 2.1.325: a mention got past a hook that denied
+  `Read` of that file, and the variable closed it). With mentions off, Claude
+  gets only the path and has to use its file tools, where Claude Code's
+  permission checks and PreToolUse hooks apply. A pane launched while the
+  harness is `audit` or `enforce` now gets
+  `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1`, set after `env.groups` so a
+  configured value cannot turn mentions back on, and
+  `workspace-plan` lists it in each pane's `env_names`. An inactive harness
+  leaves mentions alone.
+- **Codex panes turn the paste burst off.** Codex's paste burst turns an Enter
+  that arrives inside fast input into a newline, so a session-chat message
+  typed into a Codex pane could stay unsubmitted (8 of 8 early Enters were
+  swallowed on Codex 0.169.0 with the burst on, 0 of 8 with it off). Every
+  Codex pane now launches with `-c tui.disable_paste_burst=true`, unless
+  `runtimes.<name>.args` already mentions `disable_paste_burst`.
+- **Forked sessions get the session reminder.** The `SessionStart` hook now
+  matches `fork` as well as `startup`, `resume`, `clear` and `compact`, in
+  both trees.
+- Tests: exact Codex argv expectations include the new flag; new cases cover
+  the runtime.args escape hatch, Claude panes never getting the flag, the
+  `@file` setting under an active and an inactive harness, an `env.groups`
+  value that tries to turn mentions back on, and the plan's `env_names`.
+
+## chronos 0.1.5 — 2026-11-16
+
+- **The Claude mid-turn time refresh runs once per tool batch.** The Claude
+  hook was registered on `PreToolUse` with matcher `*`, so it started a shell
+  and `jq` before every tool call, including each call of a parallel batch,
+  and only the throttle kept it quiet. It is now registered on
+  `PostToolBatch`, which Claude Code runs once after a whole batch of tool
+  calls resolves and before the next model request. The throttle
+  (`CHRONOS_INTERVAL_MIN`, default 5 minutes) and the per-session state are
+  unchanged, and a `PreToolUse` call from an older configuration is still
+  throttled the same way. Checked live on Claude Code 2.1.325: the hook ran
+  once for a one-tool turn and the model received its `additionalContext`.
+- The Codex build is unchanged (per-prompt `UserPromptSubmit` only).
+- Tests: `test-chronos.sh` (Claude) runs the throttle cases on
+  `PostToolBatch`, checks the hook wiring, a 300 KB `PostToolBatch` payload,
+  and legacy `PreToolUse` throttling.
+
+## knowledge 0.5.13 — 2026-11-16
+
+- **The consolidation nudge no longer continues the turn.** The Claude Stop
+  hook printed the reminder as `hookSpecificOutput.additionalContext`, which
+  Claude Code now treats as model input that continues the turn (checked live
+  on Claude Code 2.1.325). The Codex copy printed `{"decision":"block"}`, which
+  also continues the turn. Both now print `{"systemMessage": "..."}`, which
+  Claude Code shows to the user and Codex 0.169.0 shows as a warning line, and
+  the turn ends normally. The reminder is for the user, since only the user
+  runs consolidate. `nudge-consolidate.sh` is now byte-identical in both
+  trees and names both command forms.
+- **Hook paths are quoted.** Every `${CLAUDE_PLUGIN_ROOT}` path in the Claude
+  `hooks/hooks.json` is quoted, so a plugin root with a space in it still
+  runs, and `claude plugin validate --strict` passes.
+- Tests: both `test-auto.sh` suites and `scripts/test-memory-dismissal.py`
+  require a `systemMessage`-only Stop output with no `additionalContext` or
+  `decision`.
+
+## session-scheduler 0.7.10 — 2026-11-16
+
+- **An unsubmitted dispatch is durable, not a failure.** session-chat 0.17.21
+  returns status 4 when a dispatch is staged in the recipient's input line but
+  was not submitted; its durable copy stays queued and one Enter in that pane
+  submits it. The scheduler accepted only 0 and 3, so `task-assign` rolled
+  back the prompt the staged line pointed to and left the task unassigned, the
+  assigner ack and verdict notification sent a second inline copy, and
+  `task-review` recorded the reviewer dispatch as failed, which allowed a
+  duplicating retry. Status 4 is now recorded as queued on every path
+  (`task-assign`, the `task-review` reviewer dispatch, the assigner ack
+  ladder, verdict notification, and the contract engine's assign and review
+  dispatches): nothing is rolled back or resent, and a WARN names the pane to
+  press Enter in. The outcome words in the ledger and in `diag/1` records are
+  unchanged. `task-assign` also prints `dispatch: unsubmitted`.
+- Docs: the scheduler skill, `task-assign` and `task-review` (both trees)
+  describe the unsubmitted case.
+- Tests: an `unsubmitted4` dispatch stub. The Claude suite checks assign,
+  review, rerun, verdict, block ack and contract assign against it, with a
+  hard-failure control; the Codex suite checks assign, review, the ack and a
+  review rerun. Both new cases fail on 0.7.9.
+
+## session-chat 0.17.22 — 2026-11-16
+
+- **Queued messages reach Claude again.** The Claude `UserPromptSubmit` hook
+  printed `{"decision":"approve","systemMessage":...}`. Claude Code shows a
+  top-level `systemMessage` only to the user, and `block` is the only
+  top-level decision it accepts, so a message queued for a busy Claude Code
+  pane was announced on screen but never entered the model's context. Checked
+  live on Claude Code 2.1.325: a `systemMessage` did not reach the model and
+  `hookSpecificOutput.additionalContext` did. The hook now prints
+  `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":...}}`.
+  The `Stop` hook output (`decision: block` with a reason) is unchanged, and
+  so is the Codex copy.
+- **Pane names come from `session_title` first.** Claude Code sends the
+  session's custom title as `session_title` on `SessionStart` when one is set.
+  `auto-name-pane.sh` now uses it before reading the transcript, which Claude
+  Code treats as an internal format. The transcript scan stays as the
+  fallback, with the same session binding as before, and the same sanitizing
+  and "never overwrite an existing name" rules apply to both sources.
+- **Hook paths are quoted.** Every `${CLAUDE_PLUGIN_ROOT}` path in
+  `hooks/hooks.json` is quoted, so a plugin root with a space in it still
+  runs, and `claude plugin validate --strict` passes.
+- **Codex recipients: guidance for `tui.disable_paste_burst`.** The skill
+  recommends starting Codex agent panes with `tui.disable_paste_burst = true`.
+  On Codex 0.169.0 in tmux, an Enter sent right after the paste was swallowed
+  8 times out of 8 by default and submitted 8 times out of 8 with the setting.
+  The 0.17.21 submit check stays as the fallback. Leave the setting off in
+  panes a person types into.
+- Tests: `test-session-chat.sh` checks that the prompt hook prints only
+  `hookSpecificOutput` with `additionalContext`; `test-auto-name-pane.sh` adds
+  cases for `session_title` with no transcript, `session_title` over a
+  transcript title, an existing name kept, and a non-string `session_title`
+  falling back to the transcript.
+
 ## session-workspace 0.14.0 — 2026-11-16
 
 Phase 1 of several orchestrators ("lanes") in one project: shared services.

@@ -1,5 +1,5 @@
 {
-  "description": "chronos: inject fresh current date/time as model context on every prompt, refreshed mid-turn via throttled PreToolUse",
+  "description": "chronos: inject fresh current date/time as model context on every prompt, refreshed mid-turn via a throttled PostToolBatch hook",
   "hooks": {
     "UserPromptSubmit": [{
       "matcher": "",
@@ -9,8 +9,8 @@
         "timeout": 60
       }]
     }],
-    "PreToolUse": [{
-      "matcher": "*",
+    "PostToolBatch": [{
+      "matcher": "",
       "hooks": [{
         "type": "command",
         "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/inject-current-time.sh\"",
