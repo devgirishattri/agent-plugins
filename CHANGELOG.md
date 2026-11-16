@@ -1,5 +1,38 @@
 # Changelog
 
+## session-workspace 0.14.2 — 2026-11-16
+
+- **The policy hook now runs for the newer tools.** On Claude Code the
+  `PreToolUse` matcher adds `REPL`, `Workflow`, `EnterWorktree` and
+  `SubagentHandback`. On Codex it becomes the anchored regex
+  `^(Edit|Write|NotebookEdit|apply_patch|Bash|spawn_agent|mcp__.+)$`, which
+  adds `spawn_agent` and every MCP tool. Before, these ran with no policy
+  check.
+- `REPL`, `Workflow` and `SubagentHandback` are allowed for every role
+  (`tool.delegating`), because the Bash and edit calls they make reach the
+  hook on their own.
+- **Audit-only rules for worker panes.** In an executor or reviewer pane,
+  `EnterWorktree` (`worker.enter_worktree`), Codex `spawn_agent`
+  (`worker.spawn_agent`) and Codex MCP calls (`worker.mcp`) are reported and
+  never blocked, in `audit` and `enforce` mode alike: the hook prints
+  `AUDIT … (audit-only rule; not blocked)` and exits 0. A later release can
+  deny them in enforce mode once the record shows it is safe. The
+  orchestrator is allowed all three (`tool.worktree`, `tool.spawn_agent`,
+  `tool.mcp`).
+- Because the hook now runs for these tools, an integrity failure (identity,
+  config or mode drift, no `python3`) refuses them too, as it already did
+  Bash and edits.
+- On Codex the audit line is a `systemMessage` the user sees, so a worker
+  pane that drives the browser over MCP shows one line per call. The changed
+  hook entry also has a new hash, so Codex asks to trust it again.
+- Not covered: `UserPromptExpansion`, which is a prompt event, not a tool.
+- Tests: `test-harness-policy.sh` covers each new tool for every role, the
+  audit-only rules in both modes, the Claude stderr and Codex
+  `systemMessage` rendering of an audit-only rule in enforce mode, and a
+  silent delegating allow. `test-session-workspace.sh` checks both matchers,
+  and on Codex that the regex sends `spawn_agent` and `mcp__*` to the policy
+  and nothing outside the list.
+
 ## session-manager 1.7.12 — 2026-11-16
 
 - **Deleting a Claude session now removes everything Claude Code keeps for

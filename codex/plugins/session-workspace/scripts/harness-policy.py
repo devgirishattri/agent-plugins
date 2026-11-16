@@ -109,6 +109,20 @@ SHELL_TOOL_NAMES = {
 UNPARSED_SHELL_TOOL_NAMES = {
     "powershell",
 }
+# Tools that only make other tool calls (Claude Code's REPL code mode, a
+# Workflow script, a subagent's SubagentHandback report). Each Bash or edit
+# call they make reaches this hook on its own, so the outer call is allowed by
+# name (tool.delegating) for every role.
+DELEGATING_TOOL_NAMES = {
+    "repl",
+    "workflow",
+    "subagenthandback",
+}
+# Audit-only rules (0.14.2): a worker pane's EnterWorktree, Codex spawn_agent
+# and Codex MCP calls are reported in audit AND enforce mode and never blocked,
+# until the audit record shows they can be denied without breaking real work.
+WORKER_ROLES = frozenset({"executor", "reviewer"})
+ADVISORY_RULES = frozenset({"worker.enter_worktree", "worker.spawn_agent", "worker.mcp"})
 PATH_FIELDS = {
     "absolute_path",
     "file_path",
@@ -4984,10 +4998,42 @@ def evaluate_payload(ctx: Context, raw: str) -> Decision:
                 return allow(ctx, tool_name, "tool.read", "read-only editor view")
             validate_edit(ctx, tool_input, payload)
         else:
+            named = classify_named_tool(ctx, tool_name, lower)
+            if named is not None:
+                return named
             return allow(ctx, tool_name, "tool.unclassified", "tool is outside the strict-v1 floor; not a blanket allowlist")
     except PolicyFailure as exc:
         return deny(ctx, tool_name, exc.rule, exc.reason)
     return allow(ctx, tool_name)
+
+
+def advisory(ctx: Context, tool: str, rule: str, reason: str) -> Decision:
+    """An ADVISORY_RULES finding: decision ``audit`` in both modes, so the hook
+    reports it and exits 0. It never becomes a deny."""
+    return Decision(True, ctx.mode, ctx.semantic_role, ctx.pane_name, "audit", rule, reason, tool)
+
+
+def classify_named_tool(ctx: Context, tool_name: str, lower: str) -> Optional[Decision]:
+    """Rules for tools that are neither shell nor edit tools, by name only.
+    None leaves the tool unclassified."""
+    if lower in DELEGATING_TOOL_NAMES:
+        return allow(ctx, tool_name, "tool.delegating", "the tool calls it makes reach this hook on their own")
+    worker = ctx.semantic_role in WORKER_ROLES
+    if lower == "enterworktree":
+        if worker:
+            return advisory(ctx, tool_name, "worker.enter_worktree",
+                            "a worker pane stays in its assigned checkout and branch")
+        return allow(ctx, tool_name, "tool.worktree", "the orchestrator may enter a worktree")
+    if lower == "spawn_agent":
+        if worker:
+            return advisory(ctx, tool_name, "worker.spawn_agent",
+                            "a Codex sub-agent's own tool calls are not yet shown to reach this hook")
+        return allow(ctx, tool_name, "tool.spawn_agent", "the orchestrator may start a sub-agent")
+    if lower.startswith("mcp__"):
+        if worker:
+            return advisory(ctx, tool_name, "worker.mcp", "MCP tool call from a worker pane, recorded for review")
+        return allow(ctx, tool_name, "tool.mcp", "the orchestrator may call MCP tools")
+    return None
 
 
 # --- Role floor report (harness-status) ------------------------------------------
@@ -5341,7 +5387,8 @@ def emit_diagnostic(decision: Decision) -> None:
 
 
 def audit_message(decision: Decision) -> str:
-    return "AUDIT by session-workspace strict-v1 [%s]: %s (would deny in enforce mode)" % (decision.rule, decision.reason)
+    outcome = "audit-only rule; not blocked" if decision.rule in ADVISORY_RULES else "would deny in enforce mode"
+    return "AUDIT by session-workspace strict-v1 [%s]: %s (%s)" % (decision.rule, decision.reason, outcome)
 
 
 def emit_codex_system_message(message: str) -> None:
