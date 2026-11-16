@@ -1008,14 +1008,17 @@ if jq -e '.hooks.PreToolUse[0].hooks[0].command | test("harness-hook\\.sh")' "$H
   HOOK_COMMON_OK=1
 fi
 if [ -f "$HERE/../.codex-plugin/plugin.json" ]; then
-  if jq -e '.hooks.PreToolUse[0].matcher | test("Edit") and test("Write") and test("apply_patch")' "$HOOKS_JSON" >/dev/null 2>&1 && \
+  # Codex: an anchored regex matcher (0.15.1) also sends spawn_agent and every
+  # mcp__* call to the policy, and nothing outside the list.
+  if jq -e '.hooks.PreToolUse[0].matcher as $m | (["Edit","Write","apply_patch","Bash","spawn_agent","mcp__lint__check"] | all(test($m))) and (["Read","view_image","xBash","Bash2","mcp_tool"] | all(test($m) | not))' "$HOOKS_JSON" >/dev/null 2>&1 && \
      jq -e '.hooks.PreToolUse[0].hooks[0].command | test("--codex-hook-output")' "$HOOKS_JSON" >/dev/null 2>&1; then
     HOOK_PROVIDER_OK=1
   fi
 else
   # Claude: Monitor runs a shell command and PowerShell a script the floor
-  # cannot parse, so both reach the policy; a hook that cannot run blocks.
-  if jq -e '.hooks.PreToolUse[0].matcher | split("|") | index("Edit") and index("Write") and index("Bash") and index("Monitor") and index("PowerShell")' "$HOOKS_JSON" >/dev/null 2>&1 && \
+  # cannot parse, so both reach the policy; so do the delegating tools and
+  # EnterWorktree (0.15.1). A hook that cannot run blocks.
+  if jq -e '.hooks.PreToolUse[0].matcher | split("|") | index("Edit") and index("Write") and index("Bash") and index("Monitor") and index("PowerShell") and index("REPL") and index("Workflow") and index("EnterWorktree") and index("SubagentHandback")' "$HOOKS_JSON" >/dev/null 2>&1 && \
      jq -e '.hooks.PreToolUse[0].hooks[0].onFailure == "block"' "$HOOKS_JSON" >/dev/null 2>&1 && \
      jq -e '.hooks.PreToolUse[0].hooks[0].command | test("--codex-hook-output") | not' "$HOOKS_JSON" >/dev/null 2>&1; then
     HOOK_PROVIDER_OK=1

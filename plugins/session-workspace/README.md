@@ -980,8 +980,9 @@ an integer from 1 to 3650.
 ### The hook
 
 `hooks/hooks.json` registers `scripts/harness-hook.sh` on `PreToolUse` for
-`Edit|Write|MultiEdit|NotebookEdit|Bash|Monitor|PowerShell` with
-`"onFailure": "block"`. The wrapper exits 0 without
+`Edit|Write|MultiEdit|NotebookEdit|Bash|Monitor|PowerShell|REPL|Workflow|EnterWorktree|SubagentHandback`
+with `"onFailure": "block"`. The Codex registration matches
+`^(Edit|Write|NotebookEdit|apply_patch|Bash|spawn_agent|mcp__.+)$`. The wrapper exits 0 without
 touching Python whenever the harness is inactive; when it is active and
 `python3` is missing it fails closed (exit 2). `scripts/harness-policy.py`
 (stdlib only, runs on the stock macOS Python 3.9) then:
@@ -1017,6 +1018,25 @@ tool call when the hook cannot start, times out or exits unexpectedly, where
 an earlier version, or a value of `continue`, lets the call through. The
 Codex registration is unchanged: Codex has no Monitor or PowerShell tool and
 no `onFailure`.
+
+**Newer tools (0.15.1).** `REPL` (Claude Code's code mode), `Workflow` and
+`SubagentHandback` only make other tool calls, and each Bash or edit call
+they make reaches this hook on its own, so the policy allows them for every
+role (`tool.delegating`). In an executor or reviewer pane, `EnterWorktree`
+(`worker.enter_worktree`: a worker stays in its assigned checkout and
+branch), Codex `spawn_agent` (`worker.spawn_agent`: a sub-agent's own calls
+are not yet shown to reach this hook) and any Codex MCP tool (`worker.mcp`)
+are **audit-only rules**: in `audit` and `enforce` mode alike the hook
+reports `AUDIT by session-workspace strict-v1 [rule]: reason (audit-only
+rule; not blocked)` and exits 0, so the record shows how workers use them
+before any release denies them. The orchestrator is allowed all three
+(`tool.worktree`, `tool.spawn_agent`, `tool.mcp`). On Claude the audit line
+goes to stderr, which Claude Code keeps in its debug log; on Codex it is a
+`systemMessage` the user sees, once per MCP call in a worker pane. Because
+the hook now runs for these tools, an integrity failure refuses them too,
+`SubagentHandback` included (Claude Code then asks the subagent to retry,
+up to three times). Claude's `Agent` tool and Codex's other tools stay
+unregistered and unclassified.
 
 **Claimed reviewers fail closed (0.12.11).** Without
 `SESSION_WORKSPACE_CONFIG` the hook stays a no-op for ordinary sessions, but
@@ -1145,6 +1165,10 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   `PowerShell`, so on Claude Code before 2.1.314 a `Monitor` command and,
   on every version, a `PowerShell` command reached no policy. A hook that
   could not run let the call through (no `onFailure`).
+- Until 0.15.1 `REPL`, `Workflow`, `EnterWorktree` and `SubagentHandback`
+  on Claude, and `spawn_agent` and MCP tools on Codex, reached no policy. A
+  worker's `EnterWorktree`, `spawn_agent` and MCP calls are still only
+  reported (audit-only rules), not blocked; see "The hook".
 - Until 0.13.2 an environment orchestrator's free-shell lifecycle commands
   (`workspace stop|start|restart|reconcile` through the dispatcher on PATH,
   `workspace.sh`, a lifecycle script run by name, or `--environment`) were
