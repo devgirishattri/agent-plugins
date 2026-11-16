@@ -11,7 +11,7 @@ Every plugin below ships for both providers at the same version number.
 
 | Plugin | Version | Purpose |
 |--------|---------|---------|
-| `session-manager` | 1.7.12 | List, search, and delete local agent session data |
+| `session-manager` | 1.8.0 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.22 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.10 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
@@ -217,6 +217,16 @@ uses synthetic histories, makes no model calls, and stops its disposable daemon.
 `python3 -B scripts/test-session-deletion-live.py` verifies preview and native
 deletion without a daemon in an isolated home, including preservation of another
 project's history. The temporary-connection deletion path is verified on 0.169.0.
+
+Codex also gets `session-archive` and `session-unarchive` (1.8.0), which have no
+Claude Code counterpart. Archiving is the reversible step before a delete: the
+native `codex archive` moves the session to `archived_sessions/` and out of the
+active list, and `codex unarchive` brings it back. `scripts/prepare-archive.sh
+archive|unarchive [target]` resolves the target read-only, among active sessions
+for archive and archived ones for unarchive, and `scripts/archive-session.sh`
+passes only a full UUID to the native command. `list-sessions.sh --archived-only`
+lists archived sessions. `python3 -B scripts/test-session-archive-live.py` runs the
+round trip without a daemon in an isolated home.
 
 ### session-walkthrough
 
