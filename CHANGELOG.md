@@ -1,5 +1,25 @@
 # Changelog
 
+## session-manager 1.7.12 — 2026-11-16
+
+- **Deleting a Claude session now removes everything Claude Code keeps for
+  it.** The delete missed five kinds of per-session data that current Claude
+  Code writes: set-aside transcripts (`<session>.orphaned-*.jsonl` and
+  `<session>.jsonl.superseded-*`, which hold the same content as the live
+  transcript), `image-cache/<session>/`, `uploads/<session>/`,
+  `dev-mods/<session>/`, and the session's temp directory
+  (`claude-<uid>/<project>/<session>/` under `CLAUDE_CODE_TMPDIR`, `TMPDIR`
+  or `/tmp`, holding the scratchpad, images and task output). It now removes
+  those, the session's `tasks/<session>/` list and its temp-root
+  `cache-break-state-<session>.json` too. The bulk delete inherits this.
+- The same guards apply: a target reached through a symlinked directory is
+  refused and reported, and a temp root that is itself a symlink or owned by
+  another user is refused, since it sits in a shared location.
+- Tests: four new cases in `test-session-manager.sh` cover the removals with
+  another session's copies kept, and refusals for a symlinked temp project
+  directory, a symlinked temp root and a symlinked set-aside parent. All four
+  fail on 1.7.11.
+
 ## session-workspace 0.14.1 — 2026-11-16
 
 - **An active harness turns off Claude Code `@file` mentions.** A mention

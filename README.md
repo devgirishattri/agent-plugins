@@ -11,7 +11,7 @@ Every plugin below ships for both providers at the same version number.
 
 | Plugin | Version | Purpose |
 |--------|---------|---------|
-| `session-manager` | 1.7.11 | List, search, and delete local agent session data |
+| `session-manager` | 1.7.12 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.22 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.10 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
@@ -176,6 +176,16 @@ three names are rejected if written directly into an `env.groups` block, so
 `stores.pin` stays their only source of truth.
 
 ### session-manager
+
+On Claude, deleting one session removes everything Claude Code keeps for it:
+the transcript and any set-aside copies (`<session>.orphaned-*.jsonl`,
+`<session>.jsonl.superseded-*`), subagent data, session env, debug log, file
+history, legacy todos, the task list, `image-cache/`, `uploads/` and
+`dev-mods/` entries, its `history.jsonl` lines, and the session's temp
+directory (scratchpad, images and task output) under Claude Code's temp root,
+`${CLAUDE_CODE_TMPDIR:-/tmp}/claude-<uid>/<project>/<session>/`. A target
+reached through a symlinked directory is refused, and so is a temp root that is
+a symlink or owned by another user.
 
 It reads the session data your runtime already writes. On Codex, install
 Python 3 to read session names; deletion execs the native `codex` CLI, so that
