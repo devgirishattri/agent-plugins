@@ -1,5 +1,23 @@
 # Changelog
 
+## knowledge 0.5.13 — 2026-11-16
+
+- **The consolidation nudge no longer continues the turn.** The Claude Stop
+  hook printed the reminder as `hookSpecificOutput.additionalContext`, which
+  Claude Code now treats as model input that continues the turn (checked live
+  on Claude Code 2.1.325). The Codex copy printed `{"decision":"block"}`, which
+  also continues the turn. Both now print `{"systemMessage": "..."}`, which
+  Claude Code shows to the user and Codex 0.169.0 shows as a warning line, and
+  the turn ends normally. The reminder is for the user, since only the user
+  runs consolidate. `nudge-consolidate.sh` is now byte-identical in both
+  trees and names both command forms.
+- **Hook paths are quoted.** Every `${CLAUDE_PLUGIN_ROOT}` path in the Claude
+  `hooks/hooks.json` is quoted, so a plugin root with a space in it still
+  runs, and `claude plugin validate --strict` passes.
+- Tests: both `test-auto.sh` suites and `scripts/test-memory-dismissal.py`
+  require a `systemMessage`-only Stop output with no `additionalContext` or
+  `decision`.
+
 ## session-scheduler 0.7.10 — 2026-11-16
 
 - **An unsubmitted dispatch is durable, not a failure.** session-chat 0.17.21

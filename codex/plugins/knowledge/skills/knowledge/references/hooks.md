@@ -68,8 +68,9 @@ silently (never breaks or stalls a session).
   setting, so `1` is correct there.
 
 - **`KNOWLEDGE_CONSOLIDATE_NUDGE=1`** — a Stop hook that, when the capture
-  inbox has pending candidates, prints ONE reminder to run
-  `$knowledge:consolidate`. Nudge only — it never writes and never
+  inbox has pending candidates, shows the user ONE reminder to run
+  `$knowledge:consolidate`, as a Stop `systemMessage` (a warning line in
+  Codex; the turn ends normally). Nudge only — it never writes and never
   auto-consolidates. Script: `scripts/nudge-consolidate.sh`.
 - **Implicit capture (0.5)** — both providers may select `remember` when a
   verified reusable lesson or user preference emerges. It stages
