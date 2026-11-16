@@ -917,13 +917,13 @@
             "items": {
               "type": "object",
               "required": [
-                "name",
                 "role"
               ],
               "additionalProperties": false,
               "properties": {
                 "name": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Required, except for an executor or reviewer pane of a schema-v5 environment's development session: one without a name is named <project.id>-<environment>-<executor|reviewer>, plus -<label> after workspace label ENVIRONMENT LABEL."
                 },
                 "role": {
                   "type": "string"
