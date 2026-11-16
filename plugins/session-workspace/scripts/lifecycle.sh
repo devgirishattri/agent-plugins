@@ -55,6 +55,13 @@ SW_FAILED_SLOTS=0
 SW_CHANGED=0
 SW_KEPT=0
 SW_PANE_SUBSET="${SW_PANE_SUBSET:-0}"
+# The harness pane running this start/reconcile, when one is (a launched
+# pane's own identity is built separately in adapters.sh). A value outside the
+# pane-name charset is dropped rather than written into tmux.
+SW_STARTED_BY="${SESSION_WORKSPACE_PANE_NAME:-}"
+case "$SW_STARTED_BY" in
+  *[!A-Za-z0-9._-]*) SW_STARTED_BY="" ;;
+esac
 
 _sw_report() {
   # $1=status $2=session $3=pane $4=detail
@@ -369,6 +376,7 @@ _sw_claim_pane() {
   SW_IDLE_NOTE=""
   if [ "$SW_LAUNCH_SUPPRESSED" -eq 0 ]; then
     sw_set_pane_launched "$pane_id" "$runtime" || return 1
+    sw_set_pane_started_by "$pane_id" "$SW_STARTED_BY"
     _sw_arm_idle_watch "$pane_id" "$session_id" "$pane_plan"
   fi
 }

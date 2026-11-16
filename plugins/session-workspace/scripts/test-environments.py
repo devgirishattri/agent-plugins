@@ -622,6 +622,87 @@ class Environments(unittest.TestCase):
                 p.validate_bash(scoped, command, {})
             self.assertEqual(caught.exception.rule, 'routing.scope', command)
 
+    def add_shared_services(self):
+        self.cfg['sessions'].append(dict(id='shared', name='test-shared', panes=[
+            dict(name='db', role='service', cwd='.', command=['sleep', '600']),
+            dict(name='mail', role='service', cwd='.', command=['sleep', '600'])]))
+        self.cfg['environments'][0]['shared_sessions'] = ['shared']
+        self.write()
+
+    def test_shared_sessions_validation(self):
+        self.add_shared_services()
+        plan = self.plan()
+        self.assertEqual(plan['environments'][0]['shared_sessions'], ['shared'])
+        web = next(p for s in plan['sessions'] for p in s['panes'] if p['name'] == 'web-master')
+        self.assertEqual(web['scope_identity']['own']['shared_sessions'], ['shared'])
+        original = copy.deepcopy(self.cfg)
+        for mutate, message in [
+            (lambda c: c['environments'][0].update(shared_sessions=['service-vue3']), 'no environment owns'),
+            (lambda c: c['environments'][0].update(shared_sessions=['service-web']), 'no environment owns'),
+            (lambda c: c['environments'][0].update(shared_sessions=['missing']), 'no environment owns'),
+            (lambda c: c['environments'][0].update(shared_sessions=['control']), 'only service shell panes'),
+            (lambda c: c['environments'][0].update(shared_sessions=['shared', 'shared']), 'unique session ids'),
+            (lambda c: c['environments'][0].update(shared_sessions='shared'), 'unique session ids'),
+            (lambda c: c['sessions'][-1]['panes'][0].update(runtime='claude'), 'only service shell panes'),
+        ]:
+            self.cfg = copy.deepcopy(original)
+            mutate(self.cfg)
+            self.write()
+            result = self.run_script('workspace-plan', '--json')
+            self.assertNotEqual(result.returncode, 0, message)
+            self.assertIn(message, result.stderr)
+        self.cfg = copy.deepcopy(original)
+        self.cfg['environments'][1]['shared_sessions'] = ['shared']
+        self.write()
+        self.plan()  # several environments may share one session
+        self.add_lane('d', orchestrator=False)  # coordinated by the root
+        self.cfg['environments'][-1]['shared_sessions'] = ['shared']
+        self.write()
+        result = self.run_script('workspace-plan', '--json')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('shared_sessions requires an environment orchestrator', result.stderr)
+
+    def test_shared_services_start_only(self):
+        self.add_shared_services()
+        p, web, _ = self.context('web-master')
+        self.assertEqual(web.shared_session_ids, frozenset(['shared']))
+        for args in (['shared', '--pane', 'db'], ['shared', '--pane', 'db', '--pane', 'mail']):
+            p.validate_helper(web, 'session-workspace', 'workspace-start.sh', args)
+        p.validate_helper(web, 'session-workspace', 'workspace.sh', ['start', 'shared', '--pane', 'db'])
+        p.validate_bash(web, 'workspace start shared --pane db', {})
+        refused = [('workspace-stop.sh', ['shared', '--pane', 'db', '--confirmed']), ('workspace-stop.sh', ['shared', '--confirmed']),
+                   ('workspace-restart.sh', ['shared']), ('workspace-reconcile.sh', ['shared', '--apply'])]
+        for script, args in refused:
+            with self.assertRaises(p.PolicyFailure, msg=args) as caught:
+                p.validate_helper(web, 'session-workspace', script, args)
+            self.assertEqual(caught.exception.rule, 'routing.shared_stop', (script, args))
+        for command in ['workspace stop shared --pane db --confirmed', 'workspace stop shared --confirmed',
+                        'workspace restart shared', 'bash /opt/x/workspace-stop.sh shared --confirmed']:
+            with self.assertRaises(p.PolicyFailure, msg=command) as caught:
+                p.validate_bash(web, command, {})
+            self.assertEqual(caught.exception.rule, 'routing.shared_stop', command)
+        for check in (lambda: p.validate_helper(web, 'session-workspace', 'workspace-start.sh', ['shared']),
+                      lambda: p.validate_bash(web, 'workspace start shared', {})):
+            with self.assertRaises(p.PolicyFailure) as caught:
+                check()
+            self.assertEqual(caught.exception.rule, 'routing.scope')
+        with self.assertRaises(p.PolicyFailure) as caught:
+            p.validate_helper(web, 'session-workspace', 'workspace-start.sh', ['shared', '--pane', 'nope'])
+        self.assertEqual(caught.exception.rule, 'helper.argv')
+        # An environment that does not list the session cannot start it, and
+        # workers never get the shared set.
+        p, vue3, _ = self.context('vue3-master')
+        self.assertEqual(vue3.shared_session_ids, frozenset())
+        with self.assertRaises(p.PolicyFailure) as caught:
+            p.validate_helper(vue3, 'session-workspace', 'workspace-start.sh', ['shared', '--pane', 'db'])
+        self.assertEqual(caught.exception.rule, 'routing.scope')
+        p, executor, _ = self.context('web-executor')
+        self.assertEqual(executor.shared_session_ids, frozenset())
+        # The root coordinator and the user keep full control.
+        p, root, _ = self.context('root')
+        for script, args in refused + [('workspace-start.sh', ['shared'])]:
+            p.validate_helper(root, 'session-workspace', script, args)
+
     def test_scheduler_scope(self):
         p,ctx,_=self.context('web-master')
         p.validate_helper(ctx,'session-scheduler','task-new.sh',['Example','--meta','environment=web'])
