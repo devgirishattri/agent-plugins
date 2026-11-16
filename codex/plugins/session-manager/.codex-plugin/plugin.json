@@ -1,7 +1,7 @@
 {
   "name": "session-manager",
-  "version": "1.7.12",
-  "description": "List, search, inspect, and safely delete Codex sessions across projects.",
+  "version": "1.8.0",
+  "description": "List, search, inspect, archive, and safely delete Codex sessions across projects.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
@@ -18,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Session Manager",
-    "shortDescription": "List, search, and safely delete Codex sessions.",
-    "longDescription": "Utilities for inspecting local Codex sessions, including project-wide listing, search, analytics, and explicit-confirmation deletion through native Codex state management.",
+    "shortDescription": "List, search, archive, and safely delete Codex sessions.",
+    "longDescription": "Utilities for inspecting local Codex sessions, including project-wide listing, search, analytics, reversible archive and unarchive, and explicit-confirmation deletion through native Codex state management.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": [

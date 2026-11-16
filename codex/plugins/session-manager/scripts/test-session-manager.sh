@@ -184,5 +184,60 @@ assert_log_empty "filesystem-only bulk deletion"
 assert_session_file_exists "$UUID_ONE" "filesystem-only bulk deletion"
 assert_session_file_exists "$UUID_TWO" "filesystem-only bulk deletion"
 
+# Archive and unarchive (Codex-only, 1.8.0): resolution is read-only and
+# state-scoped, and only a full UUID reaches the native command.
+UUID_ARCHIVED="44444444-4444-4444-8444-444444444444"
+mkdir -p "$CODEX_HOME/archived_sessions"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$UUID_ARCHIVED" "$PROJECT" \
+    > "$CODEX_HOME/archived_sessions/rollout-2026-07-10T10-00-00-$UUID_ARCHIVED.jsonl"
+: > "$SESSION_MANAGER_TEST_LOG"
+
+output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/list-sessions.sh")
+assert_not_contains "$output" "$UUID_ARCHIVED" "plain list should leave archived sessions out"
+output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/list-sessions.sh" --archived-only)
+assert_contains "$output" "$UUID_ARCHIVED" "--archived-only should list the archived session"
+assert_not_contains "$output" "$UUID_TWO" "--archived-only should leave active sessions out"
+
+output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/prepare-archive.sh" archive)
+assert_contains "$output" "$(printf 'STATUS\tSELECT')" "archive with no target should request selection"
+assert_contains "$output" "$UUID_TWO" "archive selection should offer active sessions"
+assert_not_contains "$output" "$UUID_ARCHIVED" "archive selection should not offer archived sessions"
+output=$(cd "$PROJECT" && bash "$SCRIPT_DIR/prepare-archive.sh" unarchive)
+assert_contains "$output" "$(printf 'STATUS\tSELECT')" "unarchive with no target should request selection"
+assert_contains "$output" "$UUID_ARCHIVED" "unarchive selection should offer archived sessions"
+assert_not_contains "$output" "$UUID_TWO" "unarchive selection should not offer active sessions"
+output=$(bash "$SCRIPT_DIR/prepare-archive.sh" archive "$UUID_TWO")
+assert_contains "$output" "$(printf 'STATUS\tONE')" "archive should resolve an active UUID"
+output=$(bash "$SCRIPT_DIR/prepare-archive.sh" archive "$UUID_ARCHIVED")
+assert_contains "$output" "$(printf 'STATUS\tNONE')" "archive should not resolve an archived UUID"
+output=$(bash "$SCRIPT_DIR/prepare-archive.sh" unarchive "$UUID_ARCHIVED")
+assert_contains "$output" "$(printf 'STATUS\tONE')" "unarchive should resolve an archived UUID"
+output=$(bash "$SCRIPT_DIR/prepare-archive.sh" unarchive "$UUID_TWO")
+assert_contains "$output" "$(printf 'STATUS\tNONE')" "unarchive should not resolve an active UUID"
+set +e
+output=$(bash "$SCRIPT_DIR/prepare-archive.sh" rename "$UUID_TWO" 2>&1)
+status=$?
+set -e
+assert_eq "2" "$status" "resolver should refuse an unknown action"
+assert_log_empty "archive and unarchive resolution"
+
+set +e
+output=$(bash "$SCRIPT_DIR/archive-session.sh" archive "Second session" 2>&1)
+status=$?
+set -e
+assert_eq "1" "$status" "archive should refuse a name"
+assert_contains "$output" "Invalid session ID format" "archive name refusal"
+set +e
+output=$(bash "$SCRIPT_DIR/archive-session.sh" delete "$UUID_TWO" 2>&1)
+status=$?
+set -e
+assert_eq "2" "$status" "archive helper should refuse any other native verb"
+assert_log_empty "refused archive calls"
+
+bash "$SCRIPT_DIR/archive-session.sh" archive "$UUID_TWO" >/dev/null
+assert_eq "$(printf 'CODEX_HOME=%s\tarchive\t%s' "$CODEX_HOME" "$UUID_TWO")" "$(tail -1 "$SESSION_MANAGER_TEST_LOG")" "native archive invocation"
+bash "$SCRIPT_DIR/archive-session.sh" unarchive "$UUID_ARCHIVED" >/dev/null
+assert_eq "$(printf 'CODEX_HOME=%s\tunarchive\t%s' "$CODEX_HOME" "$UUID_ARCHIVED")" "$(tail -1 "$SESSION_MANAGER_TEST_LOG")" "native unarchive invocation"
+
 echo "session-manager smoke tests: $ASSERTIONS passed, 0 failed"
 python3 "$SCRIPT_DIR/test-session-names.py"
