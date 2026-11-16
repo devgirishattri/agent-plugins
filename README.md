@@ -212,11 +212,11 @@ skips the native connection attempt (when using the shell alias). The same
 environment setting applies to `scripts/list-sessions.sh` and
 `scripts/session-stats.sh`; `auto` is the default and `native` fails instead of
 falling back. The isolated real-daemon regression can be run with
-`python3 -B scripts/test-session-metadata-live.py`; CI pins Codex CLI 0.155.0,
+`python3 -B scripts/test-session-metadata-live.py`; CI pins Codex CLI 0.169.0,
 uses synthetic histories, makes no model calls, and stops its disposable daemon.
 `python3 -B scripts/test-session-deletion-live.py` verifies preview and native
 deletion without a daemon in an isolated home, including preservation of another
-project's history. The temporary-connection deletion path is verified on 0.155.0.
+project's history. The temporary-connection deletion path is verified on 0.169.0.
 
 ### session-walkthrough
 
@@ -1069,8 +1069,12 @@ These checks do not themselves enable repository merge protection.
   `shellcheck --severity=warning` over all `*.sh`, on push to `main` and on
   pull requests.
 - CI splits those suites across parallel shard jobs (`release-checks`,
-  `smoke-claude-scheduler`, `smoke-claude-workspace`, `smoke-codex-workspace`,
-  `smoke-plugins`, `knowledge-evals`). The `validate-release` check passes
+  `plugin-manifests`, `smoke-claude-scheduler`, `smoke-claude-workspace`,
+  `smoke-codex-workspace`, `smoke-plugins`, `knowledge-evals`).
+  `plugin-manifests` runs `claude plugin validate --strict` on every Claude
+  plugin and on the marketplace, with Claude Code pinned in
+  `.github/tools/claude` (2.1.325) and run from its platform package with
+  install scripts off. The `validate-release` check passes
   only when every shard succeeds, and `validate-release.sh` fails if a shard is
   missing from that gate. A new push to a pull request cancels the pull
   request's older run. Runs on `main` are never cancelled.
