@@ -1,5 +1,74 @@
 # Changelog
 
+## session-workspace 0.13.2 — 2026-11-16
+
+Groundwork for several orchestrators ("lanes") in one project, each on its
+own git worktree with its own on-demand executor and reviewer.
+
+- **The policy gates Claude Code's `Monitor` and `PowerShell` tools.** The
+  Claude hook was registered for `Bash` only, so a `Monitor` command (which
+  runs in the same shell as `Bash`) reached no policy on Claude Code before
+  2.1.314, and a `PowerShell` command reached none on any version. The
+  `PreToolUse` matcher now names both. A `Monitor` command is judged as a
+  shell command by the same role floor; a `Monitor` call with no command
+  fails closed (`bash.command`); a WebSocket watch (`ws`, no `command`) runs
+  nothing and stays `tool.unclassified`. `PowerShell` is refused for every
+  role in an active harness (`bash.parse`), since the floor cannot parse it.
+  The Codex registration is unchanged.
+- **A hook that cannot run blocks the call.** The Claude `PreToolUse`
+  handler sets `"onFailure": "block"` (Claude Code 2.1.295 and later), so a
+  hook that cannot start, times out or exits unexpectedly refuses the call
+  instead of letting it through. `scripts/hook_contracts.py` accepts
+  `onFailure` (`continue` or `block`) on command and http handlers only.
+- **`start` releases the project lock before its readiness waits.** A
+  `start --pane` held the lock through the browser and agent readiness waits
+  (up to 120 s), so another orchestrator's `start` or `stop` timed out after
+  30 s. The lock now covers the tmux changes only; a pane stopped during the
+  wait is reported as not ready.
+- **A running pane pins only its own scope.** `SESSION_WORKSPACE_SCOPE_JSON`
+  held the whole `environments` list, so adding any environment failed every
+  running harness pane closed (`identity.scope`) until it restarted. The plan
+  now carries `scope_identity` for each scoped pane: its environment, the
+  root orchestrator's name and its own environment entry (`own`), or for the
+  unbound root orchestrator the environments it coordinates directly
+  (`direct`). The launcher exports it, and the policy and `harness-status`
+  accept it or the 0.13.1 full scope. Another environment can be added,
+  changed or removed while panes run; a change to a pane's own entry still
+  fails it closed. Route peers and owned sessions are read from the
+  validated config on each call, so the root orchestrator reaches a new
+  lane's orchestrator without a restart.
+- **An environment orchestrator's shell gets the same session scope as its
+  helper calls.** The scope check (only its own sessions, named explicitly;
+  no `install` or `browser-config`) ran on the reviewed helper route only. In
+  its free shell, `workspace stop OTHER-SESSION --confirmed` (the dispatcher
+  on PATH), `workspace.sh ...`, a lifecycle script run by name, or
+  `--environment OTHER` was checked for self-stop alone, so one environment's
+  orchestrator could stop, restart or reconcile another environment's
+  sessions, or the shared services. `orchestrator_lifecycle_routes` now
+  applies `environment_lifecycle_scope` and `environment_selector_scope`, the
+  same checks `validate_helper` uses (`routing.scope`). The root orchestrator
+  is not narrowed.
+- **Orchestrators cannot write the main checkout or git common dir of lanes
+  on linked worktrees.** When an executor or reviewer cwd is a linked
+  worktree (a `.git` file whose `gitdir` has a `commondir`), the policy adds
+  the common dir, and for a non-bare repository the main checkout above it,
+  to the child roots. An orchestrator can no longer edit `.git/hooks`,
+  `.git/config` or refs that every lane runs, or the main checkout's files
+  (`orchestrator.child_write`). A main checkout that holds the project root
+  or the orchestrator's own cwd stays writable for it; its `.git` does not.
+  Submodules (no `commondir`) are unchanged. A per-lane ref floor is not
+  part of this release.
+- Tests: `test-harness-policy.sh` decides `Monitor` (command, outside cwd,
+  tmux routing, `ws`, empty, both) and `PowerShell` payloads;
+  `test-session-workspace.sh` checks the Claude matcher and `onFailure`, and
+  that a `stop` succeeds with a 1 s lock timeout while a `start --pane` waits
+  3 s for its agent; `test-environments.py` adds a lane with and without an
+  orchestrator beside running panes, decides free-shell lifecycle routes for
+  an environment orchestrator and the root, changes a pane's own entry, keeps the
+  0.13.1 pin working until the environments change, and builds real linked
+  worktrees outside and inside the project root; `test-hook-contracts.py`
+  covers `onFailure`.
+
 ## session-workspace 0.13.1 — 2026-11-12
 
 - **Executors may write the `find -exec` placeholder as a bare `{}`.** The

@@ -158,7 +158,7 @@ STATUS_JSON="$(printf '%s' "$PLAN_JSON" | jq \
             and $env_cwd == ($pane.cwd // "")
             and $env_mode == (.harness.mode // "")
             and (if ($pane.read_paths // [] | length) > 0 then (try (($env_read_paths | fromjson) == $pane.read_paths) catch false) else $env_read_paths == "" end)
-            and (if $pane.scope != null then (try (($env_scope | fromjson) == $pane.scope) catch false) else $env_scope == "" end)
+            and (if $pane.scope != null then (try (($env_scope | fromjson) as $pinned | $pinned == $pane.scope_identity or $pinned == $pane.scope) catch false) else $env_scope == "" end)
             and (if .harness.guards then (try (($env_guards | fromjson) == .harness.guards) catch false) else $env_guards == "" end)
             and (($chat_alias == "" or $chat_alias == $env_pane) and ($knowledge_alias == "" or $knowledge_alias == $env_pane)))
           end
