@@ -1,5 +1,50 @@
 # Changelog
 
+## session-workspace 0.15.0 — 2026-11-16
+
+- **Lanes can no longer change each other's branches.** Environments on
+  linked worktrees of one repository share every ref, so until now an
+  executor could move, delete or push another lane's branch, and a root
+  orchestrator whose cwd is the main checkout could write lane branches
+  there. Each such environment now declares `environments[].branch`, the
+  one local branch its executor works on, and the new hook rule
+  `git.lane_ref` (registered in both diagnostics registries) holds it there.
+- **Config.** `branch` is required when an environment's checkout shares its
+  git repository with another checkout (a linked worktree, or a main
+  checkout that another environment is a worktree of), and must be unique
+  and a safe literal branch name. An orchestration target in that
+  environment must use it as `work_branch`. It is part of the pinned
+  environment entry, so adding it restarts only that environment's panes.
+  **Migration:** a config with environments on shared worktrees fails
+  validation with `environments that share a git repository must each
+  declare branch` until each declares the branch its worktree is on.
+- **Lane executor.** It may create, reset or set the upstream of only its
+  branch, deletes no branch, switches only to it or to a detached HEAD, and
+  pushes only `REMOTE BRANCH`, `HEAD` or `HEAD:BRANCH`, with no force, `+`,
+  delete, `--all`, `--mirror`, `--tags`, URL or bare push. Fetch and pull
+  refspecs may write only remote-tracking refs or its branch. Commands that
+  write the current branch (commit, merge, rebase, reset, pull, cherry-pick,
+  revert, am, bisect) need its branch or a detached HEAD checked out. Tags,
+  the shared stash, worktrees, notes, replace and reflog writes, config and
+  remote writes, `symbolic-ref` writes, `gc`, `prune`, `filter-branch`,
+  `rebase --update-refs`, `-c`, `--git-dir`, `--work-tree` and `GIT_*`
+  variables are refused, and so is any subcommand outside the reviewed list
+  (aliases included). A git argv behind `timeout`, `nice`, `find -exec` and
+  similar runners is judged the same way. Restoring files and every read are
+  unchanged.
+- **Orchestrators** are refused Git commands that would write a declared lane
+  branch (`branch -D|-f|-m`, `checkout`, `switch`, `update-ref`, a fetch or
+  pull refspec, rebasing it). Reading and merging lane branches stay allowed.
+- These rules read argv: Git run by a script or build tool, and a
+  `rebase.updateRefs` config, are not seen. Keep release branches protected
+  on the remote. Lanes do not deploy; merge them into the release branch in
+  the main checkout.
+- Tests: `test-environments.py` adds lane branch validation (missing,
+  duplicate, unsafe names, target mismatch, plain checkouts need none), 45
+  allowed and 68 refused executor commands, the HEAD check on another branch
+  and on a detached HEAD, a second lane's executor, and the root
+  orchestrator's allowed and refused commands in its own checkout.
+
 ## session-manager 1.7.12 — 2026-11-16
 
 - **Deleting a Claude session now removes everything Claude Code keeps for
