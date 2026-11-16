@@ -709,7 +709,9 @@ _env_prepare_inputs() {
     ENV_COORD_VAR_VALUES+=("$path")
   done < <(printf '%s' "$CONFIG_JSON" | jq -r '.stores.pin // [] | .[]')
 
-  ENV_SCOPE_JSON="$(printf '%s' "$PANE_PLAN" | jq -cS 'if .scope != null then .scope else empty end')"
+  # The pane's own scope identity, not the whole environments list: adding a
+  # lane must not fail closed every pane that is already running.
+  ENV_SCOPE_JSON="$(printf '%s' "$PANE_PLAN" | jq -cS 'if .scope_identity != null then .scope_identity else empty end')"
   ENV_READ_PATHS_JSON="$(printf '%s' "$PANE_PLAN" | jq -cS 'if (.read_paths // [] | length) > 0 then .read_paths else empty end')"
   ENV_PANE_NAME="$pane_name"
   ENV_TMUX_PANE_ID="$tmux_pane_id"

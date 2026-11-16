@@ -246,7 +246,11 @@ workspace stop development --pane web-executor --confirmed
   over in place, under a `reclaim` marker and only while it still names the
   dead pid, and a release renames the directory aside before removing it, so
   a waiter never deletes a newer holder's lock. On-demand workers make an
-  orchestrator take this lock far more often.
+  orchestrator take this lock far more often, so from 0.13.2 `start` holds it
+  only while it changes tmux: the browser and agent readiness waits (up to
+  `SESSION_WORKSPACE_AGENT_READY_TIMEOUT`, 120 s) run after the release, and
+  another orchestrator's `start` or `stop` no longer times out (30 s) behind
+  them. A pane stopped during that wait is reported as not ready.
 
 ## Secrets
 
@@ -344,7 +348,7 @@ validation errors) — and `workspace-plan` lists their names:
 | `SESSION_WORKSPACE_HARNESS_MODE` | `audit` or `enforce` when active; empty for v1, no `harness`, or `enabled: false` |
 | `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3–v5 launch; absent for v1/v2 and v3–v5 without guards |
 | `SESSION_WORKSPACE_READ_PATHS_JSON` | canonical `[{path, kind}]` for a reviewer or executor with `read_paths`; exported empty for every other pane so an inherited value is cleared |
-| `SESSION_WORKSPACE_SCOPE_JSON` | canonical environment scope for a pane of a schema-v5 config with `environments`; absent otherwise |
+| `SESSION_WORKSPACE_SCOPE_JSON` | canonical scope identity for a pane of a schema-v5 config with `environments`: its environment, the root orchestrator's name, and its own environment entry (`own`), or for the unbound root orchestrator the environments it coordinates directly (`direct`); absent otherwise |
 
 The policy cross-checks this identity against the validated config on every
 gated tool call and **fails closed** on any disagreement: unknown pane, role
@@ -357,6 +361,12 @@ configured session that contains the pane
 (`workspace restart <session-id>` / `/session-workspace:workspace-restart
 <session-id>`) — which kills and recreates ALL of that session's configured
 panes, not just the drifted one — never editing the variables by hand.
+
+`SESSION_WORKSPACE_SCOPE_JSON` pins only the pane's own scope (0.13.2), so an
+environment added beside running ones, for example a new lane on a git
+worktree, drifts no running pane. A change to a pane's own environment entry
+still does. A pane launched by 0.13.1 or earlier pinned the whole scope; it
+keeps working until the environments change, then needs one restart.
 
 ### Schema-v3 shared guards
 
@@ -959,7 +969,8 @@ an integer from 1 to 3650.
 ### The hook
 
 `hooks/hooks.json` registers `scripts/harness-hook.sh` on `PreToolUse` for
-`Edit|Write|MultiEdit|NotebookEdit|Bash`. The wrapper exits 0 without
+`Edit|Write|MultiEdit|NotebookEdit|Bash|Monitor|PowerShell` with
+`"onFailure": "block"`. The wrapper exits 0 without
 touching Python whenever the harness is inactive; when it is active and
 `python3` is missing it fails closed (exit 2). `scripts/harness-policy.py`
 (stdlib only, runs on the stock macOS Python 3.9) then:
@@ -980,6 +991,21 @@ touching Python whenever the harness is inactive; when it is active and
 - in `enforce` mode prints one `BLOCKED by session-workspace strict-v1
   [rule]: reason` line to stderr and exits 2, which blocks the tool call —
   on both providers.
+
+**Command-running tools (0.13.2).** Claude Code's `Monitor` tool runs its
+`command` in the same shell as `Bash` and streams the output. The policy
+reads a `Monitor` call as a shell call: its command passes the same role
+floor as a `Bash` command, and a call with no command fails closed
+(`bash.command`). A `Monitor` WebSocket watch (`ws`, no `command`) runs
+nothing and stays an unclassified tool. Claude Code 2.1.314 and later also
+run `Bash`-matcher hooks on `Monitor` commands; naming `Monitor` covers
+earlier versions too. The `PowerShell` tool runs a language the floor cannot
+parse, so an active harness refuses it for every role (`bash.parse`; use
+`Bash`). `"onFailure": "block"` (Claude Code 2.1.295 and later) refuses the
+tool call when the hook cannot start, times out or exits unexpectedly, where
+an earlier version, or a value of `continue`, lets the call through. The
+Codex registration is unchanged: Codex has no Monitor or PowerShell tool and
+no `onFailure`.
 
 **Claimed reviewers fail closed (0.12.11).** Without
 `SESSION_WORKSPACE_CONFIG` the hook stays a no-op for ordinary sessions, but
@@ -1102,6 +1128,21 @@ updating. Downgrading restores the earlier, broader reviewer exception.
 - Codex `PreToolUse` carries no per-call `exec_command` workdir (only the
   turn's top-level `cwd`), so executor/reviewer shell containment on Codex
   is incomplete for commands that set their own workdir; see "The hook".
+- Until 0.13.2 the hook was registered for `Bash` but not `Monitor` or
+  `PowerShell`, so on Claude Code before 2.1.314 a `Monitor` command and,
+  on every version, a `PowerShell` command reached no policy. A hook that
+  could not run let the call through (no `onFailure`).
+- Until 0.13.2 an environment orchestrator's free-shell lifecycle commands
+  (`workspace stop|start|restart|reconcile` through the dispatcher on PATH,
+  `workspace.sh`, a lifecycle script run by name, or `--environment`) were
+  checked for self-stop only, so it could manage another environment's
+  sessions. From 0.13.2 they get the helper route's session scope
+  (`routing.scope`).
+- Lanes on linked git worktrees share refs. The floor keeps orchestrators
+  out of the shared common dir and main checkout, but an executor's Git
+  (see above) can still move, delete or push another lane's branch, and a
+  root orchestrator whose cwd is the main checkout can run Git there. A
+  per-lane ref floor is planned, not enforced.
 - Codex "selected version" resolution needs `~/.codex/config.toml` plus the
   marketplace manifest; on Python < 3.11 (no `tomllib`) a minimal
   line-based reader handles the `[plugins."<name>"]` table.

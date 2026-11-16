@@ -68,6 +68,13 @@ def validate_claude(doc):
                         raise ValueError(f"{event}: {field} must be object")
                 if "shell" in handler and handler["shell"] not in ("bash","powershell"):
                     raise ValueError(f"{event}: unsupported shell")
+                # Claude Code 2.1.295+: "block" fails the triggering action closed
+                # when the hook cannot start, times out or exits unexpectedly.
+                if "onFailure" in handler:
+                    if kind not in ("command","http"):
+                        raise ValueError(f"{event}: onFailure unsupported on {kind}")
+                    if handler["onFailure"] not in ("continue","block"):
+                        raise ValueError(f"{event}: onFailure must be continue or block")
 
 
 def validate_codex(doc):

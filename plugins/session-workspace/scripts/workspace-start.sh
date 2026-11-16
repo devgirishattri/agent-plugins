@@ -208,6 +208,12 @@ else
 fi
 sw_process_plan "$PLAN_JSON" "$TARGET"
 
+# The project lock covers the tmux changes above, not the readiness waits
+# below: an agent can take up to SESSION_WORKSPACE_AGENT_READY_TIMEOUT (120 s)
+# to draw its input line, and another orchestrator's start or stop must not
+# time out behind it. A pane stopped meanwhile is reported as not ready.
+sw_lock_release
+
 for BROWSER_PORT in "${BROWSER_PORTS[@]:-}"; do
   [ -n "$BROWSER_PORT" ] || continue
   if [ "$SW_FAILED_SLOTS" -eq 0 ]; then
@@ -252,8 +258,6 @@ fi
 
 echo
 echo "started/adopted: $SW_CHANGED  kept (already healthy): $SW_KEPT  failed: $SW_FAILED_SLOTS"
-
-sw_lock_release
 
 if [ "$SW_FAILED_SLOTS" -gt 0 ]; then
   exit 1
