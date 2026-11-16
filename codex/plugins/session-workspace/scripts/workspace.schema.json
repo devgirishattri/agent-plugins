@@ -1106,6 +1106,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "branch": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+            "maxLength": 200,
+            "description": "Schema v5. The one local branch this environment's executor may write and push (git.lane_ref); orchestrators may not write it. Required when the environment shares a git repository with another checkout (linked worktrees)."
           }
         }
       }

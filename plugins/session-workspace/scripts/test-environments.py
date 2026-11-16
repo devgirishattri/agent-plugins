@@ -537,7 +537,13 @@ class Environments(unittest.TestCase):
                                 cwd=cwd or self.root, env=ENV, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_lanes_on_worktrees_protect_main_checkout(self):
+    def set_branches(self, *branches):
+        for env, target, branch in zip(self.cfg['environments'], self.cfg['orchestration']['targets'], branches):
+            env['branch'] = target['work_branch'] = branch
+        self.write()
+
+    def make_lanes(self):
+        """component-a and component-b as linked worktrees of app/ on lane-a and lane-b."""
         app = self.root/'app'
         app.mkdir()
         (app/'README.md').write_text('main\n')
@@ -546,6 +552,11 @@ class Environments(unittest.TestCase):
         self.git('commit', '-q', '-m', 'init', cwd=app)
         for lane, cwd in [('a', 'component-a'), ('b', 'component-b')]:
             self.git('worktree', 'add', '-q', '-b', 'lane-'+lane, str(self.root/cwd), cwd=app)
+        self.set_branches('lane-a', 'lane-b')
+        return app
+
+    def test_lanes_on_worktrees_protect_main_checkout(self):
+        app = self.make_lanes()
         p, root, _ = self.context('root')
         self.assertIn(app.resolve(), root.child_roots)
         self.assertIn((app/'.git').resolve(), root.child_roots)
@@ -569,6 +580,7 @@ class Environments(unittest.TestCase):
         self.git('add', 'README.md')
         self.git('commit', '-q', '-m', 'init')
         self.git('worktree', 'add', '-q', '-b', 'lane-a', str(self.root/'component-a'))
+        self.set_branches('lane-a')
         p, root, _ = self.context('root')
         self.assertIn((self.root/'.git').resolve(), root.child_roots)
         self.assertNotIn(self.root, root.child_roots)  # the root orchestrator's own checkout
@@ -577,6 +589,114 @@ class Environments(unittest.TestCase):
         self.assertEqual(caught.exception.rule, 'orchestrator.child_write')
         p.validate_edit(root, {'file_path': str(self.root/'README.md')}, {})
         p.validate_bash(root, 'git status', {})
+        # The root coordinator's own checkout holds lane-a's ref: it may read
+        # and merge it, never write it.
+        for command in ['git merge lane-a', 'git log --oneline lane-a', 'git diff main lane-a', 'git branch --list',
+                        'git checkout lane-a -- README.md', 'git branch side', 'git fetch origin lane-a']:
+            p.validate_bash(root, command, {})
+        for command in ['git branch -D lane-a', 'git branch -f lane-a main', 'git update-ref -d refs/heads/lane-a',
+                        'git fetch origin main:lane-a', 'git checkout lane-a', 'git switch -C lane-a', 'git rebase main lane-a',
+                        'git status\ngit branch -m lane-a gone', 'git -c x.y=z branch -D lane-a']:
+            with self.assertRaises(p.PolicyFailure) as caught:
+                p.validate_bash(root, command, {})
+            self.assertEqual(caught.exception.rule, 'git.lane_ref', command)
+
+    def test_lane_branch_validation(self):
+        app = self.root/'app'
+        app.mkdir()
+        self.git('init', '-q', '-b', 'main', cwd=app)
+        self.git('commit', '-q', '--allow-empty', '-m', 'init', cwd=app)
+        for lane, cwd in [('a', 'component-a'), ('b', 'component-b')]:
+            self.git('worktree', 'add', '-q', '-b', 'lane-'+lane, str(self.root/cwd), cwd=app)
+        def error(*branches, mutate=None):
+            for env in self.cfg['environments']:
+                env.pop('branch', None)
+            self.set_branches(*branches)
+            if mutate:
+                mutate(self.cfg)
+                self.write()
+            result = self.run_script('workspace-plan', '--json')
+            return result.returncode, result.stderr
+        code, err = error()
+        self.assertNotEqual(code, 0)
+        self.assertIn('environments that share a git repository must each declare branch', err)
+        self.assertIn('must each declare branch', error('lane-a')[1])
+        self.assertIn('environment branches must be unique', error('lane-a', 'lane-a')[1])
+        for bad in ['HEAD', '../x', 'a..b', 'x/.hidden', 'x.lock', 'x/', '-x', 'a b']:
+            self.assertIn('safe literal branch name', error(bad, 'lane-b')[1], bad)
+        def other_work(cfg):
+            cfg['orchestration']['targets'][0]['work_branch'] = 'main'
+        self.assertIn('must use it as work_branch', error('lane-a', 'lane-b', mutate=other_work)[1])
+        self.assertEqual(error('lane-a', 'lane-b')[0], 0)
+        self.assertEqual(self.plan()['sessions'][1]['panes'][1]['scope_identity']['own']['branch'], 'lane-a')
+
+    def test_plain_checkouts_need_no_branch(self):
+        for cwd in ['component-a', 'component-b']:
+            self.git('init', '-q', '-b', 'main', cwd=self.root/cwd)
+        self.plan()
+
+    def test_lane_executor_git_floor(self):
+        self.make_lanes()
+        p, ctx, _ = self.context('web-executor')
+        self.assertEqual(ctx.lane_branch, 'lane-a')
+        allowed = [
+            'git status', 'git log --oneline lane-b', 'git diff lane-b', 'git add README.md', 'git commit -m "lane work"',
+            'git push origin lane-a', 'git push -u origin HEAD', 'git push origin HEAD:lane-a', 'git push --dry-run origin refs/heads/lane-a:refs/heads/lane-a',
+            'git fetch origin', 'git fetch --prune origin main', 'git fetch origin main:refs/remotes/origin/main', 'git pull --ff-only origin main',
+            'git merge main', 'git rebase main', 'git rebase --continue', 'git reset --hard HEAD', 'git cherry-pick main',
+            'git checkout -- README.md', 'git checkout README.md', 'git checkout main -- README.md', 'git restore --source lane-b README.md',
+            'git switch --detach main', 'git checkout --detach main', 'git switch lane-a', 'git checkout -B lane-a main', 'git switch -c lane-a',
+            'git branch -f lane-a HEAD', 'git branch -u origin/lane-a', 'git branch --list', 'git branch', 'git tag -l', 'git stash list',
+            'git worktree list', 'git config --get user.name', 'git config user.name', 'git remote -v', 'git -C . status',
+            'git --no-pager log -1', 'timeout 5 git status', 'git lfs pull', 'git symbolic-ref --short HEAD', 'git update-ref refs/heads/lane-a HEAD',
+            'git --version', 'git commit -m "explain GIT_DIR=x"',
+        ]
+        for command in allowed:
+            p.validate_bash(ctx, command, {})
+        refused = [
+            'git branch -f lane-b HEAD', 'git branch -D lane-b', 'git branch -d lane-a', 'git branch -m lane-b gone', 'git branch side', 'git branch -dr origin/lane-b',
+            'git update-ref refs/heads/lane-b HEAD', 'git update-ref -d refs/heads/lane-a', 'git push origin lane-b', 'git push origin HEAD:lane-b',
+            'git push origin :lane-a', 'git push origin +lane-a', 'git push --force origin lane-a', 'git push --force-with-lease origin lane-a',
+            'git push -f origin lane-a', 'git push --all origin', 'git push --tags origin', 'git push --mirror origin', 'git push origin', 'git push',
+            'git push --delete origin lane-a', 'git push https://example.invalid/x.git lane-a', 'git push origin lane-a tag-v1',
+            'git fetch origin main:lane-b', 'git fetch origin +main:lane-a', 'git fetch --refmap=x origin', 'git fetch --update-head-ok origin main:lane-a',
+            'git pull origin main:lane-b', 'git checkout lane-b', 'git checkout main', 'git checkout -b side', 'git checkout -B lane-b',
+            'git checkout -fb side', 'git switch main', 'git switch -c side', 'git switch -', 'git checkout --ignore-other-worktrees lane-b',
+            'git checkout --track origin/lane-b', 'git checkout main --', 'git rebase main lane-b', 'git rebase --update-refs main',
+            'git tag v1', 'git stash', 'git stash pop', 'git worktree remove component-b', 'git worktree add ../x',
+            'git config user.email x@example.invalid', 'git config core.hooksPath hooks', 'git config --global user.name x',
+            'git remote set-url origin x', 'git reflog expire --all', 'git gc', 'git -c core.hooksPath=x commit -m y',
+            'git --git-dir=../app/.git branch -D lane-b', 'GIT_DIR=../app/.git git branch -D lane-b',
+            'export GIT_DIR=x', 'env GIT_COMMON_DIR=x git status', 'GIT_INDEX_FILE=x; export GIT_INDEX_FILE',
+            'timeout 5 git push origin lane-b', 'find . -name x -exec git branch -D lane-b \\;', 'git co lane-b',
+            'git submodule update --init', 'git lfs install', 'git notes add -m x', 'git symbolic-ref HEAD refs/heads/lane-b',
+            'git bisect reset main', 'git status\ngit branch -D lane-b', 'git filter-branch -- --all',
+        ]
+        for command in refused:
+            with self.assertRaises(p.PolicyFailure, msg=command) as caught:
+                p.validate_bash(ctx, command, {})
+            self.assertEqual(caught.exception.rule, 'git.lane_ref', command)
+        self.assertIn('lane-a', str(caught.exception))
+        # HEAD-moving commands need the lane branch (or a detached HEAD) checked out.
+        self.git('switch', '-q', '-c', 'other', cwd=self.root/'component-a')
+        for command in ['git commit -m x', 'git merge main', 'git reset --hard HEAD', 'git pull origin main', 'git branch -u origin/main']:
+            with self.assertRaises(p.PolicyFailure) as caught:
+                p.validate_bash(ctx, command, {})
+            self.assertEqual(caught.exception.rule, 'git.lane_ref', command)
+            self.assertIn('this checkout is on other', caught.exception.reason)
+        p.validate_bash(ctx, 'git switch lane-a', {})
+        self.git('switch', '-q', '--detach', cwd=self.root/'component-a')
+        p.validate_bash(ctx, 'git commit -m x', {})
+        # Another lane's executor is held to its own branch; the reviewer and
+        # an environment orchestrator keep their read-only Git.
+        p, other, _ = self.context('vue3-executor')
+        p.validate_bash(other, 'git push origin lane-b', {})
+        with self.assertRaises(p.PolicyFailure) as caught:
+            p.validate_bash(other, 'git push origin lane-a', {})
+        self.assertEqual(caught.exception.rule, 'git.lane_ref')
+        p, master, _ = self.context('web-master')
+        self.assertEqual(master.lane_branches, frozenset({'lane-a', 'lane-b'}))
+        self.assertEqual(master.lane_branch, '')
 
     def test_local_edit_and_shell(self):
         p, ctx, _ = self.context('web-master')

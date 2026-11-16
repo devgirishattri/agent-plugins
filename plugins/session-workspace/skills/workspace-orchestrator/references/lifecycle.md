@@ -177,7 +177,11 @@ commit on work, normal pushes of the configured work/release refs, the reviewed
 delete a ref, rewrite history, use `checkout -B` on release, or bypass verification.
 The strict-v1 hook does not refuse these executor Git commands. Put the floor
 in every executor packet, and describe it as this workflow's contract, never
-as harness enforcement.
+as harness enforcement. The one exception is a lane: a schema-v5 environment
+that declares `branch`. There the hook holds the executor to that branch
+(`git.lane_ref`). Commit and push of the work branch still work; deploy to the
+release branch is refused. Merge lanes into the release branch in the main
+checkout instead (see the environments reference, Lane branches).
 
 ## Selftest and prompt preview
 
