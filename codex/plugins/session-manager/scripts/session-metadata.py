@@ -424,6 +424,7 @@ def main():
     parser.add_argument("mode",choices=["list","stats","verify-project","delete-plan"])
     parser.add_argument("filter",nargs="?")
     parser.add_argument("--archived",action="store_true",help="include archived sessions")
+    parser.add_argument("--archived-only",action="store_true",help="only archived sessions (unarchive targets)")
     parser.add_argument("--json",action="store_true",help="metadata rows with source and nullable physical bytes")
     parser.add_argument("--project",help="expected absolute project for verify-project")
     args=parser.parse_args()
@@ -434,7 +435,9 @@ def main():
     if args.mode == "delete-plan":
         deletion_plan(home, args.project)
         return
-    rows=list(collect(home,os.environ.get("SESSION_MANAGER_BACKEND","auto"),args.archived).values())
+    rows=list(collect(home,os.environ.get("SESSION_MANAGER_BACKEND","auto"),args.archived or args.archived_only).values())
+    if args.archived_only:
+        rows=[r for r in rows if r["archived"]]
     cwd=os.getcwd()
     logical=os.environ.get("PWD","")
     if logical and os.path.realpath(logical)==cwd:

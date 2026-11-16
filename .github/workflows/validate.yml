@@ -40,6 +40,8 @@ jobs:
         run: python3 -B scripts/test-session-metadata-live.py
       - name: Test native deletion without a daemon
         run: python3 -B scripts/test-session-deletion-live.py
+      - name: Test native archive and unarchive without a daemon
+        run: python3 -B scripts/test-session-archive-live.py
 
   plugin-manifests:
     name: plugin-manifests

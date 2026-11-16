@@ -316,6 +316,11 @@ if slash_guidance.search("Use /reload-plugins after publishing."):
 print("OK: fixed Codex cache-root detector fixtures are valid")
 
 
+# Codex-only public capabilities: native Codex surfaces with no Claude Code
+# equivalent. Each must exist on the Codex side and never on the Claude side.
+CODEX_ONLY_CAPABILITIES = {"session-manager": {"session-archive", "session-unarchive"}}
+
+
 def command_names(path: pathlib.Path) -> set[str]:
     # Hook-only plugins (e.g. chronos) legitimately ship no commands; the
     # cross-provider parity check still fails one-sided absence, and the
@@ -499,12 +504,18 @@ for name in sorted(claude_plugins):
     # Canonical authored skills may replace commands without losing an invocation.
     overview_names = {name, "context"} if name == "knowledge" else {name}
     claude_capabilities = (claude_commands | skill_names(claude_dir)) - overview_names
-    codex_capabilities = (codex_commands | skill_names(codex_dir)) - overview_names
+    codex_capabilities = (codex_commands | skill_names(codex_dir)) - overview_names - CODEX_ONLY_CAPABILITIES.get(name, set())
     if claude_capabilities != codex_capabilities:
         fail(
             f"public capability parity mismatch for {name}: "
             f"claude={sorted(claude_capabilities)} codex={sorted(codex_capabilities)}"
         )
+
+    codex_only = CODEX_ONLY_CAPABILITIES.get(name, set())
+    if codex_only - (codex_commands & skill_names(codex_dir)):
+        fail(f"Codex-only capability missing its Codex command or skill for {name}: {sorted(codex_only - (codex_commands & skill_names(codex_dir)))}")
+    if codex_only & (claude_commands | skill_names(claude_dir)):
+        fail(f"Codex-only capability also ships on Claude for {name}; drop it from CODEX_ONLY_CAPABILITIES")
 
     codex_skills = skill_names(codex_dir)
     missing_command_skills = codex_commands - codex_skills
@@ -744,6 +755,9 @@ print("OK: README plugin table versions match the marketplaces")
 # High-risk semantic contracts that basename parity cannot prove.
 require_tokens(root / "plugins/session-manager/commands/session-delete.md", "AskUserQuestion", "final confirmation")
 require_tokens(root / "codex/plugins/session-manager/skills/session-delete/SKILL.md", "request_user_input", "--confirmed", "codex delete --force")
+for _verb in ("archive", "unarchive"):
+    require_tokens(root / f"codex/plugins/session-manager/skills/session-{_verb}/SKILL.md",
+                   f"prepare-archive.sh\" {_verb}", f"archive-session.sh\" {_verb}", "full UUID")
 require_tokens(root / "plugins/session-manager/scripts/delete-session.sh", "--confirmed", "REFUSED")
 require_tokens(root / "plugins/session-manager/scripts/delete-all-sessions.sh", "--confirmed", "REFUSED")
 require_tokens(
@@ -1218,7 +1232,8 @@ list_runtime_scripts() {
   fi
   if [ "$plugin" = "session-manager" ] && [ "$provider" = "codex" ]; then
     # Native Codex deletion and its session index have provider-specific helpers.
-    names="$(printf '%s\n' "$names" | grep -vE '^((delete-resolved-session|prepare-delete)\.sh|session-(names|metadata)\.py)$' || true)"
+    # Archive and unarchive are Codex-only (native `codex archive`/`unarchive`).
+    names="$(printf '%s\n' "$names" | grep -vE '^((delete-resolved-session|prepare-delete|prepare-archive|archive-session)\.sh|session-(names|metadata)\.py)$' || true)"
   fi
   printf '%s\n' "$names" | sed '/^$/d' | sort -u
 }

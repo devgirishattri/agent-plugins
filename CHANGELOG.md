@@ -1,5 +1,29 @@
 # Changelog
 
+## session-manager 1.8.0 — 2026-11-16
+
+- **Codex can archive and unarchive a session.** New `session-archive` and
+  `session-unarchive` skills and commands, on Codex only, run the native
+  `codex archive` and `codex unarchive`. Archiving is the reversible step
+  before a delete: the session moves to `archived_sessions/` and leaves the
+  active list until it is unarchived. Claude Code has no local session
+  archive, so the Claude side is unchanged apart from the version.
+- `prepare-archive.sh archive|unarchive [target]` resolves the target without
+  changing anything, among active sessions for archive and archived ones for
+  unarchive, so the native command is only asked to do something it can. It
+  prints the same `STATUS` lines as `prepare-delete.sh`. `archive-session.sh`
+  takes only a full UUID and refuses any other verb.
+- `list-sessions.sh` accepts `--archived-only`, and `search-sessions.sh` takes
+  an optional `--archived` or `--archived-only` after the query.
+- Release checks: the provider parity check lists the two capabilities and
+  their scripts as Codex-only, and fails if either goes missing on Codex or
+  appears on Claude.
+- Tests: `test-session-manager.sh` (Codex) covers state-scoped resolution, a
+  refused name and verb, and the native invocations through the mock CLI.
+  New `scripts/test-session-archive-live.py` runs a real archive, a refused
+  second archive and an unarchive on Codex 0.169.0 without a daemon, and CI
+  runs it next to the live deletion test.
+
 ## session-workspace 0.15.1 — 2026-11-16
 
 - **The policy hook now runs for the newer tools.** On Claude Code the
