@@ -376,11 +376,7 @@ _sw_claim_pane() {
   SW_IDLE_NOTE=""
   if [ "$SW_LAUNCH_SUPPRESSED" -eq 0 ]; then
     sw_set_pane_launched "$pane_id" "$runtime" || return 1
-    if [ -n "$SW_STARTED_BY" ]; then
-      tmux set-option -p -t "$pane_id" "$MARKER_STARTED_BY" "$SW_STARTED_BY" 2>/dev/null || true
-    else
-      tmux set-option -p -t "$pane_id" -u "$MARKER_STARTED_BY" 2>/dev/null || true
-    fi
+    sw_set_pane_started_by "$pane_id" "$SW_STARTED_BY"
     _sw_arm_idle_watch "$pane_id" "$session_id" "$pane_plan"
   fi
 }
