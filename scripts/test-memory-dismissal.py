@@ -91,10 +91,8 @@ proposed:
     def test_nudge_lifecycle_and_retention(self):
         self.assertIn("pending memory candidate", self.nudge())
         notice = json.loads(self.nudge(True))
-        if self.provider == "codex":
-            self.assertEqual(notice["decision"], "block")
-        else:
-            self.assertEqual(notice["hookSpecificOutput"]["hookEventName"], "Stop")
+        self.assertEqual(set(notice), {"systemMessage"})
+        self.assertIn("consolidate", notice["systemMessage"])
         result = self.disposition()
         # Independent assertions expose persistent nudging on original code,
         # even when that writer does not yet recognize the disposition verb.
