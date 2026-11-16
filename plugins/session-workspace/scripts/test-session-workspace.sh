@@ -4086,7 +4086,8 @@ else
     "status=$SWT_W_STATUS_TXT json=$SWT_W_STATUS_JSON plan=$SWT_W_PLAN"
 fi
 
-SWT_OUT="$(swrun "$HERE/workspace-start.sh" development --pane component-executor --config "$SWT_CFG_W" 2>&1)"
+# Run as the orchestrator would: its pane name is in the caller's env.
+SWT_OUT="$(SESSION_WORKSPACE_PANE_NAME=sample-workers-master swrun "$HERE/workspace-start.sh" development --pane component-executor --config "$SWT_CFG_W" 2>&1)"
 SWT_STATUS=$?
 if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_w_names)" = "sample-workers-component-executor sample-workers-master " ] &&
    printf '%s' "$SWT_OUT" | grep -Fq "[ready] sample-workers-development / $SWT_W_EXEC — agent input line on screen" &&
@@ -4095,6 +4096,16 @@ if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_w_names)" = "sample-workers-component-exe
 else
   fail "on-demand workers: start --pane starts one worker beside the orchestrator and waits for its input line" \
     "status=$SWT_STATUS names=[$(swt_w_names)] output=$SWT_OUT"
+fi
+SWT_W_STATUS_JSON="$(swrun "$HERE/workspace-status.sh" development --config "$SWT_CFG_W" --json 2>&1)"
+SWT_W_STATUS_TXT="$(swrun "$HERE/workspace-status.sh" development --config "$SWT_CFG_W" 2>&1)"
+if printf '%s' "$SWT_W_STATUS_JSON" | jq -e --arg e "$SWT_W_EXEC" '
+     (.[] | select(.pane == $e) | .started_by == "sample-workers-master")
+     and (.[] | select(.pane == "sample-workers-master") | .started_by == null)' >/dev/null 2>&1 &&
+   printf '%s' "$SWT_W_STATUS_TXT" | grep -Fq "started by: sample-workers-master"; then
+  pass "status: a pane started from a harness pane names that pane as started_by"
+else
+  fail "status: a pane started from a harness pane names that pane as started_by" "json=$SWT_W_STATUS_JSON text=$SWT_W_STATUS_TXT"
 fi
 SWT_OUT="$(swrun "$HERE/workspace-start.sh" --config "$SWT_CFG_W" --no-attach 2>&1)"
 SWT_STATUS=$?

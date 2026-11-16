@@ -162,6 +162,30 @@ profile does not, doctor emits INFO with a manual copy command. Stop Chrome firs
 the command excludes `sessions/` to avoid copying a destination back into itself.
 Doctor never moves data or changes the selected profile.
 
+## Shared services (0.14.0)
+
+An unbound session of service shells (a database, cache, mail catcher, plain
+shell) can serve several environments. List it in each environment that uses it:
+
+```json
+{"id":"web","cwd":"component-a","development":["dev-web"],"services":["service-web"],
+ "orchestrator":"sample-web-master","shared_sessions":["shared-services"]}
+```
+
+`shared_sessions` names configured sessions that no environment owns and that
+hold only service shell panes, in an environment with an orchestrator. Several
+environments may list the same session. That environment's orchestrator may
+start a shared pane, one or more at a time, with `start shared-services --pane
+NAME` (a running pane is kept). It may not stop, restart or reconcile a shared
+session, or start it whole: `stop`, `restart` and `reconcile` are refused under
+`routing.shared_stop`, and a whole-session `start` under `routing.scope`. The
+root coordinator, the user and the pane's idle watcher (`idle_stop_minutes`)
+stop it, so a service another environment still uses never goes down under it.
+`workspace status` shows `started by:` (JSON `started_by`) for a pane launched
+from a harness pane, so you can see which environment brought it up. A dev
+server serves one checkout: keep it in its environment's own `services`
+session on its own port, not in a shared one.
+
 ## Removed Jev integration
 
 Session-workspace 0.12.0 removed the optional Jev diagnostic helper. A v5 config

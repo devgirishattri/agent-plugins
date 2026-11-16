@@ -38,6 +38,11 @@ MARKER_RUNTIME="@session_workspace_runtime"
 #     exec chain (bash -> runtime), so a `start` run moments after another
 #     could see "bash" and needlessly respawn a perfectly healthy pane.
 MARKER_LAUNCHED="@session_workspace_launched"
+# MARKER_STARTED_BY names the harness pane whose `start`/`reconcile` launched
+# this pane (its SESSION_WORKSPACE_PANE_NAME), so `status` can say which
+# environment brought a shared service up. Unset when the run came from
+# outside a harness pane. Informational only: nothing authorizes on it.
+MARKER_STARTED_BY="@session_workspace_started_by"
 
 # NOTE on session-scoped option targeting: `set-option`/`show-options` take a
 # target-PANE (tmux infers the option's scope from its name), NOT a

@@ -323,6 +323,9 @@ class Context:
     # behavior.stop_scope "all": every full stop/restart widens to all of this
     # project's sessions, this pane's own included.
     stop_scope_all: bool = False
+    # An environment orchestrator's environments[].shared_sessions: unbound
+    # service sessions it may start panes of, never stop (routing.shared_stop).
+    shared_session_ids: frozenset = frozenset()
 
     @property
     def confined_orchestrator(self):
@@ -784,6 +787,7 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         scoped=scoped,
         read_paths=tuple((Path(entry["path"]), entry["kind"]) for entry in read_paths) if semantic in {"reviewer", "executor"} else (),
         session_ids=frozenset(own["development"] + own["services"]) if scoped and own else frozenset(),
+        shared_session_ids=frozenset(own.get("shared_sessions", [])) if scoped and own and semantic == "orchestrator" else frozenset(),
         scheduler_root=scheduler_store_root(pane, owned_panes, semantic),
     )
     return context, None
@@ -2937,6 +2941,16 @@ def environment_lifecycle_scope(ctx: Context, script: str, args: List[str]) -> N
     or reconfigures the workspace. The root coordinator (no environment) and
     unscoped configs are not narrowed here."""
     if not ctx.environment:
+        return
+    if script in ENVIRONMENT_LIFECYCLE_SCRIPTS and args and args[0] in ctx.shared_session_ids and "--all" not in args:
+        # A shared services session serves several environments: any of them
+        # may bring a service pane up, none may take it down under the others.
+        if script != "workspace-start.sh":
+            verb = script[len("workspace-"):-len(".sh")]
+            raise PolicyFailure("routing.shared_stop", "%s %s: a shared services session is stopped by the root coordinator, the user or its idle watcher; this environment may only start its panes (start %s --pane NAME)"
+                                % (verb, args[0], args[0]))
+        if "--pane" not in args:
+            raise PolicyFailure("routing.scope", "start shared services one pane at a time: start %s --pane NAME" % args[0])
         return
     if script in ENVIRONMENT_LIFECYCLE_SCRIPTS and (not args or args[0] not in ctx.session_ids or "--all" in args):
         raise PolicyFailure("routing.scope", "local lifecycle requires an explicitly owned session")
