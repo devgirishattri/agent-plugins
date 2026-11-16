@@ -1059,6 +1059,16 @@ These checks do not themselves enable repository merge protection.
   `codex/plugins/<name>/commands/*.md` as provider-parity reference documents,
   and always ship a skill twin for runtime behavior.
 - Codex hooks must live at `codex/plugins/<name>/hooks/hooks.json` (a plugin-root `hooks.json` is silently ignored by the runtime). Hook commands must use the runtime-provided `PLUGIN_ROOT`; never derive a plugin root from the session cwd or pin a marketplace-cache version.
+- Every hook declares what its output is for in
+  `scripts/test-hook-output-contracts.py`: model context, a notice for the
+  user, continuing a Stop turn, gating a tool call, or nothing. The test runs
+  each hooks.json command in both trees, bare and in scenarios that make it
+  print, and checks the output against what Claude Code 2.1.325 and Codex
+  0.169.0 accept for that event (`scripts/hook_contracts.py`) and against the
+  declared intent. For example, a reminder meant for the user must be a
+  `systemMessage`, and only a hook declared to continue the turn may print a
+  Stop `decision`. A new hook without a declared intent fails the release
+  check.
 - Codex skills resolve scripts relative to the selected installed `SKILL.md` source. They must not rely on `CODEX_PLUGIN_ROOT`, which is not guaranteed in model-launched shell commands.
 - Interactive/destructive workflows use Codex `request_user_input` when that capability is available and fall back to a direct blocking question with default-cancel semantics. Claude keeps the matching `AskUserQuestion` flow.
 - Shared ideas can be documented in `docs/`, but runtime files should remain provider-local. `docs/` is gitignored, so those notes stay machine-local and are never published with the marketplace.
