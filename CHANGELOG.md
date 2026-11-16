@@ -1,5 +1,38 @@
 # Changelog
 
+## session-chat 0.17.22 — 2026-11-16
+
+- **Queued messages reach Claude again.** The Claude `UserPromptSubmit` hook
+  printed `{"decision":"approve","systemMessage":...}`. Claude Code shows a
+  top-level `systemMessage` only to the user, and `block` is the only
+  top-level decision it accepts, so a message queued for a busy Claude Code
+  pane was announced on screen but never entered the model's context. Checked
+  live on Claude Code 2.1.325: a `systemMessage` did not reach the model and
+  `hookSpecificOutput.additionalContext` did. The hook now prints
+  `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":...}}`.
+  The `Stop` hook output (`decision: block` with a reason) is unchanged, and
+  so is the Codex copy.
+- **Pane names come from `session_title` first.** Claude Code sends the
+  session's custom title as `session_title` on `SessionStart` when one is set.
+  `auto-name-pane.sh` now uses it before reading the transcript, which Claude
+  Code treats as an internal format. The transcript scan stays as the
+  fallback, with the same session binding as before, and the same sanitizing
+  and "never overwrite an existing name" rules apply to both sources.
+- **Hook paths are quoted.** Every `${CLAUDE_PLUGIN_ROOT}` path in
+  `hooks/hooks.json` is quoted, so a plugin root with a space in it still
+  runs, and `claude plugin validate --strict` passes.
+- **Codex recipients: guidance for `tui.disable_paste_burst`.** The skill
+  recommends starting Codex agent panes with `tui.disable_paste_burst = true`.
+  On Codex 0.169.0 in tmux, an Enter sent right after the paste was swallowed
+  8 times out of 8 by default and submitted 8 times out of 8 with the setting.
+  The 0.17.21 submit check stays as the fallback. Leave the setting off in
+  panes a person types into.
+- Tests: `test-session-chat.sh` checks that the prompt hook prints only
+  `hookSpecificOutput` with `additionalContext`; `test-auto-name-pane.sh` adds
+  cases for `session_title` with no transcript, `session_title` over a
+  transcript title, an existing name kept, and a non-string `session_title`
+  falling back to the transcript.
+
 ## session-workspace 0.14.0 — 2026-11-16
 
 Phase 1 of several orchestrators ("lanes") in one project: shared services.

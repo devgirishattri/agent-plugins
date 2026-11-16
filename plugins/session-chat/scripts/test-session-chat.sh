@@ -401,12 +401,27 @@ qout=$(printf '{"hook_event_name":"UserPromptSubmit","prompt":"[from:peer pane:%
   | env HOME="$QHOME" TMUX="fake-socket,0,0" CLAUDE_PLUGIN_ROOT="" SESSION_CHAT_INCOMING_MODE=auto bash "$HERE/detect-incoming-message.sh")
 qcmd=$(printf '%s' "$qout" | python3 -c '
 import json,re,sys
-m=re.search(r"Full task read command: (cat .*?)\n", json.loads(sys.stdin.read()).get("systemMessage",""))
+m=re.search(r"Full task read command: (cat .*?)\n", json.loads(sys.stdin.read()).get("hookSpecificOutput",{}).get("additionalContext",""))
 print(m.group(1) if m else "")' 2>/dev/null)
 if [ -n "$qcmd" ] && [ "$(bash -c "$qcmd" 2>/dev/null)" = "QUOTED-TASK" ]; then
   pass "read_command_quotes_apostrophe"
 else
   fail "read_command_quotes_apostrophe" "cmd=[$qcmd] out=${qout:0:300}"
+fi
+# 13a5: Claude's UserPromptSubmit output is hookSpecificOutput.additionalContext.
+# A top-level systemMessage reaches only the user, and "approve" is not a valid
+# decision (hooks reference; live-checked on Claude Code 2.1.325).
+qshape=$(printf '%s' "$qout" | python3 -c '
+import json,sys
+d=json.loads(sys.stdin.read())
+h=d.get("hookSpecificOutput",{})
+ok=(set(d)=={"hookSpecificOutput"} and h.get("hookEventName")=="UserPromptSubmit"
+    and "Full task read command" in str(h.get("additionalContext","")))
+print("OK" if ok else "BAD")' 2>/dev/null)
+if [ "$qshape" = "OK" ]; then
+  pass "prompt_output_is_additional_context"
+else
+  fail "prompt_output_is_additional_context" "out=${qout:0:300}"
 fi
 rm -rf "$(dirname "$QHOME")"
 
@@ -526,7 +541,7 @@ uassert=$(printf '%s' "$uout" | python3 -c '
 import sys,json
 try: d=json.loads(sys.stdin.read())
 except Exception: print("BADJSON"); sys.exit()
-s=d.get("systemMessage","")
+s=d.get("hookSpecificOutput",{}).get("additionalContext","")
 print(("EMOJI" if "\U0001F600" in s else "NOEMOJI"),
       ("NOFFFD" if "�" not in s else "HASFFFD"),
       ("NOTAIL" if "ZZZZ" not in s else "HASTAIL"))
