@@ -1,5 +1,35 @@
 # Changelog
 
+## session-workspace 0.16.0 — 2026-11-16
+
+- **Coordinators name their workers with a label.** An executor or reviewer
+  pane in a schema-v5 environment's development session may now leave out
+  `name`. The config loader names it `<project.id>-<environment>-executor`
+  or `-reviewer`, plus `-<label>` once the environment has a label, so every
+  script, the plan and the hook see the same concrete names. A name written
+  in the config is never changed.
+- **New verb `workspace label ENVIRONMENT [LABEL | --clear] [--json]`**
+  (`workspace-label.sh`). Without a label it shows the label and the worker
+  names. A label is 1-24 characters of `a-z`, `0-9` and `-`, kept in the
+  project state file `labels.json` so the names survive restarts. The engine
+  sets it under the project lock, refuses while a worker of that environment
+  is running, and refuses a label whose names the config would not accept
+  (they must stay unique). It refuses an environment whose workers are all
+  named in the config.
+- **Policy.** The reviewed helper and every free-shell route admit `label` for
+  orchestrators: an environment coordinator only for its own environment
+  (`routing.scope`), the root coordinator for any. Workers are refused it by
+  any route (`coordination.write`). Coordinators still find their workers by
+  environment and role, never by name, so a label grants nothing.
+- Run records, session-chat queues, scheduler assignments and per-pane memory
+  stay keyed by pane name: relabel between tasks.
+- Tests: `test-environments.py` adds derived names in the plan, show/set/clear,
+  four invalid labels, an environment with configured names, a label whose
+  names collide with a configured pane (refused, stored label kept), a
+  running worker (refused), the policy's helper and free-shell routes for an
+  environment coordinator, the root and a worker, and a labeled worker's own
+  identity.
+
 ## session-workspace 0.15.0 — 2026-11-16
 
 - **Lanes can no longer change each other's branches.** Environments on

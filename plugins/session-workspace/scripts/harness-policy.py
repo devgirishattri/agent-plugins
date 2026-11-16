@@ -2799,6 +2799,7 @@ WORKSPACE_VERB_SCRIPT = {
     "reconcile": "workspace-reconcile.sh",
     "install": "workspace-install.sh",
     "browser-config": "workspace-browser-config.sh",
+    "label": "workspace-label.sh",
 }
 
 
@@ -2963,6 +2964,12 @@ def environment_lifecycle_scope(ctx: Context, script: str, args: List[str]) -> N
         raise PolicyFailure("routing.scope", "local lifecycle requires an explicitly owned session")
     if script in {"workspace-install.sh", "workspace-browser-config.sh"}:
         raise PolicyFailure("routing.scope", "workspace installation/browser config belongs to root coordinator")
+    if script == "workspace-label.sh":
+        named = [a for a in args if not a.startswith("-")]
+        values = {args[i + 1] for i, a in enumerate(args[:-1]) if a == "--config"}
+        environment = next((a for a in named if a not in values), "")
+        if environment != ctx.environment:
+            raise PolicyFailure("routing.scope", "an environment coordinator labels only its own environment's workers (label %s)" % ctx.environment)
 
 
 def environment_selector_scope(ctx: Context, args: List[str]) -> None:
@@ -3036,6 +3043,40 @@ def workspace_reconcile(ctx: Context, script: str, args: List[str]) -> None:
 
 def workspace_install(ctx: Context, script: str, args: List[str]) -> None:
     workspace_args(ctx, script, args, ("--dry-run",), allow_target=False, value_flags=("--target",))
+
+
+WORKER_LABEL_RE = re.compile(r"\A[a-z0-9][a-z0-9-]{0,23}\Z")
+ENVIRONMENT_ID_RE = re.compile(r"\A[a-z0-9][a-z0-9-]*\Z")
+
+
+def workspace_label(ctx: Context, script: str, args: List[str]) -> None:
+    """label ENVIRONMENT [LABEL | --clear] [--json] [--config PATH]: an
+    orchestrator names its environment's workers; the engine builds the
+    names. An environment coordinator labels only its own environment."""
+    remaining = list(args)
+    positionals: List[str] = []
+    seen: List[str] = []
+    while remaining:
+        arg = remaining.pop(0)
+        if arg in {"--clear", "--json"} and arg not in seen:
+            seen.append(arg)
+            continue
+        if arg == "--config":
+            if not remaining:
+                raise PolicyFailure("helper.argv", "%s --config requires a path" % script)
+            path = candidate_path(remaining.pop(0), ctx.pane_cwd)
+            if path is None or path != ctx.config_path:
+                raise PolicyFailure("helper.argv", "%s --config must name this workspace's config" % script)
+            continue
+        if not arg.startswith("-") and len(positionals) < 2:
+            positionals.append(arg)
+            continue
+        raise PolicyFailure("helper.argv", "%s argument is outside its reviewed grammar: %s" % (script, arg))
+    if not positionals or not ENVIRONMENT_ID_RE.fullmatch(positionals[0]):
+        raise PolicyFailure("helper.argv", "%s requires a literal environment id" % script)
+    if len(positionals) == 2 and ("--clear" in seen or not WORKER_LABEL_RE.fullmatch(positionals[1])):
+        raise PolicyFailure("helper.argv", "%s LABEL is 1-24 characters of a-z, 0-9 and -, and excludes --clear" % script)
+    environment_lifecycle_scope(ctx, script, [positionals[0]])
 
 
 def workspace_browser_config(ctx: Context, script: str, args: List[str]) -> None:
@@ -3160,6 +3201,7 @@ HELPERS = {
         "workspace-reconcile.sh": ("o", workspace_reconcile),
         "workspace-install.sh": ("o", workspace_install),
         "workspace-browser-config.sh": ("o", workspace_browser_config),
+        "workspace-label.sh": ("o", workspace_label),
     },
     "session-manager": {
         "list-sessions.sh": ("o", sessions_filter),
@@ -4077,7 +4119,7 @@ def child_transport_bypass(tokens: List[str], child: bool) -> Optional[str]:
 # dispatcher on PATH (workspace-install), the project bootstrap shim
 # (workspace.sh), and a lifecycle script run by name or through an
 # interpreter. Read verbs (plan, status, doctor, harness-*) stay available.
-WORKSPACE_LIFECYCLE_VERBS = {"start", "stop", "restart", "reconcile", "install", "browser-config"}
+WORKSPACE_LIFECYCLE_VERBS = {"start", "stop", "restart", "reconcile", "install", "browser-config", "label"}
 WORKSPACE_VERB_DISPATCHERS = {"workspace", "workspace.sh", "workspace-environment.sh"}
 WORKSPACE_LIFECYCLE_SCRIPTS = {
     "workspace-start.sh",
@@ -4086,6 +4128,7 @@ WORKSPACE_LIFECYCLE_SCRIPTS = {
     "workspace-reconcile.sh",
     "workspace-install.sh",
     "workspace-browser-config.sh",
+    "workspace-label.sh",
 }
 
 
