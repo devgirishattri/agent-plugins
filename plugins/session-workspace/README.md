@@ -1608,6 +1608,17 @@ Command-less service shells and browser panes may use any project-contained cwd;
 they carry no harness policy, so checkout containment protects no role boundary.
 Services with commands remain within their environment checkout.
 
+**Shared services (0.14.0).** `environments[].shared_sessions` lists unbound
+sessions of service shells that the environment's orchestrator may start panes
+of with `start SESSION --pane NAME`, but never stop, restart or reconcile
+(`routing.shared_stop`) or start whole (`routing.scope`). The root coordinator,
+the user and idle watchers stop them. Each listed session must exist, belong to
+no environment and hold only service shell panes, and the environment must have
+an orchestrator; several environments may list the same session. A pane launched
+from a harness pane records it in the pane option
+`@session_workspace_started_by`, and `workspace status` reports it as
+`started by:` (JSON `started_by`). It is informational; nothing authorizes on it.
+
 The `browsers[]` profile path is `chrome/<project.id>/sessions/session-<sid>`;
 singular `browser` retains `chrome/<project.id>`. Doctor emits INFO with a manual
 copy command when the legacy profile exists but the session profile does not.

@@ -1,5 +1,41 @@
 # Changelog
 
+## session-workspace 0.14.0 — 2026-11-16
+
+Phase 1 of several orchestrators ("lanes") in one project: shared services.
+
+- **`environments[].shared_sessions`.** An environment with an orchestrator
+  may list unbound sessions of service shells (a database, cache, mail
+  catcher, plain shell) that it shares with other environments. Validation
+  (`workspace-v5.py`, `workspace.schema.json`): unique ids of configured
+  sessions that no environment owns, holding only service shell panes (no
+  harness role, shell runtime); several environments may list the same
+  session; `shared_sessions requires an environment orchestrator`.
+- **Start-only sharing.** That environment's orchestrator may run `start
+  SESSION --pane NAME [--pane NAME]` on a listed session, through the
+  reviewed helper, `workspace` on PATH, `workspace.sh` or the script by
+  name; a running pane is kept. `stop`, `restart` and `reconcile` of a
+  shared session are refused under the new rule `routing.shared_stop`
+  (registered in both trees' `diagnostics/registry.json`), and a
+  whole-session `start` under `routing.scope`, so no environment can take a
+  service down under another. The root coordinator, the user and the pane's
+  idle watcher stop shared services as before. Workers never get the shared
+  set, and an environment that does not list the session still gets
+  `routing.scope`. The shared list is part of the environment entry each
+  pane pins, so changing it restarts only that environment's panes.
+- **`started_by`.** A pane launched by a `start` or `reconcile` that runs in
+  a harness pane records that pane's name in the pane option
+  `@session_workspace_started_by` (a name outside the pane-name charset is
+  dropped; a launch from outside a harness pane clears it). `workspace
+  status` prints `started by: NAME` and its JSON has `started_by` (null when
+  unknown or not running). It is informational; nothing authorizes on it.
+- Tests: `test-environments.py` validates `shared_sessions` (owned, unknown,
+  orchestrator, duplicate, non-list, agent pane, missing orchestrator, shared
+  by two environments) and decides start, stop, restart and reconcile of a
+  shared session for the listing orchestrator, another environment's
+  orchestrator, a worker and the root, on the helper and free-shell routes.
+  `test-session-workspace.sh` checks `started_by` in status text and JSON.
+
 ## session-workspace 0.13.2 — 2026-11-16
 
 Groundwork for several orchestrators ("lanes") in one project, each on its
