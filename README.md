@@ -1080,7 +1080,10 @@ These checks do not themselves enable repository merge protection.
   pull requests.
 - CI splits those suites across parallel shard jobs (`release-checks`,
   `plugin-manifests`, `smoke-claude-scheduler`, `smoke-claude-workspace`,
-  `smoke-codex-workspace`, `smoke-plugins`, `knowledge-evals`).
+  `smoke-claude-policy`, `smoke-codex-workspace`, `smoke-codex-policy`,
+  `smoke-plugins`, `knowledge-evals`). The session-workspace and
+  harness-policy suites run on separate runners, since together they took
+  17 to 20 minutes against a 20-minute job timeout.
   `plugin-manifests` runs `claude plugin validate --strict` on every Claude
   plugin and on the marketplace, with Claude Code pinned in
   `.github/tools/claude` (2.1.325) and run from its platform package with
