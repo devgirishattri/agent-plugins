@@ -190,6 +190,101 @@ else
     "rc=$rc histrow=$(grep -c "$UUID" "$FHC/history.jsonl" 2>/dev/null) out=$out"
 fi
 
+# --- set-aside transcripts, per-session ~/.claude dirs and the session's temp
+#     directory are all removed; another session's copies are kept. ---
+OTHER="0f0e0d0c-0b0a-4908-8706-050403020100"
+SAH="$TMP/aside"
+SAC="$SAH/.claude"
+SAP="$SAC/projects/-Users-x-proj"
+mkdir -p "$SAP" "$SAC/image-cache/$UUID" "$SAC/uploads/$UUID" "$SAC/dev-mods/$UUID" "$SAC/tasks/$UUID" \
+  "$SAC/image-cache/$OTHER"
+printf '{}' > "$SAP/$UUID.jsonl"
+printf '{}' > "$SAP/$UUID.orphaned-1794800000000-ab12.jsonl"
+printf '{}' > "$SAP/$UUID.jsonl.superseded-1794800000000"
+printf '{}' > "$SAP/$OTHER.orphaned-1794800000000-cd34.jsonl"
+printf 'img' > "$SAC/image-cache/$UUID/1.png"
+printf 'up' > "$SAC/uploads/$UUID/f.txt"
+printf 'mod' > "$SAC/dev-mods/$UUID/mod.js"
+printf '{}' > "$SAC/tasks/$UUID/1.json"
+printf 'img' > "$SAC/image-cache/$OTHER/1.png"
+CTMP="$TMP/ctmp"
+TROOT="$CTMP/claude-$(id -u)"
+mkdir -p "$TROOT/-Users-x-proj/$UUID/scratchpad" "$TROOT/-Users-x-proj/$OTHER/scratchpad"
+printf 'scratch' > "$TROOT/-Users-x-proj/$UUID/scratchpad/notes.txt"
+printf 'scratch' > "$TROOT/-Users-x-proj/$OTHER/scratchpad/notes.txt"
+printf '{}' > "$TROOT/cache-break-state-$UUID.json"
+printf '{}' > "$TROOT/cache-break-state-$OTHER.json"
+out=$(CLAUDE_CODE_TMPDIR="$CTMP" TMPDIR="$CTMP" HOME="$SAH" bash "$HERE/delete-session.sh" "$UUID" --confirmed 2>&1); rc=$?
+gone=1
+for path in "$SAP/$UUID.orphaned-1794800000000-ab12.jsonl" "$SAP/$UUID.jsonl.superseded-1794800000000" \
+  "$SAC/image-cache/$UUID" "$SAC/uploads/$UUID" "$SAC/dev-mods/$UUID" "$SAC/tasks/$UUID" \
+  "$TROOT/-Users-x-proj/$UUID" "$TROOT/cache-break-state-$UUID.json"; do
+  [ -e "$path" ] && { gone=0; echo "    still present: $path"; }
+done
+kept=1
+for path in "$SAP/$OTHER.orphaned-1794800000000-cd34.jsonl" "$SAC/image-cache/$OTHER/1.png" \
+  "$TROOT/-Users-x-proj/$OTHER/scratchpad/notes.txt" "$TROOT/cache-break-state-$OTHER.json"; do
+  [ -e "$path" ] || { kept=0; echo "    removed by mistake: $path"; }
+done
+if [ "$rc" -eq 0 ] && [ "$gone" -eq 1 ] && [ "$kept" -eq 1 ] \
+   && echo "$out" | grep -q "Deleted Set-aside transcript" && echo "$out" | grep -q "Deleted Temp directory"; then
+  pass "delete_removes_set_aside_transcripts_and_session_dirs"
+else
+  fail "delete_removes_set_aside_transcripts_and_session_dirs" "rc=$rc out=$out"
+fi
+
+# --- temp directory reached through a symlinked project dir is REFUSED and the
+#     out-of-tree target is preserved. ---
+STH="$TMP/temp_sl"
+mkdir -p "$STH/.claude/projects"
+STMP="$TMP/stmp"
+STROOT="$STMP/claude-$(id -u)"
+mkdir -p "$STROOT"
+OUT_TMP="$TMP/outside_tmp"
+mkdir -p "$OUT_TMP/$UUID"
+printf 'TMPKEEP' > "$OUT_TMP/$UUID/precious.txt"
+ln -s "$OUT_TMP" "$STROOT/-evil-proj"
+out=$(CLAUDE_CODE_TMPDIR="$STMP" TMPDIR="$STMP" HOME="$STH" bash "$HERE/delete-session.sh" "$UUID" --confirmed 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "REFUSED Temp directory" \
+   && [ "$(cat "$OUT_TMP/$UUID/precious.txt" 2>/dev/null)" = "TMPKEEP" ]; then
+  pass "delete_refuses_symlinked_temp_project"
+else
+  fail "delete_refuses_symlinked_temp_project" "rc=$rc out=$out"
+fi
+
+# --- a temp root that is itself a symlink (shared /tmp is world-writable) is
+#     REFUSED and nothing under its target is removed. ---
+RTH="$TMP/temp_root_sl"
+mkdir -p "$RTH/.claude/projects"
+RTMP="$TMP/rtmp"
+mkdir -p "$RTMP"
+OUT_ROOT="$TMP/outside_root"
+mkdir -p "$OUT_ROOT/-Users-x-proj/$UUID"
+printf 'ROOTKEEP' > "$OUT_ROOT/-Users-x-proj/$UUID/precious.txt"
+ln -s "$OUT_ROOT" "$RTMP/claude-$(id -u)"
+out=$(CLAUDE_CODE_TMPDIR="$RTMP" TMPDIR="$RTMP" HOME="$RTH" bash "$HERE/delete-session.sh" "$UUID" --confirmed 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "REFUSED Temp directory" \
+   && [ "$(cat "$OUT_ROOT/-Users-x-proj/$UUID/precious.txt" 2>/dev/null)" = "ROOTKEEP" ]; then
+  pass "delete_refuses_symlinked_temp_root"
+else
+  fail "delete_refuses_symlinked_temp_root" "rc=$rc out=$out"
+fi
+
+# --- a set-aside transcript reached through a symlinked project dir is REFUSED. ---
+SAS="$TMP/aside_sl/.claude"
+mkdir -p "$SAS/projects"
+OUT_ASIDE="$TMP/outside_aside"
+mkdir -p "$OUT_ASIDE"
+printf 'ASIDEKEEP' > "$OUT_ASIDE/$UUID.jsonl.superseded-1794800000000"
+ln -s "$OUT_ASIDE" "$SAS/projects/-evil-aside"
+out=$(CLAUDE_CODE_TMPDIR="$TMP/none" TMPDIR="$TMP/none" HOME="$TMP/aside_sl" bash "$HERE/delete-session.sh" "$UUID" --confirmed 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "REFUSED Set-aside transcript" \
+   && [ "$(cat "$OUT_ASIDE/$UUID.jsonl.superseded-1794800000000" 2>/dev/null)" = "ASIDEKEEP" ]; then
+  pass "delete_refuses_symlinked_set_aside_parent"
+else
+  fail "delete_refuses_symlinked_set_aside_parent" "rc=$rc out=$out"
+fi
+
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -gt 0 ]; then
