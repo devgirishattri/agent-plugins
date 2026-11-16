@@ -14,7 +14,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-manager` | 1.7.11 | List, search, and delete local agent session data |
 | `session-chat` | 0.17.22 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.10 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.5.12 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `knowledge` | 0.5.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.14.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
 | `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.0 | Walk users through session changes with a live in-browser overlay tour |
@@ -952,7 +952,7 @@ does not establish that a candidate was captured.
 | `KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING` | Yes | Yes | `20` | Pending inbox capacity for automatic capture; checked again under the writer lock. |
 | `KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT` | Yes | Yes | `5` | Pending automatic candidates per originating session, enforced under the writer lock. Unknown sessions share one bucket; consolidation or dismissal frees capacity. |
 | `KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES` | Yes | Yes | `4096` | Hard per-candidate raw-byte cap. |
-| `KNOWLEDGE_CONSOLIDATE_NUDGE` | Yes | Yes | Unset (off) | Off unless set to a non-empty value other than `0`, `no`, `off`, or `false`. When on, reminds the session to run `/knowledge:consolidate` while pending candidates remain. Reviewed dismissals are retained separately and do not trigger reminders. Silent on any error. |
+| `KNOWLEDGE_CONSOLIDATE_NUDGE` | Yes | Yes | Unset (off) | Off unless set to a non-empty value other than `0`, `no`, `off`, or `false`. When on, shows the user a reminder (a Stop `systemMessage`) to run `/knowledge:consolidate` while pending candidates remain; the turn ends normally. Reviewed dismissals are retained separately and do not trigger reminders. Silent on any error. |
 | `KNOWLEDGE_PANE_NAME` | Yes | Yes | Auto-detected | First entry in the writer's pane-identity resolution chain, used for role detection and write provenance. Set it where tmux pane lookup is unavailable; writers fail closed with `unresolved pane identity` rather than guessing. |
 
 `memory-write.sh` also reads several `KNOWLEDGE_TEST_*` fault-injection

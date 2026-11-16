@@ -57,10 +57,10 @@ Direct rows end in `(matched: term(field,field);term2(field))`. This is the scor
 
 ## `KNOWLEDGE_CONSOLIDATE_NUDGE=1`
 
-This is a Stop hook. When the capture inbox has pending candidates, it surfaces ONE reminder to run `/knowledge:consolidate`.
+This is a Stop hook. When the capture inbox has pending candidates, it shows the user ONE reminder to run `/knowledge:consolidate`.
 
-- It emits the reminder as a NON-BLOCKING Claude Stop JSON `hookSpecificOutput.additionalContext`. Claude Stop hooks discard plain stdout.
-- It checks `stop_hook_active`, so it can never loop.
+- It emits the reminder as a Stop JSON `systemMessage`, which Claude Code shows to the user and does not pass to the model, so the turn ends normally. A Stop `additionalContext` would continue the turn, and Claude Stop hooks discard plain stdout.
+- It checks `stop_hook_active` as a second guard.
 - It is a nudge only. It never writes. It never consolidates automatically.
 - Script: `scripts/nudge-consolidate.sh` (invoked with `--stop-json`).
 

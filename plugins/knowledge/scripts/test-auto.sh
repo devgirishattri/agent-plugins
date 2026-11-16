@@ -301,17 +301,18 @@ bash "$REMEMBER" --store "$nstore" --staged "$cand" > /dev/null 2>&1
 out="$(printf '{"stop_hook_active":false}' | KNOWLEDGE_MEMORY_HOME="$nstore" bash "$NUDGE" --stop-json)"
 assert_empty nudge_gateoff_silent "$out"
 
-# gate on + candidate + --stop-json → valid non-blocking Claude Stop JSON
+# gate on + candidate + --stop-json → a user-facing systemMessage only. Stop
+# additionalContext (Claude Code) and decision "block" (Codex) would continue
+# the turn with the reminder as model input, so neither may appear.
 before_idx="$(sha "$nstore/MEMORY.md")"
 out="$(printf '{"stop_hook_active":false}' | KNOWLEDGE_MEMORY_HOME="$nstore" KNOWLEDGE_CONSOLIDATE_NUDGE=1 bash "$NUDGE" --stop-json)"
-assert_contains nudge_json_event   "$out" "\"hookEventName\":\"Stop\""
-assert_contains nudge_json_context "$out" "additionalContext"
 assert_contains nudge_json_message "$out" "consolidate"
 assert_not_contains nudge_json_nonblocking "$out" "\"decision\""
-if printf '%s' "$out" | python3 -c 'import sys,json; d=json.load(sys.stdin); h=d["hookSpecificOutput"]; assert h["hookEventName"]=="Stop" and "consolidate" in h["additionalContext"]' 2>/dev/null; then
+assert_not_contains nudge_json_no_model_context "$out" "additionalContext"
+if printf '%s' "$out" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert set(d)=={"systemMessage"} and "consolidate" in d["systemMessage"]' 2>/dev/null; then
   pass nudge_json_valid
 else
-  fail nudge_json_valid "not valid Stop JSON: $out"
+  fail nudge_json_valid "not a systemMessage-only Stop JSON: $out"
 fi
 # never writes; candidate still pending (nudge does not consume it)
 assert_eq nudge_never_writes_index "$before_idx" "$(sha "$nstore/MEMORY.md")"
@@ -325,7 +326,7 @@ assert_empty nudge_stop_hook_active_guard "$out"
 # plain-text mode (no flag) still emits a line (CLI use); never JSON
 out="$(KNOWLEDGE_MEMORY_HOME="$nstore" KNOWLEDGE_CONSOLIDATE_NUDGE=1 bash "$NUDGE" < /dev/null)"
 assert_contains     nudge_plain_line "$out" "consolidate"
-assert_not_contains nudge_plain_not_json "$out" "hookSpecificOutput"
+assert_not_contains nudge_plain_not_json "$out" "systemMessage"
 
 # ---------------------------------------------------------------------------
 # memory-lint --fix — normalizer

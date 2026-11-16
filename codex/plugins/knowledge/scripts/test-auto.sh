@@ -306,10 +306,12 @@ still="$(bash "$REMEMBER" --store "$nstore" --list 2>/dev/null | grep -c . || tr
 assert_eq nudge_leaves_candidate "1" "$still"
 
 out="$(printf '{"hook_event_name":"Stop","stop_hook_active":false}' | KNOWLEDGE_MEMORY_HOME="$nstore" KNOWLEDGE_CONSOLIDATE_NUDGE=1 bash "$NUDGE" --stop-json)"
-if printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("decision") == "block"; assert "consolidate" in d.get("reason", "")' 2>/dev/null; then
+# A user-facing systemMessage only: decision "block" would continue the turn
+# with the reminder as model input.
+if printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert set(d) == {"systemMessage"}; assert "consolidate" in d["systemMessage"]' 2>/dev/null; then
   pass nudge_stop_json_valid
 else
-  fail nudge_stop_json_valid "expected valid Codex Stop decision JSON, got [$out]"
+  fail nudge_stop_json_valid "expected a systemMessage-only Stop JSON, got [$out]"
 fi
 out="$(printf '{"hook_event_name":"Stop","stop_hook_active":true}' | KNOWLEDGE_MEMORY_HOME="$nstore" KNOWLEDGE_CONSOLIDATE_NUDGE=1 bash "$NUDGE" --stop-json)"
 assert_empty nudge_stop_json_reentry_guard "$out"
