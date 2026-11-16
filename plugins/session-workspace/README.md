@@ -1151,11 +1151,13 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   checked for self-stop only, so it could manage another environment's
   sessions. From 0.13.2 they get the helper route's session scope
   (`routing.scope`).
-- Lanes on linked git worktrees share refs. The floor keeps orchestrators
-  out of the shared common dir and main checkout, but an executor's Git
-  (see above) can still move, delete or push another lane's branch, and a
-  root orchestrator whose cwd is the main checkout can run Git there. A
-  per-lane ref floor is planned, not enforced.
+- Lanes on linked git worktrees share refs. Until 0.15.0 an executor's Git
+  could move, delete or push another lane's branch, and a root orchestrator
+  whose cwd is the main checkout could write lane branches there. From 0.15.0
+  each such environment declares `branch` and `git.lane_ref` holds its
+  executor to that branch and keeps orchestrators off every lane branch. It
+  reads argv: Git run by a script or build tool, and a `rebase.updateRefs`
+  config, are not seen, so keep release branches protected on the remote.
 - Codex "selected version" resolution needs `~/.codex/config.toml` plus the
   marketplace manifest; on Python < 3.11 (no `tomllib`) a minimal
   line-based reader handles the `[plugins."<name>"]` table.
@@ -1638,6 +1640,22 @@ an orchestrator; several environments may list the same session. A pane launched
 from a harness pane records it in the pane option
 `@session_workspace_started_by`, and `workspace status` reports it as
 `started by:` (JSON `started_by`). It is informational; nothing authorizes on it.
+
+**Lane branches (0.15.0).** `environments[].branch` names the one local branch
+an environment's executor works on. It is required when the environment's
+checkout shares its git repository with another checkout (linked worktrees),
+unique across environments, and an orchestration target in that environment
+must use it as `work_branch`. In that executor the hook refuses, under
+`git.lane_ref`, every Git command that would write another ref: creating,
+resetting or renaming another branch, deleting any branch, switching to
+another branch (a detached HEAD is fine), pushing anything but `REMOTE BRANCH`/`HEAD:BRANCH` (no force,
+`+`, delete, `--all`, `--mirror` or `--tags`), fetching into a local branch,
+tags, the shared stash, worktrees, config and remote writes, `-c`,
+`--git-dir`, `GIT_*` variables, `gc`, `prune` and `filter-branch`. Commands
+that write the current branch need its branch or a detached HEAD checked out.
+Orchestrators may read and merge lane branches but not write them. Lanes do
+not deploy: merge them into the release branch in the main checkout. The full
+list is in the environments reference.
 
 The `browsers[]` profile path is `chrome/<project.id>/sessions/session-<sid>`;
 singular `browser` retains `chrome/<project.id>`. Doctor emits INFO with a manual
