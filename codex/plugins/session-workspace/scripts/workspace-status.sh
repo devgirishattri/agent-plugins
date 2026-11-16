@@ -185,7 +185,7 @@ while IFS= read -r session_json; do
         sw_pane_dead "$found_pane" && dead=1
         sw_pane_launched "$found_pane" && launched=1
         cur_cmd="$(sw_pane_current_command "$found_pane")"
-        started_by="$(sw_get_pane_option "$found_pane" "$MARKER_STARTED_BY")"
+        started_by="$(sw_pane_started_by "$found_pane")"
       fi
     fi
 

@@ -98,6 +98,20 @@ sw_set_pane_launched() {
   tmux set-option -p -t "$1" "$MARKER_LAUNCHED" "$2" || return 1
 }
 
+# sw_set_pane_started_by PANE_ID NAME — record (or, with an empty NAME, clear)
+# the harness pane that launched PANE_ID. Best effort: informational only.
+sw_set_pane_started_by() {
+  if [ -n "$2" ]; then
+    tmux set-option -p -t "$1" "$MARKER_STARTED_BY" "$2" 2>/dev/null || true
+  else
+    tmux set-option -p -t "$1" -u "$MARKER_STARTED_BY" 2>/dev/null || true
+  fi
+}
+
+sw_pane_started_by() {
+  sw_get_pane_option "$1" "$MARKER_STARTED_BY"
+}
+
 # sw_pane_launched PANE_ID — true if this pane's runtime was really launched
 # by a previous (or this) run. A managed pane that is NOT launched is
 # repairable, never healthy.
