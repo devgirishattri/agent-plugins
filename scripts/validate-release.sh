@@ -1145,7 +1145,7 @@ require_tokens(
 )
 require_order(
     root / "plugins/session-chat/scripts/detect-incoming-message.sh",
-    "emit_system_message", "claim_inbox_ids",
+    "emit_prompt_context", "claim_inbox_ids",
 )
 require_tokens(
     root / "codex/plugins/session-chat/scripts/detect-incoming-message.sh",
