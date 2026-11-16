@@ -18,6 +18,14 @@
 #     "${PROJECT_ID}-development", and memory shard strip_prefix)
 # No other interpolation, env-var expansion, or shell substitution is
 # performed. Any other "${...}" text in a value is left byte-for-byte as-is.
+#
+# Worker names (schema v5, 0.16.0): an executor or reviewer pane in an
+# environment's development session may leave out `name`. The loader then
+# names it <project.id>-<environment id>-<executor|reviewer>, plus
+# -<label> when the environment has a label in the project state file
+# labels.json (written only by workspace-label.sh, under the project lock,
+# while that environment's workers are stopped). Every consumer therefore
+# sees concrete names; a name written in the config is never changed.
 set -uo pipefail
 
 # Resolve this library's own directory from ${BASH_SOURCE[0]}, never $0:
@@ -135,7 +143,8 @@ load_workspace_config_raw() {
   # in that case, not this loader.
   [ -z "$proot_abs" ] && proot_abs="$cfg_dir/$proot_rel"
 
-  printf '%s' "$raw" | jq -c --arg pid "$pid" --arg root "$proot_abs" '
+  local interpolated
+  interpolated="$(printf '%s' "$raw" | jq -c --arg pid "$pid" --arg root "$proot_abs" '
     def interp:
       if type == "string" then
         (if $root != "" and startswith("${PROJECT_ROOT}")
@@ -146,6 +155,60 @@ load_workspace_config_raw() {
       elif type == "array" then map(interp)
       else . end;
     interp
+  ')" || return 1
+  # A second argument replaces the stored labels (workspace-label.sh checks a
+  # candidate label this way before it writes one).
+  sw_apply_worker_names "$interpolated" "${2:-$(sw_read_worker_labels "$pid")}"
+}
+
+# sw_worker_labels_path PROJECT_ID — the project state file holding each
+# environment's worker label ({"<environment id>": "<label>"}).
+sw_worker_labels_path() {
+  printf '%s/session-workspace/%s/labels.json\n' "${XDG_STATE_HOME:-$HOME/.local/state}" "$1"
+}
+
+SW_WORKER_LABEL_RE='^[a-z0-9][a-z0-9-]{0,23}$'
+
+# sw_read_worker_labels PROJECT_ID — the valid entries of labels.json as one
+# JSON object; {} when the file is missing, unreadable or not an object.
+sw_read_worker_labels() {
+  local pid="$1" path
+  case "$pid" in
+    ''|*/*|.|..) printf '{}'; return 0 ;;
+  esac
+  path="$(sw_worker_labels_path "$pid")"
+  if [ ! -f "$path" ] || [ -L "$path" ]; then
+    printf '{}'
+    return 0
+  fi
+  jq -c --arg re "$SW_WORKER_LABEL_RE" '
+    if type == "object" then with_entries(select((.value | type) == "string" and (.value | test($re)))) else {} end
+  ' "$path" 2>/dev/null || printf '{}'
+}
+
+# sw_apply_worker_names CONFIG_JSON LABELS_JSON — fill the name of every
+# unnamed executor/reviewer pane of a schema-v5 environment's development
+# sessions. Anything else is returned unchanged; an unnamed pane elsewhere
+# stays unnamed and fails validation as before.
+sw_apply_worker_names() {
+  printf '%s' "$1" | jq -c --argjson labels "${2:-"{}"}" '
+    if .schema_version == 5 and ((.project.id // "") | type) == "string" and (.project.id // "") != ""
+       and ((.harness.roles // null) | type) == "object" and ((.environments // null) | type) == "array" then
+      .project.id as $pid
+      | .harness.roles as $roles
+      | [.environments[] | select(type == "object") | {id, development: (.development // [])}] as $envs
+      | .sessions |= ((. // []) | map(
+          . as $session
+          | ([$envs[] | select((.development | type) == "array" and (.development | index($session.id)) != null)][0]) as $env
+          | if $env == null or ($env.id | type) != "string" then .
+            else .panes |= ((. // []) | map(
+              if type != "object" or has("name") then .
+              elif .role == $roles.executor or .role == $roles.reviewer then
+                .name = ($pid + "-" + $env.id + "-" + (if .role == $roles.executor then "executor" else "reviewer" end)
+                         + (($labels[$env.id] // "") | if . == "" then "" else "-" + . end))
+              else . end))
+            end))
+    else . end
   '
 }
 

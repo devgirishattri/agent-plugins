@@ -635,6 +635,92 @@ class Environments(unittest.TestCase):
             self.git('init', '-q', '-b', 'main', cwd=self.root/cwd)
         self.plan()
 
+    def test_worker_names_from_labels(self):
+        # Unnamed workers are named <project>-<environment>-<role>[-<label>];
+        # the label is the coordinator's, the names are the engine's.
+        state = self.root/'state'
+        env = dict(ENV, XDG_STATE_HOME=str(state))
+        for session in self.cfg['sessions']:
+            if session['id'] == 'dev-web':
+                for pane in session['panes']:
+                    if pane['role'] in ('executor', 'reviewer'):
+                        del pane['name']
+        self.write()
+        def label(*args):
+            return self.run_script('workspace-label', *args, '--json', env=env)
+        def names():
+            r = self.run_script('workspace-plan', '--json', env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return [p['name'] for s in json.loads(r.stdout)['sessions'] if s['id'] == 'dev-web' for p in s['panes']]
+        self.assertEqual(names(), ['web-master', 'harness-sample-web-executor', 'harness-sample-web-reviewer'])
+        r = label('web')
+        self.assertEqual(json.loads(r.stdout), {'environment': 'web', 'label': None, 'changed': False,
+                                                'workers': ['harness-sample-web-executor', 'harness-sample-web-reviewer']})
+        r = label('web', 'auth')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)['workers'], ['harness-sample-web-executor-auth', 'harness-sample-web-reviewer-auth'])
+        self.assertEqual(json.loads((state/'session-workspace/harness-sample/labels.json').read_text()), {'web': 'auth'})
+        self.assertEqual(names(), ['web-master', 'harness-sample-web-executor-auth', 'harness-sample-web-reviewer-auth'])
+        for bad in ['Auth', 'a_b', 'x' * 25, 'a.b']:
+            r = label('web', bad)
+            self.assertNotEqual(r.returncode, 0, bad)
+            self.assertIn('label is 1-24 characters', r.stderr)
+        r = label('vue3', 'x')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('worker names are written in the config', r.stderr)
+        # A label whose names collide with a configured pane is refused, and
+        # the stored label is kept.
+        self.cfg['sessions'][3]['panes'][1]['name'] = 'harness-sample-web-executor-pay'
+        self.write()
+        r = label('web', 'pay')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('does not accept', r.stderr)
+        self.assertEqual(json.loads((state/'session-workspace/harness-sample/labels.json').read_text()), {'web': 'auth'})
+        # A running worker keeps its label.
+        socket_tmp = tempfile.TemporaryDirectory(prefix='w5l-', dir='/tmp')
+        tenv = dict(env, TMUX_TMPDIR=socket_tmp.name)
+        try:
+            subprocess.run(['tmux', 'new-session', '-d', '-s', 'lbl'], env=tenv, check=True)
+            for option, value in [('@session_workspace_project', 'harness-sample'), ('@session_workspace_pane', 'harness-sample-web-reviewer-auth')]:
+                subprocess.run(['tmux', 'set-option', '-p', '-t', 'lbl', option, value], env=tenv, check=True)
+            r = self.run_script('workspace-label', 'web', 'billing', env=tenv)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn('worker harness-sample-web-reviewer-auth is running', r.stderr)
+        finally:
+            subprocess.run(['tmux', 'kill-server'], env=tenv, capture_output=True)
+            socket_tmp.cleanup()
+        r = label('web', '--clear')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(names(), ['web-master', 'harness-sample-web-executor', 'harness-sample-web-reviewer'])
+        label('web', 'auth')
+        # Policy: an environment coordinator labels only its own environment;
+        # workers never label; the derived name is a normal pane identity.
+        with patch.dict(ENV, {'XDG_STATE_HOME': str(state)}):
+            p, master, _ = self.context('web-master')
+            p.validate_helper(master, 'session-workspace', 'workspace-label.sh', ['web', 'billing'])
+            p.validate_helper(master, 'session-workspace', 'workspace.sh', ['label', 'web', '--clear'])
+            p.validate_bash(master, 'workspace label web billing', {})
+            for script, args, rule in [('workspace-label.sh', ['vue3', 'x'], 'routing.scope'), ('workspace.sh', ['label', 'vue3'], 'routing.scope'),
+                                       ('workspace-label.sh', ['web', 'Bad'], 'helper.argv'), ('workspace-label.sh', ['web', 'x', '--clear'], 'helper.argv'),
+                                       ('workspace-label.sh', ['web', 'x', 'y'], 'helper.argv'), ('workspace-label.sh', [], 'routing.scope')]:
+                with self.assertRaises(p.PolicyFailure, msg=args) as caught:
+                    p.validate_helper(master, 'session-workspace', script, args)
+                self.assertEqual(caught.exception.rule, rule, args)
+            for command in ['workspace label vue3 x', 'bash workspace.sh label vue3 x']:
+                with self.assertRaises(p.PolicyFailure) as caught:
+                    p.validate_bash(master, command, {})
+                self.assertEqual(caught.exception.rule, 'routing.scope', command)
+            p, root, _ = self.context('root')
+            p.validate_helper(root, 'session-workspace', 'workspace-label.sh', ['vue3', 'x'])
+            p, worker, _ = self.context('harness-sample-web-executor-auth')
+            self.assertEqual(worker.environment, 'web')
+            for command in ['workspace label web x', 'workspace-label.sh web x']:
+                with self.assertRaises(p.PolicyFailure) as caught:
+                    p.validate_bash(worker, command, {})
+                self.assertEqual(caught.exception.rule, 'coordination.write', command)
+            with self.assertRaises(p.PolicyFailure) as caught:
+                p.validate_helper(worker, 'session-workspace', 'workspace-label.sh', ['web'])
+
     def test_lane_executor_git_floor(self):
         self.make_lanes()
         p, ctx, _ = self.context('web-executor')
