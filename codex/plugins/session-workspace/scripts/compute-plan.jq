@@ -47,6 +47,23 @@ def memory_shard(name; pid; strip_prefix; strip_suffixes; fallback):
   | (reduce strip_suffixes[] as $suf ($s1; if (. | endswith($suf)) then .[0:(length - ($suf | length))] else . end)) as $s2
   | if ($s2 == "") then fallback else $s2 end;
 
+# The part of a pane's environment scope that its launch pins
+# (SESSION_WORKSPACE_SCOPE_JSON). A bound pane pins its own environment entry
+# and the root orchestrator's name; the unbound root orchestrator pins the
+# environments it coordinates directly (those without a local orchestrator).
+# Adding, changing or removing ANOTHER environment therefore leaves a running
+# pane's identity intact, while a change to its own entry still fails it
+# closed until it restarts. The policy reads everything else (route peers,
+# owned sessions) from the validated config on each call.
+def scope_identity:
+  if . == null then null
+  else . as $sc
+  | {environment: $sc.environment, root_orchestrator: $sc.root_orchestrator}
+    + (if $sc.environment != null
+       then {own: ([$sc.environments[] | select(.id == $sc.environment)][0] // null)}
+       else {direct: [$sc.environments[] | select((.orchestrator // null) == null)]} end)
+  end;
+
 def coordination_var_name(store):
   if store == "messages" then "SESSION_CHAT_TARGET_MESSAGES_DIR"
   elif store == "scheduler" then "SESSION_SCHEDULER_HOME"
@@ -135,15 +152,17 @@ def coordination_var_name(store):
           | ($role.env_group // "none") as $env_group
           | ($cfg.env.groups[$env_group] // {values: {}, pin_to_session: false}) as $group
           | ($group.pin_to_session // false) as $pin_to_session
+          | (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then {
+                environments: $cfg.environments,
+                environment: ([$cfg.environments[] | select((.development + .services) | index($s.id)) | .id][0] // null),
+                root_orchestrator: ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name | select(. as $n | [$cfg.environments[].orchestrator] | index($n) | not)][0] // null)
+              } else null end) as $scope
           | {
               name: $p.name,
               role: $p.role,
               secret_keys: ($cfg | secret_keys_for_role($p.role)),
-              scope: (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then {
-                environments: $cfg.environments,
-                environment: ([$cfg.environments[] | select((.development + .services) | index($s.id)) | .id][0] // null),
-                root_orchestrator: ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name | select(. as $n | [$cfg.environments[].orchestrator] | index($n) | not)][0] // null)
-              } else null end),
+              scope: $scope,
+              scope_identity: ($scope | scope_identity),
               optional: ($p.optional // false),
               # "on_demand": a full start/reconcile leaves this worker pane
               # down; the orchestrator (or the user) starts and stops it with
@@ -256,6 +275,6 @@ def coordination_var_name(store):
 
 | if $cfg.schema_version != 5 then
     del(.schema_version, .environments, .browsers)
-    | .sessions |= map(.panes |= map(del(.scope)))
+    | .sessions |= map(.panes |= map(del(.scope, .scope_identity)))
     | if (.orchestration.active // false) then .orchestration.targets |= map(del(.environment, .orchestrator)) else . end
   else . end

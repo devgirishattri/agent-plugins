@@ -98,6 +98,16 @@ SHELL_TOOL_NAMES = {
     "execute_command",
     "container.exec",
     "run_terminal_cmd",
+    # Claude Code's Monitor tool runs its `command` in the same shell as Bash
+    # and streams the output. A hook whose matcher names Monitor receives the
+    # call under this name; a `ws` (WebSocket) watch carries no command and
+    # stays an unclassified tool (see evaluate_payload).
+    "monitor",
+}
+# Shell tools whose language the floor cannot parse. They are refused for
+# every role in an active harness rather than read as bash.
+UNPARSED_SHELL_TOOL_NAMES = {
+    "powershell",
 }
 PATH_FIELDS = {
     "absolute_path",
@@ -387,6 +397,39 @@ def within(path: Path, root: Path) -> bool:
         return False
 
 
+def linked_worktree_shared_roots(root: Path) -> List[Path]:
+    """For a linked git worktree at ROOT: its common dir and, when that is a
+    `.git` directory, the main checkout above it. [] for anything else (a
+    plain checkout, a submodule, an unreadable or malformed `.git` file)."""
+    marker = root / ".git"
+    try:
+        if marker.is_symlink() or not marker.is_file():
+            return []
+        with marker.open("r", encoding="utf-8") as handle:
+            first = handle.readline(4096).strip()
+        if not first.startswith("gitdir:"):
+            return []
+        gitdir = Path(first[len("gitdir:"):].strip())
+        if not str(gitdir):
+            return []
+        gitdir = gitdir if gitdir.is_absolute() else root / gitdir
+        commondir_file = gitdir / "commondir"
+        if not commondir_file.is_file():
+            return []  # a submodule's gitdir has no commondir
+        with commondir_file.open("r", encoding="utf-8") as handle:
+            common_text = handle.readline(4096).strip()
+    except (OSError, UnicodeError):
+        return []
+    if not common_text:
+        return []
+    common = Path(common_text)
+    common = canonical(common if common.is_absolute() else gitdir / common)
+    roots = [common]
+    if common.name == ".git" and common.parent != common:
+        roots.append(common.parent)
+    return roots
+
+
 def walk(value: Any) -> Iterable[Tuple[Optional[str], Any]]:
     if isinstance(value, dict):
         for key, child in value.items():
@@ -639,7 +682,16 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
 
     scope = pane.get("scope")
     scope_env = os.environ.get("SESSION_WORKSPACE_SCOPE_JSON", "")
-    if (scope is None and scope_env) or (scope is not None and scope_env != json.dumps(scope, sort_keys=True, separators=(",", ":"))):
+    # A launch pins the pane's own scope identity (compute-plan.jq
+    # scope_identity), so another environment can be added or changed while
+    # this pane runs. A pane launched by 0.13.1 or earlier pinned the whole
+    # scope and keeps working until the environments change.
+    pinned_forms = set()
+    if scope is not None:
+        pinned_forms.add(json.dumps(scope, sort_keys=True, separators=(",", ":")))
+        if pane.get("scope_identity") is not None:
+            pinned_forms.add(json.dumps(pane["scope_identity"], sort_keys=True, separators=(",", ":")))
+    if (scope is None and scope_env) or (scope is not None and scope_env not in pinned_forms):
         return None, deny(None, tool, "identity.scope", "launcher scope does not match validated configuration; restart affected sessions", mode, integrity=True)
     environment = ""
     route_peers = frozenset()
@@ -676,12 +728,19 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         return None, deny(None, tool, "identity.topology", "validated topology has no unique scope orchestrator", mode, integrity=True)
     executor_panes = frozenset(str(p["name"]) for p in owned_panes if p.get("role") == roles.get("executor"))
     reviewer_panes = frozenset(str(p["name"]) for p in owned_panes if p.get("role") == roles.get("reviewer"))
-    child_roots = tuple(
-        sorted(
-            {canonical(Path(str(p["cwd"]))) for p in panes if p.get("cwd") and p.get("role") in {roles.get("executor"), roles.get("reviewer")}},
-            key=str,
-        )
-    )
+    worker_roots = {canonical(Path(str(p["cwd"]))) for p in panes if p.get("cwd") and p.get("role") in {roles.get("executor"), roles.get("reviewer")}}
+    # Lanes on linked worktrees share one git common dir (refs, hooks, config)
+    # and, for a non-bare repository, the main checkout that holds it. Both are
+    # child content: an orchestrator that may not write a lane's worktree must
+    # not rewrite the hooks or refs every lane runs, either. A main checkout
+    # that holds the project root or this pane's own cwd stays writable here
+    # (its common dir does not).
+    shared_roots = set()
+    for worker_root in worker_roots:
+        for shared in linked_worktree_shared_roots(worker_root):
+            if shared.name == ".git" or not (within(project_root, shared) or within(pane_cwd, shared)):
+                shared_roots.add(shared)
+    child_roots = tuple(sorted(worker_roots | shared_roots, key=str))
     # The coordination stores the engine actually grants THIS pane (its
     # --add-dir grants plus its memory shard) are readable/addressable roots
     # for helper operands even though they live outside a child's cwd.
@@ -2869,9 +2928,36 @@ def orchestrator_self_stop_environment(ctx: Context, args: List[str]) -> None:
                             % (args[0], ctx.environment, own))
 
 
+ENVIRONMENT_LIFECYCLE_SCRIPTS = {"workspace-start.sh", "workspace-stop.sh", "workspace-restart.sh", "workspace-reconcile.sh"}
+
+
+def environment_lifecycle_scope(ctx: Context, script: str, args: List[str]) -> None:
+    """An environment coordinator starts, stops, restarts and reconciles only
+    the sessions its environment owns, named explicitly, and never installs
+    or reconfigures the workspace. The root coordinator (no environment) and
+    unscoped configs are not narrowed here."""
+    if not ctx.environment:
+        return
+    if script in ENVIRONMENT_LIFECYCLE_SCRIPTS and (not args or args[0] not in ctx.session_ids or "--all" in args):
+        raise PolicyFailure("routing.scope", "local lifecycle requires an explicitly owned session")
+    if script in {"workspace-install.sh", "workspace-browser-config.sh"}:
+        raise PolicyFailure("routing.scope", "workspace installation/browser config belongs to root coordinator")
+
+
+def environment_selector_scope(ctx: Context, args: List[str]) -> None:
+    """Every `--environment E` an environment coordinator passes names its own."""
+    if not ctx.environment:
+        return
+    for index, arg in enumerate(args):
+        if arg == "--environment" and (index + 1 >= len(args) or args[index + 1] != ctx.environment):
+            raise PolicyFailure("routing.scope", "environment selector escapes this coordinator scope")
+
+
 def orchestrator_lifecycle_routes(ctx: Context, tokens: List[str]) -> None:
-    """Apply the self-stop rule to lifecycle routes in an orchestrator's free
-    shell (the reviewed helper path is judged in validate_helper)."""
+    """Apply the self-stop rule, and an environment coordinator's session
+    scope, to lifecycle routes in an orchestrator's free shell (`workspace`
+    on PATH, workspace.sh, a lifecycle script run by name). The reviewed
+    helper path is judged in validate_helper."""
     for segment in segments(tokens):
         argv = parse_wrappers(segment).argv
         for token in executable_tokens(segment):
@@ -2881,10 +2967,16 @@ def orchestrator_lifecycle_routes(ctx: Context, tokens: List[str]) -> None:
             if name in WORKSPACE_VERB_DISPATCHERS and rest:
                 if "--environment" in rest:
                     orchestrator_self_stop_environment(ctx, rest)
-                elif rest[0] in {"stop", "restart"}:
-                    orchestrator_self_stop(ctx, "workspace-%s.sh" % rest[0], rest[1:])
-            elif name in {"workspace-stop.sh", "workspace-restart.sh"}:
-                orchestrator_self_stop(ctx, name, rest)
+                    environment_selector_scope(ctx, rest)
+                else:
+                    if rest[0] in {"stop", "restart"}:
+                        orchestrator_self_stop(ctx, "workspace-%s.sh" % rest[0], rest[1:])
+                    if rest[0] in WORKSPACE_VERB_SCRIPT:
+                        environment_lifecycle_scope(ctx, WORKSPACE_VERB_SCRIPT[rest[0]], rest[1:])
+            elif name in WORKSPACE_LIFECYCLE_SCRIPTS:
+                if name in {"workspace-stop.sh", "workspace-restart.sh"}:
+                    orchestrator_self_stop(ctx, name, rest)
+                environment_lifecycle_scope(ctx, name, rest)
 
 
 def workspace_read(ctx: Context, script: str, args: List[str]) -> None:
@@ -3140,12 +3232,7 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
         scoped_task(ctx, script, args)
     if plugin == "session-workspace":
         orchestrator_self_stop(ctx, script, args)
-    if ctx.environment and plugin == "session-workspace":
-        mutating = {"workspace-start.sh", "workspace-stop.sh", "workspace-restart.sh", "workspace-reconcile.sh"}
-        if script in mutating and (not args or args[0] not in ctx.session_ids or "--all" in args):
-            raise PolicyFailure("routing.scope", "local lifecycle requires an explicitly owned session")
-        if script in {"workspace-install.sh", "workspace-browser-config.sh"}:
-            raise PolicyFailure("routing.scope", "workspace installation/browser config belongs to root coordinator")
+        environment_lifecycle_scope(ctx, script, args)
     if ctx.environment and (plugin, script) in {("session-scheduler", "tasks-clean.sh"), ("session-chat", "messages-clean.sh"), ("session-chat", "clean-messages.sh"), ("session-manager", "delete-all-sessions.sh"), ("session-manager", "delete-session.sh")}:
         raise PolicyFailure("routing.scope", "shared-store cleanup belongs to root coordinator")
     inert = grammar(ctx, script, args)
@@ -4865,6 +4952,10 @@ def evaluate_payload(ctx: Context, raw: str) -> Decision:
     tool_input = tool_input_of(payload)
     lower = tool_name.lower()
     try:
+        if lower in UNPARSED_SHELL_TOOL_NAMES:
+            raise PolicyFailure("bash.parse", "strict-v1 cannot parse %s commands; use the Bash tool" % tool_name)
+        if lower == "monitor" and extract_command(tool_input) is None and "ws" in tool_input:
+            return allow(ctx, tool_name, "tool.unclassified", "a WebSocket watch runs no shell command")
         if lower in SHELL_TOOL_NAMES or lower.endswith("bash"):
             command = extract_command(tool_input)
             if command is None:

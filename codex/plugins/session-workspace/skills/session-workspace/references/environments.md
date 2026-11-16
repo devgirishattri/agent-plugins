@@ -50,14 +50,30 @@ there is no automatic rollback that could kill pre-existing work. Recheck status
 
 Root routes to local coordinators; local coordinators route to root and their own
 workers; workers route only to their coordinator. Root may manage all sessions;
-environment coordinators manage only their explicit environment/session ids. Control-directory
+environment coordinators manage only their explicit environment/session ids, on
+every route: the helper, `workspace` on PATH, `workspace.sh` and a lifecycle
+script run by name (0.13.2). Control-directory
 coordinators keep native writes and ordinary shell paths inside that directory. Trusted helpers supply
 bounded coordination. Existing Codex audit-mode recommendations still apply;
 these are tool policies, not OS isolation or complete Codex path containment.
 
 The launcher pins `SESSION_WORKSPACE_SCOPE_JSON`. Never repair/export identity
-manually. Changing repository/session/coordinator bindings requires restarting
-affected sessions.
+manually. Since 0.13.2 it holds only the pane's own scope: its environment, the
+root orchestrator's name and its own environment entry (for the unbound root,
+the environments without a local orchestrator). Adding, changing or removing
+another environment leaves running panes working; changing a pane's own
+environment entry (its repository, sessions or coordinator) still requires
+restarting that environment's sessions. A pane launched by 0.13.1 or earlier
+pinned the whole scope and needs one restart after the next environment change.
+
+Environments may sit on linked git worktrees of one repository (keep them out
+of dot directories: use `worktrees/web`, not `.worktrees/web`). Their worktrees
+share one git common dir, and the policy treats it, and the main checkout that
+holds it, as child content: an orchestrator cannot edit them or run a mutating
+command against them (`orchestrator.child_write`). A main checkout that holds
+the project root or the orchestrator's own cwd stays writable for it; its
+`.git` does not. Git commands run from such a checkout still reach shared
+refs; a per-lane ref floor is not enforced yet.
 
 
 ## Root-scoped environment orchestrators

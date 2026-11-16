@@ -43,6 +43,15 @@ class Hooks(unittest.TestCase):
                         {"type":"prompt","prompt":"check"},{"type":"agent","prompt":"check"},
                         {"type":"mcp_tool","server":"s","tool":"t"}):
             validate_claude(doc(handler))
+    def test_claude_on_failure(self):
+        for kind,handler in (("command",{"type":"command","command":"x"}),("http",{"type":"http","url":"https://example.invalid"})):
+            for value in ("continue","block"):
+                validate_claude(doc({**handler,"onFailure":value},"PreToolUse"))
+            for value in ("deny",True,None):
+                with self.subTest(kind=kind,value=value),self.assertRaises(ValueError):
+                    validate_claude(doc({**handler,"onFailure":value},"PreToolUse"))
+        with self.assertRaises(ValueError):
+            validate_claude(doc({"type":"prompt","prompt":"x","onFailure":"block"},"PreToolUse"))
     def test_claude_invalid(self):
         for item in (doc({"type":"http"}),doc({"type":"agent"}),
                      doc({"type":"command","command":"x","timeout":True}),
