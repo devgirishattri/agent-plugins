@@ -88,7 +88,10 @@ substitution, or broad provider-home access to bypass the sandbox.
 Escalation is transport access, not authority: recorded roles and recipients,
 arguments, confirmations, and lifecycle rules remain in force. Lifecycle
 acknowledgements are durable file-backed dispatches, queued to the assigner's
-inbox when busy, with inline send retained only as a last-resort fallback. The
+inbox when busy, with inline send retained only as a last-resort fallback. An
+unsubmitted dispatch (session-chat status 4, the line staged in the recipient's
+input) is durable: it is recorded as queued, nothing is rolled back or resent,
+and the helper names the pane to press Enter in. The
 ledger remains authoritative and `meta.last_ack` records delivery outcome. A
 failed post-transition acknowledgement is partial success: inspect
 `task-status`, never rerun the completed transition, and never use --force to

@@ -183,11 +183,14 @@ if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$ACTOR" ]; then
     if [ "$(printf '%s\n' "$DISPATCH_OUTPUT" | grep -cE '^Message id: [a-f0-9]{8,16}$')" = "1" ]; then
       REVIEW_REQUEST_ID=$(printf '%s\n' "$DISPATCH_OUTPUT" | grep -E '^Message id: [a-f0-9]{8,16}$' | sed 's/^Message id: //')
     fi
-    if [ "$DISPATCH_RC" -eq 0 ] || [ "$DISPATCH_RC" -eq 3 ]; then
+    # Status 4 (unsubmitted) is recorded as queued: its durable copy is queued,
+    # and a retry would duplicate it.
+    if [ "$DISPATCH_RC" -eq 0 ] || [ "$DISPATCH_RC" -eq 3 ] || [ "$DISPATCH_RC" -eq "$SESSION_CHAT_UNSUBMITTED" ]; then
       REVIEW_DISPATCHED=1
       NOW=$(now_iso)
+      [ "$DISPATCH_RC" -eq "$SESSION_CHAT_UNSUBMITTED" ] && sched_warn_unsubmitted "$REVIEWER" "review packet"
       case "$DISPATCH_RC:$DISPATCH_OUTPUT" in
-        3:*) REVIEW_DISPATCH_STATUS="queued" ;;
+        3:*|4:*) REVIEW_DISPATCH_STATUS="queued" ;;
         *"Queued dispatch"*|*"Queued to "*) REVIEW_DISPATCH_STATUS="queued" ;;
         *) REVIEW_DISPATCH_STATUS="delivered" ;;
       esac

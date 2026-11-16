@@ -196,10 +196,10 @@ Rules:
 
 ## Failure modes
 
-- **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — this happens only on a hard failure (no name, unknown/ambiguous target). A *busy* executor is not a failure. The dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. After a hard failure, run `/session-chat:panes` and ensure the executor has a name. Then retry `/task-assign`.
+- **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — this happens only on a hard failure (no name, unknown/ambiguous target). A *busy* executor is not a failure. The dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. An **unsubmitted** dispatch (session-chat status 4: the packet line is staged in the executor's input but was not submitted) is not a failure either. Its durable copy is queued, so the prompt file stays, the ledger flips to `assigned`, and the output says `dispatch: unsubmitted`. Press Enter in that pane; do not re-run `/task-assign`. After a hard failure, run `/session-chat:panes` and ensure the executor has a name. Then retry `/task-assign`.
 - **Lifecycle acks are durable, not best-effort transport.** `/task-done`, `/task-block`, and `/task-review` always update the ledger first. Then each acks the assigner through a delivery ladder:
   1. File-backed dispatch. A busy assigner recovers it from the durable inbox on the next turn.
-  2. Inline `/send`, only if dispatch fails.
+  2. Inline `/send`, only if dispatch fails hard. An unsubmitted dispatch (status 4) counts as dispatched and gets no inline copy; the helper names the pane to press Enter in.
   3. A recorded failure, only if both fail.
 
   `meta.last_ack` records `status` (`dispatched`/`inline-fallback`/`failed`) and `file` for every attempt.
