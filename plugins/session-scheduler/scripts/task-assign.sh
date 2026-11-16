@@ -282,7 +282,15 @@ Load the shared context first (form for your runtime):
 EOF
 fi
 
-if ! session_chat_dispatch "$PANE" "$PROMPT_FILE"; then
+# Status 4 (unsubmitted): the packet line is staged in the pane's input and its
+# durable copy is queued. That line points at the prompt file, so it is kept
+# and the assignment is recorded; only a hard failure rolls back.
+DISPATCH_UNSUBMITTED=0
+session_chat_dispatch "$PANE" "$PROMPT_FILE"
+DISPATCH_RC=$?
+if [ "$DISPATCH_RC" = "$SESSION_CHAT_UNSUBMITTED" ]; then
+  DISPATCH_UNSUBMITTED=1
+elif [ "$DISPATCH_RC" != 0 ]; then
   restore_prompt_on_failure
   echo "ERROR: session-chat dispatch to '$PANE' failed; ledger NOT updated, prompt file rolled back." >&2
   exit 1
@@ -361,5 +369,8 @@ echo "  ledger:   $SCHED_HOME_ABS"
 [ -n "$CONTEXT_DIR" ] && echo "  context:  $CONTEXT"
 [ -n "$REVIEWER" ] && echo "  reviewer: $REVIEWER (auto-dispatched on /task-review)"
 [ -n "$WORKFLOW" ] && echo "  workflow: $WORKFLOW"
+[ "$DISPATCH_UNSUBMITTED" = 1 ] && echo "  dispatch: unsubmitted (press Enter in $PANE; do not re-run /task-assign)"
 echo
 echo "Track with: /task-status $ID"
+[ "$DISPATCH_UNSUBMITTED" = 1 ] && sched_warn_unsubmitted "$PANE" "assignment packet"
+exit 0
