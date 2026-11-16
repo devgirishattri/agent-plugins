@@ -259,7 +259,15 @@ EOF
   then restore_prompt_on_failure; exit 1; fi
 fi
 
-if ! bash "$CHAT_ROOT/scripts/dispatch-to-session.sh" "$ASSIGNEE" "$PROMPT_FILE"; then
+# Status 4 (unsubmitted): the packet line is staged in the pane's input and its
+# durable copy is queued. That line points at the prompt file, so it is kept
+# and the assignment is recorded; only a hard failure rolls back.
+DISPATCH_UNSUBMITTED=0
+bash "$CHAT_ROOT/scripts/dispatch-to-session.sh" "$ASSIGNEE" "$PROMPT_FILE"
+DISPATCH_RC=$?
+if [ "$DISPATCH_RC" = "$SESSION_CHAT_UNSUBMITTED" ]; then
+  DISPATCH_UNSUBMITTED=1
+elif [ "$DISPATCH_RC" != 0 ]; then
   restore_prompt_on_failure
   echo "ERROR: session-chat dispatch to '$ASSIGNEE' failed; ledger NOT updated, prompt file rolled back." >&2
   exit 1
@@ -344,4 +352,6 @@ fi
 [ -n "$REVIEWER" ] && echo "Reviewer: $REVIEWER"
 [ -n "$WORKFLOW_ID" ] && echo "Workflow: $WORKFLOW_ID"
 echo "Scheduler home: $SCHEDULER_HOME_ABS"
+[ "$DISPATCH_UNSUBMITTED" = 1 ] && echo "Dispatch: unsubmitted (press Enter in $ASSIGNEE; do not re-run task-assign)"
+[ "$DISPATCH_UNSUBMITTED" = 1 ] && sched_warn_unsubmitted "$ASSIGNEE" "assignment packet"
 exit 0

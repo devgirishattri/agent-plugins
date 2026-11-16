@@ -11,12 +11,12 @@ Every plugin below ships for both providers at the same version number.
 
 | Plugin | Version | Purpose |
 |--------|---------|---------|
-| `session-manager` | 1.7.11 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.21 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.9 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.5.12 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.14.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
-| `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
+| `session-manager` | 1.7.12 | List, search, and delete local agent session data |
+| `session-chat` | 0.17.22 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.10 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `knowledge` | 0.5.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-workspace` | 0.14.1 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `chronos` | 0.1.5 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.0 | Walk users through session changes with a live in-browser overlay tour |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -177,6 +177,16 @@ three names are rejected if written directly into an `env.groups` block, so
 
 ### session-manager
 
+On Claude, deleting one session removes everything Claude Code keeps for it:
+the transcript and any set-aside copies (`<session>.orphaned-*.jsonl`,
+`<session>.jsonl.superseded-*`), subagent data, session env, debug log, file
+history, legacy todos, the task list, `image-cache/`, `uploads/` and
+`dev-mods/` entries, its `history.jsonl` lines, and the session's temp
+directory (scratchpad, images and task output) under Claude Code's temp root,
+`${CLAUDE_CODE_TMPDIR:-/tmp}/claude-<uid>/<project>/<session>/`. A target
+reached through a symlinked directory is refused, and so is a temp root that is
+a symlink or owned by another user.
+
 It reads the session data your runtime already writes. On Codex, install
 Python 3 to read session names; deletion execs the native `codex` CLI, so that
 binary must also be on `PATH`. Native lookup tries an existing Codex daemon's
@@ -202,11 +212,11 @@ skips the native connection attempt (when using the shell alias). The same
 environment setting applies to `scripts/list-sessions.sh` and
 `scripts/session-stats.sh`; `auto` is the default and `native` fails instead of
 falling back. The isolated real-daemon regression can be run with
-`python3 -B scripts/test-session-metadata-live.py`; CI pins Codex CLI 0.155.0,
+`python3 -B scripts/test-session-metadata-live.py`; CI pins Codex CLI 0.169.0,
 uses synthetic histories, makes no model calls, and stops its disposable daemon.
 `python3 -B scripts/test-session-deletion-live.py` verifies preview and native
 deletion without a daemon in an isolated home, including preservation of another
-project's history. The temporary-connection deletion path is verified on 0.155.0.
+project's history. The temporary-connection deletion path is verified on 0.169.0.
 
 ### session-walkthrough
 
@@ -666,7 +676,7 @@ present. A pane launched active still fails closed if the config is later
 disabled or changed.
 `knowledge` and `session-chat` use `SessionStart`, `UserPromptSubmit`, and
 `Stop` on both providers. `chronos` differs by provider: Claude registers
-`UserPromptSubmit` plus a throttled `PreToolUse` refresh, while Codex registers
+`UserPromptSubmit` plus a throttled `PostToolBatch` refresh, while Codex registers
 only `UserPromptSubmit`, so `CHRONOS_INTERVAL_MIN` has no effect there.
 
 Registering a hook is not the same as turning a feature on. `knowledge`'s
@@ -889,12 +899,12 @@ or change the configuration and restart. Launch refuses unavailable grants.
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
-| `CHRONOS_INTERVAL_MIN` | Yes | No | `5` | Throttle window in minutes for the Claude-only PreToolUse refresh hook. Within the window, PreToolUse emits nothing; UserPromptSubmit always injects a fresh timestamp regardless. |
+| `CHRONOS_INTERVAL_MIN` | Yes | No | `5` | Throttle window in minutes for the Claude-only PostToolBatch refresh hook. Within the window, PostToolBatch emits nothing; UserPromptSubmit always injects a fresh timestamp regardless. |
 
 Chronos injects a single compact `Current time: …` line in the configured
 timezone (weekday, time, zone, and numeric UTC offset computed from one captured
 epoch) as model context. The default is IST (`Asia/Kolkata`). The Claude implementation injects on every user prompt and refreshes
-mid-turn via the throttled PreToolUse hook; the Codex implementation is
+mid-turn via the throttled PostToolBatch hook (once per batch of tool calls); the Codex implementation is
 per-prompt only (UserPromptSubmit), so it has no throttle variable.
 Claude stores throttle state in an owner-only directory at `$XDG_RUNTIME_DIR/chronos`, falling back to `$XDG_CACHE_HOME/chronos` and then `~/.cache/chronos`; the Codex build keeps no state.
 
@@ -952,7 +962,7 @@ does not establish that a candidate was captured.
 | `KNOWLEDGE_AUTO_CAPTURE_MAX_PENDING` | Yes | Yes | `20` | Pending inbox capacity for automatic capture; checked again under the writer lock. |
 | `KNOWLEDGE_AUTO_CAPTURE_SESSION_LIMIT` | Yes | Yes | `5` | Pending automatic candidates per originating session, enforced under the writer lock. Unknown sessions share one bucket; consolidation or dismissal frees capacity. |
 | `KNOWLEDGE_AUTO_CAPTURE_MAX_BYTES` | Yes | Yes | `4096` | Hard per-candidate raw-byte cap. |
-| `KNOWLEDGE_CONSOLIDATE_NUDGE` | Yes | Yes | Unset (off) | Off unless set to a non-empty value other than `0`, `no`, `off`, or `false`. When on, reminds the session to run `/knowledge:consolidate` while pending candidates remain. Reviewed dismissals are retained separately and do not trigger reminders. Silent on any error. |
+| `KNOWLEDGE_CONSOLIDATE_NUDGE` | Yes | Yes | Unset (off) | Off unless set to a non-empty value other than `0`, `no`, `off`, or `false`. When on, shows the user a reminder (a Stop `systemMessage`) to run `/knowledge:consolidate` while pending candidates remain; the turn ends normally. Reviewed dismissals are retained separately and do not trigger reminders. Silent on any error. |
 | `KNOWLEDGE_PANE_NAME` | Yes | Yes | Auto-detected | First entry in the writer's pane-identity resolution chain, used for role detection and write provenance. Set it where tmux pane lookup is unavailable; writers fail closed with `unresolved pane identity` rather than guessing. |
 
 `memory-write.sh` also reads several `KNOWLEDGE_TEST_*` fault-injection
@@ -1059,8 +1069,12 @@ These checks do not themselves enable repository merge protection.
   `shellcheck --severity=warning` over all `*.sh`, on push to `main` and on
   pull requests.
 - CI splits those suites across parallel shard jobs (`release-checks`,
-  `smoke-claude-scheduler`, `smoke-claude-workspace`, `smoke-codex-workspace`,
-  `smoke-plugins`, `knowledge-evals`). The `validate-release` check passes
+  `plugin-manifests`, `smoke-claude-scheduler`, `smoke-claude-workspace`,
+  `smoke-codex-workspace`, `smoke-plugins`, `knowledge-evals`).
+  `plugin-manifests` runs `claude plugin validate --strict` on every Claude
+  plugin and on the marketplace, with Claude Code pinned in
+  `.github/tools/claude` (2.1.325) and run from its platform package with
+  install scripts off. The `validate-release` check passes
   only when every shard succeeds, and `validate-release.sh` fails if a shard is
   missing from that gate. A new push to a pull request cancels the pull
   request's older run. Runs on `main` are never cancelled.

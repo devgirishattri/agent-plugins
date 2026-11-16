@@ -41,6 +41,30 @@ jobs:
       - name: Test native deletion without a daemon
         run: python3 -B scripts/test-session-deletion-live.py
 
+  plugin-manifests:
+    name: plugin-manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      # Install scripts stay off. The platform package ships the native
+      # binary, so it runs directly; no login or network is needed.
+      - name: Install pinned Claude Code CLI
+        run: npm ci --ignore-scripts --prefix .github/tools/claude
+      - name: Validate every Claude plugin and the marketplace (strict)
+        run: |
+          claude_bin="$GITHUB_WORKSPACE/.github/tools/claude/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
+          "$claude_bin" --version
+          home="$(mktemp -d)"
+          failed=0
+          for target in plugins/*/ .; do
+            echo "== $target"
+            env -i PATH="/usr/bin:/bin" HOME="$home" "$claude_bin" plugin validate --strict "$target" || failed=1
+          done
+          exit "$failed"
+
   release-checks:
     name: release-checks
     runs-on: ubuntu-latest
@@ -263,6 +287,7 @@ jobs:
     name: validate-release
     needs:
       - release-checks
+      - plugin-manifests
       - smoke-claude-scheduler
       - smoke-claude-workspace
       - smoke-codex-workspace

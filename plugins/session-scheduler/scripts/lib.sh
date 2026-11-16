@@ -588,14 +588,17 @@ EOF
     SESSION_CHAT_ACK_FILE="$ack_file"
     # Same durable transport task-assign uses for the outbound leg; exit 0 =
     # delivered. Tolerate 3 (queued) defensively, though the current
-    # dispatch-to-session.sh already normalizes a queued send to rc 0.
+    # dispatch-to-session.sh already normalizes a queued send to rc 0. Status 4
+    # (unsubmitted, durable copy queued) is recorded as queued, with no
+    # inline fallback: that would be a second copy.
     dack=$(session_chat_dispatch "$target" "$ack_file" 2>/dev/null)
     dc=$?
     if [ "$dc" = "$SESSION_CHAT_DISPATCH_NOT_INVOKED" ]; then dc=1; else attempted=1; fi
     case "$dc" in
-      0|3)
+      0|3|"$SESSION_CHAT_UNSUBMITTED")
         SESSION_CHAT_ACK_STATUS="dispatched"
-        if [ "$dc" = "3" ] || printf '%s\n' "$dack" | grep -q '^Queued dispatch to '; then
+        [ "$dc" = "$SESSION_CHAT_UNSUBMITTED" ] && sched_warn_unsubmitted "$target" "$event ack"
+        if [ "$dc" = "3" ] || [ "$dc" = "$SESSION_CHAT_UNSUBMITTED" ] || printf '%s\n' "$dack" | grep -q '^Queued dispatch to '; then
           SESSION_CHAT_ACK_OBSERVED="queued"
         else
           SESSION_CHAT_ACK_OBSERVED="delivered"
@@ -1380,10 +1383,22 @@ verdict_discard_unreferenced() {
   return 0
 }
 
+# session-chat 0.17.21+ dispatch/send status 4 ("Unsubmitted"): the text is
+# staged in the recipient's input line but was not submitted, and its durable
+# copy stays queued. That is a durable outcome, recorded as queued. Never roll
+# back a file the staged text points to and never send a fallback copy; one
+# Enter in that pane submits it.
+SESSION_CHAT_UNSUBMITTED=4
+# sched_warn_unsubmitted <pane> <what>: the stderr note for a status-4 result.
+sched_warn_unsubmitted() {
+  echo "WARN: the $2 to '$1' is staged in that pane's input line but was not submitted (session-chat status 4); its durable copy stays queued. Press Enter in pane '$1'. Do not resend." >&2
+}
+
 # verdict_notify <task-id> <event-id>
 # ONE notification to the recorded route. Prints exactly one outcome word on
 # stdout: delivered | queued | inline-fallback | failed. Everything else goes
-# to stderr. A queued dispatch is a durable success and is never resent; the
+# to stderr. A queued or unsubmitted (status 4, reported as queued) dispatch is
+# a durable success and is never resent; the
 # bounded inline fallback runs only after a HARD dispatch failure and can in
 # rare cases duplicate a pointer. Never writes the ledger.
 # Typed side channel (private; the outcome vocabulary is unchanged): when the caller sets
@@ -1431,6 +1446,10 @@ verdict_notify() {
   chmod 600 "$notice" 2>/dev/null || true
   dout=$(session_chat_dispatch "$to" "$notice"); dc=$?
   if [ "$dc" = "$SESSION_CHAT_DISPATCH_NOT_INVOKED" ]; then dc=1; else attempted=yes; fi
+  if [ "$dc" = "$SESSION_CHAT_UNSUBMITTED" ]; then
+    sched_warn_unsubmitted "$to" "verdict notification"
+    _vn_out queued; return 0
+  fi
   if [ "$dc" = "3" ] || { [ "$dc" = "0" ] && printf '%s\n' "$dout" | grep -q '^Queued dispatch to '; }; then
     _vn_out queued; return 0
   fi

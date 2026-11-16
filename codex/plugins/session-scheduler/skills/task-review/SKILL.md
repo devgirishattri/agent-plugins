@@ -54,7 +54,8 @@ The transition is legal only from `assigned`.
 If the task has a `reviewer`, the script builds and dispatches a private review packet.
 The packet contains the shared ledger homes and original assignment.
 Review state is retained if delivery fails; only the dispatch-only retry rules
-above permit a retry.
+above permit a retry. An unsubmitted dispatch (session-chat status 4) is recorded
+as queued and is never retried; press Enter in the reviewer's pane.
 
 An eligible assigner separately receives a durable lifecycle acknowledgement,
 queued when busy. The ledger remains authoritative. `meta.last_ack` records

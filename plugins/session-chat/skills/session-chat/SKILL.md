@@ -57,6 +57,8 @@ The `id:` field is a unique verification marker. It is repeated at the tail so i
 6. On a verify timeout: sends a line-edit clear sequence (`C-e C-u`, `C-a C-k`, `C-e C-u`) to clear the partial paste from the recipient's prompt, and retries or queues.
 7. Still staged after the extra Enter: returns the **unsubmitted** status. The line is left in the recipient's input, its durable copy stays queued, and `/pane-health` shows the pane as `UNSUBMITTED`.
 
+**Codex recipients: turn off paste-burst detection.** Start every Codex agent pane with `tui.disable_paste_burst = true` (in that pane's Codex `config.toml`, or `codex -c tui.disable_paste_burst=true`). Codex then inserts typed characters as they arrive, so an early Enter submits the line instead of becoming a newline. On Codex 0.169.0 in tmux, an Enter sent right after `send-keys -l` was swallowed 8 times out of 8 by default and submitted 8 times out of 8 with the setting. The submit check above stays as the fallback. The setting also changes how a human's fast paste behaves in that pane, so leave it off in panes a person types into.
+
 A send that never landed **does not leave junk in the recipient's prompt**. If you see "did not land within Xms," the recipient was likely busy in an approval gate or rendering a long TUI frame. An unsubmitted send is different: its line is visible in the recipient's input on purpose, so one Enter there submits it.
 
 ## Durable delivery & orchestrator fan-in

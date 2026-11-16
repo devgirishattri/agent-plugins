@@ -776,6 +776,57 @@ jq -e --arg file "$TEST_HOME/scheduler/prompts/$PARTIAL_REVIEW_ID-ack-review.md"
 ' "$PARTIAL_REVIEW_FILE" >/dev/null \
   && ok || fail "task-review failed ack metadata was not recorded"
 
+# Unsubmitted (session-chat status 4): the line is staged in the recipient's
+# input and its durable copy is queued. Assignment, reviewer dispatch and the
+# assigner ack record it as a durable (queued) outcome, keep the prompt the
+# staged line points to, send no inline copy, and name the pane to press Enter
+# in. The failstub and fallback-ack cases above are the hard-failure controls.
+UNSUB_ROOT="$TEST_HOME/unsubmitted-stub"
+UNSUB_LOG="$TEST_HOME/unsubmitted.log"
+mkdir -p "$UNSUB_ROOT/.codex-plugin" "$UNSUB_ROOT/scripts"
+printf '{"name":"session-chat","version":"0.17.21"}\n' > "$UNSUB_ROOT/.codex-plugin/plugin.json"
+printf '#!/usr/bin/env bash\nprintf "dispatch:%%s:%%s\\n" "$1" "$2" >> "%s"\necho "Unsubmitted dispatch to '"'"'$1'"'"'"\necho "Message id: dddddddddddddddd"\nexit 4\n' "$UNSUB_LOG" \
+  > "$UNSUB_ROOT/scripts/dispatch-to-session.sh"
+printf '#!/usr/bin/env bash\nprintf "send:%%s:%%s\\n" "$1" "$2" >> "%s"\nexit 0\n' "$UNSUB_LOG" \
+  > "$UNSUB_ROOT/scripts/send-message.sh"
+chmod +x "$UNSUB_ROOT/scripts"/*.sh
+unsub=$(run_sender bash "$SCRIPT_DIR/task-new.sh" "Unsubmitted dispatch task" --reviewer scheduler-reviewer)
+UNSUB_ID=$(printf '%s\n' "$unsub" | awk '/^Created task/{print $3}' | sed 's/:$//')
+UNSUB_FILE="$TEST_HOME/scheduler/tasks/$UNSUB_ID.json"
+if ! run_sender env SESSION_CHAT_ROOT_OVERRIDE="$UNSUB_ROOT" \
+  bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$UNSUB_ID" "Staged but unsubmitted" \
+  > "$TEST_HOME/unsub-assign.out" 2> "$TEST_HOME/unsub-assign.err"; then
+  fail "task-assign treated an unsubmitted dispatch as a hard failure: $(cat "$TEST_HOME/unsub-assign.err")"
+fi
+[ "$(jq -r '.status' "$UNSUB_FILE")" = "assigned" ] && ok || fail "unsubmitted dispatch did not record the assignment"
+[ -f "$TEST_HOME/scheduler/prompts/$UNSUB_ID.md" ] && ok || fail "unsubmitted dispatch rolled back the prompt its staged line points to"
+grep -F "Press Enter in pane 'scheduler-executor'" "$TEST_HOME/unsub-assign.err" >/dev/null \
+  && ok || fail "unsubmitted assignment did not name the pane to press Enter in"
+grep -F 'Dispatch: unsubmitted' "$TEST_HOME/unsub-assign.out" >/dev/null \
+  && ok || fail "unsubmitted assignment summary omitted the dispatch state"
+: > "$UNSUB_LOG"
+if ! run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$UNSUB_ROOT" \
+  bash "$SCRIPT_DIR/task-review.sh" "$UNSUB_ID" "commit 5eb1234" \
+  > "$TEST_HOME/unsub-review.out" 2> "$TEST_HOME/unsub-review.err"; then
+  fail "task-review failed on an unsubmitted dispatch: $(cat "$TEST_HOME/unsub-review.err")"
+fi
+jq -e '
+  .status == "review"
+  and .meta.review_dispatch_status == "queued"
+  and (.meta.review_dispatched_at // "") != ""
+  and .meta.review_dispatch_error == null
+  and .meta.review_request_msg_id == "dddddddddddddddd"
+  and .meta.last_ack.status == "dispatched"
+' "$UNSUB_FILE" >/dev/null && ok || fail "unsubmitted review dispatch or ack was not recorded as durable: $(jq -c '.meta' "$UNSUB_FILE")"
+[ "$(grep -c '^dispatch:' "$UNSUB_LOG")" -eq 2 ] && ok || fail "unsubmitted review did not dispatch exactly the packet and the ack"
+! grep -q '^send:' "$UNSUB_LOG" && ok || fail "unsubmitted dispatch sent an inline fallback copy"
+grep -F "Press Enter in pane 'scheduler-reviewer'" "$TEST_HOME/unsub-review.err" >/dev/null \
+  && ok || fail "unsubmitted review did not name the reviewer pane"
+: > "$UNSUB_LOG"
+run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$UNSUB_ROOT" \
+  bash "$SCRIPT_DIR/task-review.sh" "$UNSUB_ID" "again" > "$TEST_HOME/unsub-review2.out" 2>&1 || true
+! grep -q '^dispatch:.*-review.md' "$UNSUB_LOG" && ok || fail "task-review re-dispatched an unsubmitted review packet"
+
 # Review-dispatch metadata is scoped to one assignment cycle. Exercise a
 # successful review, rejection, and rework before failing the next review
 # dispatch: the stale first-cycle success timestamp must not block a normal

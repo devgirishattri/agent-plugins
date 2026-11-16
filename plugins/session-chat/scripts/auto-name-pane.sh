@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # auto-name-pane.sh — Auto-set tmux pane @name from Claude session name
+# (the hook payload's session_title, else the bound transcript's custom title)
 # Called from SessionStart hook ONLY (not UserPromptSubmit, to avoid overwriting /whoami)
 # Supported platforms: macOS, Linux
 #
 # Identity contract:
-#   The pane name must come from THIS session's transcript, never from
+#   The pane name must come from THIS session (its session_title, else its
+#   own transcript), never from
 #   "whichever *.jsonl is newest in the project dir" — that file can belong
 #   to a different concurrent session in the same project and would silently
 #   mislabel the pane.
@@ -88,6 +90,17 @@ SESSION_ID=$(extract_field "session_id") || true
 TRANSCRIPT_PATH=$(extract_field "transcript_path") || true
 CWD=$(extract_field "cwd") || true
 
+# Claude Code passes the session's custom title as session_title on
+# SessionStart when one is set (--name, /rename, a hook's sessionTitle output;
+# hooks reference, checked on 2.1.325). It comes from the harness itself, so it
+# needs no transcript binding. The transcript scan below is the fallback for
+# releases that do not send the field: Claude declares the transcript format
+# internal, so it is no longer the primary source.
+#
+# The fallback runs in a command substitution, so each early `exit 0` inside it
+# only ends the scan with no title.
+title_from_transcript() {
+# (Body left unindented: it holds embedded Python, which must stay at column 0.)
 # Without a session_id we cannot check a candidate's basename or its content
 # binding, so there is nothing to accept.
 [ -z "$SESSION_ID" ] && exit 0
@@ -197,6 +210,14 @@ for line in sys.stdin:
         last_title = title
 sys.stdout.write(last_title)
 ' "$SESSION_ID" 2>/dev/null) || true
+fi
+
+  printf '%s' "${SESSION_NAME:-}"
+}
+
+SESSION_NAME=$(extract_field "session_title") || true
+if [ -z "$SESSION_NAME" ]; then
+  SESSION_NAME=$(title_from_transcript) || true
 fi
 
 # Sanitize: session titles are free-form prose, but pane labels must stay in
