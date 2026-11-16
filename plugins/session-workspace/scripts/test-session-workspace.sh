@@ -1013,7 +1013,10 @@ if [ -f "$HERE/../.codex-plugin/plugin.json" ]; then
     HOOK_PROVIDER_OK=1
   fi
 else
-  if jq -e '.hooks.PreToolUse[0].matcher | test("Edit") and test("Write")' "$HOOKS_JSON" >/dev/null 2>&1 && \
+  # Claude: Monitor runs a shell command and PowerShell a script the floor
+  # cannot parse, so both reach the policy; a hook that cannot run blocks.
+  if jq -e '.hooks.PreToolUse[0].matcher | split("|") | index("Edit") and index("Write") and index("Bash") and index("Monitor") and index("PowerShell")' "$HOOKS_JSON" >/dev/null 2>&1 && \
+     jq -e '.hooks.PreToolUse[0].hooks[0].onFailure == "block"' "$HOOKS_JSON" >/dev/null 2>&1 && \
      jq -e '.hooks.PreToolUse[0].hooks[0].command | test("--codex-hook-output") | not' "$HOOKS_JSON" >/dev/null 2>&1; then
     HOOK_PROVIDER_OK=1
   fi
@@ -4004,7 +4007,8 @@ swrun_od "$HERE/workspace-stop.sh" services --config "$SWT_CFG_OD" --confirmed >
 #   * a full start leaves on-demand workers down and says how to start them;
 #     plan and status mark them on demand;
 #   * start --pane waits until the agent draws its input line, and reports a
-#     pane whose agent never does without killing it;
+#     pane whose agent never does without killing it; the project lock is
+#     not held during that wait;
 #   * a later full start keeps a running worker;
 #   * stop --pane refuses, and leaves running, a worker with an assigned
 #     task, a task waiting for its review, unread inbox rows or a running
@@ -4185,6 +4189,33 @@ else
 fi
 rm -f "$SWT_ROOT/worker-boot"
 swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed --force >/dev/null 2>&1
+
+# The project lock covers the tmux changes only: while a --pane start waits
+# for its agent, a second worker start of the same project goes ahead.
+echo 3 > "$SWT_ROOT/worker-boot"
+rm -f "$SWT_ROOT/slow-start.out" "$SWT_ROOT/slow-start.status"
+( SESSION_WORKSPACE_AGENT_READY_TIMEOUT=15 swrun "$HERE/workspace-start.sh" development --pane component-executor --config "$SWT_CFG_W" \
+    > "$SWT_ROOT/slow-start.out" 2>&1; echo "$?" > "$SWT_ROOT/slow-start.status" ) &
+SWT_SLOW_PID=$!
+SWT_I=0
+while [ -z "$(swt_w_pane "$SWT_W_EXEC")" ] && [ "$SWT_I" -lt 50 ]; do sleep 0.1; SWT_I=$((SWT_I + 1)); done
+SWT_SLOW_EARLY="$(cat "$SWT_ROOT/slow-start.status" 2>/dev/null)"
+SWT_OUT="$(SESSION_WORKSPACE_LOCK_TIMEOUT=1 SESSION_WORKSPACE_AGENT_READY_TIMEOUT=15 swrun "$HERE/workspace-start.sh" development --pane component-reviewer --config "$SWT_CFG_W" 2>&1)"
+SWT_STATUS=$?
+wait "$SWT_SLOW_PID"
+if [ "$SWT_STATUS" -eq 0 ] && [ -z "$SWT_SLOW_EARLY" ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[ready] sample-workers-development / $SWT_W_REV — agent input line on screen" &&
+   [ "$(cat "$SWT_ROOT/slow-start.status" 2>/dev/null)" = "0" ] &&
+   grep -Fq "[ready] sample-workers-development / $SWT_W_EXEC — agent input line on screen" "$SWT_ROOT/slow-start.out" &&
+   [ "$(swt_w_names)" = "sample-workers-component-executor sample-workers-component-reviewer sample-workers-master " ]; then
+  pass "on-demand workers: two concurrent worker starts both succeed (no lock held across the agent wait)"
+else
+  fail "on-demand workers: two concurrent worker starts both succeed (no lock held across the agent wait)" \
+    "status=$SWT_STATUS early=[$SWT_SLOW_EARLY] names=[$(swt_w_names)] out=$SWT_OUT slow=$(cat "$SWT_ROOT/slow-start.out" 2>/dev/null)"
+fi
+rm -f "$SWT_ROOT/worker-boot"
+swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed --force >/dev/null 2>&1
+swrun "$HERE/workspace-stop.sh" development --pane component-reviewer --config "$SWT_CFG_W" --confirmed --force >/dev/null 2>&1
 
 # Refusals that never touch tmux.
 SWT_OUT="$(swrun "$HERE/workspace-start.sh" development --pane master --config "$SWT_CFG_W" 2>&1)"

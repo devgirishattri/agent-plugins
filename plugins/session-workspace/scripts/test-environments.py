@@ -75,7 +75,7 @@ class Environments(unittest.TestCase):
         pane = next(p for s in plan['sessions'] for p in s['panes'] if p['name'] == name)
         env = dict(ENV, SESSION_WORKSPACE_CONFIG=str(self.path), SESSION_WORKSPACE_HARNESS_MODE='enforce', SESSION_WORKSPACE_PANE_NAME=name,
                    SESSION_WORKSPACE_ROLE=pane['role'], SESSION_WORKSPACE_PROJECT_ROOT=str(self.root), SESSION_WORKSPACE_PANE_CWD=pane['cwd'],
-                   SESSION_WORKSPACE_SCOPE_JSON=json.dumps(pane['scope'], sort_keys=True, separators=(',', ':')),
+                   SESSION_WORKSPACE_SCOPE_JSON=json.dumps(pane['scope_identity'], sort_keys=True, separators=(',', ':')),
                    SESSION_WORKSPACE_GUARDS_JSON=json.dumps(plan['harness']['guards'],sort_keys=True,separators=(',', ':')))
         with patch.dict(os.environ, env, clear=True):
             ctx, failure = policy.load_context()
@@ -482,6 +482,102 @@ class Environments(unittest.TestCase):
             _, failure=p.load_context()
         self.assertEqual(failure.rule,'identity.scope')
 
+    def add_lane(self, name, orchestrator=True):
+        cwd = 'component-' + name
+        (self.root/cwd).mkdir()
+        panes = [dict(name=name+'-executor', role='executor', cwd=cwd), dict(name=name+'-reviewer', role='reviewer', cwd=cwd)]
+        lane = dict(id=name, cwd=cwd, development=['dev-'+name], services=[])
+        if orchestrator:
+            (self.root/('control-'+name)).mkdir()
+            panes.insert(0, dict(name=name+'-master', role='master', cwd='control-'+name))
+            lane['orchestrator'] = name+'-master'
+        self.cfg['sessions'].append(dict(id='dev-'+name, name='test-dev-'+name, panes=panes))
+        self.cfg['environments'].append(lane)
+        self.cfg['orchestration']['targets'].append(dict(id=name, cwd=cwd, remote='origin', work_branch='main', release_branch='production', deploy={'strategy':'merge-no-ff-v1'}))
+        self.write()
+
+    def load_with(self, policy, env):
+        with patch.dict(os.environ, env, clear=True):
+            return policy.load_context()
+
+    def test_scope_pin_survives_other_lanes(self):
+        plan = self.plan()
+        pins = {p['name']: (p['scope'], p['scope_identity']) for s in plan['sessions'] for p in s['panes'] if p.get('scope')}
+        self.assertEqual(pins['web-master'][1], {'environment': 'web', 'root_orchestrator': 'root', 'own': self.cfg['environments'][0]})
+        self.assertEqual(pins['root'][1], {'environment': None, 'root_orchestrator': 'root', 'direct': []})
+        contexts = {name: self.context(name) for name in ['root', 'web-master', 'web-executor', 'vue3-reviewer']}
+        legacy = dict(contexts['web-master'][2], SESSION_WORKSPACE_SCOPE_JSON=json.dumps(pins['web-master'][0], sort_keys=True, separators=(',', ':')))
+        _, failure = self.load_with(contexts['web-master'][0], legacy)
+        self.assertIsNone(failure)  # a pane launched by 0.13.1 pinned the whole scope
+        self.add_lane('c')
+        for name, (policy, _, env) in contexts.items():
+            _, failure = self.load_with(policy, env)
+            self.assertIsNone(failure, name)
+        root_ctx, _ = self.load_with(contexts['root'][0], contexts['root'][2])
+        self.assertIn('c-master', root_ctx.route_peers)
+        _, failure = self.load_with(contexts['web-master'][0], legacy)
+        self.assertEqual(failure.rule, 'identity.scope')
+        # A lane the root coordinates directly changes the root's own pin.
+        self.add_lane('d', orchestrator=False)
+        _, failure = self.load_with(contexts['root'][0], contexts['root'][2])
+        self.assertEqual(failure.rule, 'identity.scope')
+        _, failure = self.load_with(contexts['web-master'][0], contexts['web-master'][2])
+        self.assertIsNone(failure)
+        # A change to a pane's own environment still fails it closed.
+        self.cfg['environments'][0]['services'] = []
+        self.write()
+        for name in ['web-master', 'web-executor']:
+            _, failure = self.load_with(contexts[name][0], contexts[name][2])
+            self.assertEqual(failure.rule, 'identity.scope', name)
+        _, failure = self.load_with(contexts['vue3-reviewer'][0], contexts['vue3-reviewer'][2])
+        self.assertIsNone(failure)
+
+    def git(self, *args, cwd=None):
+        result = subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', *args],
+                                cwd=cwd or self.root, env=ENV, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_lanes_on_worktrees_protect_main_checkout(self):
+        app = self.root/'app'
+        app.mkdir()
+        (app/'README.md').write_text('main\n')
+        self.git('init', '-q', '-b', 'main', cwd=app)
+        self.git('add', 'README.md', cwd=app)
+        self.git('commit', '-q', '-m', 'init', cwd=app)
+        for lane, cwd in [('a', 'component-a'), ('b', 'component-b')]:
+            self.git('worktree', 'add', '-q', '-b', 'lane-'+lane, str(self.root/cwd), cwd=app)
+        p, root, _ = self.context('root')
+        self.assertIn(app.resolve(), root.child_roots)
+        self.assertIn((app/'.git').resolve(), root.child_roots)
+        for path in [app/'README.md', app/'.git/hooks/pre-commit', app/'.git/config', self.root/'component-a/README.md']:
+            with self.assertRaises(p.PolicyFailure) as caught:
+                p.validate_edit(root, {'file_path': str(path)}, {})
+            self.assertEqual(caught.exception.rule, 'orchestrator.child_write', path)
+        for command in ['touch app/x', 'rm -f app/.git/hooks/pre-push']:
+            with self.assertRaises(p.PolicyFailure) as caught:
+                p.validate_bash(root, command, {})
+            self.assertEqual(caught.exception.rule, 'orchestrator.child_write', command)
+        p.validate_edit(root, {'file_path': str(self.root/'notes.md')}, {})
+        p.validate_bash(root, 'git -C app status', {})
+        p, executor, _ = self.context('web-executor')
+        with self.assertRaises(p.PolicyFailure):
+            p.validate_edit(executor, {'file_path': str(app/'.git/hooks/pre-commit')}, {})
+
+    def test_worktrees_of_the_project_root(self):
+        (self.root/'README.md').write_text('main\n')
+        self.git('init', '-q', '-b', 'main')
+        self.git('add', 'README.md')
+        self.git('commit', '-q', '-m', 'init')
+        self.git('worktree', 'add', '-q', '-b', 'lane-a', str(self.root/'component-a'))
+        p, root, _ = self.context('root')
+        self.assertIn((self.root/'.git').resolve(), root.child_roots)
+        self.assertNotIn(self.root, root.child_roots)  # the root orchestrator's own checkout
+        with self.assertRaises(p.PolicyFailure) as caught:
+            p.validate_edit(root, {'file_path': str(self.root/'.git/hooks/pre-commit')}, {})
+        self.assertEqual(caught.exception.rule, 'orchestrator.child_write')
+        p.validate_edit(root, {'file_path': str(self.root/'README.md')}, {})
+        p.validate_bash(root, 'git status', {})
+
     def test_local_edit_and_shell(self):
         p, ctx, _ = self.context('web-master')
         p.validate_edit(ctx,{'file_path':str(self.root/'control-web/plan.md')},{})
@@ -497,6 +593,34 @@ class Environments(unittest.TestCase):
         p.validate_helper(ctx,'session-workspace','workspace.sh',['status','--environment','web'])
         for script,args in [('workspace-start.sh',['all']),('workspace-stop.sh',['service-vue3','--confirmed']),('workspace.sh',['restart','--environment','vue3'])]:
             with self.assertRaises(p.PolicyFailure):p.validate_helper(ctx,'session-workspace',script,args)
+
+    def test_free_shell_lifecycle_scope(self):
+        # The `workspace` dispatcher on PATH, workspace.sh and a lifecycle
+        # script run by name get the same session scope as the reviewed helper.
+        p, ctx, _ = self.context('web-master')
+        for command in ['workspace start service-web', 'workspace stop service-web --confirmed', 'workspace status',
+                        'workspace plan --json', 'workspace-environment.sh stop --environment web --services --confirmed']:
+            p.validate_bash(ctx, command, {})
+        for command in ['workspace stop service-vue3 --confirmed', 'workspace start service-vue3',
+                        'workspace restart dev-vue3', 'workspace reconcile service-vue3 --apply',
+                        'bash workspace.sh stop service-vue3 --confirmed', 'workspace-stop.sh service-vue3 --confirmed',
+                        'bash /opt/x/workspace-start.sh control', 'workspace start --all', 'workspace start',
+                        'workspace stop --environment vue3 --services --confirmed', 'workspace install',
+                        'workspace-environment.sh stop --environment vue3 --services --confirmed',
+                        'ls && workspace start service-vue3']:
+            with self.assertRaises(p.PolicyFailure, msg=command) as caught:
+                p.validate_bash(ctx, command, {})
+            self.assertEqual(caught.exception.rule, 'routing.scope', command)
+        p, root, _ = self.context('root')
+        for command in ['workspace stop service-vue3 --confirmed', 'workspace start service-web', 'workspace install']:
+            p.validate_bash(root, command, {})
+        self.shared_root()
+        p, scoped, _ = self.context('sample-vue3-master')
+        p.validate_bash(scoped, 'workspace stop vue3-services --confirmed', {})
+        for command in ['workspace stop services --confirmed', 'workspace stop development --confirmed']:
+            with self.assertRaises(p.PolicyFailure, msg=command) as caught:
+                p.validate_bash(scoped, command, {})
+            self.assertEqual(caught.exception.rule, 'routing.scope', command)
 
     def test_scheduler_scope(self):
         p,ctx,_=self.context('web-master')
