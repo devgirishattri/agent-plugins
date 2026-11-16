@@ -870,10 +870,13 @@ session_chat_ack() {
     dispatch_out=$(bash "$chat_root/scripts/dispatch-to-session.sh" "$target" "$SESSION_CHAT_ACK_FILE" 2>/dev/null)
     dispatch_rc=$?
     SESSION_CHAT_ACK_OBSERVED="failed"
-    if [ "$dispatch_rc" -eq 0 ] || [ "$dispatch_rc" -eq 3 ]; then
+    # Status 4 (unsubmitted, durable copy queued) is recorded as queued, with
+    # no inline fallback: that would be a second copy.
+    if [ "$dispatch_rc" -eq 0 ] || [ "$dispatch_rc" -eq 3 ] || [ "$dispatch_rc" -eq "$SESSION_CHAT_UNSUBMITTED" ]; then
       SESSION_CHAT_ACK_STATUS="dispatched"
       SESSION_CHAT_ACK_OBSERVED="delivered"
-      if [ "$dispatch_rc" = 3 ] || printf '%s\n' "$dispatch_out" | grep -q '^Queued dispatch to '; then
+      [ "$dispatch_rc" -eq "$SESSION_CHAT_UNSUBMITTED" ] && sched_warn_unsubmitted "$target" "$event ack"
+      if [ "$dispatch_rc" = 3 ] || [ "$dispatch_rc" -eq "$SESSION_CHAT_UNSUBMITTED" ] || printf '%s\n' "$dispatch_out" | grep -q '^Queued dispatch to '; then
         SESSION_CHAT_ACK_OBSERVED="queued"
       fi
       return 0
@@ -1355,10 +1358,22 @@ verdict_discard_unreferenced() {
   return 0
 }
 
+# session-chat 0.17.21+ dispatch/send status 4 ("Unsubmitted"): the text is
+# staged in the recipient's input line but was not submitted, and its durable
+# copy stays queued. That is a durable outcome, recorded as queued. Never roll
+# back a file the staged text points to and never send a fallback copy; one
+# Enter in that pane submits it.
+SESSION_CHAT_UNSUBMITTED=4
+# sched_warn_unsubmitted <pane> <what>: the stderr note for a status-4 result.
+sched_warn_unsubmitted() {
+  echo "WARN: the $2 to '$1' is staged in that pane's input line but was not submitted (session-chat status 4); its durable copy stays queued. Press Enter in pane '$1'. Do not resend." >&2
+}
+
 # verdict_notify <task-id> <event-id>
 # ONE notification to the recorded route. Prints exactly one outcome word on
 # stdout: delivered | queued | inline-fallback | failed. Everything else goes
-# to stderr. A queued dispatch is a durable success and is never resent; the
+# to stderr. A queued or unsubmitted (status 4, reported as queued) dispatch is
+# a durable success and is never resent; the
 # bounded inline fallback runs only after a HARD dispatch failure and can in
 # rare cases duplicate a pointer. Never writes the ledger.
 verdict_notify() {
@@ -1400,6 +1415,10 @@ verdict_notify() {
   chmod 600 "$notice" 2>/dev/null || true
   dout=$(session_chat_dispatch "$to" "$notice"); dc=$?
   if [ "$dc" = "$SESSION_CHAT_DISPATCH_NOT_INVOKED" ]; then dc=1; else attempted=yes; fi
+  if [ "$dc" = "$SESSION_CHAT_UNSUBMITTED" ]; then
+    sched_warn_unsubmitted "$to" "verdict notification"
+    _vn_out queued; return 0
+  fi
   if [ "$dc" = "3" ] || { [ "$dc" = "0" ] && printf '%s\n' "$dout" | grep -q '^Queued dispatch to '; }; then
     _vn_out queued; return 0
   fi

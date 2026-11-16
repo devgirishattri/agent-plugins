@@ -1,5 +1,27 @@
 # Changelog
 
+## session-scheduler 0.7.10 — 2026-11-16
+
+- **An unsubmitted dispatch is durable, not a failure.** session-chat 0.17.21
+  returns status 4 when a dispatch is staged in the recipient's input line but
+  was not submitted; its durable copy stays queued and one Enter in that pane
+  submits it. The scheduler accepted only 0 and 3, so `task-assign` rolled
+  back the prompt the staged line pointed to and left the task unassigned, the
+  assigner ack and verdict notification sent a second inline copy, and
+  `task-review` recorded the reviewer dispatch as failed, which allowed a
+  duplicating retry. Status 4 is now recorded as queued on every path
+  (`task-assign`, the `task-review` reviewer dispatch, the assigner ack
+  ladder, verdict notification, and the contract engine's assign and review
+  dispatches): nothing is rolled back or resent, and a WARN names the pane to
+  press Enter in. The outcome words in the ledger and in `diag/1` records are
+  unchanged. `task-assign` also prints `dispatch: unsubmitted`.
+- Docs: the scheduler skill, `task-assign` and `task-review` (both trees)
+  describe the unsubmitted case.
+- Tests: an `unsubmitted4` dispatch stub. The Claude suite checks assign,
+  review, rerun, verdict, block ack and contract assign against it, with a
+  hard-failure control; the Codex suite checks assign, review, the ack and a
+  review rerun. Both new cases fail on 0.7.9.
+
 ## session-chat 0.17.22 — 2026-11-16
 
 - **Queued messages reach Claude again.** The Claude `UserPromptSubmit` hook

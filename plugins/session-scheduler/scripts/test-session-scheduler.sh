@@ -1712,7 +1712,7 @@ vd_chat_root() { # vd_chat_root <dir> [with-helper|no-helper]
   [ "${2:-with-helper}" = with-helper ] && cp "$VD_CHAT_SRC/own-draft-check.sh" "$d/scripts/" 2>/dev/null
   cat > "$d/scripts/dispatch-to-session.sh" <<'STUB'
 #!/usr/bin/env bash
-# Recording stub. VD_MODE: delivered | queued | queued3 | fail.
+# Recording stub. VD_MODE: delivered | queued | queued3 | unsubmitted4 | fail.
 n=$(( $(ls "$VD_LOG"/dispatch-*.md 2>/dev/null | wc -l) + 1 ))
 cp "$2" "$VD_LOG/dispatch-$n.md"; echo "$1" >> "$VD_LOG/dispatch.log"
 [ -n "${VD_MUTATE:-}" ] && printf 'edited\n' >> "$VD_MUTATE"
@@ -1722,6 +1722,7 @@ case "${VD_MODE:-delivered}" in
   delivered) echo "Dispatched task to '$1'"; [ -n "${VD_ID_OUT-x}" ] && printf '%s\n' "${VD_ID_OUT-Message id: aaaaaaaaaaaaaaaa}"; exit 0 ;;
   queued)    echo "Queued dispatch to '$1' — recipient was busy; it will arrive on their next turn."; echo "Message id: bbbbbbbbbbbbbbbb"; exit 0 ;;
   queued3)   echo "Message id: cccccccccccccccc"; exit 3 ;;
+  unsubmitted4) echo "Unsubmitted dispatch to '$1' — the notification is staged in its input line but was not submitted; the durable copy stays queued."; echo "Message id: dddddddddddddddd"; exit 4 ;;
   *)         echo "stub hard failure" >&2; exit 1 ;;
 esac
 STUB
@@ -2226,6 +2227,63 @@ VD_MODE=fail vd reviewer-1 task-done.sh "$VF_ID" --generation 1 --note-file "$VF
 VN_ID=$(vc_task VD_ID_OUT=); [ "$(jq -c '.meta.review_request_msg_id' "$(vd_tf "$VN_ID")")" = null ] || vd_bad="$vd_bad [contracted request id fabricated]"
 if [ -z "$vd_bad" ]; then pass "contracted_done_block_verdict_event_notification_and_admission_digest"
 else fail "contracted_done_block_verdict_event_notification_and_admission_digest" "$vd_bad"; fi
+
+# Unsubmitted (session-chat status 4): the line is staged in the recipient's
+# input and its durable copy is queued. Every scheduler path records it as a
+# durable outcome (queued), keeps the file the staged line points to, sends no
+# fallback copy, and names the pane to press Enter in. The delivered, queued
+# and hard-failure cases above are the controls.
+vd_bad=""
+# task-assign: assignment recorded, prompt kept, no rollback, pane named
+us_id=$(vd master-1 task-new.sh "us-task" --reviewer reviewer-1 2>&1 | awk '/Created task:/ {print $3}'); vd_reset_log
+us_out=$(VD_MODE=unsubmitted4 vd master-1 task-assign.sh executor-1 "$us_id" "do it" 2>&1); us_rc=$?
+US_F=$(vd_tf "$us_id")
+{ [ "$us_rc" = 0 ] && [ "$(jq -r .status "$US_F")" = assigned ] && [ "$(jq -r .assignee "$US_F")" = executor-1 ] \
+  && [ -f "$VD_HOME/prompts/$us_id.md" ] && [ "$(vd_ndisp)" = 1 ] && [ ! -e "$VD_LOG/send.log" ] \
+  && echo "$us_out" | grep -qF "Press Enter in pane 'executor-1'" && echo "$us_out" | grep -qF 'dispatch: unsubmitted'; } \
+  || vd_bad="$vd_bad [assign rc=$us_rc status=$(jq -r .status "$US_F") prompt=$([ -f "$VD_HOME/prompts/$us_id.md" ] && echo kept || echo gone) out=$us_out]"
+# task-review: the reviewer packet is recorded as queued with its request id, the
+# assigner ack is recorded dispatched/queued, no inline send, and a rerun does not
+# dispatch again.
+vd_reset_log
+ur_out=$(VD_MODE=unsubmitted4 vd executor-1 task-review.sh "$us_id" "sha abc" 2>&1); ur_rc=$?
+{ [ "$ur_rc" = 0 ] && [ "$(jq -r .status "$US_F")" = review ] \
+  && jq -e '.meta.review_dispatch_status == "queued" and (.meta.review_dispatched_at | type) == "string" and .meta.review_request_msg_id == "dddddddddddddddd" and .meta.review_dispatch_error == null' "$US_F" >/dev/null 2>&1 \
+  && jq -e '.meta.last_ack.status == "dispatched"' "$US_F" >/dev/null 2>&1 \
+  && [ "$(vd_ndisp)" = 2 ] && [ ! -e "$VD_LOG/send.log" ] \
+  && echo "$ur_out" | grep -qF "Press Enter in pane 'reviewer-1'" && echo "$ur_out" | grep -qF "Press Enter in pane 'master-1'"; } \
+  || vd_bad="$vd_bad [review rc=$ur_rc meta=$(jq -c '.meta' "$US_F") dispatches=$(vd_ndisp) send=$([ -e "$VD_LOG/send.log" ] && echo yes) out=$ur_out]"
+vd_reset_log
+VD_MODE=unsubmitted4 vd executor-1 task-review.sh "$us_id" "sha abc" >/dev/null 2>&1
+[ -z "$(vd_ndisp)" ] || vd_bad="$vd_bad [review rerun dispatched again: $(vd_ndisp)]"
+# verdict notification: recorded queued, no bounded pointer sent
+vd_reset_log; US_D=$(vd_draft reviewer-1 us-done.md "unsubmitted verdict")
+uv_out=$(VD_MODE=unsubmitted4 vd reviewer-1 task-done.sh "$us_id" --note-file "$US_D" 2>&1); uv_rc=$?
+{ [ "$uv_rc" = 0 ] && [ "$(jq -r .status "$US_F")" = "done" ] \
+  && [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$US_F")" = queued ] \
+  && [ "$(vd_ndisp)" = 1 ] && [ ! -e "$VD_LOG/send.log" ] && echo "$uv_out" | grep -qF "Press Enter in pane 'master-1'"; } \
+  || vd_bad="$vd_bad [verdict rc=$uv_rc events=$(jq -c '.meta.verdict_events' "$US_F") send=$([ -e "$VD_LOG/send.log" ] && echo yes) out=$uv_out]"
+# lifecycle ack without a verdict file (task-block by the assigner): dispatched, no fallback
+ub_id=$(vd_task assigned); vd_reset_log
+ub_out=$(VD_MODE=unsubmitted4 vd executor-1 task-block.sh "$ub_id" "stuck" 2>&1); ub_rc=$?
+{ [ "$ub_rc" = 0 ] && [ "$(jq -r .status "$(vd_tf "$ub_id")")" = blocked ] \
+  && jq -e '.meta.last_ack.status == "dispatched"' "$(vd_tf "$ub_id")" >/dev/null 2>&1 && [ ! -e "$VD_LOG/send.log" ]; } \
+  || vd_bad="$vd_bad [block ack rc=$ub_rc last_ack=$(jq -c '.meta.last_ack' "$(vd_tf "$ub_id")") out=$ub_out]"
+# contracted assign: delivered (phase idle, still assigned), never blocked/uncertain
+uc_id=$(vd master-1 task-new.sh "uc-task" --reviewer reviewer-1 2>&1 | awk '/Created task:/ {print $3}')
+vd master-1 task-contract.sh attach "$uc_id" --spec "$VC_SPEC" >/dev/null 2>&1; vd_reset_log
+uc_out=$(VD_MODE=unsubmitted4 vd master-1 task-contract.sh assign executor-1 "$uc_id" "implement" 2>&1); uc_rc=$?
+{ [ "$uc_rc" = 0 ] && [ "$(jq -r .status "$(vd_tf "$uc_id")")" = assigned ] \
+  && jq -e '.contract.phase == "idle" and .contract.delivery == "delivered"' "$(vd_tf "$uc_id")" >/dev/null 2>&1 \
+  && echo "$uc_out" | grep -qF "Press Enter in pane 'executor-1'"; } \
+  || vd_bad="$vd_bad [contract assign rc=$uc_rc contract=$(jq -c '{status, phase: .contract.phase, delivery: .contract.delivery}' "$(vd_tf "$uc_id")") out=$uc_out]"
+# control: a hard failure still rolls the assignment back
+uf_id=$(vd master-1 task-new.sh "uf-task" 2>&1 | awk '/Created task:/ {print $3}')
+VD_MODE=fail vd master-1 task-assign.sh executor-1 "$uf_id" "do it" >/dev/null 2>&1; uf_rc=$?
+{ [ "$uf_rc" != 0 ] && [ "$(jq -r .status "$(vd_tf "$uf_id")")" = created ] && [ ! -e "$VD_HOME/prompts/$uf_id.md" ]; } \
+  || vd_bad="$vd_bad [hard-failure control rc=$uf_rc status=$(jq -r .status "$(vd_tf "$uf_id")")]"
+if [ -z "$vd_bad" ]; then pass "unsubmitted_dispatch_is_durable_on_every_path"
+else fail "unsubmitted_dispatch_is_durable_on_every_path" "$vd_bad"; fi
 
 # --- Review round 1 regressions (R1-R5, C1, C2) ---
 

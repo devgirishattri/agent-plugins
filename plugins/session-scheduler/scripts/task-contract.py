@@ -16,6 +16,7 @@ import re
 import signal
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -341,8 +342,13 @@ class Store:
             out,_=process.communicate(timeout=60)
             # Request id: exactly one "Message id: <hex>" stdout line, else unknown (None).
             ids=re.findall(r'^Message id: ([a-f0-9]{8,16})$',out.decode('utf-8','replace'),re.M)
-            self.message_id=ids[0] if process.returncode==0 and len(ids)==1 else None
-            return process.returncode==0
+            # Status 4 (unsubmitted): the line is staged in the pane's input and the
+            # durable copy is queued. That is a delivery; a resend would duplicate it.
+            ok=process.returncode in (0,4)
+            if process.returncode==4:
+                print(f"WARN: the packet to '{target}' is staged in that pane's input line but was not submitted (session-chat status 4); its durable copy stays queued. Press Enter in pane '{target}'. Do not resend.",file=sys.stderr)
+            self.message_id=ids[0] if ok and len(ids)==1 else None
+            return ok
         except subprocess.TimeoutExpired: return False
         finally: stop_group(process)
 

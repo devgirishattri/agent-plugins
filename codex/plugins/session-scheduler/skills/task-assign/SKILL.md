@@ -41,7 +41,11 @@ arguments, confirmation requirements, and lifecycle rules remain authoritative;
 never use --force to repair transport. On a hard dispatch failure, the ledger
 is still not updated, the prompt and automatic handoff file are rolled back,
 and the per-task handoff directory is removed if empty. Fix the hard transport
-cause and retry the same legal assignment.
+cause and retry the same legal assignment. An unsubmitted dispatch (session-chat
+status 4, the packet line staged in the executor's input) is not a hard
+failure: the prompt stays, the ledger records the assignment, the output says
+`Dispatch: unsubmitted`, and a WARN names the pane. Press Enter in that pane;
+do not rerun task-assign.
 
 - `--eta MINUTES` — stores `eta_at`; overdue tasks are flagged `OVERDUE` in status/board views.
 - `--stage NAME` — set/overwrite the stage label.
