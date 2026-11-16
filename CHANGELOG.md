@@ -1,5 +1,22 @@
 # Changelog
 
+## chronos 0.1.5 — 2026-11-16
+
+- **The Claude mid-turn time refresh runs once per tool batch.** The Claude
+  hook was registered on `PreToolUse` with matcher `*`, so it started a shell
+  and `jq` before every tool call, including each call of a parallel batch,
+  and only the throttle kept it quiet. It is now registered on
+  `PostToolBatch`, which Claude Code runs once after a whole batch of tool
+  calls resolves and before the next model request. The throttle
+  (`CHRONOS_INTERVAL_MIN`, default 5 minutes) and the per-session state are
+  unchanged, and a `PreToolUse` call from an older configuration is still
+  throttled the same way. Checked live on Claude Code 2.1.325: the hook ran
+  once for a one-tool turn and the model received its `additionalContext`.
+- The Codex build is unchanged (per-prompt `UserPromptSubmit` only).
+- Tests: `test-chronos.sh` (Claude) runs the throttle cases on
+  `PostToolBatch`, checks the hook wiring, a 300 KB `PostToolBatch` payload,
+  and legacy `PreToolUse` throttling.
+
 ## knowledge 0.5.13 — 2026-11-16
 
 - **The consolidation nudge no longer continues the turn.** The Claude Stop

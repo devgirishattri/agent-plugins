@@ -16,7 +16,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-scheduler` | 0.7.10 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
 | `session-workspace` | 0.14.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
-| `chronos` | 0.1.4 | Inject fresh current date/time context with every prompt for time/day-aware agents |
+| `chronos` | 0.1.5 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.0 | Walk users through session changes with a live in-browser overlay tour |
 
 This table is the fifth place a plugin version is written down, after the two
@@ -666,7 +666,7 @@ present. A pane launched active still fails closed if the config is later
 disabled or changed.
 `knowledge` and `session-chat` use `SessionStart`, `UserPromptSubmit`, and
 `Stop` on both providers. `chronos` differs by provider: Claude registers
-`UserPromptSubmit` plus a throttled `PreToolUse` refresh, while Codex registers
+`UserPromptSubmit` plus a throttled `PostToolBatch` refresh, while Codex registers
 only `UserPromptSubmit`, so `CHRONOS_INTERVAL_MIN` has no effect there.
 
 Registering a hook is not the same as turning a feature on. `knowledge`'s
@@ -889,12 +889,12 @@ or change the configuration and restart. Launch refuses unavailable grants.
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
-| `CHRONOS_INTERVAL_MIN` | Yes | No | `5` | Throttle window in minutes for the Claude-only PreToolUse refresh hook. Within the window, PreToolUse emits nothing; UserPromptSubmit always injects a fresh timestamp regardless. |
+| `CHRONOS_INTERVAL_MIN` | Yes | No | `5` | Throttle window in minutes for the Claude-only PostToolBatch refresh hook. Within the window, PostToolBatch emits nothing; UserPromptSubmit always injects a fresh timestamp regardless. |
 
 Chronos injects a single compact `Current time: …` line in the configured
 timezone (weekday, time, zone, and numeric UTC offset computed from one captured
 epoch) as model context. The default is IST (`Asia/Kolkata`). The Claude implementation injects on every user prompt and refreshes
-mid-turn via the throttled PreToolUse hook; the Codex implementation is
+mid-turn via the throttled PostToolBatch hook (once per batch of tool calls); the Codex implementation is
 per-prompt only (UserPromptSubmit), so it has no throttle variable.
 Claude stores throttle state in an owner-only directory at `$XDG_RUNTIME_DIR/chronos`, falling back to `$XDG_CACHE_HOME/chronos` and then `~/.cache/chronos`; the Codex build keeps no state.
 

@@ -2,9 +2,12 @@
 # chronos: emit the current date/time as additionalContext for Claude Code hooks.
 #
 # UserPromptSubmit: always emits (every prompt gets a fresh timestamp).
-# PreToolUse: emits only when CHRONOS_INTERVAL_MIN (default 5) minutes have
-# elapsed since the last emission for this session, so long autonomous turns
-# stay time-aware without injecting a line per tool call.
+# PostToolBatch (and PreToolUse, from configurations before 0.1.5): emits only
+# when CHRONOS_INTERVAL_MIN (default 5) minutes have elapsed since the last
+# emission for this session, so long autonomous turns stay time-aware without
+# injecting a line per tool call. PostToolBatch runs once after a whole batch of
+# parallel tool calls, before the next model request, so it costs one hook run
+# per batch instead of one per tool call.
 set -uo pipefail
 
 input=$(cat 2>/dev/null || true)
@@ -59,7 +62,7 @@ state_write() {
   return 0
 }
 
-if [ "$event" = "PreToolUse" ]; then
+if [ "$event" = "PostToolBatch" ] || [ "$event" = "PreToolUse" ]; then
   last=$(state_read) || last=0
   case "$last" in (*[!0-9]*|'') last=0;; esac
   if [ $((epoch - last)) -lt $((interval_min * 60)) ]; then
