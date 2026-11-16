@@ -46,6 +46,7 @@ the CLI contract string both entry points use for their compatibility check.
 | `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes or on-demand workers and leaves the session running; a busy worker is left running unless `--force`. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
+| `label` | `workspace-label ENVIRONMENT [LABEL\|--clear] [--config PATH] [--json]` | Never (state file only) | Schema v5. Shows or sets the label of an environment's unnamed executor/reviewer panes, which are named `<project.id>-<environment>-<executor\|reviewer>[-<label>]`. Refuses while one of those workers runs, and refuses a label whose names the config would not accept. See "Worker names". |
 | `harness-status` | `harness-status [--config PATH] [--json] [--probe]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates), the strict-v1 role floor for this pane's role (every role outside a pane), the optional guard packs, and whether this pane's engine identity matches the validated plan. `--probe` decides this pane's built-in floor cases without running them and exits 1 on any unexpected decision. |
 | `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3–v5 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
 
@@ -606,7 +607,7 @@ role floor is off. The floor:
   own pane, by any route (rule `orchestrator.self_stop`; see "On-demand
   workers"). Executors and reviewers are refused
   the lifecycle verbs (`start`, `stop`, `restart`, `reconcile`, `install`,
-  `browser-config`) by any route, including the `workspace` dispatcher on
+  `browser-config`, `label`) by any route, including the `workspace` dispatcher on
   `PATH`, under rule `coordination.write`.
 - **Unknown tools are allowed** for every role (`Read`, `Grep`, `Glob`,
   `WebFetch`, ...). Classification is by tool *name*, never by the shape of
@@ -1680,6 +1681,23 @@ that write the current branch need its branch or a detached HEAD checked out.
 Orchestrators may read and merge lane branches but not write them. Lanes do
 not deploy: merge them into the release branch in the main checkout. The full
 list is in the environments reference.
+
+**Worker names (0.16.0).** An executor or reviewer pane in an environment's
+development session may leave out `name`. The engine then names it
+`<project.id>-<environment>-executor` or `-reviewer`. The environment's
+coordinator can add a label with `workspace label ENVIRONMENT LABEL` (1-24
+characters of `a-z`, `0-9` and `-`), which makes the names
+`<project.id>-<environment>-executor-<label>` and `-reviewer-<label>`. The
+label is kept in the project state file `labels.json`, so the names stay the
+same across restarts until it is set again or cleared (`--clear`). The engine
+changes it under the project lock, only while that environment's workers are
+stopped, and only when the config still validates with the new names (they
+must stay unique). An environment coordinator labels only its own environment
+(`routing.scope`); the root coordinator and the user label any; workers never
+do (`coordination.write`). The policy finds a coordinator's workers by
+environment and role, so a label grants nothing. Run records, session-chat
+queues and scheduler assignments are kept by pane name: relabel between
+tasks. A name written in the config is never changed.
 
 The `browsers[]` profile path is `chrome/<project.id>/sessions/session-<sid>`;
 singular `browser` retains `chrome/<project.id>`. Doctor emits INFO with a manual

@@ -234,6 +234,42 @@ These are argv rules: a script or build tool can still run Git, and a
 `rebase.updateRefs` config still applies, so keep release branches protected
 on the remote.
 
+## Worker names (0.16.0)
+
+An environment's executor and reviewer may leave out `name`:
+
+```json
+{"id":"dev-web","name":"${PROJECT_ID}-dev-web","panes":[
+  {"name":"${PROJECT_ID}-web-master","role":"master","cwd":"control-web"},
+  {"role":"executor","cwd":"worktrees/web"},
+  {"role":"reviewer","cwd":"worktrees/web"}]}
+```
+
+The engine names them `<project.id>-web-executor` and
+`<project.id>-web-reviewer`. The coordinator picks a label for the work at
+hand, and the engine builds the names from it:
+
+```text
+workspace label web            # show the label and the worker names
+workspace label web auth       # <project.id>-web-executor-auth, -reviewer-auth
+workspace label web --clear    # back to <project.id>-web-executor, -reviewer
+```
+
+A label is 1-24 characters of `a-z`, `0-9` and `-`. It is kept in the project
+state file `labels.json`, so the names survive restarts until the label is
+set again. The engine sets it under the project lock, and only while that
+environment's workers are stopped (`stop SESSION --pane NAME --confirmed`).
+It also checks that the config still validates with the new names, so they
+stay unique. An environment coordinator labels only its own
+environment (`routing.scope`); the root coordinator and the user may label
+any. Workers cannot (`coordination.write`). A name written in the config is
+never changed, and a worker with one is not labeled.
+
+The policy finds a coordinator's workers by environment and role, never by
+name, so a label grants nothing. Run records, session-chat queues, scheduler
+assignments and per-pane memory are kept by pane name, so relabel between
+tasks: work queued for the old name stays with the old name.
+
 ## Removed Jev integration
 
 Session-workspace 0.12.0 removed the optional Jev diagnostic helper. A v5 config
