@@ -1397,7 +1397,7 @@ EXPECT_SCHED_DIR="$ROOT_A/.tmp/scheduler"
 EXPECT_CTX_DIR="$ROOT_A/.tmp/contexts"
 EXPECT_MEM_WEB_DIR="$ROOT_A/.agents/memory/web"
 ARGV_EXEC="$(PATH="$STUBBIN:$PATH" bash "$HERE/adapters.sh" agent-argv --config "$HERE/fixtures/valid/project-a.json" --pane project-a-web-executor --exec 2>"$TMPROOT/argv-exec.err")"
-EXPECT_EXEC="$(printf '%s\n' --add-dir "$EXPECT_MSG_DIR" --add-dir "$EXPECT_SCHED_DIR" --add-dir "$EXPECT_CTX_DIR" --add-dir "$EXPECT_MEM_WEB_DIR")"
+EXPECT_EXEC="$(printf '%s\n' -c tui.disable_paste_burst=true --add-dir "$EXPECT_MSG_DIR" --add-dir "$EXPECT_SCHED_DIR" --add-dir "$EXPECT_CTX_DIR" --add-dir "$EXPECT_MEM_WEB_DIR")"
 if [ "$ARGV_EXEC" = "$EXPECT_EXEC" ]; then
   pass "agent-argv: executor grants render as --add-dir in stores.pin order + memory last"
 else
@@ -1437,11 +1437,35 @@ jq '.sessions[0].panes[1].agent = {"model":"o1","effort":"high","profile":"work"
   "$HERE/fixtures/valid/project-d.json" > "$CODEX_CFG"
 ROOT_CODEX_EXPLICIT="$(cd "$TMPROOT/codex-explicit-root" && pwd -P)"
 ARGV_CODEX_EXPLICIT="$(PATH="$STUBBIN:$PATH" bash "$HERE/adapters.sh" agent-argv --config "$CODEX_CFG" --pane project-d-executor --exec 2>"$TMPROOT/argv-codex-explicit.err")"
-EXPECT_CODEX_EXPLICIT="$(printf '%s\n' --model o1 -p work -c model_reasoning_effort=high --add-dir "$ROOT_CODEX_EXPLICIT/.agents/memory")"
+EXPECT_CODEX_EXPLICIT="$(printf '%s\n' --model o1 -p work -c model_reasoning_effort=high -c tui.disable_paste_burst=true --add-dir "$ROOT_CODEX_EXPLICIT/.agents/memory")"
 if [ "$ARGV_CODEX_EXPLICIT" = "$EXPECT_CODEX_EXPLICIT" ]; then
   pass "agent-argv: codex explicit model/-p profile/-c model_reasoning_effort, in order"
 else
   fail "agent-argv: codex explicit model/-p profile/-c model_reasoning_effort, in order" "got:$(printf '\n%s' "$ARGV_CODEX_EXPLICIT")"$'\n'"want:$(printf '\n%s' "$EXPECT_CODEX_EXPLICIT")"
+fi
+
+echo "== Phase C: codex panes turn the paste burst off unless runtime.args sets it =="
+if printf '%s\n' "$ARGV_REVIEW" | grep -qxF -- 'tui.disable_paste_burst=true'; then
+  pass "agent-argv: every codex pane gets -c tui.disable_paste_burst=true"
+else
+  fail "agent-argv: every codex pane gets -c tui.disable_paste_burst=true" "$ARGV_REVIEW"
+fi
+if printf '%s\n' "$ARGV_CLAUDE_EXPLICIT" "$ARGV_MASTER" | grep -qF -- 'disable_paste_burst'; then
+  fail "agent-argv: claude panes never get the codex paste-burst flag" "$ARGV_CLAUDE_EXPLICIT"
+else
+  pass "agent-argv: claude panes never get the codex paste-burst flag"
+fi
+PB_CFG="$TMPROOT/codex-pb-root/.agent-workspace/workspace.json"
+mkdir -p "$(dirname "$PB_CFG")"
+jq '.runtimes.codex.args = ["-c", "tui.disable_paste_burst=false"] | .stores.pin = []' \
+  "$HERE/fixtures/valid/project-d.json" > "$PB_CFG"
+ROOT_PB="$(cd "$TMPROOT/codex-pb-root" && pwd -P)"
+ARGV_PB="$(PATH="$STUBBIN:$PATH" bash "$HERE/adapters.sh" agent-argv --config "$PB_CFG" --pane project-d-executor --exec 2>"$TMPROOT/argv-pb.err")"
+EXPECT_PB="$(printf '%s\n' -c tui.disable_paste_burst=false --add-dir "$ROOT_PB/.agents/memory")"
+if [ "$ARGV_PB" = "$EXPECT_PB" ]; then
+  pass "agent-argv: a configured disable_paste_burst in runtime.args stands, no engine copy"
+else
+  fail "agent-argv: a configured disable_paste_burst in runtime.args stands, no engine copy" "got:$(printf '\n%s' "$ARGV_PB")"$'\n'"want:$(printf '\n%s' "$EXPECT_PB")"
 fi
 
 echo "== Phase C: special characters survive as ONE inert argv element =="
@@ -1570,6 +1594,35 @@ for expect in \
     fail "harness env: contains $expect" "$HARNESS_ENV"
   fi
 done
+
+if printf '%s' "$HARNESS_ENV" | grep -qF -- 'export CLAUDE_CODE_DISABLE_FILE_MENTIONS=1;'; then
+  pass "harness env: an active harness turns off @file mentions"
+else
+  fail "harness env: an active harness turns off @file mentions" "$HARNESS_ENV"
+fi
+if printf '%s' "$ENV_OUT_D_EXEC" | grep -qF 'CLAUDE_CODE_DISABLE_FILE_MENTIONS'; then
+  fail "harness env: an inactive harness leaves @file mentions alone" "$ENV_OUT_D_EXEC"
+else
+  pass "harness env: an inactive harness leaves @file mentions alone"
+fi
+if bash "$HERE/workspace-plan.sh" --config "$HARNESS_BASE" --json 2>/dev/null | jq -e '[.sessions[].panes[].env_names | index("CLAUDE_CODE_DISABLE_FILE_MENTIONS") != null] | all' >/dev/null && \
+   bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/valid/project-d.json" --json 2>/dev/null | jq -e '[.sessions[].panes[].env_names | index("CLAUDE_CODE_DISABLE_FILE_MENTIONS") == null] | all' >/dev/null; then
+  pass "plan: env_names lists CLAUDE_CODE_DISABLE_FILE_MENTIONS only under an active harness"
+else
+  fail "plan: env_names lists CLAUDE_CODE_DISABLE_FILE_MENTIONS only under an active harness" "$(bash "$HERE/workspace-plan.sh" --config "$HARNESS_BASE" --json 2>&1 | head -c 600)"
+fi
+FM_ROOT="$TMPROOT/file-mentions-root"
+mkdir -p "$FM_ROOT"
+cp -r "$HERE/fixtures/valid/component-a" "$HERE/fixtures/valid/component-b" "$FM_ROOT/" 2>/dev/null || true
+jq '(.env.groups // {}) as $g | .env.groups = ($g | with_entries(.value.values.CLAUDE_CODE_DISABLE_FILE_MENTIONS = "0"))' \
+  "$HARNESS_BASE" > "$FM_ROOT/harness-v2.json"
+FM_ENV="$(bash "$HERE/adapters.sh" env-exports --config "$FM_ROOT/harness-v2.json" --pane harness-sample-component-executor --tmux-pane '%77' 2>"$TMPROOT/env-fm.err")"
+if printf '%s' "$FM_ENV" | grep -qF -- 'export CLAUDE_CODE_DISABLE_FILE_MENTIONS=1;' && \
+   ! printf '%s' "$FM_ENV" | grep -qF -- 'CLAUDE_CODE_DISABLE_FILE_MENTIONS=0'; then
+  pass "harness env: env.groups cannot turn @file mentions back on under an active harness"
+else
+  fail "harness env: env.groups cannot turn @file mentions back on under an active harness" "$FM_ENV $(cat "$TMPROOT/env-fm.err")"
+fi
 
 HARNESS_SESSION_ENV="$(bash "$HERE/adapters.sh" session-env --config "$HARNESS_BASE" --pane harness-sample-component-executor | tr '\0' '\n')"
 if printf '%s' "$HARNESS_SESSION_ENV" | grep -q 'SESSION_WORKSPACE_'; then

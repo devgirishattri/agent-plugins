@@ -151,6 +151,16 @@ build_agent_argv() {
       _settable "${ADAPT_MODEL:-}" && ADAPT_ARGV+=("--model" "$ADAPT_MODEL")
       _settable "${ADAPT_PROFILE:-}" && ADAPT_ARGV+=("-p" "$ADAPT_PROFILE")
       _settable "${ADAPT_EFFORT:-}" && ADAPT_ARGV+=("-c" "model_reasoning_effort=$ADAPT_EFFORT")
+      # Codex's paste burst turns an Enter that arrives inside fast input into
+      # a newline, so a session-chat dispatch typed into the pane can stay
+      # staged unsubmitted. Engine panes always turn the burst off, unless
+      # runtime.args already sets disable_paste_burst (the configured value
+      # then stands).
+      local s has_pb=0
+      for s in "${ADAPT_STATIC_ARGS[@]:-}"; do
+        case "$s" in *disable_paste_burst*) has_pb=1 ;; esac
+      done
+      [ "$has_pb" -eq 1 ] || ADAPT_ARGV+=("-c" "tui.disable_paste_burst=true")
       # Codex has no --permission-mode equivalent: never emit one, even if a
       # config sets roles.<codex-role>.agent.permission_mode.
       ;;
@@ -381,6 +391,14 @@ _env_build_map() {
   _env_set "SESSION_WORKSPACE_ROLE" "${ENV_ROLE_NAME:-}"
   _env_set "SESSION_WORKSPACE_PANE_CWD" "${ENV_PANE_CWD:-}"
   _env_set "SESSION_WORKSPACE_HARNESS_MODE" "${ENV_HARNESS_MODE:-}"
+  # An active harness also turns off Claude Code's @file mentions: a mention
+  # inserts the file's contents while the prompt is built, with no tool call,
+  # so no PreToolUse hook sees it. With mentions off, Claude gets the path and
+  # must use its file tools. Set after env.groups so a configured value cannot
+  # turn mentions back on. Inert in Codex panes.
+  if [ -n "${ENV_HARNESS_MODE:-}" ]; then
+    _env_set "CLAUDE_CODE_DISABLE_FILE_MENTIONS" "1"
+  fi
   # Empty explicitly clears inherited identity when this pane has no grants.
   _env_set "SESSION_WORKSPACE_READ_PATHS_JSON" "${ENV_READ_PATHS_JSON:-}"
   if [ -n "${ENV_SCOPE_JSON:-}" ]; then

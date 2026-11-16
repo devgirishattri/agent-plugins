@@ -1,5 +1,34 @@
 # Changelog
 
+## session-workspace 0.14.1 — 2026-11-16
+
+- **An active harness turns off Claude Code `@file` mentions.** A mention
+  inserts a file's contents while the prompt is built, without a tool call,
+  so no PreToolUse hook sees it, and a dispatched message carrying `@<path>`
+  could pull a file from outside the pane's checkout into its context
+  (checked live on Claude Code 2.1.325: a mention got past a hook that denied
+  `Read` of that file, and the variable closed it). With mentions off, Claude
+  gets only the path and has to use its file tools, where Claude Code's
+  permission checks and PreToolUse hooks apply. A pane launched while the
+  harness is `audit` or `enforce` now gets
+  `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1`, set after `env.groups` so a
+  configured value cannot turn mentions back on, and
+  `workspace-plan` lists it in each pane's `env_names`. An inactive harness
+  leaves mentions alone.
+- **Codex panes turn the paste burst off.** Codex's paste burst turns an Enter
+  that arrives inside fast input into a newline, so a session-chat message
+  typed into a Codex pane could stay unsubmitted (8 of 8 early Enters were
+  swallowed on Codex 0.169.0 with the burst on, 0 of 8 with it off). Every
+  Codex pane now launches with `-c tui.disable_paste_burst=true`, unless
+  `runtimes.<name>.args` already mentions `disable_paste_burst`.
+- **Forked sessions get the session reminder.** The `SessionStart` hook now
+  matches `fork` as well as `startup`, `resume`, `clear` and `compact`, in
+  both trees.
+- Tests: exact Codex argv expectations include the new flag; new cases cover
+  the runtime.args escape hatch, Claude panes never getting the flag, the
+  `@file` setting under an active and an inactive harness, an `env.groups`
+  value that tries to turn mentions back on, and the plan's `env_names`.
+
 ## chronos 0.1.5 — 2026-11-16
 
 - **The Claude mid-turn time refresh runs once per tool batch.** The Claude
