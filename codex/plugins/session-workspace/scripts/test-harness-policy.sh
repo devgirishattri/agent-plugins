@@ -371,6 +371,27 @@ as_exec "executor PowerShell is refused (the floor cannot parse it)" '{"tool_nam
 as_review "reviewer exact Codex 0.151 Bash payload is classified without a tool_input workdir" "$(codex_bash_payload 'pwd > out')" '.decision == "deny" and .rule == "reviewer.shell" and .tool == "Bash"'
 as_exec "edit tool with no extractable target fails closed" '{"tool_name":"Edit","tool_input":{"old_string":"a","new_string":"b"}}' '.decision == "deny" and .rule == "edit.path"'
 
+echo "== newer tools: delegating tools allowed, worker EnterWorktree/spawn_agent/MCP audit-only =="
+for tool in REPL Workflow SubagentHandback; do
+  as_review "reviewer $tool is a delegating tool (allowed)" "$(jq -cn --arg t "$tool" '{tool_name:$t,tool_input:{}}')" '.decision == "allow" and .rule == "tool.delegating"'
+  as_master "orchestrator $tool is a delegating tool (allowed)" "$(jq -cn --arg t "$tool" '{tool_name:$t,tool_input:{}}')" '.decision == "allow" and .rule == "tool.delegating"'
+done
+ENTER_WORKTREE='{"tool_name":"EnterWorktree","tool_input":{"name":"side"}}'
+SPAWN_AGENT='{"tool_name":"spawn_agent","tool_input":{"message":"check"}}'
+MCP_CALL='{"tool_name":"mcp__chrome-devtools__navigate_page","tool_input":{"url":"http://127.0.0.1:3000"}}'
+as_exec "executor EnterWorktree is audit-only in enforce mode" "$ENTER_WORKTREE" '.decision == "audit" and .mode == "enforce" and .rule == "worker.enter_worktree" and .diagnostic == null'
+as_review "reviewer EnterWorktree is audit-only in enforce mode" "$ENTER_WORKTREE" '.decision == "audit" and .rule == "worker.enter_worktree"'
+as_master "orchestrator EnterWorktree is allowed" "$ENTER_WORKTREE" '.decision == "allow" and .rule == "tool.worktree"'
+as_exec "executor Codex spawn_agent is audit-only in enforce mode" "$SPAWN_AGENT" '.decision == "audit" and .rule == "worker.spawn_agent"'
+as_review "reviewer Codex spawn_agent is audit-only in enforce mode" "$SPAWN_AGENT" '.decision == "audit" and .rule == "worker.spawn_agent"'
+as_master "orchestrator Codex spawn_agent is allowed" "$SPAWN_AGENT" '.decision == "allow" and .rule == "tool.spawn_agent"'
+as_exec "executor MCP call is audit-only in enforce mode" "$MCP_CALL" '.decision == "audit" and .rule == "worker.mcp" and .tool == "mcp__chrome-devtools__navigate_page"'
+as_review "reviewer MCP call is audit-only in enforce mode" "$MCP_CALL" '.decision == "audit" and .rule == "worker.mcp"'
+as_master "orchestrator MCP call is allowed" "$MCP_CALL" '.decision == "allow" and .rule == "tool.mcp"'
+expect "audit-mode executor EnterWorktree stays audit-only" executor "$EXEC_PANE" "$CHILD" "$AUDIT_CONFIG" audit "$ENTER_WORKTREE" '.decision == "audit" and .mode == "audit" and .rule == "worker.enter_worktree"'
+as_review "a tool merely named like an MCP tool prefix stays unclassified" '{"tool_name":"mcp_tool","tool_input":{}}' '.decision == "allow" and .rule == "tool.unclassified"'
+as_review "Claude Agent is not Codex spawn_agent (unclassified)" '{"tool_name":"Agent","tool_input":{"prompt":"x"}}' '.decision == "allow" and .rule == "tool.unclassified"'
+
 echo "== executor: edit targets must resolve inside its configured cwd =="
 as_exec "executor edit inside cwd (relative) is allowed" "$(edit_payload 'src/file.ts')" '.decision == "allow" and .role == "executor"'
 as_exec "executor edit inside cwd (absolute) is allowed" "$(edit_payload "$CHILD/src/file.ts")" '.decision == "allow"'
@@ -2297,6 +2318,29 @@ if [ "$CODEX_DENY_CLOSED_STATUS" -eq 2 ] && grep -q '^BLOCKED by session-workspa
   pass "Codex rendering failure cannot change an enforce denial exit"
 else
   fail "Codex rendering failure cannot change an enforce denial exit" "status=$CODEX_DENY_CLOSED_STATUS err=$(cat "$TMPROOT/codex-deny-closed.err")"
+fi
+hook_run executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce "$ENTER_WORKTREE" "$TMPROOT/advisory.out" "$TMPROOT/advisory.err"
+ADVISORY_STATUS=$?
+if [ "$ADVISORY_STATUS" -eq 0 ] && [ ! -s "$TMPROOT/advisory.out" ] && \
+   grep -qx 'AUDIT by session-workspace strict-v1 \[worker.enter_worktree\]: .* (audit-only rule; not blocked)' "$TMPROOT/advisory.err"; then
+  pass "enforce-mode audit-only rule exits 0 and reports on stderr (Claude)"
+else
+  fail "enforce-mode audit-only rule exits 0 and reports on stderr (Claude)" "status=$ADVISORY_STATUS out=$(cat "$TMPROOT/advisory.out") err=$(cat "$TMPROOT/advisory.err")"
+fi
+hook_run reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$MCP_CALL" "$TMPROOT/codex-advisory.out" "$TMPROOT/codex-advisory.err" --codex-hook-output
+CODEX_ADVISORY_STATUS=$?
+if [ "$CODEX_ADVISORY_STATUS" -eq 0 ] && [ ! -s "$TMPROOT/codex-advisory.err" ] && \
+   jq -e 'keys == ["systemMessage"] and (.systemMessage | test("^AUDIT by session-workspace strict-v1 \\[worker.mcp\\]: .+ \\(audit-only rule; not blocked\\)$"))' "$TMPROOT/codex-advisory.out" >/dev/null 2>&1; then
+  pass "enforce-mode audit-only rule renders one Codex systemMessage and exits 0"
+else
+  fail "enforce-mode audit-only rule renders one Codex systemMessage and exits 0" "status=$CODEX_ADVISORY_STATUS out=$(cat "$TMPROOT/codex-advisory.out") err=$(cat "$TMPROOT/codex-advisory.err")"
+fi
+hook_run executor "$EXEC_PANE" "$CHILD" "$CONFIG" enforce '{"tool_name":"REPL","tool_input":{"code":"1"}}' "$TMPROOT/delegating.out" "$TMPROOT/delegating.err" --codex-hook-output
+DELEGATING_STATUS=$?
+if [ "$DELEGATING_STATUS" -eq 0 ] && [ ! -s "$TMPROOT/delegating.out" ] && [ ! -s "$TMPROOT/delegating.err" ]; then
+  pass "a delegating tool is a silent allow"
+else
+  fail "a delegating tool is a silent allow" "status=$DELEGATING_STATUS out=$(cat "$TMPROOT/delegating.out") err=$(cat "$TMPROOT/delegating.err")"
 fi
 hook_run reviewer unknown-pane "$CHILD" "$AUDIT_CONFIG" audit "$(bash_payload 'git status')" "$TMPROOT/drift.out" "$TMPROOT/drift.err"
 DRIFT_STATUS=$?
