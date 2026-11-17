@@ -39,4 +39,6 @@ argument-hint: "[--older-than 7d] [--status STATUS] [--apply]"
 
 Tasks referenced in `depends_on` by any task outside the deletion set are kept and reported as `kept <id> (referenced by <ids>)`. For each deletable task, remove only `tasks/<id>.json`, `prompts/<id>.md`, `prompts/<id>-review.md`, `prompts/<id>-ack-done.md`, `prompts/<id>-ack-blocked.md`, `prompts/<id>-ack-review.md`, `handoffs/<id>/`, and `locks/<id>.lock/`. Never use a task-prefix glob: task `a` must not consume task `a-b` artifacts.
 
+Codex cleanup removes the fixed review and acknowledgement filenames for each selected task. If one of those filenames is also the base prompt of a surviving task, applying cleanup can delete that prompt. Leave a batch with a known collision in preview and report the two task IDs.
+
 The same run and age threshold also select orphan handoff directories and known-suffix prompt files whose task JSON is absent, using their mtime. Dry-run lists them under `Orphans:`; `--apply` removes them. Cleanup is explicit, not automatic.

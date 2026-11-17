@@ -100,8 +100,8 @@ Doctor does not check file existence, commit membership, test results, or eviden
 
 Do not fix anything based on these findings yourself. This command is report-only. Point the user to the right path:
 
-- Memory-store issues: `/knowledge:lint`, `/knowledge:consolidate`, and `/knowledge:promote` are the write paths.
+- `/knowledge:lint` inspects the memory store. Direct the user to `/knowledge:consolidate` for reviewed memory edits or `/knowledge:promote` to promote a handoff.
 - Docs findings: the user fixes them by editing the doc directly.
-- Lock, journal, and staged-file findings: the finding names the exact recovery command to run.
+- For lock, journal and staged-file findings, relay the diagnosis and any recovery guidance the check provides.
 
 $ARGUMENTS

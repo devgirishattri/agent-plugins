@@ -8,7 +8,7 @@ allowed-tools: Bash(bash:*)
 
 Lead with the result. Add text only for errors or the follow-ups below. Parse `$ARGUMENTS` as: first word = pane, second = task id, then optional flags, rest = prompt. Put flags before the prompt text.
 
-A task with a verification contract (see the `task-contract` skill) accepts only `<pane> <id> <prompt>`. Its options must already be task metadata. `--force` never bypasses the contract or an unadmitted contracted dependency.
+A task with a verification contract (see the `task-contract` skill) accepts only `<pane> <id> <prompt>`. Its options must already be task metadata. `--force` never bypasses the contract or an unadmitted contracted dependency. Contract assignment reserves a generation before dispatch. Chat status 4 counts as delivery and names the pane where the user can press Enter. If transport reports an uncertain outcome, inspect the task and follow the assigner's reconciliation procedure. [Task contracts](../skills/task-contract/SKILL.md)
 
 `SESSION_SCHEDULER_HOME` must already be present in this session's environment. `SESSION_CONTEXT_HOME` must also be present when you use `--context NAME`. `--context auto` does not need it. Each required variable is inherited when the agent process started. The pane/session launcher sets it. Never export or derive it here.
 
@@ -20,7 +20,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/task-assign.sh" "<pane>" "<id>" [flags] "<pr
 
 If the script reports that a required variable is not set, stop. Stop also if your inherited values differ from the shared homes your panes were launched with. Ask the user to relaunch this pane/session with the correct environment. Do not derive another ledger or context store.
 
-Flags:
+Flags for tasks without a verification contract:
 - `--eta MINUTES` — expected completion window. It stores `eta_at` as ISO-8601 in `AGENT_PLUGINS_TIME_ZONE` (default `Asia/Kolkata`, `+05:30`). Tasks past their ETA show an `OVERDUE` flag in `/task-status` and `/task-board`.
 - `--stage NAME` — set or overwrite the task's stage label. Suggested labels: `plan`, `dispatch`, `execute`, `audit`, `push`.
 - `--context NAME` — attach a knowledge context snapshot (`$SESSION_CONTEXT_HOME/NAME.md`). `NAME` must be canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`), which is the knowledge context store's own contract. Hyphens, uppercase, leading or trailing underscores, and doubled underscores are invalid. The script rejects a non-canonical name before any side effect. It errors if the snapshot is missing. The generated prompt tells the executor to run `/knowledge:context-load NAME` first, with the absolute context home embedded as provenance. The script records `meta.context` and `meta.context_home` on the task. This is the only form that needs `SESSION_CONTEXT_HOME`.
@@ -30,7 +30,7 @@ Flags:
 - `--workflow ID` — group this assignment under a workflow id (`meta.workflow_id`). List the group with `/task-status --workflow ID`.
 - `--force` — bypass the status-transition check and the unmet-dependency gate. The script records "forced" in history.
 
-Behavior notes:
+For tasks without a verification contract:
 - The script refuses assignment if any `depends_on` task is not `done`. The error names the unmet dependencies. Complete them, or use `--force`.
 - If the script reports that session-chat dispatch failed, the ledger was NOT updated. The script rolled back the prompt file: it deleted a new file and restored a reassignment overwrite. This happens only on a **hard failure**. Examples: no `/whoami`, an unknown or ambiguous target, a durable-queue failure, or unavailable or incompatible session-chat. A **busy** recipient is *not* a failure. The dispatch is durably queued and the ledger still flips to `assigned`. Do not treat busy as a rollback cause. An **unsubmitted** dispatch (session-chat status 4, the packet line staged in the executor's input) is not a rollback cause either: the prompt stays, the ledger flips to `assigned`, the output says `dispatch: unsubmitted`, and a WARN names the pane. Press Enter in that pane; do not re-run `/task-assign`. On a hard failure, fix the cause and retry. Remind the user that the executor pane needs `SESSION_CHAT_INCOMING_MODE=auto` (or `assist`) before it can act on the task.
 - The first successful assignment stamps `started_at` on the task.

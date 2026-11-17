@@ -27,7 +27,7 @@ argument-hint: <pane-name> <task-id> [--eta MINUTES] [--stage NAME] [--context N
    deriving another ledger or context store.
 
    **Transport contract:** `task-assign` performs nested session-chat/tmux
-   dispatch before its ledger write. In Codex, request scoped
+   dispatch. An assignment without a verification contract writes the transition after transport. In Codex, request scoped
    escalation/approval for the exact installed helper on the first attempt
    whenever it may dispatch. Invoke it as one literal Bash segment with raw
    token zero still `bash`; never use `bash -c`, a wrapper, `env`, an assignment
@@ -36,6 +36,8 @@ argument-hint: <pane-name> <task-id> [--eta MINUTES] [--stage NAME] [--context N
    access only: the recorded role and recipient, exact arguments, confirmation
    requirements, and lifecycle rules remain authoritative.
    Never use --force to repair transport.
+
+   A contracted assignment accepts only the pane, task ID and one prompt. It reserves a generation before dispatch. A session-chat status 4 warning counts as delivery. Press Enter once in the named pane. If transport reports an uncertain outcome, inspect the task and follow the assigner's reconciliation procedure before reassigning. Steps 4–7 describe tasks without a verification contract. [Task contracts](../skills/task-contract/SKILL.md)
 
 4. Flags:
    - `--eta MINUTES` — stores `eta_at` as ISO-8601 in `AGENT_PLUGINS_TIME_ZONE` (default `Asia/Kolkata`, `+05:30`); tasks past it are flagged `OVERDUE` in `task-status`/`task-board`.
@@ -46,9 +48,9 @@ argument-hint: <pane-name> <task-id> [--eta MINUTES] [--stage NAME] [--context N
    - `--workflow ID` — set or override the workflow group; `--workflow-id` is an alias.
    - `--force` — bypass the status-transition check and unmet-dependency gate; an illegal-transition override records "forced" in history, while bypassing only the dependency gate does not.
 5. Assignment is refused if any `depends_on` task is not `done` (the error names the unmet deps) — complete them or use `--force`. Illegal status transitions (e.g. assigning a `done` task) are also refused.
-6. On hard dispatch failure the ledger is NOT updated; the prompt and automatic handoff file are rolled back, along with its per-task handoff directory if empty. Fix the hard transport cause and retry the same legal assignment. A busy target is queued durably and still counts as a successful assignment. Successful dispatch records the absolute shared homes for the recipient.
+6. On hard dispatch failure the ledger is NOT updated; the prompt and automatic handoff file are rolled back, along with its per-task handoff directory if empty. Fix the hard transport cause and retry the same legal assignment. A busy target is queued durably. If the chat transport returns 4, `task-assign` records the assignment, reports `Dispatch: unsubmitted`, and returns 0. Its input is staged and a durable copy is queued. Press Enter once in the named recipient pane. Successful dispatch records the absolute shared homes for the recipient.
 7. If dispatch succeeds, report the task id and assignee, plus `handoff: <absolute path>` for auto or `context: NAME` for an explicit snapshot. First successful assignment stamps `started_at`. Assignment metadata and the status transition are persisted together under the per-task lock. Value-taking flags require a value.
 8. If the target pane is missing or duplicated, suggest checking `$session-chat:panes` and `$session-chat:whoami`.
 9. Mention that executor panes need `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to act on assigned dispatches.
 
-Reassignment without `--context` clears all four attachment keys: `meta.context`, `meta.context_home`, `meta.handoff_file`, and `meta.handoff_home`. Locks cover ledger read-modify-write operations only, not transport; simultaneous assignments to the same task can race prompt writes and rollback, so coordinate assignments to each task serially.
+For a task without a verification contract, reassignment without `--context` clears all four attachment keys: `meta.context`, `meta.context_home`, `meta.handoff_file`, and `meta.handoff_home`. Locks cover ledger read-modify-write operations only, not transport; simultaneous assignments to the same task can race prompt writes and rollback, so coordinate assignments to each task serially.

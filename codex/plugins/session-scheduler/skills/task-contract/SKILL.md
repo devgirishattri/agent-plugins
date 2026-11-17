@@ -71,10 +71,7 @@ unaffected.
    independent review), and `$session-scheduler:task-block <id> --generation <N> "<reason>"`
    (assignee while assigned, reviewer while in review). A report carrying an
    obsolete generation is rejected. `--force` and `SESSION_SCHEDULER_FORCE`
-   never bypass a contract. Contracted done and block are ledger-only: unlike
-   the legacy commands they send no acknowledgement to the assigner, so the
-   orchestrator reads the outcome with `inspect` or `$session-scheduler:task-status`. Review
-   still dispatches the review packet to the bound reviewer.
+   never bypass a contract. With an inline note, contracted done and block record the outcome in the ledger. With `--note-file <own-draft>`, they also record the verdict and attempt to notify the eligible assigner after the transition commits. The orchestrator can read the outcome with `inspect` or `$session-scheduler:task-status`. Review dispatches the packet to the bound reviewer.
 5. **Reconcile (assigner).** After an ambiguous delivery, an interrupted
    operation, or a block, the owner records what actually happened before any
    reassignment:
@@ -82,6 +79,8 @@ unaffected.
    ```bash
    bash "<PLUGIN_ROOT>/scripts/task-contract.sh" reconcile <id> --generation <N> --note "<observed outcome and recovery rationale>"
    ```
+
+   A session-chat status 4 warning means the input is staged and the durable packet is queued. Press Enter once in the named pane. Do not resend or reconcile solely for this warning.
 
    An in-flight reservation must have expired first. Reconcile never undoes
    external effects; stop or fence the old worker before reassigning. Nothing

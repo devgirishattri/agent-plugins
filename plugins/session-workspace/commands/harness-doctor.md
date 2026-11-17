@@ -42,7 +42,7 @@ The checks:
 - `identity.live` — the verdict of `harness-policy.py` *itself*. It is probed in this process with a harmless unknown-tool payload. It is the policy engine's decision for this environment. It presumes the bundled hook is loaded and trusted. It is not proof of runtime enforcement. Verdicts:
   - `OK` — active, accepted.
   - `ERROR` — active and blocking every gated call here. The output shows the rule and reason. Restart the pane's configured session via `/session-workspace:workspace-restart <session-id>`. That kills and recreates all of that session's configured panes.
-  - `INFO` — the hook is a no-op here.
-  - `WARN` — a no-op for one of three reasons. Identity is partial. The inherited identity does not match an *inactive* config. python3 is missing, so the probe could not run.
+  - `INFO` — the hook is a no-op here, or the probe could not run and the pane has no inherited identity.
+  - `WARN` — the inactive pane has partial or mismatched identity, or the probe could not run and the pane has inherited identity.
 
 Relay the per-check lines and the `summary:` line verbatim. Do not run any fix yourself. Restarting sessions and editing the config are the user's decisions.

@@ -28,8 +28,9 @@ project logic and is not required — see "Bootstrap shim" below.
 
 ## Lifecycle verbs
 
-All verbs are exposed as both a Claude command (`/session-workspace:workspace-doctor`, etc.)
-and, in the Codex tree, a matching skill. From a shell they are reached as
+Most verbs have a Claude command and a matching Codex skill. For example,
+Claude exposes `/session-workspace:workspace-doctor`. Labels use the shell
+dispatcher directly. Run the shell verbs as
 `workspace <verb> [args...]` once the `install` verb has put the dispatcher on
 your `PATH` (or `./workspace.sh <verb>` in a project carrying the older
 per-project shim — see "The two entry points"). `workspace --contract` prints
@@ -43,7 +44,7 @@ the CLI contract string both entry points use for their compatibility check.
 | `status` | `workspace-status [TARGET\|all] [--config PATH] [--json] [--pane NAME...]` | Never | Reports session/pane/role/runtime/model/cwd/process/health/running for every planned pane, one CDP health line per browser, and each idle-stop pane's watcher and last stop. |
 | `restart` | `workspace-restart [TARGET\|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` | Yes | `stop --confirmed` followed by `start`, for the same target. Unlike the old launchers, `restart` accepts `--no-save`. |
 | `reconcile` | `workspace-reconcile [TARGET\|all] [--config PATH] [--apply] [--adopt --confirmed]` | Only with `--apply` | Dry-run by default; `--apply` repairs missing/misnamed managed resources without respawning healthy panes. Use `--adopt --confirmed` to preview adoption, then add `--apply` to perform it; `start --adopt --confirmed` is the direct lifecycle alternative. |
-| `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes or on-demand workers and leaves the session running; a busy worker is left running unless `--force`. |
+| `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes or on-demand workers. Closing the last pane ends the tmux session. A busy worker stays running unless `--force` is given. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
 | `label` | `workspace-label ENVIRONMENT [LABEL\|--clear] [--config PATH] [--json]` | Never (state file only) | Schema v5. Shows or sets the label of an environment's unnamed executor/reviewer panes, which are named `<project.id>-<environment>-<executor\|reviewer>[-<label>]`. Refuses while one of those workers runs, and refuses a label whose names the config would not accept. See "Worker names". |
@@ -67,8 +68,8 @@ created with only those panes; their declared commands run as in a full start.
 Panes that are already running are `[kept]`. A later full `workspace start
 SESSION` fills in the other panes and keeps the running ones.
 `workspace stop SESSION --pane NAME --confirmed` sends `Ctrl-C`, waits the
-grace period, closes only that pane, and leaves the session and its other
-panes running. Stopping the browser pane releases its port claim.
+grace period and closes the selected pane. Sibling panes keep running. Closing
+the last pane ends the tmux session. Stopping the browser pane releases its port claim.
 
 - **Selection.** `NAME` is a pane name, or the part after `<project.id>-`
   (`--pane browser` selects `example-browser`). Only role `service` panes and
@@ -318,15 +319,12 @@ plan and policy decision to v3. Like guards, orchestration is closed, typed
 data: it names coordinates (targets, remotes, branches) and never accepts a
 command, script, regex, prompt fragment, custom gate, or permission bypass.
 
-**Activation is explicit.** The hook is a true no-op — no Python is even
-spawned — for: a session with no `SESSION_WORKSPACE_CONFIG` (not launched
-by this engine), a schema-v1 config, a v2–v5 config with no `harness` block,
-and `harness.enabled: false` (which must then carry no `mode`/`profile`/
-`roles`/`gates`/`guards` siblings) — provided the pane's launcher mode
-(`SESSION_WORKSPACE_HARNESS_MODE`) is empty. A pane launched while the
-harness was `audit`/`enforce` still carries that mode after the config is
-disabled; that is drift, and it intentionally blocks until the pane is
-restarted. Only `enabled: true` with `mode` (`audit` | `enforce`),
+**Activation is explicit.** With no active launcher mode, an ordinary pane
+using schema v1 or a v2–v5 config with the harness disabled skips policy
+evaluation. A pane that claims a reviewer identity goes through the Python
+check so an unreadable or missing config fails closed. A pane launched with
+an active mode blocks when its validated mode, identity, read grants, guards or
+own environment scope drift. Restart the affected session to load the change. Only `enabled: true` with `mode` (`audit` | `enforce`),
 `profile: "strict-v1"`, `roles`, and `gates` activates it.
 
 ### Per-pane engine identity
@@ -461,11 +459,8 @@ a fixed Git floor (fetch/status reads, commit on work, normal pushes of the
 configured work/release refs, the reviewed `--no-ff` work-to-release merge,
 optional `--ff-only` alignment — never a force push, leading `+`, ref
 deletion, history rewrite, or `checkout -B` on release). That Git floor is
-the workflow's contract, which the skill follows; the strict-v1 hook does not
-check it. The hook keeps the orchestrator from pushing or mutating a child
-checkout, but an executor's `git push --force`, `git reset --hard` or
-`git checkout -B` is not refused, so protect release branches on the remote
-where a force push must be impossible. Deploy is gated by a
+the workflow's contract. In `enforce` mode the hook blocks lane-branch violations by executors and pushes by orchestrators. In `audit` mode it reports these violations and permits the call. Protect
+release branches on the remote for every workflow. Deploy is gated by a
 six-check executor preflight: both branches exist locally and at the remote,
 release-to-work has commits to ship, work-to-release is empty, both local
 branches exactly equal their remote refs, and the tree is clean. The pinned
@@ -1098,12 +1093,10 @@ that information or a sound mitigation exists.
 - Child verdicts and replies travel as single-line `send-message.sh`
   replies, scheduler notes, or multiline drafts staged in the pane's own
   `drafts/<pane-name>/` directory (unique names with a nonce) and dispatched
-  with `--reply-to`. After durable success (`Dispatched …`/`Queued …`) delete
-  the draft with a native delete tool where one exists (Codex `apply_patch`);
-  Claude panes leave it in place, since it is inert after delivery. Keep it
-  after a hard failure and retry. A pane without a `messages` grant reports
-  the missing grant instead of shortening a long reply. Shell staging remains denied, and nothing sweeps
-  drafts automatically. A trusted helper may still consume a pre-existing
+  with `--reply-to`. Both transports consume an eligible, unchanged own draft
+  after a delivered, queued or unsubmitted result. Preserve any draft the
+  helper retains, including after a hard failure. A pane without a `messages`
+  grant reports the missing grant. Shell staging remains denied. A trusted helper may still consume a pre-existing
   literal `$TMPDIR` file as input, but containment refuses creating one there.
 - Executors read dispatch files with the literal `cat '<absolute-path>'`
   command under the message-read rules above; other shell reads of a message
@@ -1124,19 +1117,15 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   their `policy:`/`identity.live` verdict is the policy *engine's* decision
   for this process — it assumes the bundled hook is actually loaded and
   trusted by the provider, which the plugin cannot verify from inside a
-  pane. `hook.registration` only checks that the bundled `hooks/hooks.json`
-  registers `PreToolUse`; provider-side trust prompts (Codex) or plugin
-  enablement (Claude) are outside its reach.
+  pane. `hook.registration` checks the bundled `PreToolUse`, `SessionStart`,
+  `UserPromptSubmit` and `Stop` lists. Confirm activation in the provider.
 - Outside the global gates (escape flags, exact trusted-helper provenance
   and grammar, master-only routing), arbitrary orchestrator shell is gated
   only by the child-root floor, the `git push` denial, and (0.9.0) the
   closed `gh` grammar; project release/build rules stay in `AGENTS.md` and
   project hooks.
-- An executor's Git is not narrowed by the floor. The reviewed-git-v1 Git
-  floor (no force push, ref deletion, history rewrite or `checkout -B` on
-  release) is the `workspace-orchestrator` workflow's contract, so the hook
-  allows `git push --force`, `git reset --hard` and `git checkout -B` in an
-  executor checkout. Protect release branches on the remote.
+- The executor Git rules depend on whether its environment declares a lane
+  branch. Lane executors have the restrictions in the lane branch reference. Remote release-branch protection is configured independently. [Lane branches](skills/session-workspace/references/environments.md#lane-branches-0150)
 - The 0.9.0 `gh` rules are an argv guardrail for root *and* confined
   orchestrators, not subprocess isolation: a script file the pane may run,
   an interpreter fed on stdin, or (root only) `sh -c`/inline interpreter
@@ -1230,7 +1219,7 @@ and approval requirements still apply.
   [`--expected-head SHA`] or `--snapshot FILE`. It never merges, comments,
   pushes, or retriggers CI, and a ready result is not permission to merge.
 
-The bundled `references/scheduler-pilot.md` documents an isolated scheduler
+The bundled [scheduler pilot](skills/verification-recipe/references/scheduler-pilot.md) documents an isolated scheduler
 verification pilot that only works from the agent-plugins source checkout;
 its root runner is not installed with the plugin.
 
@@ -1560,7 +1549,7 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].layout.mask_after_split_hook` | boolean | — | (always applied for `split_tree`) | Whether the engine masks the window's `after-split-window` hook during construction and restores it byte-for-byte afterward, so a user's own tmux hooks can't interfere mid-build. This is always done for a fresh split-tree build; the field exists in the schema for documentation/explicitness. |
 | `sessions[].layout.nodes` | array of `{id, from?, dir?, percent?}` | yes (if `kind: split_tree`) | — | Ordered split instructions. The first node has no `from`/`dir`/`percent` (it's the window's existing single pane). Every subsequent node splits the pane at `from` in direction `dir` (`v` or `h`) reserving `percent` (1-99) for the new pane, emitted as `-l <percent>%` (never the deprecated `-p <pct>`). |
 | `sessions[].layout.pane_order` | array of node ids | yes (if `kind: split_tree`) | — | Explicit, authoritative mapping from split-tree node id to `panes[]` slot order — a visual layout can't otherwise express "pane order differs from split order." |
-| `sessions[].panes[].name` | string | yes | — | The pane's `@name` (session-chat addressing identity) and managed-marker pane value. Enforced unique across the whole config. |
+| `sessions[].panes[].name` | string | optional for v5 environment development workers | derived for an unnamed worker | The pane's `@name` (session-chat addressing identity) and managed-marker pane value. Enforced unique across the whole config. |
 | `sessions[].panes[].role` | string | yes | — | A key from `roles`. |
 | `sessions[].panes[].runtime` | string | no (v5 only) | role runtime | Declared `runtimes` key or `shell`; pane overrides role. Harness panes cannot resolve to shell; browser-selected panes must resolve to shell. |
 | `sessions[].panes[].cwd` | string | no | session/window default | Relative (to `project.root`) or absolute working directory. Validated to resolve inside the project root; a missing directory is a hard validation error **unless** `optional: true`. |
@@ -1589,7 +1578,7 @@ hand-added pane in that session present itself as a different pane.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `harness.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires `mode`, `profile`, `roles`, and `gates`; schema-v3–v5 `guards` remain optional. |
-| `harness.mode` | enum: `audit`, `enforce` | when enabled | `audit` reports would-be policy denials on stderr without blocking; `enforce` blocks (exit 2). Integrity failures block in both. |
+| `harness.mode` | enum: `audit`, `enforce` | when enabled | Audit reports policy decisions on Claude stderr or through a Codex `systemMessage`. Enforce blocks ordinary denials. Worker audit-only rules report in both modes, and integrity failures block in both. |
 | `harness.profile` | const `strict-v1` | when enabled | The only profile. No other value is accepted. |
 | `harness.roles.orchestrator` / `.executor` / `.reviewer` | string (a `roles` key) | when enabled | Exactly these three keys; three distinct existing role names; none may be `service` or use the built-in `shell` runtime. |
 | `harness.gates.plan_review_ttl_minutes` / `.audit_ttl_minutes` | integer 1–1440 | when enabled | Exactly these two keys. Freshness windows for plan review and audit (reserved for the scheduler integration; validated now so they are stable config). |
@@ -1601,8 +1590,9 @@ hand-added pane in that session present itself as a different pane.
 | `harness.guards.workspace_health.warn_missing_panes` | boolean | no | Orchestrator-only Stop warning for missing non-optional, non-service panes. |
 | `harness.guards.workspace_health.branch_ahead.base` / `.release` | safe literal branch names | if pack exists | Orchestrator-only neutral Stop fact per executor child root; refs are distinct, contain no `..`, and do not end in `/` or `.lock`. |
 
-Cross-field rules for an enabled harness: exactly one non-service pane uses
-the orchestrator role; every executor pane declares a non-`.` `cwd` that
+An enabled harness without scoped environments has exactly one orchestrator.
+Schema v5 supports environment coordinators and an optional unbound root
+coordinator. Every executor pane declares a non-`.` `cwd` that
 does not resolve to the project root and has exactly one reviewer pane with
 the identical `cwd`; every reviewer pane pairs with exactly one executor.
 
@@ -1667,10 +1657,10 @@ from a harness pane records it in the pane option
 `started by:` (JSON `started_by`). It is informational; nothing authorizes on it.
 
 **Lane branches (0.15.0).** `environments[].branch` names the one local branch
-an environment's executor works on. It is required when the environment's
-checkout shares its git repository with another checkout (linked worktrees),
-unique across environments, and an orchestration target in that environment
-must use it as `work_branch`. In that executor the hook refuses, under
+an environment's executor works on. Every environment on a linked worktree
+requires a branch. A primary checkout also requires one when another configured
+environment shares its Git directory. Declared branches must be unique. An
+orchestration target that belongs to the environment uses the branch as `work_branch`. In that executor the hook refuses, under
 `git.lane_ref`, every Git command that would write another ref: creating,
 resetting or renaming another branch, deleting any branch, switching to
 another branch (a detached HEAD is fine), pushing anything but `REMOTE BRANCH`/`HEAD:BRANCH` (no force,
@@ -1686,12 +1676,12 @@ list is in the environments reference.
 development session may leave out `name`. The engine then names it
 `<project.id>-<environment>-executor` or `-reviewer`. The environment's
 coordinator can add a label with `workspace label ENVIRONMENT LABEL` (1-24
-characters of `a-z`, `0-9` and `-`), which makes the names
+characters of `a-z`, `0-9` and `-`, beginning with a letter or digit), which makes the names
 `<project.id>-<environment>-executor-<label>` and `-reviewer-<label>`. The
 label is kept in the project state file `labels.json`, so the names stay the
 same across restarts until it is set again or cleared (`--clear`). The engine
-changes it under the project lock, only while that environment's workers are
-stopped, and only when the config still validates with the new names (they
+changes it under the project lock when every worker whose name would change is
+stopped and the config still validates with the new names (they
 must stay unique). An environment coordinator labels only its own environment
 (`routing.scope`); the root coordinator and the user label any; workers never
 do (`coordination.write`). The policy finds a coordinator's workers by

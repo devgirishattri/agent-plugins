@@ -73,7 +73,8 @@ A project opts in by creating `.agent-workspace/workspace.json`. Set
   shows its input line, and closes it with `workspace stop SESSION --pane NAME
   --confirmed`, which leaves a busy worker running. The orchestrator may not
   stop or restart the session holding its own pane (`orchestrator.self_stop`).
-  See the README section "On-demand workers".
+  `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` sets the readiness wait in seconds
+  (default `120`). See the README section "On-demand workers".
   - The idle watcher reads these variables when `start` arms it, so a change
     applies from the next start. `SESSION_WORKSPACE_IDLE_OBSERVE=connections`
     makes the browser count client connections instead of CDP traffic.

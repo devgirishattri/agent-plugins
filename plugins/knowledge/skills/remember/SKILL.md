@@ -171,9 +171,7 @@ candidates or the dismissed archive. Details: `../knowledge/references/compatibi
    `--store` here must be the actual resolved absolute store path. `memory-write.sh` itself never falls back to a default. Use the first of these that applies:
    1. the explicit path the user gave
    2. `$KNOWLEDGE_MEMORY_HOME`, if set
-   3. the canonical `<repo-root>/.agents/memory`
-
-   This path matches the target that `/knowledge:init` reported and the store that the preceding `--list` step resolved.
+   3. the absolute store selected by canonical discovery for the preceding listing. Discovery uses `<repo-root>/.agents/memory` when it contains `MEMORY.md`, otherwise its single eligible direct child containing that index.
 
    Save the stdout of the plan to a file. It has one `<id> <sha256> <created> <expired|active>` line per candidate. Show it to the user verbatim. If the plan is empty, stop here. There is nothing to purge.
 2. **Get user approval** for exactly which candidates to delete. Never apply without an explicit go-ahead.

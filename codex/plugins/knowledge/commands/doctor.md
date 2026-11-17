@@ -63,6 +63,6 @@ Each finding is one tab-separated line: `<LEVEL>\t<section>\t<message>` with `LE
 
 Group the findings by section when reporting to the user, lead with any `ERROR` rows, then `WARN`, then summarize `INFO` rows briefly rather than repeating every line verbatim. When `agents-md` reports a missing, duplicated, or divergent recall snippet, it also prints the exact bytes to paste as a run of `INFO\tagents-md\tsnippet> <line>` rows — relay those verbatim as a fenced block for the user to paste into `AGENTS.md` themselves; this command never edits `AGENTS.md`, or anything else. If the store is clean, say so plainly, and still mention any `INFO`-level review-queue or capability-matrix items worth the user's attention.
 
-Do not attempt to fix anything based on these findings yourself — this command is report-only. `$knowledge:lint`, `$knowledge:consolidate`, and `$knowledge:promote` are the write paths for the issues it surfaces in the memory store; docs findings are fixed by editing the doc directly; lock/journal/staged findings name the exact recovery command to run.
+Report the findings. `$knowledge:lint` inspects the memory store. Point the user to `$knowledge:consolidate` for reviewed memory edits or `$knowledge:promote` to promote a handoff. Tell the user which document needs correction. For lock, journal and staged-file findings, relay the diagnosis and any recovery guidance the check provides.
 
 $ARGUMENTS

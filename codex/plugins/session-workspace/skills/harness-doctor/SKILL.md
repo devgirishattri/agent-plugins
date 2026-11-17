@@ -30,8 +30,7 @@ checks are:
 - `identity.alias` — session-chat and knowledge pane aliases agree with the
   engine pane name.
 - `identity.live` — `harness-policy.py`'s own verdict in this process: `OK`
-  active/accepted, `ERROR` active/blocking, `INFO` true no-op, or `WARN` for an
-  inactive/no-op mismatch or an unavailable probe. This predicts the bundled
+  active/accepted, `ERROR` active/blocking, `INFO` for an ordinary no-op, or `WARN` for an inactive identity mismatch. If the probe cannot run, it reports `WARN` with inherited identity and `INFO` without it. This predicts the bundled
   hook's decision when Codex loads and trusts it; it does not prove runtime
   hook loading. Likewise, `hook.registration` checks the bundled `hooks.json`
   entry, not runtime trust/loading.

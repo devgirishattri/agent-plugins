@@ -24,7 +24,7 @@ argument-hint: "[TARGET|all] [--config PATH] [--no-save] --confirmed [--all] | S
      marked for the current project.
    - `SESSION --pane NAME --confirmed` (repeatable `--pane`): stop only the
      named service panes, or on-demand executor/reviewer workers, of one
-     session; the session and its other panes keep running. Cannot be
+     session. Sibling panes keep running. Closing the last pane ends the tmux session. Cannot be
      combined with `--all` or `--no-save`.
    - `--force` (with `--pane` only): stop an on-demand worker even while it
      is busy. Use it only when the user asks.

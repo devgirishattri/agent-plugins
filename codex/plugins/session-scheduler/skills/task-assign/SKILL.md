@@ -28,8 +28,7 @@ or context store.
 
 ## Transport contract
 
-`task-assign` performs nested session-chat/tmux dispatch before it writes the
-assignment transition. In Codex, request scoped escalation/approval for the
+`task-assign` dispatches through session-chat/tmux. For a task without a verification contract, it writes the assignment transition after dispatch. In Codex, request scoped escalation/approval for the
 exact installed helper on the first attempt whenever it may dispatch. Invoke
 that helper as one literal Bash segment with raw token zero still `bash`; never
 work around the sandbox with `bash -c`, a wrapper, `env`, an assignment prefix,
@@ -38,7 +37,13 @@ provider-home access.
 
 Escalation grants transport access only. The recorded role and recipient, exact
 arguments, confirmation requirements, and lifecycle rules remain authoritative;
-never use --force to repair transport. On a hard dispatch failure, the ledger
+never use --force to repair transport.
+
+For a contracted task, the helper accepts only the pane, task ID and one prompt. Force never bypasses the contract. It reserves a generation before dispatch. Session-chat status 4 counts as delivery and names the pane where the user can press Enter. If transport reports an uncertain outcome, inspect the task and follow the assigner's reconciliation procedure. [Task contracts](../task-contract/SKILL.md)
+
+## Assignments without a verification contract
+
+On a hard dispatch failure, the ledger
 is still not updated, the prompt and automatic handoff file are rolled back,
 and the per-task handoff directory is removed if empty. Fix the hard transport
 cause and retry the same legal assignment. An unsubmitted dispatch (session-chat
@@ -66,8 +71,3 @@ has started without evidence from the recipient.
 The dispatch records the absolute shared scheduler home and, for explicit NAME
 only, context home. The recipient must preserve the relevant inherited environment.
 Remind the user that executor panes need `SESSION_CHAT_INCOMING_MODE=auto` or `assist`.
-
-For a task with a verification contract, read `../task-contract/SKILL.md`.
-Contract assignment accepts only pane, id and one prompt. Review, done and block
-require `<id> --generation <N> "<note>"`; only the bound reviewer may complete.
-Force never bypasses the contract. Inspect the task first to use its generation.
