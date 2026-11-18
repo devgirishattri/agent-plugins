@@ -11,11 +11,10 @@ argument-hint: "[all]"
 2. Run:
 
    ```bash
-   ARGUMENTS="${ARGUMENTS:-}"
-   bash "$PLUGIN_ROOT/scripts/list-panes.sh" "$ARGUMENTS"
+   bash "$PLUGIN_ROOT/scripts/list-panes.sh"
    ```
 
-3. By default, this lists named panes in the current tmux session only. If `all` is provided, it lists named panes across all tmux sessions.
+3. With empty `$ARGUMENTS`, use the command as shown to list named panes in this tmux session. If the user supplied `all`, append the literal argument `all` to list named panes across every tmux session.
 4. Present the tab-separated output as a markdown table:
 
    ```text

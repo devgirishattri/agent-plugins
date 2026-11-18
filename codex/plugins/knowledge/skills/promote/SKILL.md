@@ -290,9 +290,7 @@ for this deletion. Do not reinvent it:
    ```
    bash "<PLUGIN_ROOT>/scripts/remove-context.sh" "<name>" --confirmed
    ```
-   Relay the helper's final file count. (Context-store writes are
-   reviewer-ALLOWED per the baseline's coordination-state exception —
-   `remove-context.sh` carries no reviewer gate, by design.)
+   Relay the helper's final file count. In enforce mode, strict-v1 reserves removal for orchestrators and currently rejects the required `--dry-run` preview. If policy refuses the preview, report the refusal and stop before deletion.
 
 **Memory source** (supersession retire) — `memory-write.sh retire`:
 1. Compute fresh CAS hashes, each its own step: `--expect-target` = the

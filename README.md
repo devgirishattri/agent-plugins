@@ -11,13 +11,13 @@ Every plugin below ships for both providers at the same version number.
 
 | Plugin | Version | Purpose |
 |--------|---------|---------|
-| `session-manager` | 1.8.0 | List, search, and delete local agent session data |
-| `session-chat` | 0.17.22 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.10 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.5.13 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.16.0 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4 reviewed Git orchestration |
+| `session-manager` | 1.8.1 | List, search, and delete local sessions. Codex also supports archive and unarchive. |
+| `session-chat` | 0.17.23 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.11 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `knowledge` | 0.5.14 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
+| `session-workspace` | 0.16.1 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4/v5 reviewed Git orchestration |
 | `chronos` | 0.1.5 | Inject fresh current date/time context with every prompt for time/day-aware agents |
-| `session-walkthrough` | 0.3.0 | Walk users through session changes with a live in-browser overlay tour |
+| `session-walkthrough` | 0.3.1 | Walk users through session changes with a live in-browser overlay tour |
 
 This table is the fifth place a plugin version is written down, after the two
 plugin manifests and the two marketplace files. `scripts/validate-release.sh`
@@ -38,7 +38,7 @@ rather than assumed: the `session-scheduler` Claude suite passes 81/81 under 3.2
 | `python3`, `gh` | `session-workspace` PR status | Python is required; live GitHub reads additionally require authenticated `gh`. |
 | `python3`, `bash`, `tmux`, `jq`, `git`, `rg` | Scheduler verification pilot | Required by the source-checkout runner; not an installed helper. |
 | `jq` | `chronos` | Optional. Claude falls back to hand-built JSON; the Codex build never uses jq. |
-| `curl` | `session-workspace` browser integration | Hard only when a top-level `browser` block is configured; used for DevTools readiness checks. |
+| `curl` | `session-workspace` browser integration | Required for DevTools readiness when starting a selected managed browser from `browser` or schema-v5 `browsers[]`. |
 | `tmux` | `session-chat`, `session-workspace` | Hard. `session-chat` additionally requires that the agent itself be running inside a tmux pane, not merely that tmux be installed. |
 | `tmux` | `session-scheduler` | Hard in practice. The ledger itself does not touch tmux, but every notify path goes through `session-chat`. |
 | `tmux` | `knowledge` | Required for `context-share`, inside an active tmux session. Otherwise optional for pane identity, where `KNOWLEDGE_PANE_NAME` substitutes. |
@@ -46,13 +46,12 @@ rather than assumed: the `session-scheduler` Claude suite passes 81/81 under 3.2
 | `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
 | `python3` | `knowledge` v2 handoffs | Required to save or regenerate structured scope/items. Legacy v1 and plain snapshot writes retain their existing behavior. |
 | `python3` | `session-manager` on Codex | Required to read names from `session_index.jsonl` for listing, search, deletion selection, and statistics. |
-| `python3` | `session-workspace` harness policy | Hard only when a schema-v2/v3/v4 `harness.enabled` policy is active. Hooks launched inactive remain no-ops; stale active launcher identity/config/guard drift intentionally fails closed. |
+| `python3` | `session-workspace` harness policy | Hard only when a schema-v2–v5 harness is active or the hook must validate a claimed reviewer identity. |
 | `python3` | `knowledge` doctor, `session-chat` message surfacing | Optional. Both degrade rather than fail. |
-| `codex` CLI | `session-manager` on Codex | Hard for deletion only. Its delete path execs the native CLI and exits 127 without it. |
+| `codex` CLI | `session-manager` on Codex | Required for native deletion, archive and unarchive. Single-session delete, archive and unarchive exit 127 if the CLI is unavailable. Bulk deletion can return 1 when planning or deletion fails. |
 | GNU or BSD `date` plus a zoneinfo tree | `chronos` | Hard. It validates `AGENT_PLUGINS_TIME_ZONE` against the system zoneinfo. |
 
-`ripgrep` and `ruby` appear in CI but are test-only, and are not runtime
-prerequisites. On Claude, `session-manager` and `chronos` need nothing beyond
+Release validation uses Ruby. The source-checkout scheduler pilot also requires ripgrep. On Claude, `session-manager` and `chronos` need nothing beyond
 bash and the system `date`.
 
 ## Installation
@@ -149,13 +148,11 @@ what each one needs after installation. Full variable reference is in
 
 ### Shared environment
 
-Two variables must be exported **before** an agent process starts, because the
-panes and agents inherit them and the scripts never derive or export them
-themselves. They are scoped, not universal: `SESSION_SCHEDULER_HOME` is required
-for every scheduler operation, while `SESSION_CONTEXT_HOME` is required only by
-the `/knowledge:context-*` family and by attaching a context to a task. The rest
-of `knowledge` works without it, and `/knowledge:doctor` falls back to
-`<repo-root>/.tmp/contexts` rather than failing.
+Configure store paths in the launcher before starting the agent. Scheduler operations
+require `SESSION_SCHEDULER_HOME`. Single-project context operations and tasks that
+attach a named snapshot require `SESSION_CONTEXT_HOME`. The Codex context-search
+skill also requires it. Claude’s cross-project search can discover stores without it.
+`knowledge:doctor` can inspect `<repo-root>/.tmp/contexts` when the variable is unset.
 
 ```bash
 export SESSION_CONTEXT_HOME="$HOME/.agent-context"     # knowledge context snapshots
@@ -168,12 +165,11 @@ that need them fail closed with an explicit error when they are unset rather
 than guessing a path, so a missing export surfaces as a clear failure instead of
 silent misbehavior.
 
-A project using `session-workspace` does not set these by hand. Listing
-`scheduler` or `contexts` in the config's `stores.pin` is what exports
-`SESSION_SCHEDULER_HOME` and `SESSION_CONTEXT_HOME` (and `messages` exports
-`SESSION_CHAT_TARGET_MESSAGES_DIR`) into every pane the engine launches. Those
-three names are rejected if written directly into an `env.groups` block, so
-`stores.pin` stays their only source of truth.
+In a workspace config, include `scheduler`, `contexts` or `messages` in
+`stores.pin`. Set `pin_to_session: true` on each pane group that needs the
+corresponding `SESSION_SCHEDULER_HOME`, `SESSION_CONTEXT_HOME` or
+`SESSION_CHAT_TARGET_MESSAGES_DIR`. The default is false. The engine reserves
+these variable names and rejects overrides in `env.groups`.
 
 ### session-manager
 
@@ -182,14 +178,15 @@ the transcript and any set-aside copies (`<session>.orphaned-*.jsonl`,
 `<session>.jsonl.superseded-*`), subagent data, session env, debug log, file
 history, legacy todos, the task list, `image-cache/`, `uploads/` and
 `dev-mods/` entries, its `history.jsonl` lines, and the session's temp
-directory (scratchpad, images and task output) under Claude Code's temp root,
-`${CLAUDE_CODE_TMPDIR:-/tmp}/claude-<uid>/<project>/<session>/`. A target
+directory (scratchpad, images and task output) and `cache-break-state-<session>.json`.
+It checks each distinct `claude-<uid>` root under `CLAUDE_CODE_TMPDIR`,
+`TMPDIR` and `/tmp` for these records. A target
 reached through a symlinked directory is refused, and so is a temp root that is
 a symlink or owned by another user.
 
 It reads the session data your runtime already writes. On Codex, install
-Python 3 to read session names; deletion execs the native `codex` CLI, so that
-binary must also be on `PATH`. Native lookup tries an existing Codex daemon's
+Python 3 to read session names. Deletion, archive and unarchive require the
+native `codex` CLI on `PATH`. Native lookup tries an existing Codex daemon's
 WebSocket control socket, then a temporary stdio app server that it closes after
 lookup. No manual daemon startup is required; it never starts a persistent daemon.
 If both native connections fail, auto mode reports a warning and falls back to local
@@ -235,8 +232,8 @@ A walkthrough request ("walk me through the change", "show me the changes",
 `scripts/tour/overlay.js` and a tour definition into the already-running
 managed browser through chrome-devtools `evaluate_script`. Each step highlights
 a new or changed element and quotes the request line it covers, or labels a
-design decision. The tour is read-mostly: steps only set controls, the user
-does any real save, and Close removes every trace. See the
+design decision. Steps can change control values. The user performs any save.
+Close removes the tour overlay, listeners and saved tour state. Preserve user edits if an `onClose` callback undoes a value the tour itself set. See the
 [live tour reference](plugins/session-walkthrough/skills/session-walkthrough/references/live-tour.md)
 and the walkable [example](plugins/session-walkthrough/examples/live-tour/README.md),
 a synthetic demo page with a nine-step tour.
@@ -288,8 +285,8 @@ store, then creates `.agents/memory/` with an empty `MEMORY.md` at `0700`/`0600`
 It refuses to run outside a git repository, and re-running it is a no-op. Until
 a store exists, the search, recall, and remember surfaces have nothing to read.
 
-Docs and context surfaces work without a store. Context snapshots additionally
-need `SESSION_CONTEXT_HOME`.
+Documentation and context commands work without a memory store. Configure
+`SESSION_CONTEXT_HOME` for work on individual snapshots.
 
 Prompt-hook recall remains **off** on a fresh plugin install:
 `KNOWLEDGE_AUTO_RECALL=1` enables session-start and prompt injection;
@@ -390,9 +387,10 @@ completion requires source-bound executed evidence and independent reviewer
 admission. Dependencies use durable admission; `inspect --fresh` and
 `inspect --committed` add current-source checks for commit and release preflight.
 Reconcile ambiguous outcomes explicitly before reassignment. No automatic retry
-or force flag bypasses the contract. Contracted done/block write the ledger
-without an assigner acknowledgement; the coordinator reads task status. Receipts remain in the existing scheduler
-handoff directory; cleanup retains contracted tasks. All participating panes
+or force flag bypasses the contract. Contracted done/block with inline notes
+write the ledger. With `--note-file`, they also record the verdict and attempt
+to notify the eligible assigner. The coordinator can read task status.
+Receipts stay in the scheduler handoff directory. Cleanup retains contracted tasks. All participating panes
 and consumers need scheduler 0.7.0. Verification needs Python 3 and Git, runs
 with an isolated environment, and preserves the active harness policy. Local
 digests do not authenticate an external runner or authorize a release.
@@ -400,6 +398,9 @@ digests do not authenticate an external runner or authorize a release.
 New scheduler IDs use `task-<epoch>-<8hex>` from OS randomness. Existing task
 IDs remain valid. Creation refuses collisions among cooperating scheduler
 writers under the shared task lock, then atomically publishes complete JSON.
+Codex task cleanup can delete a surviving task’s base prompt when its ID overlaps
+another task’s review or acknowledgement filename. See the cleanup skill before
+applying a batch with overlapping IDs. [Codex task cleanup](codex/plugins/session-scheduler/skills/tasks-clean/SKILL.md)
 
 Ordinary done/block/review failures report `DIAG` JSON with separate transition,
 notification and bookkeeping observations. Workspace hook denials report the
@@ -457,14 +458,11 @@ That copies the plugin's `templates/workspace-dispatcher.sh` to
 also how you refresh the copy after a plugin update, which matters because the
 dispatcher lives outside the versioned plugin cache and can otherwise go stale.
 
-Per project, create two things at the repository root:
-
-1. `.agent-workspace/workspace.json`, the versioned config describing sessions,
-   panes, per-role models and grants, exported coordination stores, and secrets.
-2. `workspace.sh`, a bootstrap shim copied from the plugin's
-   `templates/workspace.sh`. It resolves `SESSION_WORKSPACE_CONFIG` and
-   `SESSION_WORKSPACE_PLUGIN_ROOT` and execs the engine. It holds no project
-   logic, and project-specific behavior belongs in the JSON rather than here.
+Create `.agent-workspace/workspace.json` in the repository root. It describes
+sessions, panes, model grants, coordination stores and secrets. The installed
+`workspace` command discovers this config from the current project. To support
+callers that invoke `./workspace.sh`, use the optional `templates/workspace.sh`
+shim. Keep project-specific behavior in the JSON config.
 
 ### Secret visibility by role
 
@@ -609,8 +607,8 @@ transport messages. Confined coordinators must use native reads or trusted
 helpers to read the message store; arbitrary shell access is blocked even when
 the store is nested inside their checkout.
 
-One asymmetry to know about: `stores.pin` exports the three coordination
-variables, but `stores.memory.root` exports nothing. If panes should write to
+A group with `pin_to_session: true` receives the coordination variables selected
+by `stores.pin`. To make panes write to
 that memory root, restate the same path as `KNOWLEDGE_MEMORY_HOME` in an
 `env.groups` block. Nothing keeps the two in sync, so changing one alone makes
 them diverge silently.
@@ -623,25 +621,25 @@ read-only:
 /workspace-plan
 ```
 
-`/workspace-start` brings the workspace up, creating only what is missing.
-`/workspace-stop` and adopting existing unmanaged panes require explicit
-confirmation. `/workspace-restart` is itself a destructive surface and passes
-the confirmation internally to its stop phase; it does not accept a separate
-`--confirmed` flag. The config schema is documented in
-`plugins/session-workspace/README.md`.
+`/workspace-start` creates missing workspace resources. `/workspace-stop` and
+adopting unmanaged panes require explicit confirmation. With the default stop
+scope, `workspace stop --confirmed` selects every configured session. Supply a
+session ID to select one. `--all` or `behavior.stop_scope: all` widens the stop
+to every session marked for this project. `/workspace-restart` passes confirmation
+to its own stop phase. With `behavior.stop_scope: all`, a targeted restart can stop other project-marked sessions and start only the named one.
+See the [workspace configuration](plugins/session-workspace/README.md).
 
-Schema v4 can additionally enable the provider-neutral
-`workspace-orchestrator` skill. Its fixed `reviewed-git-v1` lifecycle maps
-validated child targets to their executor/reviewer panes and coordinates plan
-review, scheduler-tracked implementation, independent audit, commit, push, and
-deploy as separate gates. Configuration contains only safe Git coordinates;
-every mutation executes in the owning executor pane, and explicit user
-confirmations are never inferred from harness or ledger state.
+Schemas v4 and v5 support the `workspace-orchestrator` skill and its fixed
+`reviewed-git-v1` lifecycle. The orchestrator assigns work, the executor implements
+it and performs authorized Git operations, and the reviewer records the audit.
+Commit, push and deploy have separate gates. For ordinary targets the executor
+merges into the release branch after separate user confirmation. A v5 executor
+bound to one branch may commit and push that work branch. For those lanes,
+the separately authorized release merge runs in the main checkout.
 
-From session-workspace 0.9.0, active strict-v1 orchestrators (including confined
-environment coordinators) explicitly deny remote-mutating `gh` commands even
-when their operands do not resolve to a child checkout. Projects that previously
-ran these commands from an orchestrator must route them to an executor. Reviewed
+Since session-workspace 0.9.0, strict-v1 classifies remote-mutating `gh` commands by
+root and confined orchestrators even without a child-checkout operand. Audit mode
+warns and enforce mode blocks. Route authorized mutations through the executor. Reviewed
 single-command reads remain available: `run list/view`, `pr list/view/diff/checks`,
 `workflow list/view`, `release list/view` with `--repo`/`-R OWNER/NAME`,
 `repo view OWNER/NAME`, and `api repos/OWNER/NAME/...` or
@@ -679,11 +677,10 @@ loop handling are unchanged.
 
 `chronos`, `knowledge`, and `session-chat` register lifecycle hooks;
 `session-manager`, `session-scheduler`, and `session-walkthrough` register none. `session-workspace`
-registers opt-in harness hooks: schema-v1 projects, schema-v2/v3/v4
-projects without an enabled harness, and sessions without launcher-provided
-harness identity remain true no-ops when no stale active launcher mode is
-present. A pane launched active still fails closed if the config is later
-disabled or changed.
+registers opt-in harness hooks for schemas v2–v5. An ordinary unbound pane
+runs with the harness inactive. A pane launched with an active harness fails
+closed when its validated mode, identity, read grants, guards or own environment scope drift. A pane claiming a reviewer identity also
+requires a readable workspace config before the hook can establish its mode.
 `knowledge` and `session-chat` use `SessionStart`, `UserPromptSubmit`, and
 `Stop` on both providers. `chronos` differs by provider: Claude registers
 `UserPromptSubmit` plus a throttled `PostToolBatch` refresh, while Codex registers
@@ -777,13 +774,12 @@ These variables keep the `SESSION_CONTEXT_*` names they had under the retired
 
 | Variable | Claude | Codex | Default | Purpose |
 |----------|--------|-------|---------|---------|
-| `SESSION_CONTEXT_HOME` | Yes | Yes | Required by the skill workflow (inherited) | Snapshot store root. Context skills never export or derive it; most helpers fail closed when it is unset. Both providers' cross-project `search-contexts.sh` helpers can discover project stores without it; when set, it overrides the current project's search store. This helper behavior does not relax the inherited-store skill contract. The SessionStart detection hook can use a git-root fallback to detect snapshots; its resolver can also initialize, lock, and harden that store. |
+| `SESSION_CONTEXT_HOME` | Yes | Yes | Inherited for single-project commands and the Codex search skill | Snapshot store root. Both cross-project search helpers can discover stores without it. When set, it overrides the current project's search store. Claude's search command uses that discovery directly. The SessionStart banner can initialize, lock and harden a git-root fallback store. |
 | `SESSION_CONTEXT_STALE_DAYS` | Yes | Yes | `7` | Age at which `context-load` warns that a snapshot is stale. Doctor also uses it for file age and newest evidence age on in-progress/blocked handoff items; doctor accepts 0-999999 and warns/falls back to 7 for invalid values. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the `session-chat` dependency used by `context-share`. |
 | `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for the `session-chat` dependency. |
 
-The core context-store variable name and inherited-at-startup contract are
-shared, but `context-search` unset behavior differs as noted above.
+Cross-project search reads existing stores without creating directories or changing their permissions.
 `SESSION_CHAT_PLUGIN_ROOT` is a Codex-only locator; both providers support
 `SESSION_CHAT_ROOT_OVERRIDE`. As with the scheduler homes below,
 launcher/parent-shell configuration establishes `SESSION_CONTEXT_HOME` before
@@ -821,8 +817,7 @@ repeat the absolute homes only as provenance and relaunch guidance.
 
 The four transport-bearing helpers (`task-assign`, `task-review`, `task-done`,
 `task-block`) perform nested session-chat/tmux transport for legacy tasks.
-Contracted assignment/review also use transport; contracted done/block are
-ledger-only and send no acknowledgement. A
+Contracted assignment and review also use transport. Contracted done and block use it to notify an eligible assigner when called with `--note-file`. Inline notes update the ledger only. A
 sandboxed runtime (e.g. Codex) should grant scoped escalation/approval for the
 exact installed helper on its first invocation; the helpers never self-escalate,
 and agents must not bypass a transport denial with wrappers or command
@@ -848,8 +843,9 @@ session-manager operations do not honor `CLAUDE_HOME`.
 |----------|--------|-------|---------|---------|
 | `SESSION_WORKSPACE_CONFIG` | Yes | Yes | Discovered | Explicit path to the project's `.agent-workspace/workspace.json`. The bootstrap shim exports it; set it directly to drive a config outside the current project root. |
 | `SESSION_WORKSPACE_PLUGIN_ROOT` | Yes | Yes | Resolved | Explicit engine root, used by the bootstrap shim and the machine-wide dispatcher when the installed plugin cannot be located by the normal search. |
-| `SESSION_WORKSPACE_SOURCE_TREE_DIR` | Yes | Yes | Unset | Development override for the sibling-checkout search used to resolve the engine from a source tree instead of an installed copy. |
+| `SESSION_WORKSPACE_SOURCE_TREE_DIR` | Yes | Yes | Unset | Development override for finding sibling dependency plugins in a source checkout. |
 | `SESSION_WORKSPACE_LOCK_TIMEOUT` | Yes | Yes | `30` | Seconds to wait for the tmux lifecycle lock before giving up. |
+| `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` | Yes | Yes | `120` | Seconds to wait for a targeted worker pane to display an agent prompt. |
 | `SESSION_WORKSPACE_STOP_GRACE_SECONDS` | Yes | Yes | `5` | Grace period given to a pane's agent to exit before `workspace-stop` escalates. |
 | `SESSION_WORKSPACE_IDLE_OBSERVE` | Yes | Yes | Unset | Set to `connections` to make the browser's idle watcher count client connections instead of CDP traffic. Read when `start` arms the watcher. |
 | `SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS` | Yes | Yes | `30` | Seconds between idle-watcher samples, at most the idle window. Read when `start` arms the watcher. |
@@ -858,9 +854,8 @@ session-manager operations do not honor `CLAUDE_HOME`.
 | `SESSION_WORKSPACE_ATTACH_DRY_RUN` | Yes | Yes | `0` | Set to `1` to skip the terminal attach step. Intended for tests and automation. |
 
 All behavior lives in the plugin engine. An adopting project contributes only a
-versioned `.agent-workspace/workspace.json` and a bootstrap `workspace.sh` shim
-that resolves the two locator variables and execs the engine; the shim holds no
-project logic. Lifecycle verbs are exposed as Claude commands (`/workspace-start`,
+versioned `.agent-workspace/workspace.json`. An optional `workspace.sh` shim
+resolves the two locator variables and starts the engine. Lifecycle verbs are exposed as Claude commands (`/workspace-start`,
 `/workspace-stop`, `/workspace-restart`, `/workspace-reconcile`,
 `/workspace-status`, `/workspace-plan`, `/workspace-doctor`,
 `/workspace-install`) and as matching Codex skills. `plan` and `doctor` mutate
@@ -1101,26 +1096,21 @@ These checks do not themselves enable repository merge protection.
   only when every shard succeeds, and `validate-release.sh` fails if a shard is
   missing from that gate. A new push to a pull request cancels the pull
   request's older run. Runs on `main` are never cancelled.
-- Commits carry no `Co-Authored-By` or `Claude-Session` line anywhere in the
-  message. The `commit-trailers` CI job runs `scripts/check-commit-trailers.sh`
-  on every commit a pull request adds and every commit pushed to `main`, and
-  `validate-release` needs it, so a pull request whose commits carry such a
-  line cannot merge. It matches any line that starts with either key, indented
-  or not, because squash messages copy commit bodies: their trailers end up
-  mid-message, where git's trailer parser does not look, and `git merge
-  --squash` indents them. For local commits, enable the tracked hook once per
-  clone with `git config core.hooksPath .githooks`; that setting replaces
-  `.git/hooks` for the clone. The tracked `.claude/settings.json` turns off
-  Claude Code's commit trailer, pull request attribution line and session link
-  (`attribution.commit`, `attribution.pr`, `attribution.sessionUrl`).
-- Write squash merge messages by hand. The pull request run never sees the
-  squash message, and GitHub's default copies every commit body and adds a
-  `Co-authored-by` line for each commit author other than the merger. The run
-  on `main` checks the squash commit, but only after it has landed.
+- Commit messages must omit `Co-Authored-By` and `Claude-Session`. The `commit-trailers`
+  job checks the full message of every commit added by a pull request or pushed to `main`.
+  Either key at the start of a line, including an indented line, fails `validate-release`.
+  Blocking a merge also depends on GitHub requiring that check. Enable the local hook
+  with `git config core.hooksPath .githooks`. This replaces the clone's `.git/hooks` path.
+- Review the rendered pull request description for attribution, session links and private
+  project details before publishing. The commit check reads commit messages only.
+  The tracked `.claude/settings.json` configures local Claude Code through
+  `attribution.commit`, `attribution.pr` and `attribution.sessionUrl`.
+- Write the squash message by hand. GitHub can include commit bodies and author
+  trailers in a generated message. CI checks the resulting commit on `main` after merge.
 - `claude plugin validate <path>` checks a single plugin or marketplace manifest
   against the Claude schema, which is a faster inner-loop check than a full
   release validation.
-- `python3 -B scripts/test-codex-install.py` installs all six plugins into a
+- `python3 -B scripts/test-codex-install.py` installs all seven plugins into a
   disposable Codex home and checks skill names, duplicate wrappers, and helper
   references. It makes no model calls.
 - `python3 -B scripts/plugin-evals.py` validates portable `evals/*/case.json`
@@ -1175,7 +1165,7 @@ These checks do not themselves enable repository merge protection.
   appropriate to the reviewed fixture. Generated `evals/results/` reports stay
   local and are gitignored.
 - `session-scheduler` is intentionally a file-backed ledger layered on `session-chat`; keep scheduling state out of the transport plugin.
-- `session-workspace` owns tmux lifecycle, the optional executable role-policy harness, and schema-v4's fixed `reviewed-git-v1` coordination lifecycle. A project's root `workspace.sh` remains a logic-free bootstrap. `workspace.json` supplies validated pane/Git coordinates only; correlated session-chat replies plus the pinned scheduler ledger carry machine-verifiable gate evidence, while product-specific build/test requirements remain in `AGENTS.md` and explicit user confirmations remain conversational rather than harness-enforced.
+- `session-workspace` owns tmux lifecycle, the optional role-policy harness and the schema-v4/v5 `reviewed-git-v1` workflow. The project's root `workspace.sh` is a bootstrap. `workspace.json` supplies validated pane and Git coordinates. Correlated session-chat replies and the pinned scheduler ledger record gate evidence. Product-specific checks belong in `AGENTS.md`, and the user gives the required confirmations in conversation.
 
 ### Independent workspace environments (schema v5)
 
@@ -1185,8 +1175,11 @@ scoped task/routing checks, and multiple browser profiles. See the
 [environment contract](codex/plugins/session-workspace/skills/session-workspace/references/environments.md)
 and [complete sample](codex/plugins/session-workspace/templates/workspace-multi-environment.json).
 Use `workspace start --environment web`, `workspace status --environment vue3`,
-or `workspace restart --environment vue3 --services`. Existing configurations remain
-valid; opt into v5 only after upgrading both providers.
+or `workspace restart --environment vue3 --services`. Upgrade both providers
+before opting into v5. From workspace 0.15.0, declare a unique `branch` for every environment
+on a linked worktree. A primary checkout also needs one when another configured
+environment shares its Git directory. Set it to the local worktree branch and use the same value for an
+orchestration target’s `work_branch` in that environment.
 
 #### Root-scoped environment orchestrators
 

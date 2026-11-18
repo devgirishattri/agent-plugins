@@ -130,8 +130,8 @@ shell call and use a native tool to write the file there.
 
 Use file dispatch for multiline, long, or command-containing/quoting-sensitive
 messages. For replies, always pass the incoming id through `--reply-to`. The
-helper creates a separate durable transport copy. After delivered or durable
-queued success, it automatically removes an eligible own-pane draft and prints
+helper creates a separate durable transport copy. After delivery, durable queueing or
+an unsubmitted result (exit 4), it can remove an eligible, unchanged own-pane draft and print
 `Removed delivered draft: <path>`. Do not delete a retained draft or resend a
 successful message. Set `SESSION_CHAT_KEEP_DRAFTS=1` to keep eligible drafts.
 
@@ -179,7 +179,7 @@ If that evidence is unavailable, report task completion as unverified.
 
 For durable fallback, the sender writes the queue row and dispatch file into the recipient runtime's message directory. Codex recipients use `${CODEX_HOME:-~/.codex}/messages`; Claude recipients use `${CLAUDE_HOME:-~/.claude}/messages`. When `SESSION_CHAT_TARGET_MESSAGES_DIR` is exported in every participating pane, it becomes the shared sender and receiver mailbox root instead. Queue operations lock under that message directory so mixed Codex/Claude fallback does not depend on both runtimes sharing the same `TMPDIR`.
 
-Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and performs a one-time safe migration of an existing owner-owned, non-symlink message tree. Every operation revalidates queue, lock, archive, and ledger paths; symlinked, multiply-linked, non-regular, or unowned paths are rejected. Dispatch files use atomic no-clobber creation and are revalidated before notification and before trusted reads.
+Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and performs a one-time safe migration of an existing owner-owned, non-symlink message tree. Transport and trusted dispatch reads validate their target paths. History search scans archive files and top-level Markdown in the resolved mailbox. Dispatch files use atomic no-clobber creation and are revalidated before notification and before trusted reads.
 
 ## Tunables
 
@@ -207,7 +207,7 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
   sandbox blocked the tmux socket. This is not an empty pane list, an unnamed
   pane, or a missing target. Relay the error and rerun the entire plugin script
   escalated/approved; retrying only one inner `tmux` command is insufficient.
-- `did not land within Xms after N attempts` followed by `Queued ...`: target was busy through all live attempts, but the message is **not lost** — it is already in the recipient's resolved durable inbox. Without `SESSION_CHAT_TARGET_MESSAGES_DIR`, the defaults are `${CODEX_HOME:-~/.codex}/messages/queue/<name>.tsv` for Codex and `${CLAUDE_HOME:-~/.claude}/messages/queue/<name>.tsv` for Claude; with the override, the queue is under `$SESSION_CHAT_TARGET_MESSAGES_DIR/queue/<name>.tsv`. Do not retry the queued message. It surfaces on the recipient's next prompt (`UserPromptSubmit` hook) or as soon as the current turn finishes (`Stop` hook feedback). Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES` only when immediate live landing matters.
+- `did not land within Xms after N attempts` followed by `Queued ...`: target was busy through all live attempts, but the message is **not lost** — it is already in the recipient's resolved durable inbox. Without `SESSION_CHAT_TARGET_MESSAGES_DIR`, the defaults are `${CODEX_HOME:-~/.codex}/messages/queue/<name>.tsv` for Codex and `${CLAUDE_HOME:-~/.claude}/messages/queue/<name>.tsv` for Claude; with the override, the queue is under `$SESSION_CHAT_TARGET_MESSAGES_DIR/queue/<name>.tsv`. Do not retry the queued message. An eligible `UserPromptSubmit` or `Stop` hook processes the prefix that fits its output budget. Overflow waits for later hooks. An interruption after output and before cleanup can replay a row. Raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES` only when immediate live landing matters.
 - `landed in the recipient's input line but was not submitted` followed by `Unsubmitted ...`: the recipient's TUI kept the line staged through two Enters. The message is **not lost**: it is in the input line and in the durable inbox, and `$session-chat:pane-health` shows `UNSUBMITTED`. Press Enter in that pane once. Do not resend.
 - `timed out waiting for send lock`: rare now that the unset lock timeout auto-sizes to the send budget and resets on holder change. If `SESSION_CHAT_LOCK_TIMEOUT_MS` is set, that value is treated as an absolute cap.
 - `pane 'X' is at a shell prompt`: the recipient's agent exited; the message would have been executed by their shell. Restart the agent in that pane (set `SESSION_CHAT_ALLOW_SHELL_TARGET=1` only for deliberate shell targets, e.g. tests).
@@ -218,7 +218,7 @@ Session-chat uses umask `077`, enforces directories `0700` and files `0600`, and
 
 ## Incoming Mode
 
-Use `$session-chat:incoming-mode` to show the current receiver mode and explain `notify`, `assist`, `auto`, and `off`. The `UserPromptSubmit` hook reads this value when incoming tmux messages are submitted to Codex, then emits model-visible `hookSpecificOutput.additionalContext` capped at 10000 characters. Use `$session-chat:incoming-mode auto` or another mode to print an `export SESSION_CHAT_INCOMING_MODE=<mode>` command. Run that export in the shell that starts Codex, then restart or reload the session; a child script cannot mutate the parent Codex environment.
+Use `$session-chat:incoming-mode` to show the current receiver mode and explain `notify`, `assist`, `auto`, and `off`. The `UserPromptSubmit` hook reads this value when incoming tmux messages are submitted to Codex, then emits model-visible `hookSpecificOutput.additionalContext` capped at 10000 characters. Use `$session-chat:incoming-mode auto` or another mode to print an `export SESSION_CHAT_INCOMING_MODE=<mode>` command. Apply that export in the launch environment and relaunch Codex.
 
 ## Message Files
 
@@ -231,7 +231,7 @@ Use `$session-chat:messages-list` to inspect trusted dispatch message files in `
 ## Fleet Helpers
 
 - `$session-chat:broadcast [--all] [--match GLOB] <text>`: fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `$session-chat:send` per pane.
-- `$session-chat:message-search <pattern> [--days N] [--peer NAME]`: search the message archive plus full dispatch bodies. The archive holds every sent and surfaced incoming message as a 200-character excerpt, with 30-day retention.
+- `$session-chat:message-search <pattern> [--days N] [--peer NAME]` searches archive rows and matching dispatch bodies. Archiving is best effort. Excerpts contain up to 200 characters. Retention runs on append (30 days by default). `--peer` filters only archive rows.
 - `$session-chat:check-replies [--pending] [--since MIN] [--task TASK_ID]`: which sent messages have confirmed correlated replies. Use `$session-chat:reply <pane> <id> <message>` for responses; it generates `[re:<id>]` automatically. An unconfirmed row is not evidence that the peer still has an active task.
 - `$session-chat:pane-health [name] [--all]`: liveness, cwd/location, unsubmitted input, inbox backlog, and lock state per named pane; catches dead, duplicate, or repo-drifted workers before dispatch, and `UNSUBMITTED` panes whose input line holds a session-chat message that was never submitted.
 

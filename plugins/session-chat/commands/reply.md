@@ -32,14 +32,14 @@ The token goes at the very start of the message body. Only that leading position
         ```
         bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-to-session.sh --reply-to <message-id> [--task <task-id>] "<pane>" "<prompt-file-path>"
         ```
-     4. Under strict-v1, the transport removes your own draft after a delivered or queued result (`Removed delivered draft: …`); do not delete it yourself. Outside strict-v1, optionally run `rm -f "<prompt-file-path>"` for a temp file. After a hard failure, keep the draft for the retry.
+     4. The transport can remove an eligible, unchanged own draft after delivery, queueing or an unsubmitted result (exit 4). It prints `Removed delivered draft: …` when it removes the file. Keep retained drafts. Outside strict-v1, an ordinary temporary prompt file can be cleaned up after delivery.
    - Put a complete verdict or packet in **one** reply. Do not send a short reply and then follow-ups that complete it. A correction is one full replacement packet that names the message id it replaces.
 
 3. Report the result:
-   - "Sent to …" or "Dispatched task to …" (delivered live), or "Queued …" (recipient busy; durable, surfaces on their next turn) → report success. Note that the reply is correlated: the sender's `/check-replies` will mark id `<message-id>` answered.
+   - Report `Sent to …`, `Dispatched task to …` or `Queued …` as the transport result. The sender's `/check-replies` can confirm a correlated reply after a receiving hook records it.
    - If `--reply-to` reports an invalid id, re-check the `id:<hex>` from the received message.
    - If the error is about no name, tell the user to run `/whoami <name>` first.
    - If the target is not found, run `/panes` to show available targets.
    - If it mentions duplicate names, ask the user to rename one pane via `/whoami`.
-   - A busy recipient yields a "Queued …" result. That result is durable success, so **do not resend**. It arrives on their next turn, and resending duplicates it. Retry only a hard failure, and only after fixing its named cause.
+   - `Queued …` is durable success. A receiving hook will process the row when it fits. Once it is queued, do not resend it.
    - "Unsubmitted …" (exit status 4) is **not** success: the reply sits unsubmitted in the recipient's input line and its durable copy stays queued. Do not resend. Tell the user to press Enter in that pane, then check `/pane-health <pane>`.

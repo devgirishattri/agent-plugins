@@ -30,12 +30,10 @@ checks are:
 - `identity.alias` — session-chat and knowledge pane aliases agree with the
   engine pane name.
 - `identity.live` — `harness-policy.py`'s own verdict in this process: `OK`
-  active/accepted, `ERROR` active/blocking, `INFO` true no-op, or `WARN` for an
-  inactive/no-op mismatch or an unavailable probe. This predicts the bundled
+  active/accepted, `ERROR` active/blocking, `INFO` for an ordinary no-op, or `WARN` for an inactive identity mismatch. If the probe cannot run, it reports `WARN` with inherited identity and `INFO` without it. This predicts the bundled
   hook's decision when Codex loads and trusts it; it does not prove runtime
   hook loading. Likewise, `hook.registration` checks the bundled `hooks.json`
   entry, not runtime trust/loading.
 
 Do not apply remediation unless the user separately asks for a change. For an
-active identity failure, recommend `$session-workspace:workspace-restart` and
-never suggest editing engine identity variables by hand.
+active identity failure, recommend `$session-workspace:workspace-restart <session-id>` for the session containing the pane. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down. Leave engine identity variables to the launcher.

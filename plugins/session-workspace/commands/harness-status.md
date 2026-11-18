@@ -30,7 +30,7 @@ The `identity:` line reads this pane's engine-owned environment. The variables a
 - `PARTIAL` — only some identity variables are set. An active policy fails closed on this.
 - `MISMATCH` — identity disagrees with the config. Causes: drift, a renamed pane, a config edited after launch (including any change to `harness.guards`), or a `SESSION_CHAT_PANE_NAME` / `KNOWLEDGE_PANE_NAME` alias that disagrees.
 
-An **active** harness fails closed on `MISMATCH`. Every Edit/Write/Bash call is blocked until the user restarts the configured session that contains this pane. The remedy is `/session-workspace:workspace-restart <session-id>`. It kills and recreates all of that session's configured panes, not just this one. Relay that remedy verbatim.
+An active harness blocks on `MISMATCH`. Recommend `/session-workspace:workspace-restart <session-id>` for the configured session containing the pane. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down.
 
 The `policy:` line is `harness-policy.py`'s own verdict for this process: `no-op`, `active ... identity accepted`, or `BLOCKING [rule] reason`. It is the policy engine's decision for this environment. It assumes the provider has loaded and trusted the bundled hook. A pane cannot verify that.
 

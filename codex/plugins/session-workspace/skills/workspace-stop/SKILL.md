@@ -26,8 +26,8 @@ Real flags:
 - `--all`: widen from configured/selected sessions to every live session
   marked for the current project.
 - `SESSION --pane NAME --confirmed` (repeatable `--pane`): stop only the named
-  service panes, or on-demand executor/reviewer workers, of one session; the
-  session and its other panes keep running. Cannot be combined with `--all` or
+  service panes, or on-demand executor/reviewer workers, of one session. Sibling panes keep running.
+  Stopping the last pane ends the tmux session. Cannot be combined with `--all` or
   `--no-save`. Prints `stopped: N  not running: N  skipped: N  busy: N`.
 - `--force` (with `--pane` only): stop an on-demand worker even while it is
   busy. Use it only when the user asks.

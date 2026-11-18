@@ -26,13 +26,12 @@ argument-hint: "[topic or file to document]"
 6. If no topic is provided in `$ARGUMENTS`, ask the user what they want to document.
 7. After writing or updating docs, derive the unique parent directory of every
    changed documentation file. Run the validators once per parent directory;
-   use `docs/` only when that is actually the changed document's parent:
+   replace `<PLUGIN_ROOT>` and `<DOCS_DIR>` with resolved literal paths before each invocation. Under strict-v1 the target directory must be inside the pane's working directory.
 
    ```bash
-   DOCS_DIR="<parent directory of changed doc>"
-   bash "$PLUGIN_ROOT/scripts/check-todos.sh" "$DOCS_DIR"
-   bash "$PLUGIN_ROOT/scripts/validate-links.sh" "$DOCS_DIR"
-   bash "$PLUGIN_ROOT/scripts/check-freshness.sh" "$DOCS_DIR" 30
+   bash "<PLUGIN_ROOT>/scripts/check-todos.sh" "<DOCS_DIR>"
+   bash "<PLUGIN_ROOT>/scripts/validate-links.sh" "<DOCS_DIR>"
+   bash "<PLUGIN_ROOT>/scripts/check-freshness.sh" "<DOCS_DIR>" 30
    ```
 
 8. Delegate an independent, report-only review of the changed docs to a fresh subagent using `$PLUGIN_ROOT/skills/docs-review/SKILL.md`. Give it the target and absolute `PLUGIN_ROOT`, explicitly tell it not to delegate again or edit files, wait for it, and relay the verdict. Only when the runtime has no delegation capability may you review directly; disclose that non-independent fallback.

@@ -13,13 +13,12 @@ argument-hint: "[doc file or docs directory to review]"
 5. The independent worker checks every referenced file path, function, table,
    endpoint, env var, and cross-link against the real codebase. For a file
    target, derive its parent directory; for a directory target, use it directly.
-   Run the scripts once per unique target directory (not a hard-coded `docs/`):
+   Run the scripts once per unique target directory. Replace both placeholders with resolved literal paths inside the commands. Under strict-v1 the target must be inside the pane's working directory.
 
    ```bash
-   DOCS_DIR="<target directory or parent of target file>"
-   bash "$PLUGIN_ROOT/scripts/validate-links.sh" "$DOCS_DIR"
-   bash "$PLUGIN_ROOT/scripts/check-todos.sh" "$DOCS_DIR"
-   bash "$PLUGIN_ROOT/scripts/check-freshness.sh" "$DOCS_DIR" 30
+   bash "<PLUGIN_ROOT>/scripts/check-todos.sh" "<DOCS_DIR>"
+   bash "<PLUGIN_ROOT>/scripts/validate-links.sh" "<DOCS_DIR>"
+   bash "<PLUGIN_ROOT>/scripts/check-freshness.sh" "<DOCS_DIR>" 30
    ```
 
 6. Report the worker's structured verdict (ACCURATE / ISSUES FOUND) with broken references, stale items, script results, and suggested fixes. Neither the caller nor worker may edit files — this command is report-only.

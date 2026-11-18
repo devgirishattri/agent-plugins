@@ -26,7 +26,7 @@ argument-hint: <name> [--meta k=v] [--stage NAME] [--depends-on id1,id2] [--revi
 3. Options:
    - `--meta k=v` — free-form metadata (repeatable).
    - `--stage NAME` — optional pipeline stage label (suggested: `plan`, `dispatch`, `execute`, `audit`, `push`).
-   - `--depends-on id1,id2` — comma-separated existing task ids; `task-assign` refuses to dispatch until every dependency is `done` (unless `--force`).
+   - `--depends-on id1,id2` records comma-separated existing task IDs. Ordinary prerequisites must be `done` unless `--force` overrides their status. A contracted prerequisite always requires valid admission.
    - `--reviewer PANE` — independent reviewer automatically dispatched by `task-review`.
    - `--workflow ID` — workflow group; `--workflow-id` is an alias.
 4. Report the created task id, name, and stage/dependencies if set.

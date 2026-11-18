@@ -17,7 +17,7 @@ def check_skills(plugin):
     assert not generated, f"duplicate generated command skills: {generated}"
     for skill in files:
         text = skill.read_text()
-        for helper in re.findall(r"(?:<PLUGIN_ROOT>|\$\{?PLUGIN_ROOT\}?)/scripts/([\w.-]+)", text):
+        for helper in re.findall(r"(?:<PLUGIN_ROOT>|\$\{?PLUGIN_ROOT\}?)/scripts/([\w.-]+(?:/[\w.-]+)*)", text):
             assert (plugin / "scripts" / helper).is_file(), (skill, helper)
         for ref in re.findall(r"\]\(([^)]+\.md)\)", text):
             if not ref.startswith(("https://", "http://")) and "<" not in ref:

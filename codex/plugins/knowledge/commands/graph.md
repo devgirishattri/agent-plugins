@@ -41,6 +41,6 @@ Exit codes: `0` success (including empty results); `2` a bad/unresolvable slug �
 - `components`: one line per weakly-connected cluster, member stems space-separated.
 - whole graph `--format json`: `{"nodes":[{slug,type,status,tags}...],"edges":[{from,to}...]}`. `--format dot`: a Graphviz `digraph knowledge { ... }` block — hand it to the user as a fenced ```dot``` block if they want to render it. `--format mermaid`: a `flowchart LR` block with positional `n<i>` node ids — hand it back as a fenced ```mermaid``` block.
 
-If stderr contains a `dangling: <n>` line, mention that the store has `<n>` outgoing `[[links]]` that don't resolve to any file (excluded from the graph itself) — point at `$knowledge:lint` or `$knowledge:doctor` for the detailed per-link list rather than trying to enumerate them yourself.
+If stderr contains a `dangling: <n>` line, mention that the store has `<n>` outgoing `[[links]]` that don't resolve to any file (excluded from the graph itself) — point at `$knowledge:doctor` for the detailed per-link list rather than trying to enumerate them yourself.
 
 $ARGUMENTS

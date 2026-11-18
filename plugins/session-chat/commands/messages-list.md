@@ -1,5 +1,5 @@
 ---
-description: List dispatched message files (read-only)
+description: List dispatch files and their metadata
 argument-hint: "[--from NAME] [--to NAME]"
 allowed-tools: Bash(bash:*)
 ---
@@ -14,5 +14,5 @@ Lead with the result. Add text only for errors or the follow-ups below. Render t
 
 | Age | Size | From | To | File |
 
-- Show the total count + bytes line below the table.
+- Show the total count and bytes below the table. Listing preserves message bodies. Opening the mailbox can create directories, harden permissions and record its one-time migration.
 - Suggest `/messages-clean` to remove old files.

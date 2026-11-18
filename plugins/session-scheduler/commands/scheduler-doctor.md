@@ -11,7 +11,7 @@ allowed-tools: Bash(bash:*)
 
 `SESSION_SCHEDULER_HOME` must already be present in this session's environment. It is inherited when the agent process started. If the output above reports that it is not set, stop. Ask the user to relaunch this pane/session with the correct environment. Do not export the variable or derive another ledger.
 
-Relay the diagnostic output as-is. Highlight any `WARN` or `MISSING` lines. For each one, suggest the matching fix: install jq, install session-chat, or run `/session-chat:incoming-mode auto`.
+Relay the diagnostic output and highlight `WARN` or `MISSING`. Explain the matching dependency or configuration issue. For an incoming-mode warning, `/session-chat:incoming-mode auto` prints the export. Apply it in the executor's launcher and relaunch the executor.
 
 The diagnostic has these blocks and lines:
 

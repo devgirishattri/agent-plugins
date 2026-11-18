@@ -1,17 +1,14 @@
 # Autonomous capture — opt-in `Stop` hook (Claude)
 
-This is the **opt-in** bridge for the knowledge plugin's autonomous memory
-capture on **Claude Code**. The plugin ships **nothing active** by default: a
-fresh install never captures autonomously and never shows a Stop-hook line.
-Adding the snippet below to your **user or project `settings.json`** is what
-turns it on — the hook's *presence* is the opt-in (there is no environment gate).
+Add this snippet to your user or project `settings.json` to enable the optional
+Stop evaluator. A fresh installation can already use the `remember` skill to stage
+verified candidates during a turn. The extra evaluation at Stop requires this hook.
 
-## Why a `type: "prompt"` hook (not `command`)
+## How the Stop evaluator continues a turn
 
-A `command` Stop hook can only force the agent to keep working by returning
-`{"decision":"block", …}`, and Claude Code renders **every** such block as a red
-`Stop hook error` line — on every turn the gate is on, whether or not anything
-was worth capturing. There is no setting to restyle or suppress it.
+A command Stop hook can continue Claude with a blocking decision or with
+`hookSpecificOutput.additionalContext`. A `systemMessage` displays a user-facing
+notice. The optional evaluator below uses the prompt-hook response format.
 
 A `type: "prompt"` Stop hook instead returns `{"ok": true}` or
 `{"ok": false, "reason": …}`. On `ok:false` the `reason` is fed back to Claude
@@ -69,9 +66,9 @@ it rather than replacing it.
   shared `scripts/memory-auto-capture.sh` wrapper — the *sole* write path — which
   caps count/bytes, rejects secrets and candidates lacking `evidence:`, dedups,
   honours `MAX_PENDING` and the per-session pending cap, and writes
-  **only** to `.agents/memory/.inbox/`. Nothing is persisted automatically;
-  `/knowledge:consolidate` stays the persist gate. The wrapper auto-resolves the
-  store, so no path needs to be baked into the snippet. If you prefer a fixed
+  only to `<resolved-memory-store>/.inbox/`. `/knowledge:consolidate` asks for
+  approval before a candidate enters durable memory. The wrapper resolves the store.
+  If you prefer a fixed
   path over letting the agent locate the script, replace `<knowledge-plugin>`
   with your installed plugin directory
   (`~/.claude/plugins/cache/<marketplace>/knowledge/<version>`).
@@ -92,8 +89,7 @@ it rather than replacing it.
   `scripts/nudge-consolidate.sh`, is separate and still opt-in via
   `KNOWLEDGE_CONSOLIDATE_NUDGE=1`; it shows the user a reminder (a Stop `systemMessage`) when the
   inbox has pending candidates and never blocks or errors.
-- **Codex.** Codex plugin hooks support only `type: "command"`, which cannot
-  return the silent `ok:false` shape, so autonomous Stop-capture is **not**
-  offered on Codex — a command Stop hook there renders a blocked-hook line every
-  turn. On Codex, use the manual capture bridge (`assets/capture-snippet.md`,
-  i.e. `$knowledge:remember` mid-task + `$knowledge:consolidate` at session end).
+- **Codex.** Codex supports `command` and `mcp_tool` hooks. The plugin ships this
+  optional prompt-type Stop evaluator for Claude. On Codex an explicit or implicit
+  `$knowledge:remember` can stage a verified candidate during a turn. Use
+  `$knowledge:consolidate` to review it before writing durable memory.

@@ -33,9 +33,7 @@ variables plus `SESSION_CHAT_PANE_NAME` / `KNOWLEDGE_PANE_NAME` aliases:
 - `PARTIAL` means only some identity variables are set; an active policy fails
   closed.
 - `MISMATCH` means the identity, config, pane, role, cwd, mode, or alias has
-  drifted. Restart the pane through
-  `$session-workspace:workspace-restart`; never edit identity variables by
-  hand.
+  drifted. Recommend `$session-workspace:workspace-restart <session-id>` for the session containing the pane. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down. Leave engine identity variables to the launcher.
 
 The `policy:` line is the live `harness-policy.py` engine verdict for this
 process (`no-op`, active/accepted, or `BLOCKING [rule] reason`). It predicts

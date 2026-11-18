@@ -76,7 +76,7 @@ Snapshot and handoff names are canonical knowledge item names: lowercase `snake_
 
 1. **You are inside tmux.** Sharing works only in tmux.
 2. **The recipient pane has a name.** Name it via `/whoami <name>` or SessionStart auto-naming when session-chat is installed. Panes are addressed by name, and the search spans all tmux sessions. The sender also needs a name for fallback transport.
-3. **The recipient inherits the same context store.** Sharing is not a file copy. It relies on the launcher-selected `$SESSION_CONTEXT_HOME` directory being shared. It then sends the peer a one-line message that carries the canonical store path. The message tells the peer to run `/context-load <name>`, which resolves against the peer's own store. A peer in a different repo or store does not have the snapshot to load.
+3. **The recipient inherits the same context store.** Sharing sends a notification with the canonical store path. `/knowledge:context-load <name>` reads from the recipient's inherited `SESSION_CONTEXT_HOME`. Check the store path for both panes, even if they share a checkout.
 
 Sharing uses the hardened transport of session-chat when it is installed. That transport is a durable inbox, so a busy recipient still gets the notice on its next turn. If session-chat is absent, sharing falls back to the basic tmux send of this plugin. The same-store prerequisite does not change.
 

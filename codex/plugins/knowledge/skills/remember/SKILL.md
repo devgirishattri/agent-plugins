@@ -174,7 +174,7 @@ way candidates leave the inbox. Purge uses a two-call PLAN/APPLY protocol on
    ```
    bash "<PLUGIN_ROOT>/scripts/memory-write.sh" purge --store <resolved-store-path> (--expired | --ids <id,...>)
    ```
-   `--store` here must be the actual resolved absolute store path — `memory-write.sh` itself never falls back to a default. Use the explicit path the user gave, `$KNOWLEDGE_MEMORY_HOME` if set, or otherwise the canonical `<repo-root>/.agents/memory` (matching `$knowledge:init`'s reported target and whatever store the preceding `--list` step resolved). Save the plan's stdout (one `<id> <sha256> <created> <expired|active>` line per candidate) to a file. Show it to the user verbatim. If the plan is empty, stop here: there is nothing to purge.
+   `--store` here must be the actual resolved absolute store path — `memory-write.sh` itself never falls back to a default. Use the explicit path the user gave, `$KNOWLEDGE_MEMORY_HOME` if set, or the absolute store selected by canonical discovery for the preceding listing. Discovery uses `<repo-root>/.agents/memory` when it contains `MEMORY.md`, otherwise its single eligible direct child containing that index. Save the plan's stdout (one `<id> <sha256> <created> <expired|active>` line per candidate) to a file. Show it to the user verbatim. If the plan is empty, stop here: there is nothing to purge.
 2. **Get user approval** for exactly which candidates to delete. Never apply without an explicit go-ahead.
 3. **Apply** — run exactly one literal Bash segment with the SAME selector and the saved plan file as the manifest:
    ```

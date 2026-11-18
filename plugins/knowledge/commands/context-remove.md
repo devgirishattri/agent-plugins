@@ -23,6 +23,7 @@ Removing a snapshot is **destructive**. It deletes the snapshot AND all of its a
      - the orphan notice, when the helper prints one (history exists but the current snapshot is gone)
      - the "Would delete N file(s)" count
    - The dry run leaves snapshot and history files and their permissions unchanged. Store bootstrap and lock bookkeeping can still occur.
+   - In enforce mode, strict-v1 reserves removal for orchestrators and currently rejects the required `--dry-run` preview. If policy refuses the preview, report the refusal and stop before deletion.
    - The confirmed run rechecks under its writer lock. A concurrent overwrite can add history after this preview. The final removal count of the confirmed run is authoritative.
    - If the dry run exits 1, relay the helper's actual error output.
      - If that output says no current or archived snapshot was found, also relay the available-snapshots list that the helper printed. Suggest `/context-list`. Stop.

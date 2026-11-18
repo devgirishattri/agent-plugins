@@ -20,11 +20,9 @@ never export or derive it here). Invoke the context helper as one literal Bash
 segment, with no `export` beforehand, no `env` or variable-assignment prefix,
 and no other command chained, piped, redirected, or substituted around it.
 
-If the script reports `SESSION_CONTEXT_HOME` is not set, stop and request a
-pane relaunch with the correct environment instead of deriving another context
-store. Search still requires the inherited variable: it overrides only the
-current repository's store while other discoverable project roots use their own
-stores.
+If this pane lacks the inherited value, stop before invoking the helper and request a
+pane relaunch with the correct store. The helper itself can discover existing stores
+when invoked directly. An inherited value overrides only the current repository's store.
 
 If no pattern is provided, tell the user:
 
@@ -50,8 +48,7 @@ With `--list`, rows are `ROOT, SNAPSHOT`:
 | Project Root | Snapshot |
 ```
 
-The search does not modify snapshot contents, although resolving a configured
-store may create its directory or harden existing owner-only permissions.
+Search reads existing stores without creating directories or changing permissions.
 Candidate roots are the current git toplevel plus the `cwd` recorded in local
 Codex session files; roots without a discoverable store are skipped, so
 cross-project coverage is best-effort. Suggest

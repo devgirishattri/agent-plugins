@@ -23,8 +23,8 @@ Rules:
 - Sort by Last Modified, most recent first. The script output is already sorted.
 - With no argument, list the current project; with a project path, list that exact project; with `all`, list every project.
 - Show full Session IDs so users can copy them for `$session-manager:session-delete`.
-- Show the latest session name from `~/.codex/session_index.jsonl`.
-- If a session has no indexed name, show `(untitled)`; do not substitute its description or first user message.
+- Use the native thread name when available. The filesystem backend uses the latest name in `$CODEX_HOME/session_index.jsonl` (default `~/.codex/session_index.jsonl`). Show `(untitled)` when no name is available.
+- A native thread can have an `unknown` file size. Keep that value as reported.
 - Show the total count of sessions at the bottom.
 - If the output is empty or says `No sessions found`, report that no sessions were found.
 - Mention that `$session-manager:session-list all` shows sessions across all projects.

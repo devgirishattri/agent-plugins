@@ -28,8 +28,7 @@ or context store.
 
 ## Transport contract
 
-`task-assign` performs nested session-chat/tmux dispatch before it writes the
-assignment transition. In Codex, request scoped escalation/approval for the
+`task-assign` dispatches through session-chat/tmux. For a task without a verification contract, it writes the assignment transition after dispatch. In Codex, request scoped escalation/approval for the
 exact installed helper on the first attempt whenever it may dispatch. Invoke
 that helper as one literal Bash segment with raw token zero still `bash`; never
 work around the sandbox with `bash -c`, a wrapper, `env`, an assignment prefix,
@@ -38,7 +37,13 @@ provider-home access.
 
 Escalation grants transport access only. The recorded role and recipient, exact
 arguments, confirmation requirements, and lifecycle rules remain authoritative;
-never use --force to repair transport. On a hard dispatch failure, the ledger
+never use --force to repair transport.
+
+For a contracted task, the helper accepts only the pane, task ID and one prompt. Force never bypasses the contract. It reserves a generation before dispatch. Session-chat status 4 counts as delivery and names the pane where the user can press Enter. If transport reports an uncertain outcome, inspect the task and follow the assigner's reconciliation procedure. [Task contracts](../task-contract/SKILL.md)
+
+## Assignments without a verification contract
+
+On a hard dispatch failure, the ledger
 is still not updated, the prompt and automatic handoff file are rolled back,
 and the per-task handoff directory is removed if empty. Fix the hard transport
 cause and retry the same legal assignment. An unsubmitted dispatch (session-chat
@@ -53,21 +58,16 @@ do not rerun task-assign.
 - `--context auto` — write `$SESSION_SCHEDULER_HOME/handoffs/<task-id>/<nonce>.md` from the approved prompt and current ledger state, with no live-session summarization. The nonce is exactly 32 lowercase hex characters from OS randomness. Each file is never overwritten; an existing path is refused. Directories use 0700 and files use 0600 with symlink and ownership checks. Auto does not require, read, create, or resolve `SESSION_CONTEXT_HOME`. The packet carries the absolute handoff path for direct reading, not knowledge context-load commands.
 - `--reviewer PANE` — set or override the independent reviewer route.
 - `--workflow ID` — set or override the workflow group; `--workflow-id` is an alias.
-- `--force` — bypass the status-transition check and unmet-dependency gate; an illegal-transition override records "forced" in history, while bypassing only the dependency gate does not.
+- `--force` can override an ordinary status transition or an unmet ordinary prerequisite. Overriding an illegal transition records `forced` in history. A contracted prerequisite still requires admission.
 
 Auto records `meta.handoff_file` and `meta.handoff_home`, clearing prior context keys. Explicit NAME records `meta.context` and `meta.context_home`, clearing prior handoff keys. The command prints `handoff: <absolute path>` for auto and `context: NAME` for explicit context. Assignment metadata and status are persisted together under the per-task lock. Value-taking flags require a value.
 
 Reassignment without `--context` clears all four attachment keys: `meta.context`, `meta.context_home`, `meta.handoff_file`, and `meta.handoff_home`. Locks cover ledger read-modify-write operations only, not transport; simultaneous assignments to the same task can race prompt writes and rollback, so coordinate assignments to each task serially.
 
-Assignment is refused while any `depends_on` task is not `done`.
+An ordinary prerequisite normally needs status `done`. A contracted prerequisite always needs valid admission, including when the dependent task uses `--force`.
 Report the task ID, assignee, and observed assignment or precise session-chat error.
 Distinguish a queued dispatch from recipient execution; do not claim the task
 has started without evidence from the recipient.
 The dispatch records the absolute shared scheduler home and, for explicit NAME
 only, context home. The recipient must preserve the relevant inherited environment.
 Remind the user that executor panes need `SESSION_CHAT_INCOMING_MODE=auto` or `assist`.
-
-For a task with a verification contract, read `../task-contract/SKILL.md`.
-Contract assignment accepts only pane, id and one prompt. Review, done and block
-require `<id> --generation <N> "<note>"`; only the bound reviewer may complete.
-Force never bypasses the contract. Inspect the task first to use its generation.

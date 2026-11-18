@@ -6,13 +6,15 @@ allowed-tools: Bash(bash:*)
 
 ## Named Panes
 
-!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/list-panes.sh" "$ARGUMENTS"`
+Requested scope: `$ARGUMENTS`
+
+If the requested scope above is empty, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/list-panes.sh"` with no arguments. If it is `all`, append the single literal argument `all`. Reject any other value.
 
 ## Instructions
 
 Lead with the result. Add text only for errors or the follow-ups below. Render the table directly.
 
-Present the tab-separated data above as a markdown table:
+Present the tab-separated result as a markdown table:
 
 | Name | Pane | Command | Location |
 

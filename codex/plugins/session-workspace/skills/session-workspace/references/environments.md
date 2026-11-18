@@ -198,9 +198,9 @@ environment declares the one branch its executor works on:
  "orchestrator":"sample-web-master","branch":"lane/web"}
 ```
 
-`branch` is required when the environment's checkout shares its git
-repository with another checkout, optional otherwise, and unique across
-environments. An orchestration target in that environment must use it as its
+Every environment on a linked worktree requires a `branch`. A primary checkout
+also requires one when another configured environment shares its Git directory.
+All declared branches must be unique. An orchestration target in that environment must use it as its
 `work_branch`. It is part of the environment's pinned entry, so changing it
 restarts only that environment's panes.
 
@@ -255,11 +255,13 @@ workspace label web auth       # <project.id>-web-executor-auth, -reviewer-auth
 workspace label web --clear    # back to <project.id>-web-executor, -reviewer
 ```
 
-A label is 1-24 characters of `a-z`, `0-9` and `-`. It is kept in the project
+A label starts with a lowercase letter or digit and contains 1–24 characters
+from `a-z`, `0-9` and `-`. It is kept in the project
 state file `labels.json`, so the names survive restarts until the label is
-set again. The engine sets it under the project lock, and only while that
-environment's workers are stopped (`stop SESSION --pane NAME --confirmed`).
-It also checks that the config still validates with the new names, so they
+set again. The engine sets it under the project lock when every worker whose
+name would change is stopped. For an on-demand worker use `workspace stop SESSION --pane NAME --confirmed`.
+For an always-on worker, check `behavior.stop_scope` and stop the containing session before relabeling.
+Start the session again after relabeling if it was running. The engine validates the new names so they
 stay unique. An environment coordinator labels only its own
 environment (`routing.scope`); the root coordinator and the user may label
 any. Workers cannot (`coordination.write`). A name written in the config is

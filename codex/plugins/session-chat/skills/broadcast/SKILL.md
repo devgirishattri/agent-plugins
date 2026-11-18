@@ -17,7 +17,9 @@ Parse optional `--all` (every tmux session instead of just the current one) and 
 Usage: $session-chat:broadcast [--all] [--match GLOB] <message>
 ```
 
-Run:
+The standalone helper also accepts `--priority high|normal` and `--ttl MINUTES`. The Codex skill parses `--all` and `--match` only. The strict-v1 harness does not admit broadcast in enforce mode.
+
+Run the skill's supported form:
 
 ```bash
 bash "$PLUGIN_ROOT/scripts/broadcast-message.sh" [--all] [--match "<glob>"] "<message>"

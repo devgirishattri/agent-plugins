@@ -1,5 +1,11 @@
 # Changelog
 
+## Plugin instruction updates — 2026-11-18
+
+- Knowledge 0.5.14 clarifies how to review documents and run validators. Session Chat 0.17.23 documents pane discovery, draft ownership and delivery results.
+- Session Manager 1.8.1 documents Codex archive filters. Session Scheduler 0.7.11 explains when a review can be retried and how to check its delivery.
+- Session Walkthrough 0.3.1 explains what closing a live tour removes. Session Workspace 0.16.1 documents which commands each workspace role can run.
+
 ## session-manager 1.8.0 — 2026-11-16
 
 - **Codex can archive and unarchive a session.** New `session-archive` and
@@ -34,9 +40,10 @@
   in the config is never changed.
 - **New verb `workspace label ENVIRONMENT [LABEL | --clear] [--json]`**
   (`workspace-label.sh`). Without a label it shows the label and the worker
-  names. A label is 1-24 characters of `a-z`, `0-9` and `-`, kept in the
+  names. A label starts with a lowercase letter or digit and contains 1–24 characters
+  from `a-z`, `0-9` and `-`. It is kept in the
   project state file `labels.json` so the names survive restarts. The engine
-  sets it under the project lock, refuses while a worker of that environment
+  sets it under the project lock, refuses while a worker whose name would change
   is running, and refuses a label whose names the config would not accept
   (they must stay unique). It refuses an environment whose workers are all
   named in the config.

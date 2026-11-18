@@ -59,6 +59,6 @@ Lead with the form you ran and the result count. Then show the rows.
 - whole graph `--format dot`: a Graphviz `digraph knowledge { ... }` block. If the user wants to render it, hand it over as a fenced ```dot``` block.
 - whole graph `--format mermaid`: a `flowchart LR` block with positional `n<i>` node ids. Hand it back as a fenced ```mermaid``` block.
 
-If stderr contains a `dangling: <n>` line, report that the store has `<n>` outgoing `[[links]]` that do not resolve to any file. The graph itself excludes them. Point the user at `/knowledge:lint` or `/knowledge:doctor` for the detailed per-link list. Do not enumerate them yourself.
+If stderr contains a `dangling: <n>` line, report that the store has `<n>` outgoing `[[links]]` that do not resolve to any file. The graph itself excludes them. Point the user at `/knowledge:doctor` for the detailed per-link list. Do not enumerate them yourself.
 
 $ARGUMENTS

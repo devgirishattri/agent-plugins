@@ -36,8 +36,8 @@ bash "<PLUGIN_ROOT>/scripts/remove-context.sh" "<snapshot-name>" --dry-run
 ```
 
 Relay the listed files and total count, including any orphaned-history notice.
-If the helper fails, relay its error and stop; if neither current nor archived
-data exists, suggest `$knowledge:context-list`.
+If the helper fails, relay its error and stop. If neither current nor archived
+data exists, suggest `$knowledge:context-list`. In enforce mode, strict-v1 reserves removal for orchestrators and currently rejects the required `--dry-run` preview. If policy refuses the preview, report the refusal and stop before deletion.
 Explain that the real run re-checks under its writer lock,
 so a concurrent overwrite may add history after this preview and the helper's
 final removal count is authoritative.

@@ -12,10 +12,10 @@ Resolve `PLUGIN_ROOT` from the selected skill's absolute path: it is the session
 If no query is provided, tell the user:
 
 ```text
-Usage: $session-manager:session-search <query>
+Usage: $session-manager:session-search <query> [--archived|--archived-only]
 ```
 
-Run:
+The standalone helper accepts one optional state argument after the query. `--archived` includes active and archived records. `--archived-only` searches archived records only. In strict-v1 enforce mode, the orchestrator can pass exactly one literal query and no archive flag.
 
 ```bash
 bash "$PLUGIN_ROOT/scripts/search-sessions.sh" "<query>"

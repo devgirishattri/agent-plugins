@@ -17,4 +17,4 @@ Run:
 bash "$PLUGIN_ROOT/scripts/list-messages.sh" <args>
 ```
 
-Supported args: `--older-than 7d`, `--sender <name>`, and `--recipient <name>`. This command is read-only. Present the tab-separated output as file, age in seconds, size in bytes, sender, and recipient.
+Supported args: `--older-than 7d`, `--sender <name>`, and `--recipient <name>`. Present file, age in seconds, size in bytes, sender, and recipient. Listing preserves message bodies. Opening the mailbox can create directories, harden permissions and record its one-time migration.

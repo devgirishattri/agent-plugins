@@ -14,8 +14,7 @@ infer it from cwd or hardcode a marketplace cache version.
 Run:
 
 ```bash
-ARGUMENTS="${ARGUMENTS:-}"
-bash "$PLUGIN_ROOT/scripts/list-panes.sh" "$ARGUMENTS"
+bash "$PLUGIN_ROOT/scripts/list-panes.sh"
 ```
 
 By default, list named panes in the current tmux session only. If the user passes `all` or explicitly asks for all tmux sessions, pass `all` to the script.

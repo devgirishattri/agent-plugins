@@ -88,4 +88,4 @@ For a missing, duplicated, or divergent recall snippet, `agents-md` prints
 The user can paste them into `AGENTS.md`. This skill never edits any file.
 If the store is clean, say so. Still mention useful review-queue or capability-matrix information.
 
-Do not attempt to fix anything based on these findings yourself — this skill is report-only. `$knowledge:lint`, `$knowledge:consolidate`, and `$knowledge:promote` are the write paths for the issues it surfaces in the memory store; docs findings are fixed by editing the doc directly; lock/journal/staged findings name the exact recovery command to run.
+Report the findings. `$knowledge:lint` inspects the memory store. Point the user to `$knowledge:consolidate` for reviewed memory edits or `$knowledge:promote` to promote a handoff. Tell the user which document needs correction. For lock, journal and staged-file findings, relay the diagnosis and any recovery guidance the check provides.

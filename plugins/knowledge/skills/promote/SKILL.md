@@ -265,7 +265,7 @@ for this deletion. Do not reinvent it:
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/remove-context.sh" "<name>" --confirmed
    ```
-   Relay the helper's actual result line and final count. This includes the orphan-only "Removed N orphaned history file(s)" line. Context-store writes are reviewer-ALLOWED, per the coordination-state exception of the baseline. `remove-context.sh` carries no reviewer gate, by design.
+   Relay the helper's actual result line and final count, including the orphan-only "Removed N orphaned history file(s)" result. In enforce mode, strict-v1 reserves removal for orchestrators and currently rejects the required `--dry-run` preview. If policy refuses the preview, report the refusal and stop before deletion.
 
 **Memory source** (supersession retire) — `memory-write.sh retire`:
 1. Compute fresh CAS hashes. Compute each in its own step.

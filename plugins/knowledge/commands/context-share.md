@@ -16,8 +16,8 @@ allowed-tools: Bash(bash:*)
    ```
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/share-context.sh" "<session-name>" "<snapshot-name>"
    ```
-   - A failed share is transport-only and changes no store state. Fix the transport cause. Then re-run the same command.
+   - Sharing preserves snapshot content. Store initialization may create directories or harden permissions. A transport failure can leave the notification queued or staged in the recipient's input. Check `/session-chat:pane-health` for the recipient. If delivery is uncertain, confirm receipt before resending. Retry only after verifying that nothing was staged, queued or delivered.
    - If the script reports `SESSION_CONTEXT_HOME` is not set, stop. Ask the user to relaunch this pane or session with the correct environment. Do not derive another context store.
 
-3. Relay the script's output as-is. It reports the store path and the transport used: session-chat's durable inbox when installed, otherwise the builtin fallback. Tell the user that the recipient can load the snapshot with `/context-load <snapshot-name>` **only if the recipient shares the same store or repo**. Sharing notifies. It does not copy the file.
+3. Relay the script's output as-is. On success it reports the store and transport. The recipient can load the snapshot with `/knowledge:context-load <snapshot-name>` only if both panes inherit the same context store. Sharing sends a notification and leaves the snapshot in that store.
 4. If the snapshot does not exist, suggest `/context-generate` first.

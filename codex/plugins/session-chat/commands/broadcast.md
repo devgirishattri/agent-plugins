@@ -12,7 +12,9 @@ argument-hint: "[--all] [--match GLOB] <message>"
 3. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
    command reference. Do not infer it from cwd or hardcode a cache version.
 
-4. Run:
+4. The standalone helper also accepts `--priority high|normal` and `--ttl MINUTES`. The Codex skill parses `--all` and `--match` only. The strict-v1 harness does not admit broadcast in enforce mode.
+
+   Run the skill's supported form:
 
    ```bash
    bash "$PLUGIN_ROOT/scripts/broadcast-message.sh" [--all] [--match "<glob>"] "<message>"

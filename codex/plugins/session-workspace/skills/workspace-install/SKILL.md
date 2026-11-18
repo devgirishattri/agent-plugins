@@ -28,7 +28,7 @@ The dispatcher lives on PATH and locates the installed plugin.
 Install it outside any versioned plugin cache. A stale dispatcher copy can fail silently.
 This command installs or refreshes that copy.
 If the target is identical, it reports `already current` and writes nothing.
-`upgrade.sh` calls it after each plugin update to keep the copy current.
+Run this command again after a plugin update to refresh the dispatcher, or include it in your own upgrade procedure.
 
 It requires no config and does not touch tmux.
 It works on a fresh machine without `.agent-workspace/`.

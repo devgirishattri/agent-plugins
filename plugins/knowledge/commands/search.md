@@ -48,7 +48,7 @@ Default (TSV): one result per line, `<score>\t<slug>\t<type>\t<status>\t<descrip
 - `--json` emits one object `{"results":[...], "truncated":<n>}`. Each result also carries `file` (the bare basename) and `matches`. `matches` is always present. It holds the same provenance as a list of `{"atom": "...", "fields": [...]}` objects.
 - On a degraded result, the provenance covers only the atoms of the winning subset. It never covers a dropped atom.
 - Zero hits print nothing (TSV) or an empty `results` array (JSON). Say so plainly. Do not treat zero hits as a failure.
-- If stderr contains a `truncated: <n> more` line, tell the user that more results exist than the output shows. Suggest raising `--limit` or narrowing the query.
+- If stderr contains a `truncated: <n> more` line, explain that the output character budget omitted results. Suggest narrowing the query.
 
 Report to the user:
 1. Lead with the result count.

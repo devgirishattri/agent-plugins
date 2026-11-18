@@ -36,7 +36,7 @@ Distill can compose this workflow after the user approves its exact document pat
 8. **Add diagrams.** Include Mermaid diagrams where prose cannot show a relationship clearly. See `references/DIAGRAMS_GUIDE.md` for types and examples.
 9. **Cross-reference.** Link to related docs. Update them if the new doc changes the picture.
 10. **Independent review.** After every docs write or edit, including a single-file change, run a fresh, read-only accuracy review. Complete it before you report the work done. The writer cannot see its own stale references.
-    - **Preferred:** delegate to the **doc-reviewer** subagent through the Agent tool (`subagent_type: knowledge:doc-reviewer`). The subagent independently verifies that every referenced path, function, table, endpoint, env var, and cross-link exists in the codebase. It re-runs the validation scripts once per unique parent directory of the docs you touched (see Validation Tools).
+    - **Preferred:** delegate to the **doc-reviewer** subagent through the Agent tool (`subagent_type: knowledge:doc-reviewer`). Give it the changed targets and the resolved absolute plugin root from `${CLAUDE_PLUGIN_ROOT}`. It verifies the references against source and repeats the validators once per unique parent directory.
     - **Fallback (only when the Agent tool is unavailable):** perform the review inline yourself. Re-read each doc you changed. Verify every reference against the codebase. Re-run the validators.
     - **Repeat after fixes:** if the review finds issues, fix the docs. Then run the independent review again on the changed docs. Do not report the documentation as complete until an independent review has passed.
 
@@ -127,14 +127,14 @@ Group entries by file for scannability. For a large doc (20 or more references),
 
 This skill bundles three scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/` to verify doc health. Run them after you write or update docs.
 
-**Target the actual location of the docs.** Docs can live at the project root, under `docs/`, or next to a module (for example `src/api/README.md`). Derive the parent directory of each doc you created or edited. Run each validator **once per unique parent directory**. The `docs/` shown below is only an example, not a fixed path. Every script accepts any directory argument (default `.`).
+**Target the actual location of the docs.** Use the project root, `docs/` or the module directory containing the document. Run once per unique parent directory. Replace `<PLUGIN_ROOT>` and `<DOCS_DIR>` with the fully resolved paths before invocation. Strict-v1 requires the target directory to be inside the pane's working directory.
 
 ### check-todos.sh
 
 Scans doc files for embedded TODO/FIXME/HACK markers. These markers belong in the dedicated tracker files. Run this script after every doc creation or update.
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-todos.sh docs/
+bash "<PLUGIN_ROOT>/scripts/check-todos.sh" "<DOCS_DIR>"
 ```
 
 ### validate-links.sh
@@ -142,7 +142,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-todos.sh docs/
 Checks that Markdown `.md` cross-references (inline links and `**Related**:` header refs) point to existing files. It catches stale links after renames or deletions.
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/validate-links.sh docs/
+bash "<PLUGIN_ROOT>/scripts/validate-links.sh" "<DOCS_DIR>"
 ```
 
 ### check-freshness.sh
@@ -150,7 +150,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/validate-links.sh docs/
 Compares doc modification dates against the code files that the docs reference, using git history. It flags docs that nobody updated since their referenced code changed.
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-freshness.sh docs/ 30
+bash "<PLUGIN_ROOT>/scripts/check-freshness.sh" "<DOCS_DIR>" 30
 ```
 
 Arguments: `[docs-directory]` and `[days-threshold]` (default: 30 days).

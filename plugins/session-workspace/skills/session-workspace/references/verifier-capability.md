@@ -65,8 +65,7 @@ and unknown outcomes. These requirements are not evidence that this plugin has
 implemented or tested such a runner.
 
 For current recipe authoring and evidence handling, use
-[verification-recipe](../../verification-recipe/SKILL.md). Existing scheduler
-contracts remain governed by
-[task-contract](../../../../session-scheduler/skills/task-contract/SKILL.md);
-this guidance neither replaces their admission checks nor adds an execution
-grant to the harness.
+[verification-recipe](../../verification-recipe/SKILL.md). The installed
+`session-scheduler:task-contract` skill defines scheduler contracts. The
+[commit admission checks](../../workspace-orchestrator/references/lifecycle.md#commit)
+explain which evidence the coordinator verifies. A recipe grants no execution authority.
