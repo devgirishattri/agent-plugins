@@ -41,7 +41,7 @@ Both operations produce a single line in the recipient's prompt buffer:
 - `/send` →  `[from:NAME pane:%N id:HEX16] <message text> [id:HEX16]`
 - `/dispatch` → `[from:NAME pane:%N msg:/path/to/file.md id:HEX16] dispatch (N lines) — read msg file for full task id:HEX16`
 
-The message id is 16 lowercase hex characters, from `/dev/urandom` only. If the system cannot produce one, `/send`, `/dispatch` and `/broadcast` stop with an error before they write or send anything. Older 8-hex ids still work wherever an id is read (`--reply-to`, `/check-replies`, queued rows, archives).
+Each recipient's message needs a 16-character lowercase hex ID from `/dev/urandom`. If ID creation fails, that send stops before writing or sending the message. In a broadcast, earlier recipients can already have received their copies. Older 8-hex IDs still work wherever an ID is read.
 
 The `id:` field is a unique verification marker. It is repeated at the tail so it stays visible in TUIs that show the end of long input lines. The dispatch line **does not include a preview** of the message body. The recipient must read `$msg_file`.
 
@@ -72,18 +72,13 @@ Each runtime drains only its own dir. An exported `SESSION_CHAT_TARGET_MESSAGES_
 
 | Live paste | Wrapper output | Exit code | Recipient sees the message |
 |---|---|---|---|
-| Lands | The message appears in the recipient's prompt now. The durable copy is removed (no duplicate). | 0 | Now |
-| Fails (recipient mid-generation or in an approval gate) | **"Queued … will arrive on their next turn"** | **0** | On the next turn, or when the current turn ends |
-| Lands but is never submitted, even after one extra Enter | **"Unsubmitted …"** | **4** | When someone presses Enter in that pane, or on its next turn from the durable copy. An idle recipient has no next turn by itself. |
+| Lands | The message appears in the recipient's prompt. | 0 | On submission |
+| Recipient stays busy | `Queued …` | 0 | When a receiver hook processes that queue row |
+| Lands but is not submitted after one extra Enter | `Unsubmitted …` | 4 | On submission or when the durable queue row is processed. An idle pane may require Enter. |
 
 The internal send/dispatch function returns code 3 for the queued path. At the boundary, the public `/send` and `/dispatch` wrappers translate that to a normal success exit. The unsubmitted path returns 4 and the wrappers exit 4: it is not success, even though the durable copy keeps the message from being lost.
 
-A queued message surfaces through two hooks:
-
-- The recipient's `UserPromptSubmit` hook drains the inbox on its **next** turn.
-- The `Stop` hook drains it when the recipient **finishes its current turn**. So even a pane that never submits another prompt surfaces queued messages as soon as it stops working.
-
-Nothing is lost. Dedup across the two paths uses the `id:` marker.
+`UserPromptSubmit` and `Stop` process the durable inbox when eligible. Each hook emits the prefix that fits its output budget. Overflow waits for a later eligible hook. The receiver uses the `id:` marker for deduplication. An interruption after output and before cleanup can replay a row.
 
 Fan-in is covered. Several executors/reviewers can ack a busy orchestrator at once. Their sends queue on the orchestrator's per-target lock. Any send that can't paste live is recovered from the inbox. The send lock **waits for the full per-send budget and resets whenever the queue moves**. So fan-in to one pane does not trip "could not acquire send-lock". For an idle recipient the paste lands immediately. The inbox is the safety net for busy ones.
 
@@ -133,11 +128,11 @@ Condition: a session-workspace strict-v1 harness is active and you are a child p
    - These are denied: renames/moves; shell writes (redirection, `tee`, `cp`, `mktemp`); other panes' drafts; files at the store top level; delivered messages and queue/archive/ledger state.
 4. Dispatch it by absolute path: `bash <plugin-root>/scripts/dispatch-to-session.sh --reply-to <incoming-id> <pane> <messages-path>/drafts/<your-pane-name>/<name>.md` (omit `--reply-to` for a new task).
 5. Handle the result.
-   - **Durable success** (`Dispatched task to …` or `Queued dispatch …`): the transport removes the draft for you and prints `Removed delivered draft: <path>`. Do not delete it yourself.
+   - After live delivery, durable queueing or an `Unsubmitted …` result (exit 4), the transport can remove the eligible own draft and print `Removed delivered draft: <path>`. Leave retained drafts in place.
      - It removes only your own private draft (regular, single-link, no group/other write bits, named as in step 3, in an owner-only messages store) that is unchanged since it was read for delivery: same file identity and SHA-256. The delivered copy is a new file; the queue never reads `drafts/`. The check is best-effort, not atomic against a concurrent change by the same user.
-     - `NOTE: kept draft (…)` means the file changed, was replaced, or was not an eligible own draft. The message was still delivered. Do not resend it.
+     - `NOTE: kept draft (…)` means the draft changed or was ineligible. Check the transport result for delivery status. A retained draft alone is no reason to resend.
      - `SESSION_CHAT_KEEP_DRAFTS=1` in the launch environment keeps every draft.
-   - **Hard failure** (`ERROR:` and non-zero exit, including an unreadable draft): nothing is sent and the draft is kept. Fix the named cause, and retry with the same file.
+   - A hard transport failure keeps the draft. Before retrying, fix the reported cause and check whether delivery could have occurred.
 
 Leftover drafts, including ones the transport kept, are not swept automatically. Cleanup of leftovers is an explicit user request. The root orchestrator keeps its authority over store files.
 
@@ -212,11 +207,11 @@ The wrapper command (`/send`, `/dispatch`) passes the message via shell argv. Wh
 
 ## Helper commands
 
-- `/broadcast [--all] [--match GLOB] <text>` — fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `/send` per pane.
+- `/broadcast [--all] [--match GLOB] <text>` — fan out one short message to every named pane (status pings, fleet-wide notices) instead of looping `/send` per pane. The strict-v1 harness does not admit broadcast in enforce mode.
 - `/reply <pane> <message-id> <message>` — reply to a received message, auto-correlated: prepends the `[re:<id>]` token and picks `/send` (short) or `/dispatch` (long/multiline) for you. Use this instead of hand-typing `[re:<id>]`.
 - `/check-replies [--pending] [--since MIN] [--task TASK_ID]` — which sent messages have a correlated reply (via the leading `[re:<id>]` token) and which are still `unconfirmed`, with each reply marked `verified`, `replied (recipient-unknown)` or `unexpected`. This reflects reply **correlation only**, not the recipient's task progress or liveness. An `unconfirmed` row does not mean the pane is stuck. Use `/pane-health` to check liveness.
 - `/pane-health [name] [--all]` — liveness, unsubmitted input, inbox backlog, and lock state per named pane; catches dead/duplicate panes before sends time out against them, and `UNSUBMITTED` panes whose input line holds a session-chat message that was never submitted.
-- `/message-search <pattern> [--days N] [--peer NAME]` — search the message archive plus full dispatch bodies. The archive holds every sent and surfaced incoming message as a 200-char excerpt. Retention is 30 days via `SESSION_CHAT_ARCHIVE_RETENTION_DAYS`.
+- `/message-search <pattern> [--days N] [--peer NAME]` searches archive rows and matching dispatch bodies. Archiving is best effort. The records contain excerpts of up to 200 characters. Retention runs on append (30 days by default). `--peer` filters only archive rows.
 - `/incoming-mode` — show or set `SESSION_CHAT_INCOMING_MODE` (prints an `export` line to `eval`).
 - `/messages-list` — read-only inventory of dispatch files under `${SESSION_CHAT_TARGET_MESSAGES_DIR:-${CLAUDE_HOME:-~/.claude}/messages}`.
 - `/messages-clean` — delete old dispatch files (dry-run by default; pass `--apply` to actually delete).
@@ -239,10 +234,10 @@ Report the helper's result line as printed. These words describe transport statu
 - **"This pane has no name"** — run `/whoami <name>` in the sending pane first.
 - **"No pane named X"** — run `/panes all` to see registered names across tmux sessions. The recipient might not have run `/whoami`.
 - **"Multiple panes named X"** — duplicate names exist; rename one with `/whoami` in that pane.
-- **"did not land within Xms after N attempts"** — the recipient stayed busy through all retries. The message is **not lost**. It is in the recipient's durable inbox and surfaces on their next turn (the sender reports "Queued …"). To make more sends land *live*, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
+- **"did not land within Xms after N attempts"** — the recipient stayed busy through all retries. The message is **not lost**. It is in the recipient's durable inbox and waits for an eligible receiver hook (the sender reports "Queued …"). To make more sends land *live*, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.
 - **"landed in the recipient's input line but was not submitted"** — the recipient's TUI kept the line staged through two Enters. The message is **not lost**: it is in the input line and in the durable inbox. `/pane-health` shows `UNSUBMITTED`. Press Enter in that pane once. Do not resend.
 - **"could not acquire send-lock"** — another sender is targeting the same pane. It resolves when that sender finishes. Raise `SESSION_CHAT_LOCK_TIMEOUT_MS` if you need to wait longer.
-- **Dispatch lands but recipient never acts** — the recipient is in `INCOMING_MODE=notify` (default). It was told not to read the file. Run `/incoming-mode auto` (or `assist`) in the recipient's shell.
+- If a dispatch lands without action, check the recipient's `SESSION_CHAT_INCOMING_MODE`. The default `notify` directs the recipient agent to leave the dispatch body unread. The hook can still inspect its envelope for correlation. `/incoming-mode auto` or `/incoming-mode assist` prints an export. Apply the printed `export SESSION_CHAT_INCOMING_MODE=<mode>` in the recipient's launcher or parent shell, then relaunch the agent so it inherits that value.
 
 ## Reload after install
 

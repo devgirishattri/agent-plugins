@@ -40,7 +40,7 @@ argument-hint: <session-name> [snapshot-name]
    authoritative. A failed share is transport-only with respect to snapshot
    contents: no snapshot lifecycle transition occurs, although resolving the
    configured store may create its directory or harden owner-only permissions.
-   Fixing the transport and re-running the same legal share command is safe.
+   A failed share can leave the notification queued or staged. Check `$session-chat:pane-health` for the recipient. If delivery is uncertain, confirm receipt before resending. Retry only after verifying that nothing was staged, queued or delivered.
 
-6. Report: `Shared session context '<snapshot-name>' with <session>. The notification does not copy the file; they can load it with $knowledge:context-load <snapshot-name> only when both panes inherited the same SESSION_CONTEXT_HOME. Relaunch a mismatched pane with the correct environment.`
+6. On success, report that the recipient was notified. They can load the snapshot with `$knowledge:context-load <snapshot-name>` when both panes inherited the same `SESSION_CONTEXT_HOME`. Relaunch a mismatched pane with the correct environment.
 7. If the snapshot does not exist, suggest running `$knowledge:context-generate` first.

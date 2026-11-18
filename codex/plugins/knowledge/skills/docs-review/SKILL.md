@@ -45,12 +45,12 @@ The target is a single doc path (e.g. `docs/AUTH_FLOW.md`) or a directory (e.g. 
 
 3. **Run the plugin's validation scripts.** Use the absolute `PLUGIN_ROOT` supplied by the caller. The caller resolves it from this selected skill's source path by going up two directories from `<plugin-root>/skills/docs-review/SKILL.md`; never derive it from the project working directory or a versioned cache path. For a file target, set `DOCS_DIR` to its parent; for a directory target, use that directory. With multiple files, run once per unique parent. Never silently substitute a hard-coded `docs/` directory.
 
-   Then run all three against the docs dir:
+   Replace `<PLUGIN_ROOT>` and `<DOCS_DIR>` with the resolved literal paths before each separate invocation. Strict-v1 requires the target directory to be inside the pane's working directory.
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/validate-links.sh" "$DOCS_DIR"    # broken cross-references
-   bash "$PLUGIN_ROOT/scripts/check-todos.sh" "$DOCS_DIR"       # stray TODO/FIXME markers
-   bash "$PLUGIN_ROOT/scripts/check-freshness.sh" "$DOCS_DIR" 30  # docs older than referenced code
+   bash "<PLUGIN_ROOT>/scripts/check-todos.sh" "<DOCS_DIR>"
+   bash "<PLUGIN_ROOT>/scripts/validate-links.sh" "<DOCS_DIR>"
+   bash "<PLUGIN_ROOT>/scripts/check-freshness.sh" "<DOCS_DIR>" 30
    ```
 
    Relay each script's findings. If the scripts aren't found, do the equivalent

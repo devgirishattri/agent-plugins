@@ -31,8 +31,8 @@ argument-hint: "[project-filter]"
 
 Rules:
 - This command is read-only — it never modifies session data.
-- Projects are grouped by the session `cwd` recorded in each session file.
-- Session names come from `~/.codex/session_index.jsonl`; a session without an indexed name shows as `(untitled)`.
+- Group logical sessions by canonical `cwd`. Use native names when available and the latest indexed name for filesystem records. Show `(untitled)` for missing names.
+- Sizes cover known files. Preserve `+ unknown` for logical sessions without a known size. JSON rows include provenance and nullable byte sizes.
 - If `$ARGUMENTS` was given, mention that results are filtered to projects matching it.
 - If the output says `No sessions found`, report that and stop.
 - Suggest `$session-manager:session-list <project>` to inspect a specific project's sessions and `$session-manager:session-delete <session-id>` to clean up large ones.

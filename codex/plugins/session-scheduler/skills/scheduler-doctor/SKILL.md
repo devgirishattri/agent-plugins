@@ -23,8 +23,8 @@ bash "<PLUGIN_ROOT>/scripts/scheduler-doctor.sh"
 If the script reports `SESSION_SCHEDULER_HOME` is not set, stop and request a
 pane relaunch with the correct environment instead of deriving another ledger.
 
-Report the ledger home and whether it is inside the current git root, handoffs
-directory count, pane name, enforced session-chat version, date math, and ledger
+Report the ledger home and whether it is inside the current git root, the number of
+Markdown files under `handoffs/`, pane name, enforced session-chat version, date math, and ledger
 provenance. Custom workspace store locations are supported; there is no fixed
 `.tmp/scheduler` expected-path comparison.
 

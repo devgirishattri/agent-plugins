@@ -55,7 +55,7 @@ status object:
 | `SessionWalkthroughTour.status()` | Current state and geometry, synchronous |
 | `SessionWalkthroughTour.goTo(i)` | Show step `i` (from 0); resolves when it is ready |
 | `SessionWalkthroughTour.next()` / `.prev()` | Move one step |
-| `SessionWalkthroughTour.close()` | Close and remove everything |
+| `SessionWalkthroughTour.close()` | Close the tour and remove its overlay, listeners and saved tour state |
 
 The overlay adds one root (`#session-walkthrough-tour-root`) and one
 stylesheet. The stylesheet is a constructed stylesheet in

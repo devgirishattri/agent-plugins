@@ -30,8 +30,9 @@ reply is pending.
    workers" before you send it anything.
 2. Verify harness status/identity and run harness doctor when identity or hook
    health is uncertain.
-3. Inspect the root read-only. Inspect the target checkout read-only from the
-   orchestrator using literal Git queries; do not mutate it or change into it.
+3. Inspect the root read-only. When the orchestrator may read the target checkout,
+   use literal Git queries without changing into it. A v5 environment coordinator
+   obtains the target's Git evidence from its executor and has its reviewer verify it.
 4. Report current branch, dirty state, HEAD, existing local/remote-ref
    divergence, work-to-release and release-to-work counts, and active scheduler
    tasks.
@@ -43,7 +44,7 @@ before push or deploy.
 
 ## Plan review
 
-1. Run status and read the target repository's applicable `AGENTS.md` files.
+1. Run status and obtain the applicable target `AGENTS.md` files. A v5 environment coordinator obtains them through its executor and has its reviewer verify the supplied evidence.
 2. File-dispatch a read-only `PLAN REVIEW` to the configured reviewer. Include
    the shared packet, complete plan, files, acceptance criteria, verification,
    risks, and exclusions.
@@ -71,8 +72,9 @@ When implementation and tests finish, call task-review so the configured reviewe
 Report exact changed paths and verification results.
 ```
 
-4. The executor calls task-review; the configured reviewer audits independently
-   and closes with `task-done "APPROVE: ..."` or rejects with `task-block`.
+4. The executor submits the task for review. The configured reviewer independently
+   audits it and runs `task-done <id> "APPROVE: ..."` or `task-block <id> "<reason>"`.
+   For a contracted task, pass `--generation <N>` immediately after the task ID using the current generation.
 5. Before commit authorization, verify these items: reviewer authorship, task
    identity, reviewed diff/SHA, and timestamp freshness within `audit_ttl_minutes`.
    Also verify an explicit `APPROVE` token in the closing note or correlated reply. A `done`

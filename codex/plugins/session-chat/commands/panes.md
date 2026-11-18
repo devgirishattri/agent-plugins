@@ -11,8 +11,7 @@ argument-hint: "[all]"
 2. Run:
 
    ```bash
-   ARGUMENTS="${ARGUMENTS:-}"
-   bash "$PLUGIN_ROOT/scripts/list-panes.sh" "$ARGUMENTS"
+   bash "$PLUGIN_ROOT/scripts/list-panes.sh"
    ```
 
 3. By default, this lists named panes in the current tmux session only. If `all` is provided, it lists named panes across all tmux sessions.

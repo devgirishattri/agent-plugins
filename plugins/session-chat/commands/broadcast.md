@@ -8,7 +8,7 @@ allowed-tools: Bash(bash:*)
 
 Lead with the result. Add text only for errors or the follow-ups below. Run the script directly and report only the result.
 
-`/broadcast` fans out a **short, single-line** message to every named pane except this one. Use it for status pings, "sync now" nudges, and fleet-wide notices. Per-target delivery is identical to `/send` (durable enqueue, live paste, queued fallback).
+`/broadcast` fans out a short, single-line message to every named pane except this one. Delivery is independent per recipient. The strict-v1 harness does not admit broadcast in enforce mode.
 
 1. Parse $ARGUMENTS. Optional flags come first: `--all` (every tmux session instead of just the current one), `--match <glob>` (e.g. `--match 'worker-*'`), `--priority high`, and `--ttl <minutes>`. Everything after is the message.
 2. Run the broadcast script with properly quoted arguments:

@@ -23,9 +23,7 @@ argument-hint: "[TARGET|all] [--config PATH] [--json] [--running]"
      managed pane is alive and launched, `null` without tmux).
 
 4. Safety/behavior:
-   - This command is mutation-free. It validates config, canonicalizes pane
-     `cwd` paths, and computes the normalized plan without touching tmux or any
-     state directory. Only `--running` reads tmux, and it changes nothing.
+   - The plan reads the config, resolves pane working directories, and applies worker names from the project's `labels.json` when present. It writes no state. Only `--running` reads tmux.
    - Unknown targets exit non-zero with the known session ids.
    - An executor/reviewer with `"launch": "on_demand"` is marked `(on demand:
      a full start leaves it down; start it with --pane)`, and its `--json`

@@ -247,7 +247,7 @@ when a user hits them.
     `task-done`/`task-block`, context and read-only knowledge helpers.
 - Quote `^`, `~`, globs and spaces: `git diff 'HEAD~1' -- src/x.ts`. A
   bracket pathspec needs `git --literal-pathspecs`. `git blame` runs as
-  `git blame [REV] -- PATH`, and `git config` reads need `--file PATH`.
+  `git blame [REV] -- PATH`. Use `--file PATH` for file-scoped config reads. The two allowed repository queries are `git config --get core.hooksPath` and `git config --get-all remote.origin.fetch`.
   There is no `git -C`, `grep -f`/`rg -f` or `jq`: run git from the
   checkout, search with `-e PATTERN` and read JSON with `cat` or `grep`.
 - A pane whose role, engine pane name or tmux `@name` says reviewer is refused
@@ -397,13 +397,13 @@ Installed plugin and skill reads:
 
 #### `gh` rules
 
-Root and confined orchestrators deny direct remote-mutating `gh` commands
-(`orchestrator.gh_mutation`). The denial applies even without a child
-filesystem operand. Route mutations to the executor.
+In enforce mode, root and confined orchestrators block direct remote-mutating `gh`
+commands (`orchestrator.gh_mutation`), including calls without a child filesystem
+operand. Audit mode reports the rule. Route authorized mutations to the executor.
 
 | Rule id | What it covers |
 |---|---|
-| `orchestrator.gh_mutation` | Direct remote-mutating `gh` commands. Always denied. |
+| `orchestrator.gh_mutation` | Direct remote-mutating `gh` commands. Warns in audit mode and blocks in enforce mode. |
 | `orchestrator.gh_read` | Reviewed reads: `run list/view`, `pr list/view/diff/checks`, `workflow list/view`, `release list/view` with an explicit `--repo`/`-R OWNER/NAME`; positional `repo view OWNER/NAME`; `api repos/OWNER/NAME/...` or `api repositories/ID/...` with effective GET. |
 | `orchestrator.gh_unsupported` | Everything else gh-shaped: aliases, extensions, executable paths, env assignments, wrappers and launchers (`timeout`, `nice`, `find -exec`, ...), composition, expansions, redirections, stdin inputs, browser flags, command-line host overrides, headers, API caching, and unknown flags (grammar reviewed against gh 2.100.0). |
 
@@ -451,7 +451,9 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
 | Mode | Policy denial | Identity/config/drift integrity failure |
 |---|---|---|
 | `audit` | Reports `AUDIT by session-workspace strict-v1 [...]`. Never blocks. | Blocks |
-| `enforce` | Prints `BLOCKED ...` and blocks. | Blocks |
+| `enforce` | Blocks policy denials. The three worker rules below are advisory. | Blocks |
+
+Worker advisories warn in both modes when their provider hook receives the call. Claude registers `EnterWorktree` (`worker.enter_worktree`). Codex registers `spawn_agent` (`worker.spawn_agent`) and MCP calls (`worker.mcp`).
 
 - In `audit` mode, Claude reports the policy denial as one stderr line.
 - Codex discards stderr for successful hooks. There, `audit` reports one inert
@@ -461,8 +463,7 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
   Codex mode for now.
 - Remedy for an integrity failure: run `/session-workspace:workspace-restart <session-id>`
   for the configured session containing that pane.
-- That restart kills and recreates ALL of that session's configured panes, not
-  just the drifted one.
+- Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down.
 - Never hand-edit the identity variables.
 
 ### Guards and diagnostics
@@ -474,7 +475,7 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
   launcher identity.
 - `warn_missing_panes` ignores `optional:true`, shell/service panes and
   on-demand workers.
-- Workspace-health diagnostics emit only from the configured orchestrator.
+- Stop-health diagnostics run for the configured orchestrator. In schema v5 the root coordinator qualifies, as do environment coordinators whose pane cwd is the project root.
 - `branch_ahead` is a neutral local-branch fact, not deploy authorization.
 - After a Codex plugin upgrade that changes hook entries, accept/re-trust the
   new session-workspace hook hashes. Do this before you rely on lifecycle/Stop output.
@@ -574,8 +575,7 @@ When `orchestration.enabled` is true, use the `workspace-orchestrator` skill
   slot. The slot fails with guidance until you use `--adopt --confirmed`
   deliberately. The adoption-candidate details are always shown first, even in
   `reconcile`'s dry-run without `--apply`.
-- The engine never touches a tmux session with the same configured name that it
-  did not create. It uses exact `=NAME` targeting only, never a prefix match.
+- The engine refuses a same-name unmanaged session by default. Explicit confirmed adoption may claim it. The engine targets the exact tmux session name with `=NAME`.
 - `stop`/`restart` never run without confirmation. `stop` refuses outright
   without `--confirmed`. `restart` implies it.
 - `workspace-plan`, `workspace-status`, and `workspace-doctor` are

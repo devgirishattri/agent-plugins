@@ -24,7 +24,7 @@ The output above has three sections. Present each one:
 
 Rules:
 - This command is read-only — it never modifies session data.
-- Project paths are decoded best-effort from directory names; paths containing hyphens may decode imperfectly (e.g. `/Users/foo/ProjectA-app` may display as `/Users/foo/ProjectA/app`).
+- For each project, use the `cwd` in its newest transcript when available. As a fallback the script decodes its directory name, which can make paths containing hyphens ambiguous.
 - If a session has no name, it shows as "(untitled)".
 - If `$ARGUMENTS` was given, mention that results are filtered to projects matching it.
 - If the output says "No sessions found", report that and stop.

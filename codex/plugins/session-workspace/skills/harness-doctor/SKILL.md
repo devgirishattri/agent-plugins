@@ -36,5 +36,4 @@ checks are:
   entry, not runtime trust/loading.
 
 Do not apply remediation unless the user separately asks for a change. For an
-active identity failure, recommend `$session-workspace:workspace-restart` and
-never suggest editing engine identity variables by hand.
+active identity failure, recommend `$session-workspace:workspace-restart <session-id>` for the session containing the pane. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down. Leave engine identity variables to the launcher.

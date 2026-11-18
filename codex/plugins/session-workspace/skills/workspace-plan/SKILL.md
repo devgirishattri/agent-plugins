@@ -25,9 +25,8 @@ Real flags:
 - `--running`: add a read-only `running` field to each pane (true when the
   managed pane is alive and launched, `null` without tmux).
 
-This command is mutation-free. It validates config, resolves pane cwd paths,
-and prints the normalized plan without touching tmux or any state directory.
-Only `--running` reads tmux, and it changes nothing.
+The plan reads the config, resolves pane working directories, and applies worker names from the project's `labels.json` when present. It writes no state.
+Only `--running` reads tmux.
 Unknown targets fail with the known session ids. The human report shows env
 variable names only and never prints env values or secret values.
 

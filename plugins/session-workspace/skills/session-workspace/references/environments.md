@@ -259,8 +259,9 @@ A label starts with a lowercase letter or digit and contains 1–24 characters
 from `a-z`, `0-9` and `-`. It is kept in the project
 state file `labels.json`, so the names survive restarts until the label is
 set again. The engine sets it under the project lock when every worker whose
-name would change is stopped (`stop SESSION --pane NAME --confirmed`).
-It also checks that the config still validates with the new names, so they
+name would change is stopped. For an on-demand worker use `workspace stop SESSION --pane NAME --confirmed`.
+For an always-on worker, check `behavior.stop_scope` and stop the containing session before relabeling.
+Start the session again after relabeling if it was running. The engine validates the new names so they
 stay unique. An environment coordinator labels only its own
 environment (`routing.scope`); the root coordinator and the user may label
 any. Workers cannot (`coordination.write`). A name written in the config is

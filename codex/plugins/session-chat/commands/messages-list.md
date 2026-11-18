@@ -15,4 +15,4 @@ argument-hint: "[--older-than 7d] [--sender name] [--recipient name]"
    ```
 
 3. Present the tab-separated output as file, age in seconds, size in bytes, sender, and recipient.
-4. This command is read-only.
+4. Listing preserves message bodies. Opening the mailbox can create directories, harden permissions and record its one-time migration.

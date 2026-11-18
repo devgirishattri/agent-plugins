@@ -72,7 +72,7 @@ Three write boundaries exist. Each has its own stated role rule. There is no uni
   - Role detection is plugin-neutral. The first non-empty value wins, in this order: `KNOWLEDGE_PANE_NAME`, then `SESSION_CHAT_PANE_NAME`, then the tmux pane `@name` option. A `*-reviewer` name refuses.
   - If no name resolves, tmux membership decides. Outside tmux, the session is truly solo and writes proceed. Inside tmux, a missing name is an unresolved fleet identity and also fails closed (exit 6).
   - To fix an unresolved identity, export `KNOWLEDGE_PANE_NAME` from your project's canonical pane-name variable if it differs.
-- **Context.** Context coordination writes are **reviewer-ALLOWED**, per the coordination-state exception of the multi-agent baseline. Session hand-off state is fleet-coordination data. It is not a durable knowledge store.
+- **Context.** Reviewers may save and share coordination snapshots. In enforce mode, strict-v1 reserves removal for orchestrators and currently rejects the required `--dry-run` preview. If policy refuses the preview, report the refusal and stop before deletion.
 - **Docs.** `docs-create` and its explicitly invoked TODO/ISSUES maintenance are gated by the `docs-write.sh` reviewer-role preflight (described below). The refusal is **workflow-level**. The skill hard-requires the preflight. It is not a technical funnel like `memory-write.sh`, because docs edits are direct model edits.
 
 `doctor`, `search`, `recall`, `graph`, and `lint` are read-only. They run anywhere, including reviewer panes.
@@ -140,7 +140,7 @@ This document is the taxonomy and command-selection overview. It is not the step
 
 - Never auto-edit `AGENTS.md`, `CLAUDE.md`, `docs/decisions/`, or reference docs. These surfaces are report-only, always. `doctor` prints the exact bytes to paste. It never writes them.
 - Never call an external memory SaaS, vector DB, or embeddings API. There is zero memory-specific network egress. `search`, `recall`, and `graph` are deterministic lexical and explicit-link tools. Never market them as semantic memory.
-- Never silently forget. Memory decay demotes an entry: it lowers the recall ranking and sets `status: stale/superseded/archived`. It also queues the entry for review (the review queue of `doctor`). It never deletes. Deletion is always the separate, explicit `retire`, `purge`, or `context-remove` action.
+- Memory search uses a note's recorded lifecycle status to adjust its ranking. Doctor reports notes due for review using their status and `review_after`. Changing a status requires a write. Retiring a durable note and removing a snapshot require explicit lifecycle actions. An approved `memory-write.sh apply` also consumes its named inbox candidate.
 - Never create, edit, close, or sync TODO, ISSUES, or ticket entries from an autonomous surface (`doctor`, `lint`, `search`, `recall`, `consolidate`, `promote`, `remember`). There are two exceptions:
   - `distill` runs the configured tracker operations that the user explicitly approved.
   - `docs-create` runs TODO/ISSUES maintenance that the user explicitly invoked. This is user-directed authoring, not automation.

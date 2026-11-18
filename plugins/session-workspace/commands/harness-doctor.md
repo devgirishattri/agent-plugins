@@ -41,7 +41,7 @@ The checks:
   - An inactive config with an empty launcher mode no-ops before the alias check. There, `identity.live` stays a no-op.
 - `identity.live` — the verdict of `harness-policy.py` *itself*. It is probed in this process with a harmless unknown-tool payload. It is the policy engine's decision for this environment. It presumes the bundled hook is loaded and trusted. It is not proof of runtime enforcement. Verdicts:
   - `OK` — active, accepted.
-  - `ERROR` — active and blocking every gated call here. The output shows the rule and reason. Restart the pane's configured session via `/session-workspace:workspace-restart <session-id>`. That kills and recreates all of that session's configured panes.
+  - `ERROR` — active and blocking every gated call here. Relay the rule and reason. The recovery command is `/session-workspace:workspace-restart <session-id>`. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down.
   - `INFO` — the hook is a no-op here, or the probe could not run and the pane has no inherited identity.
   - `WARN` — the inactive pane has partial or mismatched identity, or the probe could not run and the pane has inherited identity.
 

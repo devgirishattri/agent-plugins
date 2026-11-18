@@ -35,8 +35,7 @@ argument-hint: <snapshot-name>
    ```
 
    Relay the listed files and total count, including any orphaned-history notice.
-   If the helper fails, relay its error and stop; if neither current nor archived
-   data exists, suggest `$knowledge:context-list`.
+   If the helper fails, relay its error and stop. If neither current nor archived data exists, suggest `$knowledge:context-list`. In enforce mode, strict-v1 reserves removal for orchestrators and currently rejects the required `--dry-run` preview. If policy refuses the preview, report the refusal and stop before deletion.
    State that the real run re-checks under its writer lock, so a concurrent overwrite may add history
    after this preview and the helper's final removal count is authoritative.
 5. Show the exact `SNAPSHOT_NAME` and ask a separate Yes/No confirmation. Prefer `request_user_input` when available, with Cancel recommended/default; otherwise ask directly and wait. Anything other than explicit confirmation cancels. Never invoke the removal script with `--confirmed` before confirmation.

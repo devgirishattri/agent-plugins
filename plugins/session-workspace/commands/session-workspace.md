@@ -48,9 +48,7 @@ Lead with the result. Add text only for errors or the follow-ups below.
 4. Relay these safety gates if the user hits them:
    - The engine never renames or respawns an unmanaged pane that occupies a
      planned slot. That slot fails with guidance.
-   - The engine never touches a tmux session that has the same configured
-     name but was not created by this engine (exact `=NAME` targeting, never
-     a prefix match).
+   - The engine refuses a same-name unmanaged session by default. Explicit confirmed adoption may claim it. The engine targets the exact tmux session name with `=NAME`.
    - `stop` refuses without `--confirmed`. `restart` confirms its internal
      stop phase and accepts no separate `--confirmed` flag.
    - Secrets reach exactly one pane's process environment through a
@@ -67,8 +65,7 @@ Lead with the result. Add text only for errors or the follow-ups below.
      Inactive configs are a true no-op for panes launched with an empty harness
      mode. Drift (a stale launcher mode, identity/config mismatch) fails
      closed in both modes. To recover, restart the pane's configured session via
-     `/session-workspace:workspace-restart <session-id>`. This kills and
-     recreates all of that session's configured panes.
+     `/session-workspace:workspace-restart <session-id>`. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down.
    - Schema v3–v5 may add typed `harness.guards` for shared protected-file and
      child-chdir denials, generic lifecycle reminders, and bounded Stop
      health diagnostics. Guard changes require `workspace restart`.

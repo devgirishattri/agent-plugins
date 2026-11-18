@@ -32,4 +32,4 @@ Relay these checks and the summary without applying fixes:
   loaded and trusted; it does not verify runtime hook loading.
 
 For an active identity error, relay the rule and reason and recommend
-`$session-workspace:workspace-restart`; never repair engine identity by hand.
+`$session-workspace:workspace-restart <session-id>` for the session containing the pane. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down. Leave engine identity variables to the launcher.

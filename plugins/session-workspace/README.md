@@ -47,7 +47,7 @@ the CLI contract string both entry points use for their compatibility check.
 | `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes or on-demand workers. Closing the last pane ends the tmux session. A busy worker stays running unless `--force` is given. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
-| `label` | `workspace-label ENVIRONMENT [LABEL\|--clear] [--config PATH] [--json]` | Never (state file only) | Schema v5. Shows or sets the label of an environment's unnamed executor/reviewer panes, which are named `<project.id>-<environment>-<executor\|reviewer>[-<label>]`. Refuses while one of those workers runs, and refuses a label whose names the config would not accept. See "Worker names". |
+| `label` | `workspace label ENVIRONMENT [LABEL\|--clear] [--config PATH] [--json]` | Never (state file only) | Schema v5. Shows or sets the label of an environment's unnamed executor/reviewer panes, which are named `<project.id>-<environment>-<executor\|reviewer>[-<label>]`. Refuses while one of those workers runs, and refuses a label whose names the config would not accept. See "Worker names". |
 | `harness-status` | `harness-status [--config PATH] [--json] [--probe]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates), the strict-v1 role floor for this pane's role (every role outside a pane), the optional guard packs, and whether this pane's engine identity matches the validated plan. `--probe` decides this pane's built-in floor cases without running them and exits 1 on any unexpected decision. |
 | `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3–v5 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
 
@@ -369,8 +369,7 @@ after launch). Integrity failures block in **both** modes — `audit` only
 softens policy denials. The remedy for drift is always restarting the
 configured session that contains the pane
 (`workspace restart <session-id>` / `/session-workspace:workspace-restart
-<session-id>`) — which kills and recreates ALL of that session's configured
-panes, not just the drifted one — never editing the variables by hand.
+<session-id>`). Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down. The launcher supplies the identity variables.
 
 `SESSION_WORKSPACE_SCOPE_JSON` pins only the pane's own scope (0.13.2), so an
 environment added beside running ones, for example a new lane on a git
@@ -474,10 +473,9 @@ edit: set `schema_version: 4` (behavior unchanged), then add `orchestration`
 when ready. Adding or editing `orchestration` does not itself change launcher
 identity or require a restart — it invalidates any orchestration
 evidence collected under the previous coordinates, so in-flight workflows
-restart at plan review. A session restart
-(`workspace restart <session-id>`, which kills and recreates every
-configured pane in that session) is required for identity/launcher-bearing
-changes — for example `project.root`, a pane's name, role, cwd, or runtime,
+restart at plan review. Restart the affected session after identity or launcher changes,
+including changes to `project.root` or a pane's name, role, cwd or runtime. Check
+`behavior.stop_scope` first. A full start leaves on-demand workers down. Restart after changes to
 `harness` mode/roles, or `harness.guards` — because those are baked into the
 engine-owned launch identity the policy cross-checks.
 
@@ -498,8 +496,8 @@ role floor is off. The floor:
   directory, `<messages grant>/drafts/<pane-name>/<name>.md|.txt` (the grant
   is normally `.tmp/messages` and comes from the workspace plan, never
   inherited environment overrides). Native create/edit/delete only; shell
-  writes and `rm` stay denied, so Claude panes (no native delete tool)
-  leave delivered drafts in place. The target's parent must canonicalise to
+  writes and `rm` stay denied. The dispatch helper attempts to remove an eligible, unchanged own draft after delivery, durable queueing or unsubmitted input (exit 4). `SESSION_CHAT_KEEP_DRAFTS=1` keeps it. A hard failure or an identity or content mismatch also retains the draft. Leave retained drafts in place.
+  The target's parent must canonicalise to
   exactly that directory; names not starting with an ASCII letter or digit (or using other than letters, digits, `.`, `_`, `-`; stem at most 128), symlinked directories, hardlinked or
   non-regular targets, moves, other panes' drafts, the store top level,
   delivered dispatch files, queue/archive/ledger state, and patches touching
@@ -1427,16 +1425,16 @@ readiness. `workspace browser-config` previews the Codex/Claude MCP entries;
 `workspace browser-config --apply` backs up and merges them. Start the browser
 session before opening a new Codex or Claude session.
 
-Lifecycle stays keyed on `browser.session_id`. `workspace start <session>` (or
-`all`) claims the port, starts every pane of that session, then waits for
-`/json/version`; `--no-services` suppresses the Chrome pane like any other
-service pane and skips the claim and the wait; `workspace stop <session>`
+Lifecycle uses `browser.session_id`. A full start that includes the browser session
+claims the port and waits for `/json/version` after starting its eligible panes.
+It preserves running on-demand workers and skips stopped ones. `--no-services`
+skips the Chrome pane, port claim and wait. `workspace stop <session> --confirmed`
 releases the port. When Chrome shares a session with dev servers, start or
 stop it on its own with `workspace start <session> --pane <browser pane>` and
 `workspace stop <session> --pane <browser pane> --confirmed` (see "Single
-service panes on demand"). `workspace restart <session>` still bounces every
-pane in that session, and a failed sibling slot suppresses the readiness
-wait and its `[ready]`/`[failed]` report. Because a `split_tree` layout with
+service panes on demand"). A targeted restart stops the session's live panes. The
+new full start leaves on-demand workers down. A failed sibling slot suppresses the
+readiness wait and its `[ready]`/`[failed]` report. Because a `split_tree` layout with
 `only_when_fresh: true` is built only while the window has exactly one pane,
 moving Chrome into an already-running session requires stopping that session
 once so the new tree is built fresh; a saved `retain_layout` file from the old

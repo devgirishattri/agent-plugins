@@ -16,7 +16,7 @@ Lead with the result. Add text only for errors or the follow-ups below. Report t
 
 - `TARGET` restricts the plan to one `sessions[].id`. An unknown target fails fast with the list of known ids.
 - `--json` emits the machine-readable plan that the other verbs consume.
-- `--running` adds a read-only `running` field to each pane (true when the managed pane is alive and launched, `null` when tmux is not installed). It is the only form of `plan` that reads tmux, and it never changes anything. Without it the plan stays the same on every machine.
+- `--running` adds a read-only `running` field to each pane (true when the managed pane is alive and launched, `null` when tmux is absent). Only this flag reads tmux. Local paths and worker labels from `labels.json` can affect the plan on each machine.
 
 The plan marks an optional pane whose declared `cwd` does not resolve on disk (an un-cloned child repo) as `[SKIPPED: cwd unavailable — will not be launched]`. This is expected, not a config error. It mirrors what the lifecycle verbs will actually do with the pane.
 

@@ -23,7 +23,7 @@ Options:
 - `--stage NAME` — optional pipeline stage label. Suggested labels: `plan`, `dispatch`, `execute`, `audit`, `push`. Any alphanumeric/`_`/`-` label works.
 - `--workflow ID` — group related tasks under a workflow id (stored as `meta.workflow_id`); list them together with `/task-status --workflow ID`.
 - `--reviewer PANE` — record a reviewer pane on the task (stored as `.reviewer`). When the executor runs `/task-review`, the audit request is auto-dispatched to this pane.
-- `--depends-on id1,id2` — comma-separated existing task ids this task depends on. Each id must already exist. `/task-assign` refuses to dispatch until every dependency is `done`, unless `--force` is set.
+- `--depends-on id1,id2` records comma-separated existing task IDs. Ordinary prerequisites must be `done` unless `--force` overrides their status. A contracted prerequisite always requires valid admission.
 
 The new task id has the form `task-<epoch>-<8 hex>`. The hex comes from `/dev/urandom` only; with no usable `od`/`/dev/urandom` the command stops with an error and creates nothing. The ledger file is created exclusively, so a colliding id is refused and the existing task stays unchanged. Older bare 8-hex ids remain valid everywhere.
 

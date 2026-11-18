@@ -18,17 +18,14 @@ For grouped local docs, memory, and configured context results, use `$knowledge:
    never export or derive it here). Invoke the helper as one literal Bash
    segment, with no `export` beforehand, no `env` or variable-assignment prefix,
    and no other command chained, piped, redirected, or substituted around it.
+   If the inherited value is missing, stop before invocation and request a pane relaunch with the configured store.
    Pass `--list` through if the user asked for names only:
 
    ```bash
    bash "<PLUGIN_ROOT>/scripts/search-contexts.sh" "<pattern>" [--list]
    ```
 
-   If the script reports `SESSION_CONTEXT_HOME` is not set, stop and request a
-   pane relaunch with the correct environment instead of deriving another
-   context store. Search still requires the inherited variable: it overrides
-   only the current repository's store while other discoverable project roots
-   use their own stores.
+   The underlying helper can discover existing stores when invoked directly. The inherited value overrides discovery only for the current repository.
 
 4. Present the tab-separated output:
 
@@ -45,8 +42,7 @@ For grouped local docs, memory, and configured context results, use `$knowledge:
      ```
 
 Rules:
-- This command does not modify snapshot contents. Resolving a configured store
-  may create its directory or harden existing owner-only permissions.
+- Search reads existing stores without creating directories or changing permissions.
 - The current git toplevel is always included and uses the inherited
   `SESSION_CONTEXT_HOME`; additional roots come from `cwd` values recorded in
   local Codex session files and use their own `.tmp/contexts/` stores, falling

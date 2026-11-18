@@ -48,8 +48,7 @@ or broad provider-home access. Escalation grants transport access only; the
 chosen recipient and arguments remain authoritative. A failed share is
 transport-only with respect to snapshot contents: no snapshot lifecycle
 transition occurs, although resolving the configured store may create its
-directory or harden owner-only permissions. Fixing the transport and re-running
-the same legal share command is safe.
+directory or harden owner-only permissions. A transport failure can leave the notification queued or staged in the recipient's input. Use `$session-chat:pane-health` to inspect the recipient. If delivery is uncertain, confirm receipt before resending. Retry only after verifying that nothing was staged, queued or delivered.
 
 If tmux is not active, explain that sharing requires running Codex inside tmux.
 If the snapshot does not exist, suggest `$knowledge:context-generate <snapshot-name>`. If the target session is not found, suggest `$session-chat:panes`.

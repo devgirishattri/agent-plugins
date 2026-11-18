@@ -31,8 +31,8 @@ Topic/context: **$ARGUMENTS**
 
 ## Validation Scripts
 
-Run these after you write or update docs. Run them once per **unique parent directory** of the docs you touched. Replace `<dir>` with each such directory. Use the actual doc location (project root, `docs/`, or a module-adjacent directory), not a hard-coded `docs/`:
+Run these after writing or updating docs, once per **unique parent directory** of the changed files. Resolve `<PLUGIN_ROOT>` from `${CLAUDE_PLUGIN_ROOT}` and `<DOCS_DIR>` from each changed file. Pass both paths literally. Under strict-v1 the directory must resolve inside the pane's working directory.
 
-- `bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-todos.sh <dir>`
-- `bash ${CLAUDE_PLUGIN_ROOT}/scripts/validate-links.sh <dir>`
-- `bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-freshness.sh <dir> 30`
+- `bash "<PLUGIN_ROOT>/scripts/check-todos.sh" "<DOCS_DIR>"`
+- `bash "<PLUGIN_ROOT>/scripts/validate-links.sh" "<DOCS_DIR>"`
+- `bash "<PLUGIN_ROOT>/scripts/check-freshness.sh" "<DOCS_DIR>" 30`

@@ -122,12 +122,14 @@ Group entries by file for scannability. For large docs (20+ references), include
 
 This skill bundles three scripts in the plugin's `scripts/` directory for verifying doc health. Resolve `PLUGIN_ROOT` from the absolute source path Codex supplied for this selected `SKILL.md`: go up two directories from `<plugin-root>/skills/docs-create/SKILL.md` to `<plugin-root>`. Use that absolute path regardless of the project working directory. Never embed a plugin cache version or assume the repository checkout is the current directory. Set `DOCS_DIR` to the actual parent directory of each changed doc (or each unique parent for multiple docs); do not hard-code `docs/` when the document lives at the project root or beside a module.
 
+Replace `<PLUGIN_ROOT>` and `<DOCS_DIR>` with resolved literal paths before each invocation. Strict-v1 admits a target directory inside the pane's working directory.
+
 ### check-todos.sh
 
 Scans doc files for embedded TODO/FIXME/HACK markers that should be in the dedicated tracker files instead. Run this after every doc creation or update.
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/check-todos.sh" "$DOCS_DIR"
+bash "<PLUGIN_ROOT>/scripts/check-todos.sh" "<DOCS_DIR>"
 ```
 
 ### validate-links.sh
@@ -135,7 +137,7 @@ bash "$PLUGIN_ROOT/scripts/check-todos.sh" "$DOCS_DIR"
 Checks that Markdown `.md` cross-references (inline links and `**Related**:` header refs) point to existing files. Catches stale links after renames or deletions.
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/validate-links.sh" "$DOCS_DIR"
+bash "<PLUGIN_ROOT>/scripts/validate-links.sh" "<DOCS_DIR>"
 ```
 
 ### check-freshness.sh
@@ -143,7 +145,7 @@ bash "$PLUGIN_ROOT/scripts/validate-links.sh" "$DOCS_DIR"
 Compares doc modification dates against the code files they reference using git history. Flags docs not updated since their referenced code changed.
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/check-freshness.sh" "$DOCS_DIR" 30
+bash "<PLUGIN_ROOT>/scripts/check-freshness.sh" "<DOCS_DIR>" 30
 ```
 
 Arguments: `[docs-directory]` and `[days-threshold]` (default: 30 days).

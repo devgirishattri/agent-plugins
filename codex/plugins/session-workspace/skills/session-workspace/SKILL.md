@@ -27,18 +27,18 @@ is not a scaffold.
 
 | Command | Purpose |
 |---|---|
-| `/workspace-doctor` | Read-only dependency/config health check |
-| `/workspace-plan` | Dry-run plan (human + JSON); mutates nothing |
-| `/workspace-start` | Bring up sessions/panes/agents/services (idempotent) |
-| `/workspace-status` | Current lifecycle state; mutates nothing |
-| `/workspace-stop` | Tear down sessions/panes (destructive, needs `--confirmed`) |
-| `/workspace-restart` | Stop then start (destructive, confirmation implicit) |
-| `/workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
-| `/workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
-| `/workspace-browser-config` | Render/apply project MCP entries for the configured browser |
-| `/harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), which strict-v1 role floor applies (`--probe` decides its cases), which optional guard packs add to it, and does this pane's engine identity match the plan |
-| `/harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
-| `$session-workspace:workspace-orchestrator` | Schema-v4 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
+| `$session-workspace:workspace-doctor` | Read-only dependency/config health check |
+| `$session-workspace:workspace-plan` | Dry-run plan (human + JSON); mutates nothing |
+| `$session-workspace:workspace-start` | Bring up sessions/panes/agents/services (idempotent) |
+| `$session-workspace:workspace-status` | Current lifecycle state; mutates nothing |
+| `$session-workspace:workspace-stop` | Tear down sessions/panes (destructive, needs `--confirmed`) |
+| `$session-workspace:workspace-restart` | Stop then start (destructive, confirmation implicit) |
+| `$session-workspace:workspace-reconcile` | Dry-run by default; `--apply` repairs drift; `--adopt --confirmed` claims unmanaged panes |
+| `$session-workspace:workspace-install` | Install/refresh the machine-wide `workspace` dispatcher on PATH; no config, no tmux, idempotent |
+| `$session-workspace:workspace-browser-config` | Render/apply project MCP entries for the configured browser |
+| `$session-workspace:harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), which strict-v1 role floor applies (`--probe` decides its cases), which optional guard packs add to it, and does this pane's engine identity match the plan |
+| `$session-workspace:harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
+| `$session-workspace:workspace-orchestrator` | Schema-v4/v5 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
 | `$session-workspace:verification-recipe` | Create or maintain a project-local, executed verification recipe with retained evidence |
 | `$session-workspace:blast-radius` | Report indirect breakage risks and check the assumptions that make a diff safe |
 | `$session-workspace:adversarial-review` | Optional independent review with bounded effort and evidence-based dispositions |
@@ -225,9 +225,7 @@ message store is inside the checkout. Confined coordinators must use native
 reads or trusted helpers for store reads, even inside the checkout. Root
 coordinators retain authority to edit the entire store, including transport
 messages.
-Dispatch with `--reply-to` for a reply, then natively delete your draft only
-after delivered or durable queued success; preserve it after hard failure.
-Claude has no native delete tool and retains its inert draft.
+Use `--reply-to` for a reply. The dispatch helper attempts to remove an eligible, unchanged own draft after delivery, durable queueing or unsubmitted input (exit 4). `SESSION_CHAT_KEEP_DRAFTS=1` keeps it. A hard failure or an identity or content mismatch also retains the draft. Leave retained drafts in place.
 No grant means no staging exception. Existing reviewer top-level drafts must
 be restaged here; never move or edit transport files. No config/schema migration
 is required. Update both plugins and restart affected agents. Downgrading
@@ -247,8 +245,8 @@ substitution, double quotes, backslashes, unlisted commands or ungranted
 sibling reads. `sed` runs only as `sed -n 'N[,M]p' FILE`. Quote `^`, `~`, globs
 and spaces: `git diff 'HEAD~1' -- src/x.ts`. A bracket pathspec needs
 `git --literal-pathspecs`, `git blame` runs as `git blame [REV] -- PATH`, and
-`git config` reads need `--file PATH`. There is no `git -C`, `grep -f`/`rg -f`
-or `jq`: run git from the checkout, search with `-e PATTERN` and read JSON with
+`git config` reads of a file use `--file PATH`. The two allowed repository queries are `git config --get core.hooksPath` and `git config --get-all remote.origin.fetch`.
+There is no `git -C`, `grep -f`/`rg -f` or `jq`. Run Git from the checkout, search with `-e PATTERN` and read JSON with
 `cat` or `grep`. A pane whose role, engine pane name or
 tmux `@name` says reviewer is refused every tool call when no readable
 workspace config backs it (`identity.reviewer`).
@@ -414,7 +412,9 @@ guidance adds no permission rule or executable capability.
 | Mode | Policy denial | Identity/config/drift integrity failure |
 |---|---|---|
 | `audit` | Reports `AUDIT by session-workspace strict-v1 [...]`. Never blocks. | Blocks |
-| `enforce` | Prints `BLOCKED ...` and blocks. | Blocks |
+| `enforce` | Blocks policy denials. The three worker rules below are advisory. | Blocks |
+
+Worker advisories warn in both modes when their provider hook receives the call. Claude registers `EnterWorktree` (`worker.enter_worktree`). Codex registers `spawn_agent` (`worker.spawn_agent`) and MCP calls (`worker.mcp`).
 
 - In `audit` mode, Claude reports the policy denial as one stderr line.
 - Codex discards stderr for successful hooks. There, `audit` reports one inert
@@ -424,8 +424,7 @@ guidance adds no permission rule or executable capability.
   Codex mode for now.
 - Remedy for an integrity failure: run `$session-workspace:workspace-restart <session-id>`
   for the configured session containing that pane.
-- That restart kills and recreates ALL of that session's configured panes, not
-  just the drifted one.
+- Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down.
 - Never hand-edit the identity variables.
 
 ### Guards and diagnostics
@@ -437,11 +436,11 @@ guidance adds no permission rule or executable capability.
   launcher identity.
 - `warn_missing_panes` ignores `optional:true`, shell/service panes and
   on-demand workers.
-- Workspace-health diagnostics emit only from the configured orchestrator.
+- Stop-health diagnostics run for the configured orchestrator. In schema v5 the root coordinator qualifies, as do environment coordinators whose pane cwd is the project root.
 - `branch_ahead` is a neutral local-branch fact, not deploy authorization.
 - After a Codex plugin upgrade that changes hook entries, accept/re-trust the
   new session-workspace hook hashes before relying on lifecycle/Stop output.
-- Run `/harness-doctor` first when something is unexpectedly blocked.
+- Run `$session-workspace:harness-doctor` first when something is unexpectedly blocked.
 
 ### Denial diagnostics (`DIAG` line)
 
@@ -532,8 +531,7 @@ must never be described as harness-enforced.
   slot. The slot fails with guidance until you use `--adopt --confirmed`
   deliberately. The adoption-candidate details are always shown first, even in
   `reconcile`'s dry-run without `--apply`.
-- The engine never touches a tmux session with the same configured name that it
-  did not create. It uses exact `=NAME` targeting only, never a prefix match.
+- The engine refuses a same-name unmanaged session by default. Explicit confirmed adoption may claim it. The engine targets the exact tmux session name with `=NAME`.
 - `stop`/`restart` never run without confirmation. `stop` refuses outright
   without `--confirmed`. `restart` implies it.
 - `workspace-plan`, `workspace-status`, and `workspace-doctor` are

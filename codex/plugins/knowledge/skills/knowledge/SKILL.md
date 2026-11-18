@@ -82,9 +82,7 @@ universal funnel or one universal rule:
   with no name is an unresolved fleet identity and also fails closed (exit
   6) — export `KNOWLEDGE_PANE_NAME` from your project's canonical pane-name
   variable if it differs.
-- **Context** — context coordination writes are **reviewer-ALLOWED**, per the multi-agent
-  baseline's coordination-state exception (session hand-off state is
-  fleet-coordination data, not a durable knowledge store).
+- **Context.** Reviewers may save and share coordination snapshots. In enforce mode, strict-v1 reserves removal for orchestrators and currently rejects the required `--dry-run` preview. If policy refuses the preview, report the refusal and stop before deletion.
 - **Docs** — `docs-create` (and its explicitly-invoked TODO/ISSUES
   maintenance) is gated by the `docs-write.sh` reviewer-role preflight
   described below — **workflow-level** reviewer refusal (the skill
@@ -143,12 +141,12 @@ be named and reachable, and both must inherit the same
 context directory). See `skills/context-share/SKILL.md` for the full sharing
 workflow, prerequisites, and failure modes.
 
-Every context command consumes `SESSION_CONTEXT_HOME`, inherited when the agent process started;
-it never derives, exports, or prefixes a helper with a replacement value, and
-its scripts fail closed when the variable is absent.
-Direct callers of every script must set the variable explicitly in their
-parent environment. If the inherited value is missing or wrong, relaunch the
-pane or session with the correct environment before retrying.
+Codex context workflows use `SESSION_CONTEXT_HOME`, inherited when the agent process started.
+If the value is missing or wrong, relaunch the pane with the correct store. Never derive,
+export or prefix a helper with a replacement value. Single-project snapshot helpers fail closed
+without it. Direct callers of every script must set the variable explicitly when using those
+single-project operations. Cross-project `search-contexts.sh` can discover existing stores
+when invoked directly.
 
 ## Agent-neutral recall bridge
 
@@ -193,10 +191,7 @@ these commands:
 - Never call an external memory SaaS, vector DB, or embeddings API — zero
   memory-specific network egress. `search`/`recall`/`graph` are deterministic
   lexical/explicit-link tools, never marketed as semantic memory.
-- Never silently forget: memory decay demotes (recall-ranking, `status:
-  stale/superseded/archived`) and queues for review (`doctor`'s review
-  queue) — it never deletes. Deletion is always the separate, explicit
-  `retire`/`purge`/`context-remove` action.
+- Search adjusts ranking using the note's recorded lifecycle status. Doctor uses status and `review_after` to identify entries for review. Changing a note's status requires a write. Retiring a durable note and removing a snapshot require explicit lifecycle actions. An approved `memory-write.sh apply` also consumes its named inbox candidate.
 - Never create, edit, close, or sync TODO/ISSUES/ticket entries from an
   autonomous surface (`doctor`/`lint`/`search`/`recall`/`consolidate`/
   `promote`/`remember`); exceptions are `distill`'s explicitly approved configured

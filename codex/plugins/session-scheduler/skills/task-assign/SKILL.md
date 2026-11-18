@@ -58,13 +58,13 @@ do not rerun task-assign.
 - `--context auto` — write `$SESSION_SCHEDULER_HOME/handoffs/<task-id>/<nonce>.md` from the approved prompt and current ledger state, with no live-session summarization. The nonce is exactly 32 lowercase hex characters from OS randomness. Each file is never overwritten; an existing path is refused. Directories use 0700 and files use 0600 with symlink and ownership checks. Auto does not require, read, create, or resolve `SESSION_CONTEXT_HOME`. The packet carries the absolute handoff path for direct reading, not knowledge context-load commands.
 - `--reviewer PANE` — set or override the independent reviewer route.
 - `--workflow ID` — set or override the workflow group; `--workflow-id` is an alias.
-- `--force` — bypass the status-transition check and unmet-dependency gate; an illegal-transition override records "forced" in history, while bypassing only the dependency gate does not.
+- `--force` can override an ordinary status transition or an unmet ordinary prerequisite. Overriding an illegal transition records `forced` in history. A contracted prerequisite still requires admission.
 
 Auto records `meta.handoff_file` and `meta.handoff_home`, clearing prior context keys. Explicit NAME records `meta.context` and `meta.context_home`, clearing prior handoff keys. The command prints `handoff: <absolute path>` for auto and `context: NAME` for explicit context. Assignment metadata and status are persisted together under the per-task lock. Value-taking flags require a value.
 
 Reassignment without `--context` clears all four attachment keys: `meta.context`, `meta.context_home`, `meta.handoff_file`, and `meta.handoff_home`. Locks cover ledger read-modify-write operations only, not transport; simultaneous assignments to the same task can race prompt writes and rollback, so coordinate assignments to each task serially.
 
-Assignment is refused while any `depends_on` task is not `done`.
+An ordinary prerequisite normally needs status `done`. A contracted prerequisite always needs valid admission, including when the dependent task uses `--force`.
 Report the task ID, assignee, and observed assignment or precise session-chat error.
 Distinguish a queued dispatch from recipient execution; do not claim the task
 has started without evidence from the recipient.

@@ -50,10 +50,10 @@ You receive a target: a single doc path (for example `docs/AUTH_FLOW.md`) or a d
    - **Cross-links:** confirm that each linked `.md` file exists at the resolved path.
    - **Copied code and line numbers:** flag each embedded code block or `file:line` citation that no longer matches the source. These go stale fast. Reference-based notation is preferred.
 
-3. **Run the validation scripts of the plugin** if they are present. Locate them with `Glob: **/knowledge/scripts/*.sh`. Then run them against the docs dir:
-   - `bash <root>/scripts/validate-links.sh <docs-dir>` — broken cross-references
-   - `bash <root>/scripts/check-todos.sh <docs-dir>` — stray TODO/FIXME markers
-   - `bash <root>/scripts/check-freshness.sh <docs-dir> 30` — docs older than referenced code
+3. **Run the plugin validators.** Use the absolute installed Knowledge root supplied by the caller. For a file use its parent directory. For a directory use the target itself. Run once per unique directory and substitute both resolved paths literally before invocation.
+   - `bash "<PLUGIN_ROOT>/scripts/check-todos.sh" "<DOCS_DIR>"`
+   - `bash "<PLUGIN_ROOT>/scripts/validate-links.sh" "<DOCS_DIR>"`
+   - `bash "<PLUGIN_ROOT>/scripts/check-freshness.sh" "<DOCS_DIR>" 30`
 
    Relay the findings of each script. If you cannot find the scripts, do the equivalent checks manually and say so.
 

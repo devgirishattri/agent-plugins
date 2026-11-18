@@ -27,6 +27,8 @@ Use it when **you, the orchestrator pane, coordinate ≥3 panes** (executors and
 
 ## Lifecycle
 
+The following diagram shows an ordinary task. Contracted tasks use generation-bound transitions and their own notification rules.
+
 ```
 /task-new        → status=created
   ↓
@@ -39,7 +41,7 @@ Use it when **you, the orchestrator pane, coordinate ≥3 panes** (executors and
 /task-block      → status=blocked, durable ack to assigner
 ```
 
-Legal status transitions (enforced by every command):
+Legal status transitions for ordinary tasks:
 `created→assigned`, `created→blocked`, `assigned→review`, `assigned→done`, `assigned→blocked`, `assigned→assigned` (reassignment), `review→done` (approve), `review→blocked` (reject), `blocked→assigned`. Anything else is rejected with the current status and legal next steps; override with `--force` (or `SESSION_SCHEDULER_FORCE=1`), which records "forced" in history.
 
 `/tasks-clean` removes tasks past `--older-than DAYS` (default 7; a bare integer is days on both providers). It removes **any status** by default; narrow with `--status done|blocked`. It is a dry run by default.
@@ -50,15 +52,15 @@ Legal status transitions (enforced by every command):
 
 ## Stages, ETAs, and dependencies
 
-- **Stages** are optional free-form labels (`--stage` on `/task-new` or `/task-assign`). Suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`. View grouped output with `/task-status --by-stage` or `/task-board`.
+- **Stages** are optional labels matching `[A-Za-z0-9_-]+` (`--stage` on `/task-new` or `/task-assign`). Suggested pipeline: `plan`, `dispatch`, `execute`, `audit`, `push`. View grouped output with `/task-status --by-stage` or `/task-board`.
 - **ETAs**: `/task-assign --eta MINUTES` stores `eta_at`; tasks past it are flagged `OVERDUE`. Tasks in `assigned`/`review` with no update for `SESSION_SCHEDULER_STALE_MINUTES` (default 30) are flagged `STALE`.
-- **Dependencies**: `/task-new --depends-on id1,id2` stores `depends_on`. `/task-assign` refuses to dispatch until every dependency is `done` (the error names the unmet deps) unless `--force`.
+- **Dependencies.** `/task-new --depends-on id1,id2` records prerequisite IDs. Ordinary dependencies must be `done` unless `--force` overrides their status. A contracted prerequisite always requires valid admission.
 - **Context attach (explicit)**: `/task-assign --context NAME` resolves the knowledge context snapshot at `$SESSION_CONTEXT_HOME/NAME.md`. It records `meta.context` + `meta.context_home`. It tells the executor to `/knowledge:context-load NAME` before starting. Snapshot names follow the knowledge context store's contract — canonical `snake_case` (`^[a-z0-9]+(_[a-z0-9]+)*$`); a non-canonical `NAME` is rejected before any side effect.
 - **Auto handoff**: `/task-assign --context auto` writes a **scheduler-owned** handoff at `handoffs/<task-id>/<nonce>.md` under the shared scheduler home. The handoff derives from the approved prompt and ledger state, and its mode is 0600. The nonce is 32 lowercase hex digits from OS randomness — never the task id or a timestamp. The file is never overwritten: each assignment adds a new file. The current file is recorded as `meta.handoff_file` (with `meta.handoff_home`). The packet carries the absolute path under `## Handoff` ("read it first"). The knowledge context store is never written, and `SESSION_CONTEXT_HOME` is not needed. `/tasks-clean` sweeps handoffs with the task. A reassignment with no `--context` clears all four attachment keys.
 
 ## Concurrency
 
-Every ledger write is atomic (tmp + mv). Every read-modify-write (status transitions, history, metadata, acks, durations) runs under the per-task lock `locks/<id>.lock/`. The lock is mkdir-atomic, with a `pid` inside. `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS` sets the wait (default 10). `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536) is the size limit for a `--note-file` verdict. A lock whose holder pid is dead is reclaimed. Both providers use the identical lock path, so Claude and Codex panes sharing one ledger exclude each other. The lock is never held across session-chat transport.
+Every ledger write is atomic (tmp + mv). Every read-modify-write (status transitions, history, metadata, acks, durations) runs under the per-task lock `locks/<id>.lock/`. The holder acquires the lock by exclusively creating `pid` in that directory. Both providers use that same ownership test. `SESSION_SCHEDULER_LOCK_TIMEOUT_SECS` sets the wait (default 10). `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536) is the size limit for a `--note-file` verdict. A lock whose holder pid is dead is reclaimed. Both providers use the identical lock path, so Claude and Codex panes sharing one ledger exclude each other. The lock is never held across session-chat transport.
 
 Known limitation: two simultaneous *reassignments of the same task* still race on the prompt file. Coordinate those serially.
 
@@ -74,13 +76,13 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
    - Never rerun `task-done`/`task-block` once the task is done/blocked.
    - Never use --force to repair a notification.
    - Report the partial success. Send a separate exact session-chat message only when authorized.
-   - `/task-review` retries dispatch only while the task is in `review` with no successful reviewer-dispatch timestamp. It never duplicates a delivered packet.
-   - `/task-assign` keeps its rollback on hard dispatch failure.
+   - For an ordinary task in `review`, retry reviewer dispatch only if there is no successful dispatch timestamp and independent recipient or outbox evidence confirms the earlier packet did not arrive. A delivery can succeed before its timestamp is saved.
+   - On a hard dispatch failure, ordinary assignment rolls back the staged packet. Contracted assignments reserve an attempt and generation before dispatch. If assignment or review delivery is uncertain, inspect the task and use the contract owner's reconciliation procedure before any new assignment.
 
 ## Hard prerequisites
 
-1. **session-chat ≥ 0.13.0** installed. Its send lock and retries prevent corrupted dispatches. Its durable inbox recovers a dispatch or ack to a busy pane on its next turn, so the message is not lost.
-2. **Executor pane has `SESSION_CHAT_INCOMING_MODE=auto`** (or `assist`). Default `notify` tells the executor *not* to read dispatched files — your tasks will be assigned in the ledger but never acted on. Run `/session-chat:incoming-mode auto` in the executor's shell.
+1. Install **session-chat ≥ 0.13.0**. An eligible receiver hook processes a busy pane's durable inbox as output space allows.
+2. Run executors with `SESSION_CHAT_INCOMING_MODE=auto` for automatic handling, or `assist` for user-guided handling. The default `notify` tells the executor to leave the dispatch body unread. The `incoming-mode` command prints an export. Apply it in the executor's launch environment and relaunch the executor.
 3. **All participating panes have unique registered names** (via `/whoami <name>` or SessionStart auto-naming). Pane names are the addressing scheme.
 
 `/scheduler-doctor` checks the session-chat install/version (#1) and incoming-mode (#2), warning on misconfiguration, and reports the current pane name (it cannot inspect other panes for #3).
@@ -89,11 +91,11 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
 
 | Command | Purpose |
 |---|---|
-| `/task-new <name> [--meta k=v] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id, `task-<epoch>-<8 hex>` (hex from `/dev/urandom` only; creation fails closed without it, and a colliding id is refused rather than replaced). Older bare 8-hex ids stay valid. Creation takes the per-task lock, writes a private staging file `tasks/<id>.json.tmp.<6 random chars>`, refuses if the task name already exists in any form, then renames the staging file into place, so a `tasks/<id>.json` is never empty or partial. This is no-replace among scheduler writers, not a defence against another same-user process that ignores the lock. A crash can leave a staging file behind. Nothing reads or sweeps it; remove it by hand only after confirming no process holds `locks/<id>.lock`. |
+| `/task-new <name> [--meta k=v] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]` | Create a ledger entry. Returns the new task id, `task-<epoch>-<8 hex>` (hex from `/dev/urandom` only; creation fails closed without it, and a colliding id is refused rather than replaced). Older bare 8-hex ids stay valid. Creation takes the per-task lock, writes a private staging file `tasks/<id>.json.tmp.<6 random chars>`, refuses an existing path for that generated ID (task titles can repeat), then renames the staging file into place, so a `tasks/<id>.json` is never empty or partial. This is no-replace among scheduler writers, not a defence against another same-user process that ignores the lock. A crash can leave a staging file behind. Nothing reads or sweeps it; remove it by hand only after confirming no process holds `locks/<id>.lock`. |
 | `/task-assign <pane> <id> [--eta MIN] [--stage NAME] [--context NAME] [--reviewer PANE] [--workflow ID] [--force] <prompt>` | Dispatch the task to an executor and update the ledger. |
 | `/task-status [<id>\|--all\|--pending\|--mine\|--by-stage\|--by-workflow\|--workflow ID]` | Read-only view. Default = active (created+assigned+review); `--pending` = created only; `--mine` = assigner, assignee, or reviewer is me. Shows OVERDUE/STALE flags and any verdict events. |
-| `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); durably acks the assigner. A dispatch-only retry reuses the original note. |
-| `/task-done <id> [--force] [note]` / `<id> --note-file <own draft>` | Executor or reviewer calls this; records duration; durably acks the assigner. With `--note-file`, the reviewer's complete verdict is one verdict event (see the verdict section). |
+| `/task-review <id> [--force] <note>` | Executor calls this when ready for audit (note = e.g. commit SHA); an ordinary task can acknowledge the assigner. An ordinary dispatch-only retry uses the stored note when present, otherwise the required retry note. |
+| `/task-done <id> [--force] [note]` / `<id> --note-file <own draft>` | Executor or reviewer calls this; an ordinary inline completion records duration and can acknowledge the assigner. With `--note-file`, the reviewer's complete verdict is one verdict event (see the verdict section). |
 | `/task-block <id> [--force] <reason>` / `<id> --note-file <own draft>` | Executor or reviewer calls this when blocked/rejecting; reason or note file required. |
 | `/task-board` | Stage-grouped dashboard: id, name, status, assignee, age, flags, unmet deps + totals. |
 | `/tasks-clean [--older-than DAYS] [--status S] [--apply]` | Dry-run by default. Removes owned prompt/packet/handoff files too; keeps referenced prerequisites; sweeps aged orphans. |
@@ -174,39 +176,34 @@ After it leaves the lock, the helper sends ONE notification to the assigner. The
 | `pending` | No outcome was recorded. A stop or crash after the transition can cause this. The notification may or may not have been sent. Treat it as unconfirmed. |
 | `delivered` | The dispatch reached the assigner. |
 | `queued` | The dispatch is in the assigner's durable inbox. This is a success. The helper does not resend or use the fallback. |
-| `inline-fallback` | The dispatch failed hard. The helper sent one inline pointer of at most `SESSION_CHAT_SEND_MAX_LEN` (default 1024) characters: `[task:<id>] [event:<event>] <first line> — full verdict recorded: task-status <id>`. A partial transport side effect can cause a duplicate pointer. |
-| `failed` | Both transports reported failure. Delivery is not confirmed (a transport can fail after a side effect). The verdict artifact is durable; the assigner reads it with `/task-status <id>`. |
+| `inline-fallback` | A verdict notification used an inline pointer. The pointer is bounded by `SESSION_CHAT_SEND_MAX_LEN` (default 1024 UTF-8 bytes here). It includes the task and event IDs and the `task-status <id>` recovery instruction. It shortens or omits the first verdict line to fit. A partial transport side effect can duplicate a pointer. |
+| `failed` | Notification could not be confirmed. Preparation can fail before transport begins, and a transport can fail after a side effect. Read the durable verdict with `/task-status <id>`. |
 | `not-required` | The assigner is unknown or is the actor. |
 
 Rules:
 
 - `--generation <N>` with `--note-file` is valid only for a contracted task. The helper refuses it for any other task.
 - The verdict is committed before any notification. Never rerun `/task-done` or `/task-block` to repair a notification: the rerun is refused. There is no retry helper. The assigner reads the full verdict with `/task-status <id>`.
-- `/task-status <id>` shows each event (event id, request id or `unknown`, artifact path, SHA-256, notification state) and the verdict text only after the SHA-256 matches. `--all` lists one line per event. Status never writes and never reconciles a `pending` event.
+- `/task-status <id>` shows each event (event id, request id or `unknown`, artifact path, SHA-256, notification state) and the verdict text only after the SHA-256 matches. `--all` lists one line per event. Status preserves ledger records and leaves `pending` events unresolved. Its directory initialization can create directories or harden modes.
 - Afterwards, the helper asks session-chat to remove the draft. It removes the draft only if it is still the same own draft that was checked (same file identity and SHA-256). Otherwise it keeps the draft and prints a NOTE. A kept draft never undoes the verdict. `SESSION_CHAT_KEEP_DRAFTS=1` keeps the draft.
-- Only the `--note-file` forms create events. An inline note keeps the lifecycle ack (`meta.last_ack`) unchanged. For a contracted task, `--note-file` also sends the notification; the notification record is kept outside the history that the admission digest covers.
+- Only `--note-file` creates a verdict event. On an ordinary task an eligible inline transition can replace `meta.last_ack`. Contracted inline completion or blocking records the transition in the ledger. A contracted note-file completion or block also records the verdict notification outside the admission digest.
 - These claims are narrow: the helper does not promise exactly-once delivery or that the assigner sees the message. A crash before the draft check or before the ledger write leaves no event and keeps the draft. A crash before the artifact is referenced can leave one unreferenced artifact file; `/tasks-clean` removes it after the task is removed or when it ages as an orphan.
 - Under the strict harness, `--note-file` is allowed only for the pane's own existing draft inside its messages grant, and only as `<id> --note-file <draft>` or `<id> --generation <N> --note-file <draft>`.
 
 ## Conventions
 
-- **Status updates flow executor → ledger → durable ack to assigner**. The orchestrator never polls executor panes; it polls the ledger via `/task-status`.
+- The ledger records status. Ordinary eligible transitions also notify the assigner. Contract review dispatches to the independent reviewer. The orchestrator reads the ledger via `/task-status`.
 - **Assigner is recorded at `/task-new` time**, derived from the current pane's `@name`. If you create tasks from an unnamed pane, assigner = `?` and the ack will be skipped.
 - **Reassign isn't automatic**. If an executor goes silent, run `/task-status <id>` to inspect. Then run `/task-assign <new-pane> <id> <prompt>`. The script regenerates the prompt file and history records the reassignment.
 
 ## Failure modes
 
-- **`session-chat dispatch to '<pane>' failed; ledger NOT updated, prompt file rolled back`** — this happens only on a hard failure (no name, unknown/ambiguous target). A *busy* executor is not a failure. The dispatch is queued to the executor's durable inbox and surfaces on its next turn, so the ledger still flips to `assigned`. An **unsubmitted** dispatch (session-chat status 4: the packet line is staged in the executor's input but was not submitted) is not a failure either. Its durable copy is queued, so the prompt file stays, the ledger flips to `assigned`, and the output says `dispatch: unsubmitted`. Press Enter in that pane; do not re-run `/task-assign`. After a hard failure, run `/session-chat:panes` and ensure the executor has a name. Then retry `/task-assign`.
-- **Lifecycle acks are durable, not best-effort transport.** `/task-done`, `/task-block`, and `/task-review` always update the ledger first. Then each acks the assigner through a delivery ladder:
-  1. File-backed dispatch. A busy assigner recovers it from the durable inbox on the next turn.
-  2. Inline `/send`, only if dispatch fails hard. An unsubmitted dispatch (status 4) counts as dispatched and gets no inline copy; the helper names the pane to press Enter in.
-  3. A recorded failure, only if both fail.
-
-  `meta.last_ack` records `status` (`dispatched`/`inline-fallback`/`failed`) and `file` for every attempt.
+- For an ordinary task, a hard assignment dispatch failure rolls back the prompt. A queued or unsubmitted assignment keeps its durable copy and records `assigned`. On status 4, press Enter once in the named pane. Contracted assignments reserve an attempt and generation before dispatch. If assignment or review delivery is uncertain, inspect the task and use the contract owner's reconciliation procedure before any new assignment.
+- On an ordinary task, the first eligible inline transition attempts an assigner acknowledgement. If file preparation or file dispatch fails, it can send the acknowledgement's first line, including the actor's note, inline. A successful or queued file dispatch, including status 4, records `dispatched`. A successful inline send records `inline-fallback`. An unsubmitted inline fallback can record `failed`. The record's `file` is null when no file was written. A contracted review dispatches to the reviewer only.
 
   A `failed` ack is a **partial success**: the transition already happened. Never rerun the helper. Never use --force to repair the notification. Follow the transport contract above.
 - **Keep four facts apart in every result.** (a) The task state in the ledger. (b) Message delivery to the assigner or reviewer: Sent, Queued, or failed. (c) The ack outcome in `meta.last_ack`. (d) Whether the recipient has acted. Delivery alone does not show that. Only evidence from that same actor counts: a correlated reply from its pane, a receipt it authored, or a ledger transition it made. An executor transition proves only that the executor acted, not the reviewer. Otherwise report the action as unverified. Example: "Task t12 is in review. The ack to the reviewer was queued; the reviewer's action is unverified."
-- **Tasks are `assigned` but executor never acts** — almost always `INCOMING_MODE=notify` on the executor side. Run `/session-chat:incoming-mode auto` in the executor's shell.
+- If an assigned executor does not act, check its incoming mode and the delivery result. The `incoming-mode` command prints an export. Apply it in the executor's launch environment and relaunch the executor.
 - **`jq` missing** — `brew install jq`. The ledger is JSON; jq is a hard dependency.
 
 ## Diagnostics (`DIAG` lines)

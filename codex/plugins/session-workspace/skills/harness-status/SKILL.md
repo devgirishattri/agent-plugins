@@ -40,4 +40,4 @@ pane-name alias drift. The `policy:` line is the live policy-engine verdict
 (`no-op`, active/accepted, or `BLOCKING [rule] reason`) assuming the bundled
 hook is loaded and trusted; it does not prove runtime hook loading. Never
 suggest editing the six `SESSION_WORKSPACE_*` variables or pane aliases by
-hand; recommend `$session-workspace:workspace-restart` for active drift.
+hand. For active drift recommend `$session-workspace:workspace-restart <session-id>` for the affected session. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down.

@@ -1,17 +1,17 @@
 ---
 description: Search Codex sessions by name, ID prefix, or project path
-argument-hint: <search-query>
+argument-hint: "<search-query> [--archived|--archived-only]"
 ---
 
 ## Instructions
 
-1. If `$ARGUMENTS` is empty, tell the user: `Usage: $session-manager:session-search <name-or-id-or-project>`.
+1. If `$ARGUMENTS` is empty, report `Usage: $session-manager:session-search <query> [--archived|--archived-only]`.
 2. Resolve `PLUGIN_ROOT` from this command resource's absolute path: it is the parent directory of `commands/`. Never hard-code a marketplace cache version.
 
-3. Run:
+3. The standalone helper accepts one optional state argument after the query. `--archived` includes active and archived records. `--archived-only` searches archived records only. In strict-v1 enforce mode, the orchestrator can pass exactly one literal query and no archive flag.
 
    ```bash
-   bash "$PLUGIN_ROOT/scripts/search-sessions.sh" "$ARGUMENTS"
+   bash "$PLUGIN_ROOT/scripts/search-sessions.sh" "<query>"
    ```
 
 4. Present matching sessions as a markdown table:
