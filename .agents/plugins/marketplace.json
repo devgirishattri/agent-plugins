@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "session-manager",
-      "version": "1.8.0",
+      "version": "1.8.1",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-manager"
@@ -20,7 +20,7 @@
     },
     {
       "name": "session-chat",
-      "version": "0.17.22",
+      "version": "0.17.23",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-chat"
@@ -34,7 +34,7 @@
     },
     {
       "name": "session-scheduler",
-      "version": "0.7.10",
+      "version": "0.7.11",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-scheduler"
@@ -48,7 +48,7 @@
     },
     {
       "name": "knowledge",
-      "version": "0.5.13",
+      "version": "0.5.14",
       "source": {
         "source": "local",
         "path": "./codex/plugins/knowledge"
@@ -76,7 +76,7 @@
     },
     {
       "name": "session-workspace",
-      "version": "0.16.0",
+      "version": "0.16.1",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-workspace"
@@ -90,7 +90,7 @@
     },
     {
       "name": "session-walkthrough",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "source": {
         "source": "local",
         "path": "./codex/plugins/session-walkthrough"

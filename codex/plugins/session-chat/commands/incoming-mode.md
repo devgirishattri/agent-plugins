@@ -8,7 +8,7 @@ argument-hint: "[notify|assist|auto|off]"
 1. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
    command reference. Do not infer it from cwd or hardcode a cache version.
 
-2. Use the helper with no arguments to show the current mode. To explain a change, append exactly one valid mode (`notify`, `assist`, `auto`, or `off`).
+2. Read the optional mode from `$ARGUMENTS`. With no mode, run the helper as shown. For `notify`, `assist`, `auto`, or `off`, append that one mode as a literal argument.
 
    ```bash
    bash "$PLUGIN_ROOT/scripts/incoming-mode.sh"

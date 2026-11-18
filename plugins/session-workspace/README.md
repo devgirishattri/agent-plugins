@@ -458,7 +458,9 @@ a fixed Git floor (fetch/status reads, commit on work, normal pushes of the
 configured work/release refs, the reviewed `--no-ff` work-to-release merge,
 optional `--ff-only` alignment — never a force push, leading `+`, ref
 deletion, history rewrite, or `checkout -B` on release). That Git floor is
-the workflow's contract. In `enforce` mode the hook blocks lane-branch violations by executors and pushes by orchestrators. In `audit` mode it reports these violations and permits the call. Protect
+the workflow's contract. In `enforce` mode the hook blocks lane-branch violations by executors and pushes by orchestrators. In `audit` mode it reports these violations and permits the call. The hook
+does not refuse `git push --force`, `git reset --hard` or `git checkout -B`
+in an executor without a lane branch. Protect
 release branches on the remote for every workflow. Deploy is gated by a
 six-check executor preflight: both branches exist locally and at the remote,
 release-to-work has commits to ship, work-to-release is empty, both local
@@ -1123,7 +1125,10 @@ updating. Downgrading restores the earlier, broader reviewer exception.
   closed `gh` grammar; project release/build rules stay in `AGENTS.md` and
   project hooks.
 - The executor Git rules depend on whether its environment declares a lane
-  branch. Lane executors have the restrictions in the lane branch reference. Remote release-branch protection is configured independently. [Lane branches](skills/session-workspace/references/environments.md#lane-branches-0150)
+  branch. Lane executors have the restrictions in the lane branch reference.
+  The floor does not narrow Git for an executor without a lane branch: the
+  hook allows `git push --force`, `git reset --hard` and `git checkout -B`
+  there. Remote release-branch protection is configured independently. [Lane branches](skills/session-workspace/references/environments.md#lane-branches-0150)
 - The 0.9.0 `gh` rules are an argv guardrail for root *and* confined
   orchestrators, not subprocess isolation: a script file the pane may run,
   an interpreter fed on stdin, or (root only) `sh -c`/inline interpreter

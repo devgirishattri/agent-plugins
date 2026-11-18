@@ -5,7 +5,7 @@ argument-hint: <pattern> [--days N] [--peer NAME]
 
 ## Instructions
 
-1. Parse the pattern, optional `--days <n>` (default 7) and optional `--peer <name>` for archive rows.
+1. Read the pattern from `$ARGUMENTS`. Parse the optional `--days <n>` (default 7) and `--peer <name>` (archive rows only).
 2. Resolve `PLUGIN_ROOT` from the installed plugin source containing this
    command reference. Do not infer it from cwd or hardcode a cache version.
 

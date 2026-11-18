@@ -1,5 +1,11 @@
 # Changelog
 
+## Plugin instruction updates — 2026-11-18
+
+- Knowledge 0.5.14 clarifies how to review documents and run validators. Session Chat 0.17.23 documents pane discovery, draft ownership and delivery results.
+- Session Manager 1.8.1 documents Codex archive filters. Session Scheduler 0.7.11 explains when a review can be retried and how to check its delivery.
+- Session Walkthrough 0.3.1 explains what closing a live tour removes. Session Workspace 0.16.1 documents which commands each workspace role can run.
+
 ## session-manager 1.8.0 — 2026-11-16
 
 - **Codex can archive and unarchive a session.** New `session-archive` and

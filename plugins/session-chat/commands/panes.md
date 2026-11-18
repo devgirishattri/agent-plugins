@@ -6,7 +6,9 @@ allowed-tools: Bash(bash:*)
 
 ## Named Panes
 
-When `$ARGUMENTS` is empty, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/list-panes.sh"` with no arguments. When it is `all`, append the single literal argument `all`. Reject other values.
+Requested scope: `$ARGUMENTS`
+
+If the requested scope above is empty, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/list-panes.sh"` with no arguments. If it is `all`, append the single literal argument `all`. Reject any other value.
 
 ## Instructions
 
