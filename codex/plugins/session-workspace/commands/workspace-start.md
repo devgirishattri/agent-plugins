@@ -39,11 +39,13 @@ argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no
      `--adopt`.
    - A full start leaves on-demand workers down and reports each as
      `[on-demand] ... start it with: workspace start SESSION --pane NAME`.
-     `--pane` for a worker waits until its agent shows its input line and
-     prints `[ready]`. `[not ready]` means the agent did not get there in
-     time (or shows a choice, such as a folder trust question); the pane is
-     left running and the start exits non-zero. Relay it, and do not send the
-     worker a message until it is ready.
+     For a targeted worker, start prints `[ready]` after every check shows
+     the agent's input line for `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS`
+     milliseconds (default `1500`). Set it to `0` to accept the first input line.
+     A numbered choice or a missing input line restarts the window. If time
+     runs out, start reports `[not ready]`, exits nonzero and leaves the pane
+     running. Relay the reason. A first-run folder trust question needs the
+     user. Wait for `[ready]` before sending the worker a message.
 
 4. Safety/behavior:
    - Start validates config, requires `jq` and `tmux`, and takes a project lock.

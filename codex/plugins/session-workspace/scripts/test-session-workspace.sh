@@ -4062,9 +4062,10 @@ swrun_od "$HERE/workspace-stop.sh" services --config "$SWT_CFG_OD" --confirmed >
 # them and closes them when they are idle. Covered against the real engine:
 #   * a full start leaves on-demand workers down and says how to start them;
 #     plan and status mark them on demand;
-#   * start --pane waits until the agent draws its input line, and reports a
-#     pane whose agent never does without killing it; the project lock is
-#     not held during that wait;
+#   * start --pane waits until the agent has kept its input line on screen
+#     for the settle window, and reports a pane whose agent never does, or
+#     whose input line a first-run choice replaces, without killing it; the
+#     project lock is not held during that wait;
 #   * a later full start keeps a running worker;
 #   * stop --pane refuses, and leaves running, a worker with an assigned
 #     task, a task waiting for its review, unread inbox rows or a running
@@ -4082,20 +4083,31 @@ SWT_W_TASKS="$SWT_PROJ_W/.tmp/scheduler/tasks"
 SWT_W_QUEUE="$SWT_PROJ_W/.tmp/messages/queue/$SWT_W_EXEC.tsv"
 mkdir -p "$SWT_W_TASKS" "$(dirname "$SWT_W_QUEUE")"
 # A stand-in agent: after the boot delay in worker-boot it draws Codex's input
-# line, and while worker-turn exists it shows a running turn.
-rm -f "$SWT_ROOT/worker-boot" "$SWT_ROOT/worker-turn"
+# line, and while worker-turn exists it shows a running turn. While worker-menu
+# exists and holds N, it replaces the input line with a numbered choice N
+# tenths of a second after it first drew that line, and draws the input line
+# again once the file is removed.
+rm -f "$SWT_ROOT/worker-boot" "$SWT_ROOT/worker-turn" "$SWT_ROOT/worker-menu"
 cat > "$SWT_BIN/codex" <<EOF
 #!/usr/bin/env bash
 sleep "\$(cat "$SWT_ROOT/worker-boot" 2>/dev/null || echo 0)"
 shown=""
+ticks=0
 while :; do
-  if [ -e "$SWT_ROOT/worker-turn" ]; then now=turn; else now=idle; fi
+  if [ -e "$SWT_ROOT/worker-turn" ]; then
+    now=turn
+  elif [ -e "$SWT_ROOT/worker-menu" ] && [ "\$ticks" -ge "\$(cat "$SWT_ROOT/worker-menu" 2>/dev/null || echo 0)" ]; then
+    now=menu
+  else
+    now=idle
+  fi
   if [ "\$now" != "\$shown" ]; then
     shown="\$now"
     printf '\033[2J\033[Hstand-in agent\n\n'
     [ "\$now" = turn ] && printf '• Working (2s • esc to interrupt)\n\n'
-    printf '› \n'
+    if [ "\$now" = menu ]; then printf '› 1. Yes, continue\n  2. No, quit\n'; else printf '› \n'; fi
   fi
+  [ "\$now" = idle ] && ticks=\$((ticks + 1))
   sleep 0.1
 done
 EOF
@@ -4112,6 +4124,18 @@ swt_w_wait_screen() {
   while [ "$i" -lt 30 ]; do
     pane="$(swt_w_pane "$1")"
     [ -n "$pane" ] && SWT_TMUX capture-pane -p -t "$pane" 2>/dev/null | grep -Fq "$2" && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# swt_w_wait_gone NAME TEXT — true once NAME's pane no longer shows TEXT (3 s at most).
+swt_w_wait_gone() {
+  local i=0 pane
+  while [ "$i" -lt 30 ]; do
+    pane="$(swt_w_pane "$1")"
+    [ -n "$pane" ] && ! SWT_TMUX capture-pane -p -t "$pane" 2>/dev/null | grep -Fq "$2" && return 0
     sleep 0.1
     i=$((i + 1))
   done
@@ -4257,6 +4281,38 @@ fi
 rm -f "$SWT_ROOT/worker-boot"
 swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed --force >/dev/null 2>&1
 
+# An input line that a choice replaces a moment later is not ready: the agent
+# draws its input line, then 0.5 s later a numbered choice takes its place.
+# The pane is reported and left running. Once the choice is gone, the same
+# start reports the worker ready (the control).
+echo 5 > "$SWT_ROOT/worker-menu"
+SWT_OUT="$(SESSION_WORKSPACE_AGENT_READY_TIMEOUT=4 swrun "$HERE/workspace-start.sh" development --pane component-executor --config "$SWT_CFG_W" 2>&1)"
+SWT_STATUS=$?
+SWT_MENU_PANE="$(swt_w_pane "$SWT_W_EXEC")"
+if [ "$SWT_STATUS" -ne 0 ] && [ -n "$SWT_MENU_PANE" ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[not ready] sample-workers-development / $SWT_W_EXEC — the agent is showing a choice, not its input line"; then
+  pass "on-demand workers: start --pane does not report ready when a choice replaces the input line, and leaves the pane running"
+else
+  fail "on-demand workers: start --pane does not report ready when a choice replaces the input line, and leaves the pane running" \
+    "status=$SWT_STATUS pane=[$SWT_MENU_PANE] output=$SWT_OUT"
+fi
+rm -f "$SWT_ROOT/worker-menu"
+if swt_w_wait_gone "$SWT_W_EXEC" "No, quit"; then
+  SWT_OUT="$(SESSION_WORKSPACE_AGENT_READY_TIMEOUT=10 swrun "$HERE/workspace-start.sh" development --pane component-executor --config "$SWT_CFG_W" 2>&1)"
+  SWT_STATUS=$?
+else
+  SWT_OUT="the stand-in agent never left its choice screen"; SWT_STATUS=99
+fi
+if [ "$SWT_STATUS" -eq 0 ] && [ "$(swt_w_pane "$SWT_W_EXEC")" = "$SWT_MENU_PANE" ] &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[kept] sample-workers-development / $SWT_W_EXEC" &&
+   printf '%s' "$SWT_OUT" | grep -Fq "[ready] sample-workers-development / $SWT_W_EXEC — agent input line on screen"; then
+  pass "on-demand workers: once the choice is gone, the same start keeps the pane and reports it ready"
+else
+  fail "on-demand workers: once the choice is gone, the same start keeps the pane and reports it ready" \
+    "status=$SWT_STATUS pane=[$(swt_w_pane "$SWT_W_EXEC")] was=[$SWT_MENU_PANE] output=$SWT_OUT"
+fi
+swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed --force >/dev/null 2>&1
+
 # The project lock covers the tmux changes only: while a --pane start waits
 # for its agent, a second worker start of the same project goes ahead.
 echo 3 > "$SWT_ROOT/worker-boot"
@@ -4332,7 +4388,212 @@ swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG_WS" --confirmed --all >/dev/n
 swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG_W" --confirmed --all >/dev/null 2>&1
 printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$SWT_BIN/codex"
 chmod +x "$SWT_BIN/codex"
-rm -f "$SWT_ROOT/worker-boot" "$SWT_ROOT/worker-turn"
+rm -f "$SWT_ROOT/worker-boot" "$SWT_ROOT/worker-turn" "$SWT_ROOT/worker-menu"
+
+# --- 12w. agent-pane.py ready: the settle window, against a stubbed tmux ---
+# `ready` returns 0 only when the pane showed a non-menu input line on every
+# poll for SESSION_WORKSPACE_AGENT_READY_SETTLE_MS. The stub tmux answers from
+# a per-call frame list (the last frame repeats), so each case scripts what the
+# pane shows on poll 1, 2, 3, ... Assertions use only lower bounds taken from
+# the capture times (load can only delay a poll), except SETTLE_MS=0, which
+# must capture exactly once. SESSION_WORKSPACE_TEST_AGENT_PANE runs the block
+# against another copy of agent-pane.py (for failure evidence on the old code).
+# The frame token `late` sleeps 0.7 s inside the capture, then shows the input line.
+SWT_AGENT_PANE="${SESSION_WORKSPACE_TEST_AGENT_PANE:-$HERE/agent-pane.py}"
+SWT_RD_DIR="$SWT_ROOT/ready-stub"
+SWT_RD_STATE="$SWT_RD_DIR/state"
+mkdir -p "$SWT_RD_DIR/bin" "$SWT_RD_STATE"
+cat > "$SWT_RD_DIR/bin/tmux" <<'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+import time
+
+state_dir = os.environ["SWT_READY_STATE"]
+FRAMES = {
+    "input": "stand-in agent\n\n› \n",
+    "claude": "stand-in agent\n\n❯ \n",
+    "menu": "Trust this folder?\n› 1. Yes, continue\n  2. No, quit\n",
+    "blank": "stand-in agent is starting\n",
+}
+
+
+def bump(name):
+    path = os.path.join(state_dir, name)
+    try:
+        with open(path) as handle:
+            count = int(handle.read() or 0)
+    except (OSError, ValueError):
+        count = 0
+    count += 1
+    with open(path, "w") as handle:
+        handle.write(str(count))
+    return count
+
+
+def pick(name, call, default):
+    try:
+        with open(os.path.join(state_dir, name)) as handle:
+            items = handle.read().split()
+    except OSError:
+        items = []
+    return items[min(call, len(items)) - 1] if items else default
+
+
+command = sys.argv[1] if len(sys.argv) > 1 else ""
+if command == "display-message":
+    state = pick("states", bump("n_display"), "live")
+    if state == "gone":
+        sys.exit(1)
+    print("%%7\t%d" % (1 if state == "dead" else 0))
+elif command == "capture-pane":
+    call = bump("n_capture")
+    with open(os.path.join(state_dir, "capture.log"), "a") as handle:
+        handle.write(repr(time.time()) + "\n")
+    token = pick("frames", call, "blank")
+    if token == "late":
+        time.sleep(0.7)
+        token = "input"
+    sys.stdout.write(FRAMES[token])
+else:
+    sys.exit(1)
+EOF
+chmod +x "$SWT_RD_DIR/bin/tmux"
+
+# swt_ready_run TIMEOUT SETTLE FRAMES STATES — run `ready` on the stub.
+# SETTLE is a number or text for the variable, or "unset" to leave it unset.
+# Sets SWT_RD_STATUS, SWT_RD_OUT and SWT_RD_CAPS (the capture count).
+swt_ready_run() {
+  local envargs=(-u TMUX -u TMUX_PANE)
+  if [ "$2" = unset ]; then
+    envargs+=(-u SESSION_WORKSPACE_AGENT_READY_SETTLE_MS)
+  else
+    envargs+=("SESSION_WORKSPACE_AGENT_READY_SETTLE_MS=$2")
+  fi
+  rm -rf "$SWT_RD_STATE"
+  mkdir -p "$SWT_RD_STATE"
+  printf '%s\n' "${3//,/ }" > "$SWT_RD_STATE/frames"
+  printf '%s\n' "${4//,/ }" > "$SWT_RD_STATE/states"
+  SWT_RD_OUT="$(env "${envargs[@]}" SWT_READY_STATE="$SWT_RD_STATE" PATH="$SWT_RD_DIR/bin:$PATH" \
+    python3 "$SWT_AGENT_PANE" ready --pane-id %7 --timeout "$1" --interval 0.1 2>&1)"
+  SWT_RD_STATUS=$?
+  SWT_RD_CAPS="$(wc -l 2>/dev/null < "$SWT_RD_STATE/capture.log" | tr -d ' ')"
+  SWT_RD_CAPS="${SWT_RD_CAPS:-0}"
+}
+# swt_ready_gap K — seconds from capture K to the last capture (0 when fewer than K).
+swt_ready_gap() {
+  awk -v k="$1" 'NR == k {a = $1} {l = $1} END {if (NR >= k) printf "%.3f", l - a; else printf "0.000"}' \
+    "$SWT_RD_STATE/capture.log" 2>/dev/null
+}
+# swt_ready_ge A B — true when A >= B (numbers).
+swt_ready_ge() { awk -v a="$1" -v b="$2" 'BEGIN {exit !(a + 0 >= b + 0)}'; }
+swt_ready_detail() { printf 'status=%s captures=%s gap=%s output=[%s]' "$SWT_RD_STATUS" "$SWT_RD_CAPS" "$1" "$SWT_RD_OUT"; }
+
+# 1. A steady input line is ready only after the whole window.
+swt_ready_run 10 600 input live
+SWT_RD_GAP="$(swt_ready_gap 1)"
+if [ "$SWT_RD_STATUS" -eq 0 ] && swt_ready_ge "$SWT_RD_GAP" 0.4; then
+  pass "agent ready settle: a steady input line is reported ready only after the settle window"
+else
+  fail "agent ready settle: a steady input line is reported ready only after the settle window" "$(swt_ready_detail "$SWT_RD_GAP")"
+fi
+
+# 2. An input line that a menu replaces is not ready (the control is case 5).
+swt_ready_run 1.5 600 input,menu live
+if [ "$SWT_RD_STATUS" -eq 1 ] && printf '%s' "$SWT_RD_OUT" | grep -Fq "the agent is showing a choice, not its input line"; then
+  pass "agent ready settle: an input line replaced by a menu is not ready and reports the choice"
+else
+  fail "agent ready settle: an input line replaced by a menu is not ready and reports the choice" "$(swt_ready_detail "")"
+fi
+
+# 3. A menu that gives way to an input line: the window starts at the input line.
+swt_ready_run 10 600 menu,menu,input live
+SWT_RD_GAP="$(swt_ready_gap 3)"
+if [ "$SWT_RD_STATUS" -eq 0 ] && [ "$SWT_RD_CAPS" -ge 4 ] && swt_ready_ge "$SWT_RD_GAP" 0.4; then
+  pass "agent ready settle: the window starts when a menu gives way to the input line"
+else
+  fail "agent ready settle: the window starts when a menu gives way to the input line" "$(swt_ready_detail "$SWT_RD_GAP")"
+fi
+
+# 4. A screen without an input line restarts the window.
+swt_ready_run 10 600 input,input,input,blank,input live
+SWT_RD_GAP="$(swt_ready_gap 5)"
+if [ "$SWT_RD_STATUS" -eq 0 ] && [ "$SWT_RD_CAPS" -ge 6 ] && swt_ready_ge "$SWT_RD_GAP" 0.4; then
+  pass "agent ready settle: a screen without an input line restarts the window"
+else
+  fail "agent ready settle: a screen without an input line restarts the window" "$(swt_ready_detail "$SWT_RD_GAP")"
+fi
+
+# 5. SETTLE_MS=0 accepts the first input line, menu or not afterwards.
+swt_ready_run 10 0 input,menu live
+if [ "$SWT_RD_STATUS" -eq 0 ] && [ "$SWT_RD_CAPS" -eq 1 ]; then
+  pass "agent ready settle: SESSION_WORKSPACE_AGENT_READY_SETTLE_MS=0 accepts the first input line (one capture)"
+else
+  fail "agent ready settle: SESSION_WORKSPACE_AGENT_READY_SETTLE_MS=0 accepts the first input line (one capture)" "$(swt_ready_detail "")"
+fi
+
+# 6. A pane that exits or closes during the window is reported as such.
+swt_ready_run 10 600 input live,dead
+SWT_RD_OUT_A="$SWT_RD_OUT"; SWT_RD_STATUS_A="$SWT_RD_STATUS"; SWT_RD_CAPS_A="$SWT_RD_CAPS"
+swt_ready_run 10 600 input live,gone
+if [ "$SWT_RD_STATUS_A" -eq 2 ] && [ "$SWT_RD_OUT_A" = "pane %7 exited before its agent was ready" ] &&
+   [ "$SWT_RD_STATUS" -eq 2 ] && [ "$SWT_RD_OUT" = "pane %7 closed before its agent was ready" ]; then
+  pass "agent ready settle: a pane that exits or closes during the window exits 2 with its message"
+else
+  fail "agent ready settle: a pane that exits or closes during the window exits 2 with its message" \
+    "dead: status=$SWT_RD_STATUS_A captures=$SWT_RD_CAPS_A output=[$SWT_RD_OUT_A]; gone: $(swt_ready_detail "")"
+fi
+
+# 7. The timeout stays a hard bound: a window still running at the deadline does not finish.
+swt_ready_run 0.3 600 input live
+if [ "$SWT_RD_STATUS" -eq 1 ] &&
+   printf '%s' "$SWT_RD_OUT" | grep -Fq "had not stayed on screen for 600ms when the 0.3s wait ended"; then
+  pass "agent ready settle: a timeout shorter than the window never reports ready"
+else
+  fail "agent ready settle: a timeout shorter than the window never reports ready" "$(swt_ready_detail "")"
+fi
+
+# 8. The default window is 1500 ms.
+swt_ready_run 10 unset claude live
+SWT_RD_GAP="$(swt_ready_gap 1)"
+if [ "$SWT_RD_STATUS" -eq 0 ] && swt_ready_ge "$SWT_RD_GAP" 1.3; then
+  pass "agent ready settle: with the variable unset the window is 1500 ms (Claude's input line)"
+else
+  fail "agent ready settle: with the variable unset the window is 1500 ms (Claude's input line)" "$(swt_ready_detail "$SWT_RD_GAP")"
+fi
+
+# 9. A value that is not a number of milliseconds, 0 or more, exits 64 and names the variable.
+swt_ready_run 10 abc input live
+SWT_RD_OUT_A="$SWT_RD_OUT"; SWT_RD_STATUS_A="$SWT_RD_STATUS"; SWT_RD_CAPS_A="$SWT_RD_CAPS"
+swt_ready_run 10 -5 input live
+if [ "$SWT_RD_STATUS_A" -eq 64 ] && printf '%s' "$SWT_RD_OUT_A" | grep -Fq "SESSION_WORKSPACE_AGENT_READY_SETTLE_MS" &&
+   [ "$SWT_RD_STATUS" -eq 64 ] && printf '%s' "$SWT_RD_OUT" | grep -Fq "SESSION_WORKSPACE_AGENT_READY_SETTLE_MS"; then
+  pass "agent ready settle: a non-number or a negative value exits 64 and names the variable"
+else
+  fail "agent ready settle: a non-number or a negative value exits 64 and names the variable" \
+    "abc: status=$SWT_RD_STATUS_A captures=$SWT_RD_CAPS_A output=[$SWT_RD_OUT_A]; -5: $(swt_ready_detail "")"
+fi
+
+# 10. A check that finishes after the timeout does not establish readiness (the control allows the time).
+swt_ready_run 0.3 600 input,late live
+SWT_RD_OUT_A="$SWT_RD_OUT"; SWT_RD_STATUS_A="$SWT_RD_STATUS"; SWT_RD_CAPS_A="$SWT_RD_CAPS"
+swt_ready_run 5 600 input,late live
+if [ "$SWT_RD_STATUS_A" -eq 1 ] &&
+   printf '%s' "$SWT_RD_OUT_A" | grep -Fq "had not stayed on screen for 600ms when the 0.3s wait ended" &&
+   [ "$SWT_RD_STATUS" -eq 0 ]; then
+  pass "agent ready settle: a check that finishes after the timeout does not report ready"
+else
+  fail "agent ready settle: a check that finishes after the timeout does not report ready" \
+    "timeout 0.3: status=$SWT_RD_STATUS_A captures=$SWT_RD_CAPS_A output=[$SWT_RD_OUT_A]; timeout 5: $(swt_ready_detail "")"
+fi
+
+# 11. SETTLE_MS=0 keeps the first-poll rule even when that check finishes after the timeout.
+swt_ready_run 0.3 0 late live
+if [ "$SWT_RD_STATUS" -eq 0 ] && [ "$SWT_RD_CAPS" -eq 1 ]; then
+  pass "agent ready settle: SESSION_WORKSPACE_AGENT_READY_SETTLE_MS=0 keeps the first-poll rule for a check that finishes after the timeout"
+else
+  fail "agent ready settle: SESSION_WORKSPACE_AGENT_READY_SETTLE_MS=0 keeps the first-poll rule for a check that finishes after the timeout" "$(swt_ready_detail "")"
+fi
 
 # --- 13. teardown + leak check -------------------------------------------
 swrun "$HERE/workspace-stop.sh" --config "$SWT_CFG" --confirmed --all >/dev/null 2>&1

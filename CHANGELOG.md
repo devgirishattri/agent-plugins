@@ -1,5 +1,20 @@
 # Changelog
 
+## session-workspace 0.16.2 — 2026-11-19
+
+- `workspace start SESSION --pane NAME` now waits for a worker's input line to
+  stay on screen before reporting `[ready]`. A Codex worker can briefly show
+  `›` before opening a hook-review or folder-trust menu. Each check that sees
+  a menu or a missing input line restarts the wait for a stable prompt.
+- `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS` defaults to `1500` milliseconds.
+  Set it to `0` to accept the first input line. The window counts toward
+  `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` and runs outside the project lock.
+  A timeout reports whether the agent showed a choice, had no input line, or
+  showed one too briefly.
+- Both provider suites exercise prompt, menu and blank screens, pane closure,
+  and timeout behavior. A tmux test starts a worker that replaces its prompt
+  with a choice. Clearing the choice lets the same pane become ready.
+
 ## Plugin instruction updates — 2026-11-18
 
 - Knowledge 0.5.14 clarifies how to review documents and run validators. Session Chat 0.17.23 documents pane discovery, draft ownership and delivery results.

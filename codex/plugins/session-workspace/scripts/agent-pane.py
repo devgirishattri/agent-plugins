@@ -8,11 +8,19 @@ worker is never closed in the middle of its work. Both only read: tmux's
 visible screen, the scheduler's task files and the session-chat inbox queues.
 
 ready --pane-id ID [--timeout SECONDS] [--interval SECONDS]
-    Exit 0 once the pane's last prompt line is an agent input line: Codex
-    draws `›` at column 0, Claude Code `❯` (older versions `│ >` inside a box,
-    or `>` under a rule). A numbered choice on that line (`› 1. Yes`) is a
-    menu, such as a first-run folder trust question, not an input line.
-    Exit 1 on timeout, 2 when the pane is gone or its process exited.
+    Exit 0 once the pane's last prompt line has been an agent input line on
+    every check for a settle window: Codex draws `›` at column 0, Claude Code
+    `❯` (older versions `│ >` inside a box, or `>` under a rule). A numbered
+    choice on that line (`› 1. Yes`) is a menu, such as a first-run folder
+    trust question, not an input line. A check that finds no input line, or
+    finds a menu, restarts the window, so an input line that a menu replaces
+    a moment later is not ready. The window is
+    SESSION_WORKSPACE_AGENT_READY_SETTLE_MS milliseconds (default 1500; 0
+    accepts the first input line). The check that completes the window must
+    finish within --timeout, so a timeout shorter than the window never
+    reports ready; with 0 the first input line is ready whenever it is seen.
+    Exit 1 on timeout, 2 when the pane is gone or its process exited, 64
+    when the settle variable is not a number of milliseconds, 0 or more.
 
 busy --pane-id ID --pane NAME [--tasks-dir DIR] [--queue FILE]...
     Print one line per reason the worker is busy and exit 1, or exit 0:
@@ -22,6 +30,7 @@ busy --pane-id ID --pane NAME [--tasks-dir DIR] [--queue FILE]...
 """
 import argparse
 import json
+import math
 import os
 import re
 import stat
@@ -70,23 +79,58 @@ def input_line(text):
     return last
 
 
+SETTLE_ENV = "SESSION_WORKSPACE_AGENT_READY_SETTLE_MS"
+
+
+def settle_seconds():
+    """The settle window in seconds, or None when the variable is not a finite number >= 0."""
+    raw = os.environ.get(SETTLE_ENV) or "1500"  # unset or empty -> default
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value / 1000.0
+
+
 def cmd_ready(opts):
+    settle = settle_seconds()
+    if settle is None:
+        print("%s must be a number of milliseconds, 0 or more" % SETTLE_ENV, file=sys.stderr)
+        return 64
     deadline = time.monotonic() + opts.timeout
+    stable_since = None
     while True:
         state = pane_state(opts.pane_id)
         if state != "live":
             print("pane %s %s before its agent was ready" % (opts.pane_id, "exited" if state == "dead" else "closed"))
             return 2
         line = input_line(screen(opts.pane_id))
-        if line is not None and not MENU_RE.match(line):
-            return 0
-        if time.monotonic() >= deadline:
-            if line is not None:
+        now = time.monotonic()
+        menu = line is not None and MENU_RE.match(line) is not None
+        if line is not None and not menu:
+            if stable_since is None:
+                stable_since = now
+            # The check that completes the window must itself finish within the
+            # timeout. 0 keeps the rule from before the window existed: the
+            # first input line is ready whenever it is seen.
+            if settle == 0 or (now - stable_since >= settle and now <= deadline):
+                return 0
+        else:
+            stable_since = None
+        if now >= deadline:
+            if menu:
                 print("the agent is showing a choice, not its input line (a first-run question such as folder trust needs an answer in the pane)")
+            elif line is not None:
+                print("the agent's input line had not stayed on screen for %gms when the %gs wait ended" % (settle * 1000, opts.timeout))
             else:
                 print("no agent input line on screen after %gs" % opts.timeout)
             return 1
-        time.sleep(opts.interval)
+        wait = min(opts.interval, deadline - now)
+        if stable_since is not None:
+            wait = min(wait, stable_since + settle - now)
+        time.sleep(max(wait, 0.0))
 
 
 def safe_regular(path):
