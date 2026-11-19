@@ -19,6 +19,8 @@ that `harness-policy.py` enforces, generated from the policy's own tables. In a
 pane with an accepted identity, they show that pane's role and an `all roles`
 line. Without one, they show every role. `<name> (confined)` is an environment
 coordinator whose cwd is not the project root.
+In a schema 6 peer orchestrator, `floor.current` is `peer_orchestrator`.
+Its role entry covers worker ownership and lifecycle rules.
 
 The `optional guard packs:` line shows only the configured `harness.guards`
 packs, or `none (schema-v2-compatible behavior)`. The packs add to the floor.

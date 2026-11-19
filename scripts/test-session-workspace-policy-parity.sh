@@ -75,7 +75,7 @@ normalize_decision() {
 
 compare_case() {
   local label="$1" role="$2" pane="$3" cwd="$4" config="$5" mode="$6" payload="$7" expected_decision="${8:-}"
-  local codex claude codex_normalized claude_normalized actual_decision
+  local expected_rule="${9:-}" codex claude codex_normalized claude_normalized actual_decision
   codex="$(decision "$CODEX_POLICY" "$role" "$pane" "$cwd" "$config" "$mode" "$payload" 2>&1)"
   claude="$(decision "$CLAUDE_POLICY" "$role" "$pane" "$cwd" "$config" "$mode" "$payload" 2>&1)"
   if ! printf '%s' "$codex" | jq -e . >/dev/null 2>&1; then
@@ -90,6 +90,8 @@ compare_case() {
       fail "$label" "codex=$codex_normalized claude=$claude_normalized"
     elif [ -n "$expected_decision" ] && [ "$actual_decision" != "$expected_decision" ]; then
       fail "$label" "providers agree on $actual_decision; expected $expected_decision ($codex_normalized)"
+    elif [ -n "$expected_rule" ] && [ "$(printf '%s' "$codex_normalized" | jq -r '.rule')" != "$expected_rule" ]; then
+      fail "$label" "expected rule $expected_rule ($codex_normalized)"
     else
       pass "$label"
     fi
@@ -294,6 +296,30 @@ for test_role in reviewer executor; do
     fi
   done
 done
+
+echo "== schema 6 peer ownership =="
+PEER_CONFIG="$PROJECT/.agent-workspace/peers.json"
+cp "$ROOT_DIR/codex/plugins/session-workspace/scripts/fixtures/valid/peers-v6.json" "$PEER_CONFIG"
+PEER_STATE="$PROJECT/.test-state"
+mkdir -p "$PEER_STATE/session-workspace/sample"
+cat > "$PEER_STATE/session-workspace/sample/instances.json" <<'JSON'
+{"version":1,"orchestrators":[{"index":2}],"workers":[
+  {"checkout":"web","role":"executor","label":"","owner":"sample-master-2","visible":false}]}
+JSON
+PEER_GUARDS="$(jq -cS '.harness.guards' "$PEER_CONFIG")"
+peer_decision() {
+  local pane="$1" scope
+  shift
+  scope="$(jq -cnS --arg name "$pane" '{environment:null,peer:$name}')"
+  XDG_STATE_HOME="$PEER_STATE" SESSION_WORKSPACE_GUARDS_JSON="$PEER_GUARDS" SESSION_WORKSPACE_SCOPE_JSON="$scope" \
+    compare_case "$1" master "$pane" "$PROJECT" "$PEER_CONFIG" enforce "$(payload_bash "$2")" "$3" "${4:-}"
+}
+peer_decision sample-master-2 "owner can show its worker" "workspace show sample-web-executor" allow
+peer_decision sample-master "peer cannot show another owner's worker" "workspace show sample-web-executor" deny routing.owner
+peer_decision sample-master "peer can start a checkout worker" "workspace start --checkout web --role reviewer" allow
+peer_decision sample-master "only a user can start an orchestrator copy" "workspace start development-2" deny orchestrator.peer_lifecycle
+peer_decision sample-master "peer can list tmux panes" "tmux list-panes" allow
+peer_decision sample-master "peer cannot change the tmux layout directly" "tmux select-layout tiled" deny orchestrator.tmux
 
 printf '\n-----------------------------------------------\n'
 printf 'session-workspace policy parity: %d passed, %d failed\n' "$PASS" "$FAIL"

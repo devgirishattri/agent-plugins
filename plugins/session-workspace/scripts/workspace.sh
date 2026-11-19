@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # workspace.sh — session-workspace CLI dispatcher.
 # Verbs: plan | start | status | stop | doctor | reconcile | restart | install | browser-config | label
+#        show | hide  (schema v6 peers: move a worker pane into or out of its orchestrator's window)
 #        harness-status | harness-doctor  (read-only views of the opt-in harness)
 #
 # `install` is the odd one out: it takes no config and touches no tmux. It
@@ -28,7 +29,7 @@ if [ "${1:-}" = "--contract" ]; then
 fi
 
 usage() {
-  echo "Usage: workspace.sh <plan|start|status|stop|doctor|reconcile|restart|install|browser-config|label|harness-status|harness-doctor> [args...]" >&2
+  echo "Usage: workspace.sh <plan|start|status|stop|doctor|reconcile|restart|install|browser-config|label|show|hide|harness-status|harness-doctor> [args...]" >&2
   echo "       workspace.sh --contract" >&2
 }
 
@@ -76,6 +77,12 @@ case "$VERB" in
     ;;
   label)
     exec bash "$HERE/workspace-label.sh" "$@"
+    ;;
+  show)
+    exec bash "$HERE/workspace-show.sh" "$@"
+    ;;
+  hide)
+    exec bash "$HERE/workspace-hide.sh" "$@"
     ;;
   harness-status)
     exec bash "$HERE/harness-status.sh" "$@"

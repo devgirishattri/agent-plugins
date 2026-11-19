@@ -28,8 +28,25 @@
 # idle watcher's guard: a pane that was restarted since it was judged idle
 # (a different tmux pane id) is left running.
 #
+# Peer orchestrators (schema v6 with `peers`, 0.17.0): the whole verb runs under
+# one hold of the project lock, after the instances.sh preamble (stale records
+# removed, caller resolved).
+#   `stop --worker NAME --confirmed [--force]` stops one worker, named by its
+#   full pane name or the part after "<project.id>-", through the --pane path
+#   of its owner's session. A worker pane may sit in a window of its own
+#   (hidden), so its lookup covers the whole session. After the pane is gone its
+#   record is removed and the orchestrator's window gets its standard layout.
+#   Only the owner or the user stops a worker; another orchestrator gets
+#   `[held] ... owner X` and exit 3, and --force is the user's alone.
+#   `stop <orchestrator session> --confirmed` (the user only) ends that
+#   session and removes the copy's record and the records of the workers it
+#   owned; behavior.stop_scope is `selected`, so the other orchestrators and
+#   their workers keep running. An orchestrator may not stop any orchestrator
+#   session, `all`, or use --all.
+#
 # Usage: workspace-stop.sh [TARGET|all] [--config PATH] [--no-save] --confirmed [--all]
 #        workspace-stop.sh SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]
+#        workspace-stop.sh --worker NAME [--config PATH] --confirmed [--force]
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -37,10 +54,12 @@ source "$HERE/lib.sh"
 source "$HERE/config.sh"
 source "$HERE/validate-config.sh"
 source "$HERE/tmux-lib.sh"
+source "$HERE/instances.sh"
 
 usage() {
   echo "Usage: workspace-stop.sh [TARGET|all] [--config PATH] [--no-save] --confirmed [--all]" >&2
   echo "       workspace-stop.sh SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]" >&2
+  echo "       workspace-stop.sh --worker NAME [--config PATH] --confirmed [--force]" >&2
 }
 
 TARGET="all"
@@ -51,6 +70,7 @@ CONFIRMED_FLAG=0
 WIDEN_ALL=0
 FORCE_BUSY=0
 EXPECT_PANE_ID=""
+WORKER_ARG=""
 GRACE_SECONDS="${SESSION_WORKSPACE_STOP_GRACE_SECONDS:-5}"
 declare -a PANE_ARGS=()
 
@@ -62,6 +82,11 @@ while [ $# -gt 0 ]; do
         echo "ERROR: --pane requires a pane name" >&2; usage; exit 1
       fi
       PANE_ARGS+=("$2"); shift 2 ;;
+    --worker)
+      if [ $# -lt 2 ] || [ -z "$2" ] || [ "${2#-}" != "$2" ]; then
+        echo "ERROR: --worker requires a worker name" >&2; usage; exit 1
+      fi
+      WORKER_ARG="$2"; shift 2 ;;
     --expect-pane-id)
       case "${2:-}" in
         %[0-9]*) EXPECT_PANE_ID="$2"; shift 2 ;;
@@ -80,13 +105,19 @@ done
 
 ensure_jq
 ensure_tmux
+sw_tmux_bind
 
 if [ "$CONFIRMED_FLAG" -ne 1 ]; then
   echo "ERROR: workspace-stop refuses to run without --confirmed (this kills live tmux sessions)." >&2
   exit 1
 fi
 
-if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
+if [ -n "$WORKER_ARG" ]; then
+  if [ "$TARGET_GIVEN" -eq 1 ] || [ "${#PANE_ARGS[@]}" -gt 0 ] || [ "$WIDEN_ALL" -eq 1 ] || [ "$NO_SAVE" -eq 1 ] || [ -n "$EXPECT_PANE_ID" ]; then
+    echo "ERROR: --worker cannot be combined with a session, --pane, --all, --no-save, or --expect-pane-id" >&2
+    exit 1
+  fi
+elif [ "${#PANE_ARGS[@]}" -gt 0 ]; then
   if [ "$TARGET_GIVEN" -eq 0 ] || [ "$TARGET" = "all" ]; then
     echo "ERROR: --pane needs one explicit session: workspace stop SESSION --pane NAME --confirmed" >&2
     exit 1
@@ -122,6 +153,40 @@ STOP_SCOPE="$(printf '%s' "$CONFIG_JSON" | jq -r '.behavior.stop_scope // "selec
 SAVE_BEFORE_STOP="$(printf '%s' "$CONFIG_JSON" | jq -r '.behavior.save_before_stop // false')"
 [ "$NO_SAVE" -eq 1 ] && SAVE_BEFORE_STOP="false"
 
+# A peers config takes the lock first, because who may stop what depends on the
+# records, and they change only under the lock.
+PEERS=0
+LOCK_HELD=0
+sw_inst_peers "$CONFIG_JSON" && PEERS=1
+# One state home for the lock and the registry (instances.sh).
+[ "$PEERS" -eq 1 ] && sw_inst_normalize_state_home
+if [ -n "$WORKER_ARG" ] && [ "$PEERS" -eq 0 ]; then
+  echo "ERROR: --worker needs a schema-6 config with peers" >&2
+  exit 1
+fi
+if [ "$PEERS" -eq 1 ]; then
+  sw_lock_acquire "$PROJECT_ID" || exit 1
+  LOCK_HELD=1
+  sw_inst_begin
+  STOP_SCOPE="$(printf '%s' "$CONFIG_JSON" | jq -r '.behavior.stop_scope // "selected"')"
+  [ "$WIDEN_ALL" -eq 1 ] && STOP_SCOPE="all"
+  if [ -n "$WORKER_ARG" ]; then
+    sw_caller_check_worker_verb "stop a worker" "$FORCE_BUSY" ""
+    WORKER_ROW="$(sw_worker_resolve "$CONFIG_JSON" "$WORKER_ARG")"
+    if [ -z "$WORKER_ROW" ]; then
+      echo "ERROR: no worker \"$WORKER_ARG\" (workers: $(printf '%s' "$CONFIG_JSON" | jq -r '[(.sessions // [])[] | (.panes // [])[] | select(.worker != null) | .name] | if length == 0 then "none" else join(", ") end'))" >&2
+      exit 1
+    fi
+    TARGET="$(printf '%s' "$WORKER_ROW" | jq -r '.session_id')"
+    TARGET_GIVEN=1
+    PANE_ARGS=("$(printf '%s' "$WORKER_ROW" | jq -r '.name')")
+  elif [ "${#PANE_ARGS[@]}" -gt 0 ]; then
+    sw_caller_check_worker_verb "stop panes" "$FORCE_BUSY" ""
+  else
+    sw_caller_check_session_verb stop "$TARGET_GIVEN" "$TARGET" "$WIDEN_ALL" "$FORCE_BUSY" ""
+  fi
+fi
+
 if [ "$TARGET" != "all" ]; then
   if ! printf '%s' "$CONFIG_JSON" | jq -e --arg t "$TARGET" '[(.sessions // [])[].id] | index($t) != null' >/dev/null; then
     echo "ERROR: unknown session target \"$TARGET\"" >&2
@@ -154,17 +219,10 @@ _sw_wait_pane_idle() {
 # inbox queue a session-chat send to this pane can land in: the plan's
 # messages store and both providers' default messages directories.
 _sw_worker_busy() {
-  local pane_id="$1" pane_name="$2" tasks_dir="" dir
-  local -a busy_args=()
-  tasks_dir="$(printf '%s' "$PLAN_JSON" | jq -r --arg n "$pane_name" '
-    ([.sessions[].panes[] | select(.name == $n) | .grants[]? | select(.store == "scheduler") | .path]
-     + [.sessions[].panes[].grants[]? | select(.store == "scheduler") | .path])[0] // empty')"
-  [ -n "$tasks_dir" ] && busy_args+=(--tasks-dir "$tasks_dir/tasks")
-  while IFS= read -r dir; do
-    [ -n "$dir" ] && busy_args+=(--queue "$dir/queue/$pane_name.tsv")
-  done < <({ printf '%s' "$PLAN_JSON" | jq -r '[.sessions[].panes[].grants[]? | select(.store == "messages") | .path] | unique[]'
-             printf '%s\n' "$HOME/.claude/messages" "${CODEX_HOME:-$HOME/.codex}/messages"; } | awk '!seen[$0]++')
-  python3 "$HERE/agent-pane.py" busy --pane-id "$pane_id" --pane "$pane_name" "${busy_args[@]}"
+  local pane_id="$1" pane_name="$2"
+  # The same store arguments start's leftover check reads (instances.sh).
+  sw_worker_store_args "$PLAN_JSON" "$pane_name"
+  python3 "$HERE/agent-pane.py" busy --pane-id "$pane_id" --pane "$pane_name" "${SW_STORE_ARGS[@]}"
 }
 
 if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
@@ -174,7 +232,15 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
   WINDOW_INDEX="$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '.sessions[] | select(.id == $t) | .window_index // 0')"
   STOP_REASON="${SESSION_WORKSPACE_STOP_REASON:-workspace stop --pane}"
 
-  sw_lock_acquire "$PROJECT_ID" || exit 1
+  if [ "$PEERS" -eq 1 ]; then
+    # An orchestrator stops only its own workers; nothing has changed yet.
+    while IFS= read -r pane_name; do
+      [ -n "$pane_name" ] || continue
+      held_row="$(printf '%s' "$PLAN_JSON" | jq -r --arg n "$pane_name" '[.sessions[].panes[] | select(.name == $n and .worker != null) | .worker.owner][0] // empty')"
+      [ -n "$held_row" ] && sw_caller_require_owner "$SESSION_NAME" "$pane_name" "$held_row"
+    done <<<"$SELECTED_LIST"
+  fi
+  [ "$LOCK_HELD" -eq 1 ] || sw_lock_acquire "$PROJECT_ID" || exit 1
   echo "session-workspace stop — $CONFIG_PATH (project: $PROJECT_ID, session: $TARGET, panes: $(printf '%s' "$SELECTED_LIST" | tr '\n' ' '))"
 
   STOPPED=0
@@ -194,13 +260,21 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
     while IFS= read -r pane_name; do
       [ -n "$pane_name" ] || continue
       found=""
+      # A worker of a peers config may sit in a window of its own (hidden): its
+      # lookup covers the whole session. Every other pane keeps the window scope.
+      pane_scope=(-t "=$SESSION_NAME:$WINDOW_INDEX")
+      is_worker_pane=0
+      if [ "$PEERS" -eq 1 ] && [ -n "$(printf '%s' "$PLAN_JSON" | jq -r --arg n "$pane_name" '[.sessions[].panes[] | select(.name == $n and .worker != null) | .name][0] // empty')" ]; then
+        pane_scope=(-s -t "=$SESSION_NAME")
+        is_worker_pane=1
+      fi
       while IFS=$'\t' read -r pid pmark; do
         [ -n "$pid" ] || continue
         if [ "$pmark" = "$pane_name" ] && sw_pane_is_managed "$pid" "$PROJECT_ID" "$pane_name"; then
           found="$pid"
           break
         fi
-      done < <(tmux list-panes -t "=$SESSION_NAME:$WINDOW_INDEX" -F "$(printf '#{pane_id}\t#{%s}' "$MARKER_PANE")" 2>/dev/null)
+      done < <(tmux list-panes "${pane_scope[@]}" -F "$(printf '#{pane_id}\t#{%s}' "$MARKER_PANE")" 2>/dev/null)
       if [ -z "$found" ]; then
         echo "  [absent] $SESSION_NAME / $pane_name — not running"
         NOT_RUNNING=$((NOT_RUNNING + 1))
@@ -239,6 +313,13 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
       tmux kill-pane -t "$found" 2>/dev/null || true
       echo "  [stopped] $SESSION_NAME / $pane_name — $STOP_REASON"
       STOPPED=$((STOPPED + 1))
+      # The record goes once the pane is gone for sure. A pane that is somehow
+      # still there keeps its record; the next cleanup settles it.
+      if [ "$is_worker_pane" -eq 1 ] && ! tmux display-message -p -t "$found" '#{pane_id}' >/dev/null 2>&1; then
+        worker_triple="$(printf '%s' "$PLAN_JSON" | jq -r --arg n "$pane_name" '[.sessions[].panes[] | select(.name == $n and .worker != null) | .worker | [.checkout, .role, .["label"]] | join("\u0001")][0] // empty')"
+        IFS=$'\001' read -r dw_checkout dw_role dw_label <<<"$worker_triple"
+        sw_inst_commit "$(sw_inst_drop_worker "$dw_checkout" "$dw_role" "${dw_label:-}")" 0 || echo "WARNING: could not remove the record of $pane_name" >&2
+      fi
       while IFS= read -r browser_port; do
         [ -n "$browser_port" ] && sw_browser_release_port "$PROJECT_ID" "$browser_port"
       done < <(printf '%s' "$PLAN_JSON" | jq -r --arg sid "$TARGET" --arg pane "$pane_name" \
@@ -249,9 +330,12 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
   # Re-apply a standard layout so the panes left share the window again.
   if [ "$STOPPED" -gt 0 ] && tmux has-session -t "=$SESSION_NAME" 2>/dev/null &&
      [ "$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '.sessions[] | select(.id == $t) | .layout.kind // "standard"')" != "split_tree" ]; then
+    STOP_OWNER="$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '[.sessions[] | select(.id == $t) | .panes[] | select(.worker != null) | .worker.owner][0] // empty')"
+    [ -n "$STOP_OWNER" ] && WINDOW_INDEX="$(sw_owner_window_index "$SESSION_NAME" "$STOP_OWNER" "$WINDOW_INDEX")"
     tmux select-layout -t "=$SESSION_NAME:$WINDOW_INDEX" \
       "$(printf '%s' "$PLAN_JSON" | jq -r --arg t "$TARGET" '.sessions[] | select(.id == $t) | .layout.name // "tiled"')" 2>/dev/null || true
   fi
+  if [ "$PEERS" -eq 1 ]; then sw_inst_cleanup; fi
   echo
   echo "stopped: $STOPPED  not running: $NOT_RUNNING  skipped: $SKIPPED  busy: $BUSY"
   sw_lock_release
@@ -259,7 +343,7 @@ if [ "${#PANE_ARGS[@]}" -gt 0 ]; then
   exit 0
 fi
 
-sw_lock_acquire "$PROJECT_ID" || exit 1
+[ "$LOCK_HELD" -eq 1 ] || sw_lock_acquire "$PROJECT_ID" || exit 1
 
 echo "session-workspace stop — $CONFIG_PATH (project: $PROJECT_ID, scope: $STOP_SCOPE)"
 
@@ -324,12 +408,18 @@ while [ "$i" -lt "$n" ]; do
     fi
   fi
   if [ "$SAVE_BEFORE_STOP" = "true" ] && [ -x "$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" ]; then
-    "$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" >/dev/null 2>&1 || true
+    # The save script calls tmux by name: give it the bound server through
+    # $TMUX (the socket field is all a tmux client reads from it).
+    env -u SESSION_WORKSPACE_TMUX_SOCKET TMUX="$SESSION_WORKSPACE_TMUX_SOCKET,0,0" \
+      "$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" >/dev/null 2>&1 || true
   fi
 
   # Graceful service shutdown: ask every managed, non-idle pane in this
   # session to stop (C-c), then allow the configured grace period before
-  # the whole session is force-killed underneath them.
+  # the whole session is force-killed underneath them. A peers session also
+  # holds hidden workers in windows of their own, so it asks every window.
+  sess_scope=(-t "=$sname")
+  [ "$PEERS" -eq 1 ] && sess_scope=(-s -t "=$sname")
   while IFS=$'\t' read -r pane_id pmark ppmark; do
     [ -z "$pane_id" ] && continue
     [ "$pmark" = "$PROJECT_ID" ] || continue
@@ -338,7 +428,7 @@ while [ "$i" -lt "$n" ]; do
       bash|sh|zsh|fish|ksh|dash|"") ;;
       *) tmux send-keys -t "$pane_id" C-c 2>/dev/null || true ;;
     esac
-  done < <(tmux list-panes -t "=$sname" -F "$(printf '#{pane_id}\t#{%s}\t#{%s}' "$MARKER_PROJECT" "$MARKER_PANE")" 2>/dev/null)
+  done < <(tmux list-panes "${sess_scope[@]}" -F "$(printf '#{pane_id}\t#{%s}\t#{%s}' "$MARKER_PROJECT" "$MARKER_PANE")" 2>/dev/null)
 
   if [ "$GRACE_SECONDS" -gt 0 ] 2>/dev/null; then
     sleep "$GRACE_SECONDS"
@@ -346,12 +436,19 @@ while [ "$i" -lt "$n" ]; do
 
   tmux kill-session -t "=$sname" 2>/dev/null || true
   echo "  [killed] $sname"
+  # A copy's record and the records of the workers its orchestrator owned go
+  # with the session (the workers lived in it). Only this session's own records:
+  # the other orchestrators and their workers keep running.
+  if [ "$PEERS" -eq 1 ] && [ "$sid" != "(unlisted)" ] && ! tmux has-session -t "=$sname" 2>/dev/null; then
+    sw_inst_commit "$(sw_inst_drop_session "$sid")" 0 || echo "WARNING: could not remove the records of $sname" >&2
+  fi
   while IFS= read -r browser_port; do
     sw_browser_release_port "$PROJECT_ID" "$browser_port"
   done < <(printf '%s' "$CONFIG_JSON" | jq -r --arg sid "$sid" '[.browser?, .browsers[]?][] | select(. != null and .session_id == $sid) | .port')
   KILLED=$((KILLED + 1))
 done
 
+if [ "$PEERS" -eq 1 ]; then sw_inst_cleanup; fi
 echo
 echo "killed: $KILLED  skipped (unmanaged): $SKIPPED_UNMANAGED  absent: $MISSING"
 

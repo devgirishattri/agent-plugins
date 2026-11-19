@@ -4,12 +4,19 @@
 # Accepts --no-save (the old hand-maintained launchers' `restart` did not —
 # see defect #12 in the session-workspace plan).
 #
+# Peer orchestrators (schema v6 with `peers`): who may restart what is checked
+# before anything is stopped (instances.sh). An orchestrator may not restart an
+# orchestrator session or `all`, and a worker pane restarts nothing. Restarting
+# an orchestrator session ends the workers it owned (they live in its tmux
+# session), and their records go with them.
+#
 # Usage: workspace-restart.sh [TARGET|all] [--config PATH] [--no-save]
 #          [--no-agents] [--no-services] [--no-attach]
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/lib.sh"
+source "$HERE/instances.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -19,6 +26,7 @@ EOF
 }
 
 TARGET="all"
+TARGET_GIVEN=0
 CONFIG_OVERRIDE=""
 NO_SAVE=0
 declare -a START_PASSTHRU=()
@@ -29,11 +37,28 @@ while [ $# -gt 0 ]; do
     --no-save) NO_SAVE=1; shift ;;
     --no-agents|--no-services|--no-attach) START_PASSTHRU+=("$1"); shift ;;
     -h|--help) usage; exit 0 ;;
-    all) TARGET="all"; shift ;;
+    all) TARGET="all"; TARGET_GIVEN=1; shift ;;
     -*) echo "ERROR: unknown option: $1" >&2; usage; exit 1 ;;
-    *) TARGET="$1"; shift ;;
+    *) TARGET="$1"; TARGET_GIVEN=1; shift ;;
   esac
 done
+
+# Peers: refuse before anything is stopped. The stop and start steps check the
+# same rules again under the project lock.
+ensure_jq
+ensure_tmux
+sw_tmux_bind
+RESTART_CONFIG_PATH="$(resolve_project_config_path "$CONFIG_OVERRIDE")" || exit 1
+CONFIG_PATH="$RESTART_CONFIG_PATH"
+CONFIG_JSON="$(load_workspace_config_raw "$CONFIG_PATH")" || exit 1
+if sw_inst_peers "$CONFIG_JSON"; then
+  # shellcheck disable=SC2034  # read by sw_caller_resolve (instances.sh)
+  PROJECT_ID="$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')"
+  # One state home for the lock and the registry (instances.sh).
+  sw_inst_normalize_state_home
+  sw_caller_resolve
+  sw_caller_check_session_verb "restart" "$TARGET_GIVEN" "$TARGET" 0 0 ""
+fi
 
 # Check before stop: an unavailable reviewer grant must not tear down a
 # healthy session only to fail its subsequent start.

@@ -1,7 +1,7 @@
 {
   "name": "session-workspace",
-  "version": "0.16.2",
-  "description": "Config-driven tmux workspace, fail-closed multi-agent harness, and schema-v4 reviewed Git orchestration for Codex sessions.",
+  "version": "0.17.0",
+  "description": "Config-driven tmux workspace, strict-v1 role policy, reviewed Git orchestration, and on-demand peer orchestrators for Codex sessions.",
   "author": {
     "name": "Girish Attri",
     "email": "dev@girishattri.com"
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Session Workspace",
     "shortDescription": "Tmux workspace, role harness, and reviewed Git orchestration.",
-    "longDescription": "Codex skills for a config-driven tmux workspace, an opt-in fail-closed orchestrator/executor/reviewer policy, and schema-v4 reviewed Git coordination with durable scheduler and session-chat evidence.",
+    "longDescription": "Codex skills for managing tmux sessions, coordinating reviewed Git work through session-chat and the scheduler, and starting peer orchestrators with their own workers under schema 6.",
     "developerName": "Girish Attri",
     "category": "Productivity",
     "capabilities": [

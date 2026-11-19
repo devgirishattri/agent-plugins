@@ -124,17 +124,31 @@ while IFS=$'\t' read -r pane_name cwd_rel; do
   CWD_MAP_RESOLVED="$(printf '%s' "$CWD_MAP_RESOLVED" | jq -c --arg k "$pane_name" --arg v "$resolved" '.[$k] = (if $v == "" then null else $v end)')"
 done < <(printf '%s' "$CWD_MAP" | jq -r '.[] | [.name, .cwd] | @tsv')
 
+# Under peers the orchestration targets carry the checkout path itself: there
+# is no fixed executor pane to read it from.
+ENV_CWD_MAP="{}"
+if printf '%s' "$CONFIG_JSON" | jq -e '.schema_version == 6 and has("peers")' >/dev/null; then
+  while IFS=$'\t' read -r env_id env_cwd; do
+    [ -z "$env_id" ] && continue
+    resolved="$(canonicalize_dir "$ROOT_ABS/$env_cwd")"
+    ENV_CWD_MAP="$(printf '%s' "$ENV_CWD_MAP" | jq -c --arg k "$env_id" --arg v "$resolved" '.[$k] = (if $v == "" then null else $v end)')"
+  done < <(printf '%s' "$CONFIG_JSON" | jq -r '.environments[] | [.id, .cwd] | @tsv')
+fi
+
 PLAN_JSON="$(printf '%s' "$CONFIG_JSON" | jq -c \
   --arg root "$ROOT_ABS" \
   --arg config_path "$CONFIG_PATH" \
   --arg browser_profile_dir "$BROWSER_PROFILE_DIR" \
   --argjson browser_profiles "$BROWSER_PROFILES" \
   --argjson cwd_map "$CWD_MAP_RESOLVED" \
+  --argjson env_cwd_map "$ENV_CWD_MAP" \
   --argjson read_paths_map "$VALIDATED_READ_PATHS" \
   -L "$HERE" -f "$HERE/compute-plan.jq")"
 
 if [ "$TARGET" != "all" ]; then
-  PLAN_JSON="$(printf '%s' "$PLAN_JSON" | jq -c --arg t "$TARGET" '.sessions |= map(select(.id == $t))')"
+  PLAN_JSON="$(printf '%s' "$PLAN_JSON" | jq -c --arg t "$TARGET" '
+    .sessions |= map(select(.id == $t))
+    | if has("workers") then .workers |= map(select(.session == $t)) else . end')"
 fi
 
 if [ "$RUNNING_MODE" -eq 1 ]; then
@@ -142,7 +156,7 @@ if [ "$RUNNING_MODE" -eq 1 ]; then
   # managed pane; the project marker is read at pane scope by the same format
   # (tmux falls back to the session value, which a managed session carries).
   LIVE_JSON="null"
-  if command -v tmux >/dev/null 2>&1; then
+  if [ -n "$(type -P tmux 2>/dev/null)" ]; then
     LIVE_JSON="$(tmux list-panes -a -F '#{session_name}	#{@session_workspace_project}	#{@session_workspace_pane}	#{pane_dead}	#{@session_workspace_launched}' 2>/dev/null |
       jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") | select(.[2] != "")
                  | {session: .[0], project: .[1], pane: .[2], live: (.[3] == "0" and .[4] != "")})')"
@@ -152,7 +166,11 @@ if [ "$RUNNING_MODE" -eq 1 ]; then
     .project.id as $pid
     | .sessions |= map(.name as $sname | .panes |= map(.name as $pn | . + {running:
         (if $live == null then null
-         else any($live[]; .session == $sname and .project == $pid and .pane == $pn and .live) end)}))')"
+         else any($live[]; .session == $sname and .project == $pid and .pane == $pn and .live) end)}))
+    | if has("workers") then
+        . as $plan
+        | .workers |= map(. as $w | .running = ([$plan.sessions[] | select(.id == $w.session) | .panes[] | select(.name == $w.name) | .running][0]))
+      else . end')"
 fi
 
 if [ "$JSON_MODE" -eq 1 ]; then
@@ -177,6 +195,9 @@ printf '%s\n' "$PLAN_JSON" | jq -r '
    else
      "harness: inactive"
    end),
+  (if has("peers") then
+     "peers: session=\(.peers.session)  orchestrators=\([.sessions[] | select(has("instance"))] | length)  workers=\(.workers | length)  limits=\(.peers.limits | tojson)"
+   else empty end),
   (if (.orchestration.active // false) then
      "orchestration: active  profile=\(.orchestration.profile)  targets=\(.orchestration.targets | length)",
      (.orchestration.targets[] |
@@ -245,6 +266,7 @@ printf '%s\n' "$PLAN_JSON" | jq -c '.sessions[]' | while IFS= read -r session; d
     [ -n "$p_idle" ] && printf '    idle_stop_minutes: %s\n' "$p_idle"
     [ -n "$p_idle_activity" ] && printf '    idle_activity: %s\n' "$p_idle_activity"
     [ -n "$p_running" ] && printf '    running: %s\n' "$p_running"
+    printf '%s\n' "$pane" | jq -r 'if has("worker") then "    worker: checkout=\(.worker.checkout) owner=\(.worker.owner) " + (if .worker.visible then "shown" else "hidden" end) else empty end'
     printf '    agent: model=%s effort=%s profile=%s permission_mode=%s\n' \
       "$(flag_or_none "$p_model")" "$(flag_or_none "$p_effort")" "$(flag_or_none "$p_profile")" "$(flag_or_none "$p_perm")"
     printf '%s\n' "$pane" | jq -r '

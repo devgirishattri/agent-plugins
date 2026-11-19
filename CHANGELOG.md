@@ -1,5 +1,34 @@
 # Changelog
 
+## session-workspace 0.17.0 — 2026-11-19
+
+- Schema 6 adds optional peer orchestrators. Declare one root orchestrator and
+  the checkouts it can use. A user can start another instance by session ID,
+  such as `workspace start development-2`. Each orchestrator starts and owns
+  its executor and reviewer workers. A config without `peers` follows schema 5.
+- Workers start in their own tmux windows. `workspace show NAME` and
+  `workspace hide NAME` move a running worker. `workspace stop --worker NAME --confirmed`
+  checks for unfinished work. A held name or checkout reports its owner and exits 3.
+- `workspace plan --json` lists workers by name, role, checkout, and owner.
+  `--running` adds liveness, and `workspace status --json` reports live
+  visibility. The engine records peer instances under `XDG_STATE_HOME` and
+  pins that location for each launched pane. `SESSION_WORKSPACE_HIDDEN_SIZE`
+  sets the hidden window size (default `160x48`, minimum `40x10`).
+- Strict-v1 checks peer ownership on routing, scheduler transitions and
+  lifecycle operations. In schema 5, workers in an environment managed by the
+  unbound root orchestrator now accept its `environment=root` task tag.
+- Workspace operations and their child processes send tmux commands to one
+  socket path. Bound clients use `-N` to prevent automatic server startup.
+  Only `workspace start` can create a server with `new-session`. It can do so
+  at most once and only if tmux reports no server at the selected socket when
+  the command begins. The engine rejects a missing `TMUX_TMPDIR`. Idle watchers verify
+  both the project and pane markers before claiming a pane.
+- The workspace, Codex chat and Codex scheduler tests use private `-S`
+  sockets and disposable home and XDG directories. They start tmux with an
+  empty or fixture-specific config and check ownership before teardown.
+- Upgrade both providers before using schema 6. See the
+  [peer configuration and rollback procedure](codex/plugins/session-workspace/skills/session-workspace/references/environments.md#peer-orchestrators-schema-6).
+
 ## session-workspace 0.16.2 — 2026-11-19
 
 - `workspace start SESSION --pane NAME` now waits for a worker's input line to

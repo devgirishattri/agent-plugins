@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install), its opt-in strict-v1 multi-agent harness (harness-status/harness-doctor, the PreToolUse role policy), and schema-v4/v5 reviewed Git orchestration. Use this before invoking any /session-workspace:workspace-* or /session-workspace:harness-* command (including /session-workspace:workspace-orchestrator) so you understand the config model, the real flags, the safety gates, and the provider-neutral coordination boundary.
+description: When and how to use the session-workspace plugin's config-driven tmux lifecycle commands (doctor/plan/start/status/stop/restart/reconcile/install), its opt-in strict-v1 multi-agent harness (harness-status/harness-doctor, the PreToolUse role policy), and schema-v4/v5/v6 reviewed Git orchestration and schema-v6 peer orchestrators. Use this before invoking any /session-workspace:workspace-* or /session-workspace:harness-* command (including /session-workspace:workspace-orchestrator) so you understand the config model, the real flags, the safety gates, and the provider-neutral coordination boundary.
 ---
 
 # session-workspace: config-driven tmux workspace engine
@@ -85,14 +85,14 @@ A project opts in by creating `.agent-workspace/workspace.json`. Set
     interval. `SESSION_WORKSPACE_IDLE_SECONDS_PER_MINUTE` (default `60`) is
     the length of one configured minute, for tests. The watcher sets
     `SESSION_WORKSPACE_STOP_REASON` for the stop it records; do not set it.
-- `harness` (schema v2–v5) — opt-in strict-v1 role policy: `enabled`,
+- `harness` (schema v2–v6) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
-  `gates`, plus optional schema-v3–v5 `guards`.
+  `gates`, plus optional schema-v3–v6 `guards`.
   - Absent or `enabled: false` is a true no-op for panes whose launcher mode
     is empty.
   - A pane launched under audit/enforce keeps that mode. It blocks as drift
     until restarted.
-- `orchestration` (schema v4 or v5) — optional closed `reviewed-git-v1`
+- `orchestration` (schema v4, v5 or v6) — optional closed `reviewed-git-v1`
   targets. A target binds a safe child cwd to its configured executor/reviewer
   pair, named remote, work/release branches, and fixed merge strategy. It
   accepts no commands, scripts, prompts, regexes, or custom gate bypasses.
@@ -186,7 +186,7 @@ plain `tmux set-environment` on purpose. That path is for coordination vars a
 hand-made pane should also inherit. Secrets are excluded from it by
 construction.
 
-## The opt-in harness (schema v2–v5)
+## The opt-in harness (schema v2–v6)
 
 With `harness.enabled: true`, the engine's `PreToolUse` hook enforces an
 **immutable strict-v1 floor**. The floor is keyed on the per-pane identity the
@@ -471,7 +471,7 @@ Worker advisories warn in both modes when their provider hook receives the call.
 
 ### Guards and diagnostics
 
-- In schema v3–v5, optional `harness.guards` centralize orchestrator protected
+- In schema v3–v6, optional `harness.guards` centralize orchestrator protected
   files, child-directory hops, generic lifecycle reminders, and bounded Stop
   health warnings.
 - Guard changes require a workspace restart, because their canonical JSON is
@@ -555,7 +555,7 @@ Worker advisories warn in both modes when their provider hook receives the call.
   their values, task ids, targets, prompt-file operands, and `--note-file`
   operands may not. A line break in any argument is still refused.
 
-## Reviewed orchestration (schema v4/v5)
+## Reviewed orchestration (schema v4/v5/v6)
 
 When `orchestration.enabled` is true, use the `workspace-orchestrator` skill
 (`/session-workspace:workspace-orchestrator`).
@@ -583,6 +583,12 @@ When `orchestration.enabled` is true, use the `workspace-orchestrator` skill
   without `--confirmed`. `restart` implies it.
 - `workspace-plan`, `workspace-status`, and `workspace-doctor` are
   mutation-free. Run them freely to check state.
+- A verb works on one tmux server from start to end: the one in `TMUX`, or
+  `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default` outside tmux, or the absolute
+  socket in `SESSION_WORKSPACE_TMUX_SOCKET` (which must match `TMUX` inside
+  tmux). If that server goes away mid-operation, the verb fails. It never
+  switches to, or starts, another server. A `TMUX_TMPDIR` that names a missing
+  directory is refused before anything changes.
 
 ## Schema v5: independent environments
 
@@ -595,6 +601,20 @@ Read [references/environments.md](references/environments.md) for these topics:
 
 Versions 1–4 retain their single-orchestrator contract. V5 pins scope identity
 at launch. Never export it manually.
+
+## Schema v6: peer orchestrators
+
+Schema 6 without `peers` is schema 5. With `peers`, one declared orchestrator
+session can be copied by the user (`workspace start SESSION-N`), and each
+orchestrator starts and owns its executor and reviewer workers
+(`workspace start --checkout ID --role executor|reviewer [--label L] [--show]`,
+`workspace stop --worker NAME --confirmed`, `workspace show NAME`,
+`workspace hide NAME`). Another owner's worker gives `[held]` (exit 3). A
+configured limit gives `[limit]` (exit 1). Read
+[references/environments.md](references/environments.md) "Peer orchestrators
+(schema 6)" for the config, output lines, ownership rule ids, hidden workers,
+migration and rollback. Never export or unset launcher identity variables
+(`identity.override`).
 
 Session-workspace 0.12.0 removed the optional Jev diagnostic helper. A v5 config
 that still has `integrations`, `environments[].jev`, or `"integrations"` in

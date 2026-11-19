@@ -1,6 +1,6 @@
 ---
 description: Bring up session-workspace sessions/panes/agents/services
-argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed] | SESSION --pane NAME [--pane NAME...]"
+argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed] | SESSION --pane NAME [--pane NAME...] | SESSION-N | --checkout ID --role executor|reviewer [--label L] [--show] [--owner PANE]"
 allowed-tools: Bash(bash:*)
 ---
 
@@ -37,6 +37,8 @@ Relay the per-pane report lines and the summary count (`started/adopted: N  kept
 |---|---|---|
 | 0 | No slot failed. | Report the result above. |
 | Non-zero | At least one slot failed. | Do not claim the workspace is fully up. Name the failed slots. |
+
+Schema 6 with `peers` adds `SESSION-N` (the user starts an orchestrator copy) and `--checkout ID --role executor|reviewer [--label L] [--show] [--owner PANE]` (start a worker). See the `workspace-start` skill.
 
 Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
 Group selection cannot be combined with a positional session or `--all`; it never

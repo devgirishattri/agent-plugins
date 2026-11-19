@@ -1,6 +1,6 @@
 # Schema-v4 Orchestration Configuration
 
-`orchestration` is accepted with `schema_version: 4` or `5`. Version 4 otherwise
+`orchestration` is accepted with `schema_version: 4`, `5` or `6`. Under schema 6 with `peers`, a target's `executor`, `reviewer` and `orchestrator` are null in the plan: the orchestrator uses its own workers on the target's checkout. Version 4 otherwise
 retains schema-v3 harness and guard behavior; omitting `orchestration` leaves the
 normalized plan and policy decision unchanged.
 
@@ -57,7 +57,7 @@ fields. Use repository `AGENTS.md` for product-specific checks; use another
 future reviewed profile when a different Git strategy is required.
 
 A target's executor or reviewer pane may set `"launch": "on_demand"` (schema
-2-5 with an active harness, standard layout only). A full `workspace start`
+2-6 with an active harness, standard layout only). A full `workspace start`
 then leaves that pane down, and the orchestrator starts and closes it with
 `--pane` as in [lifecycle.md](lifecycle.md) "On-demand workers":
 

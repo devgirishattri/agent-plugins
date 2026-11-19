@@ -55,8 +55,17 @@ def memory_shard(name; pid; strip_prefix; strip_suffixes; fallback):
 # pane's identity intact, while a change to its own entry still fails it
 # closed until it restarts. The policy reads everything else (route peers,
 # owned sessions) from the validated config on each call.
+#
+# Peers (schema 6): a worker pins its checkout's own entry and its owner, an
+# orchestrator only its own pane name. Neither depends on which other
+# orchestrators or workers exist, so starting or stopping one changes no other
+# pane's pinned value. Any other pane keeps the formula above.
 def scope_identity:
   if . == null then null
+  elif has("peer") then {environment: null, peer: .peer}
+  elif has("owner") then
+    . as $sc
+    | {environment: $sc.environment, own: ([$sc.environments[] | select(.id == $sc.environment)][0] // null), owner: $sc.owner}
   else . as $sc
   | {environment: $sc.environment, root_orchestrator: $sc.root_orchestrator}
     + (if $sc.environment != null
@@ -80,8 +89,10 @@ def coordination_var_name(store):
 | ($browsers[0] // null) as $browser
 | ($browser.pane_name // null) as $browser_pane_name
 | ([($cfg.sessions // [])[] | (.panes // [])[]]) as $all_panes
-| (($cfg.schema_version == 2 or $cfg.schema_version == 3 or ($cfg.schema_version == 4 or $cfg.schema_version == 5)) and ($cfg.harness.enabled // false)) as $harness_active
-| (($cfg.schema_version == 3 or ($cfg.schema_version == 4 or $cfg.schema_version == 5)) and $harness_active and ($cfg.harness | has("guards"))) as $guards_configured
+| (($cfg.schema_version == 5 or $cfg.schema_version == 6)) as $envs_schema
+| (($cfg.schema_version == 6) and ($cfg | has("peers"))) as $peers
+| (($cfg.schema_version == 2 or $cfg.schema_version == 3 or ($cfg.schema_version == 4 or $cfg.schema_version == 5 or $cfg.schema_version == 6)) and ($cfg.harness.enabled // false)) as $harness_active
+| (($cfg.schema_version == 3 or ($cfg.schema_version == 4 or $cfg.schema_version == 5 or $cfg.schema_version == 6)) and $harness_active and ($cfg.harness | has("guards"))) as $guards_configured
 | ($cfg.stores.base // ".tmp") as $store_base
 | ($cfg.stores.overrides // {}) as $store_overrides
 | ($cfg.stores.pin // []) as $pin
@@ -105,7 +116,7 @@ def coordination_var_name(store):
     "SESSION_WORKSPACE_PANE_CWD",
     "SESSION_WORKSPACE_HARNESS_MODE",
     "SESSION_WORKSPACE_READ_PATHS_JSON"
-  ] + (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then ["SESSION_WORKSPACE_SCOPE_JSON"] else [] end) + [
+  ] + (if $envs_schema and ($cfg.environments // [] | length) > 0 then ["SESSION_WORKSPACE_SCOPE_JSON"] else [] end) + [
   ] + (if $guards_configured then ["SESSION_WORKSPACE_GUARDS_JSON"] else [] end)) as $engine_always
 |
 ({
@@ -152,7 +163,24 @@ def coordination_var_name(store):
           | ($role.env_group // "none") as $env_group
           | ($cfg.env.groups[$env_group] // {values: {}, pin_to_session: false}) as $group
           | ($group.pin_to_session // false) as $pin_to_session
-          | (if $cfg.schema_version == 5 and ($cfg.environments // [] | length) > 0 then {
+          | (if $peers and ($p | has("worker")) then {
+                environments: $cfg.environments,
+                environment: $p.worker.checkout,
+                owner: $p.worker.owner,
+                root_orchestrator: null
+              }
+             elif $peers and $p.role == $cfg.harness.roles.orchestrator then {
+                environments: $cfg.environments,
+                environment: null,
+                peer: $p.name,
+                root_orchestrator: null
+              }
+             elif $peers then {
+                environments: $cfg.environments,
+                environment: ([$cfg.environments[] | select((.development + .services) | index($s.id)) | .id][0] // null),
+                root_orchestrator: null
+              }
+             elif $envs_schema and ($cfg.environments // [] | length) > 0 then {
                 environments: $cfg.environments,
                 environment: ([$cfg.environments[] | select((.development + .services) | index($s.id)) | .id][0] // null),
                 root_orchestrator: ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name | select(. as $n | [$cfg.environments[].orchestrator] | index($n) | not)][0] // null)
@@ -226,13 +254,14 @@ def coordination_var_name(store):
                 + $aliases
                 + $engine_always
                 + (if $harness_active then ["CLAUDE_CODE_DISABLE_FILE_MENTIONS"] else [] end)
+                + (if $peers then ["XDG_STATE_HOME"] else [] end)
                 + (if $pin_to_session then [$pin[] | coordination_var_name(.)] else [] end)
                 | unique
                 | sort
               )
-            }
+            } + (if $p | has("worker") then {worker: $p.worker} else {} end)
         ]
-      }
+      } + (if $s | has("instance") then {instance: $s.instance} else {} end)
   ],
   browsers: $browsers,
   browser: (if $browser == null then null else {
@@ -245,21 +274,28 @@ def coordination_var_name(store):
     mcp_package: $browser.mcp_package,
     mcp_server_name: ($browser.mcp_server_name // "chrome-devtools")
   } end)
-} + (if ($cfg.schema_version == 4 or $cfg.schema_version == 5) and ($cfg | has("orchestration")) then {
+} + (if $peers then {
+  peers: {session: $cfg.peers.session, limits: ($cfg.peers.limits // {})},
+  workers: [
+    ($cfg.sessions // [])[] | . as $s | ($s.panes // [])[] | select(has("worker"))
+    | {name, role: .worker.role, checkout: .worker.checkout, owner: .worker.owner, visible: .worker.visible, running: null, session: $s.id}
+  ]
+} else {} end)
++ (if ($cfg.schema_version == 4 or $cfg.schema_version == 5 or $cfg.schema_version == 6) and ($cfg | has("orchestration")) then {
   orchestration: (if ($cfg.orchestration.enabled // false) then {
     active: true,
     profile: $cfg.orchestration.profile,
     gates: $cfg.harness.gates,
     targets: [
       $cfg.orchestration.targets[] | . as $target
-      | ([ $all_panes[] | select(.role == $cfg.harness.roles.executor and (.cwd // null) == $target.cwd) ][0]) as $executor
-      | ([ $all_panes[] | select(.role == $cfg.harness.roles.reviewer and (.cwd // null) == $target.cwd) ][0]) as $reviewer
+      | (if $peers then null else [ $all_panes[] | select(.role == $cfg.harness.roles.executor and (.cwd // null) == $target.cwd) ][0] end) as $executor
+      | (if $peers then null else [ $all_panes[] | select(.role == $cfg.harness.roles.reviewer and (.cwd // null) == $target.cwd) ][0] end) as $reviewer
       | {
           id: $target.id,
           environment: ([$cfg.environments[]? | select(.cwd == $target.cwd) | .id][0] // null),
-          orchestrator: ([$cfg.environments[]? | select(.cwd == $target.cwd) | .orchestrator][0] // ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name][0])),
+          orchestrator: (if $peers then null else ([$cfg.environments[]? | select(.cwd == $target.cwd) | .orchestrator][0] // ([$all_panes[] | select(.role == $cfg.harness.roles.orchestrator) | .name][0])) end),
           cwd_raw: $target.cwd,
-          cwd: ($cwd_map[$executor.name] // null),
+          cwd: (if $peers then ($env_cwd_map[([$cfg.environments[]? | select(.cwd == $target.cwd) | .id][0] // "")] // null) else ($cwd_map[$executor.name] // null) end),
           executor: $executor.name,
           reviewer: $reviewer.name,
           remote: $target.remote,
@@ -274,7 +310,7 @@ def coordination_var_name(store):
   } else {active: false} end)
 } else {} end))
 
-| if $cfg.schema_version != 5 then
+| if $cfg.schema_version != 5 and $cfg.schema_version != 6 then
     del(.schema_version, .environments, .browsers)
     | .sessions |= map(.panes |= map(del(.scope, .scope_identity)))
     | if (.orchestration.active // false) then .orchestration.targets |= map(del(.environment, .orchestrator)) else . end

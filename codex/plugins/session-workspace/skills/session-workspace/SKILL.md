@@ -1,6 +1,6 @@
 ---
 name: session-workspace
-description: When and how to use session-workspace lifecycle commands, its strict-v1 multi-agent harness, and schema-v4/v5 reviewed Git orchestration. Use before workspace/harness commands or workspace-orchestrator so you understand the config model, safety gates, and provider-neutral coordination boundary.
+description: Use session-workspace lifecycle commands, the strict-v1 multi-agent harness, and reviewed Git orchestration. Covers schema 6 peer orchestrators and on-demand workers. Read before workspace/harness commands or workspace-orchestrator.
 ---
 
 # session-workspace: config-driven tmux workspace engine
@@ -38,7 +38,7 @@ is not a scaffold.
 | `$session-workspace:workspace-browser-config` | Render/apply project MCP entries for the configured browser |
 | `$session-workspace:harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), which strict-v1 role floor applies (`--probe` decides its cases), which optional guard packs add to it, and does this pane's engine identity match the plan |
 | `$session-workspace:harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
-| `$session-workspace:workspace-orchestrator` | Schema-v4/v5 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
+| `$session-workspace:workspace-orchestrator` | Coordinate the reviewed Git lifecycle in schemas 4–6. With peers, use your own workers for the target checkout. |
 | `$session-workspace:verification-recipe` | Create or maintain a project-local, executed verification recipe with retained evidence |
 | `$session-workspace:blast-radius` | Report indirect breakage risks and check the assumptions that make a diff safe |
 | `$session-workspace:adversarial-review` | Optional independent review with bounded effort and evidence-based dispositions |
@@ -50,7 +50,7 @@ is not a scaffold.
 
 A project opts in by creating `.agent-workspace/workspace.json`. Set
 `schema_version: 1`, `2` for the optional harness, `3` for shared guard packs,
-`4` for reviewed orchestration, or `5` for independent environments. The config describes:
+`4` for reviewed orchestration, `5` for independent environments, or `6` for peer orchestrators. The config describes:
 
 - `project` — id/display name/root
 - `runtimes` — named launch profiles (e.g. `claude`, `codex`), replacing any
@@ -96,16 +96,16 @@ A project opts in by creating `.agent-workspace/workspace.json`. Set
     interval. `SESSION_WORKSPACE_IDLE_SECONDS_PER_MINUTE` (default `60`) is
     the length of one configured minute, for tests. The watcher sets
     `SESSION_WORKSPACE_STOP_REASON` for the stop it records; do not set it.
-- `harness` (schema v2–v5) — opt-in strict-v1 role policy: `enabled`,
+- `harness` (schema v2–v6) — opt-in strict-v1 role policy: `enabled`,
   `mode` (`audit`|`enforce`), `profile`, the three semantic `roles`, and
-  `gates`, plus optional schema-v3–v5 `guards`.
+  `gates`, plus optional schema-v3–v6 `guards`.
   - Absent or `enabled: false` is a true no-op for panes whose launcher mode
     is empty.
   - A pane launched under audit/enforce keeps that mode. It blocks as drift
     until restarted.
-- `orchestration` (schema v4 or v5) — optional closed `reviewed-git-v1`
-  targets. A target binds a safe child cwd to its configured executor/reviewer
-  pair, named remote, work/release branches, and fixed merge strategy. It
+- `orchestration` (schemas 4–6) — optional closed `reviewed-git-v1`
+  targets. Each target identifies a child checkout, remote, branches, and merge strategy.
+  It uses a configured worker pair or, with `peers`, the caller's workers on that checkout. It
   accepts no commands, scripts, prompts, regexes, or custom gate bypasses.
 
 `workspace.schema.json` in `scripts/` documents this shape. `validate-config.sh`
@@ -197,7 +197,7 @@ plain `tmux set-environment` on purpose. That path is for coordination vars a
 hand-made pane should also inherit. Secrets are excluded from it by
 construction.
 
-## The opt-in harness (schema v2–v5)
+## The opt-in harness (schemas 2–6)
 
 With `harness.enabled: true`, the engine's `PreToolUse` hook enforces an
 **immutable strict-v1 floor**. The floor is keyed on the per-pane identity the
@@ -252,7 +252,7 @@ There is no `git -C`, `grep -f`/`rg -f` or `jq`. Run Git from the checkout, sear
 `cat` or `grep`. A pane whose role, engine pane name or
 tmux `@name` says reviewer is refused every tool call when no readable
 workspace config backs it (`identity.reviewer`).
-Schema v2–5 reviewers and executors may set `sessions[].panes[].read_paths` to up to 16
+Reviewers and executors declared in schemas 2–6 may set `sessions[].panes[].read_paths` to up to 16
 existing files/directories, relative to the project root or canonical absolute
 paths for external repositories. Files grant exact-file access, directories
 grant descendants. Symlink components, parent traversal, overlapping grants,
@@ -431,7 +431,7 @@ Worker advisories warn in both modes when their provider hook receives the call.
 
 ### Guards and diagnostics
 
-- In schema v3–v5, optional `harness.guards` centralize orchestrator protected
+- In schemas 3–6, optional `harness.guards` centralize orchestrator protected
   files, child-directory hops, generic lifecycle reminders, and bounded Stop
   health warnings.
 - Guard changes require a workspace restart, because their canonical JSON is
@@ -515,7 +515,7 @@ Worker advisories warn in both modes when their provider hook receives the call.
   their values, task ids, targets, prompt-file operands, and `--note-file`
   operands may not. A line break in any argument is still refused.
 
-## Reviewed orchestration (schema v4/v5)
+## Reviewed orchestration (schemas 4–6)
 
 When `orchestration.enabled` is true, use
 `$session-workspace:workspace-orchestrator`. The normalized workspace plan is
@@ -538,6 +538,15 @@ must never be described as harness-enforced.
   without `--confirmed`. `restart` implies it.
 - `workspace-plan`, `workspace-status`, and `workspace-doctor` are
   mutation-free. Run them freely to check state.
+- Lifecycle commands and their children use one tmux socket path. Inside
+  tmux, they use the socket in `TMUX`. Outside tmux, the default is
+  `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default`. Set
+  `SESSION_WORKSPACE_TMUX_SOCKET` to select an absolute socket path. Inside
+  tmux, that path must match `TMUX`. A missing `TMUX_TMPDIR` directory stops
+  the operation. Only `workspace start` can create a server. It can do so
+  at most once and only if tmux reports no server at the selected socket when
+  the command begins. If the connection is lost during `stop`, it can report a session as
+  absent.
 
 ## Schema v5: independent environments
 
@@ -550,6 +559,23 @@ Read [references/environments.md](references/environments.md) for these topics:
 
 Versions 1–4 retain their single-orchestrator contract. V5 pins scope identity
 at launch. Never export it manually.
+
+## Peer orchestrators in schema 6
+
+Add `peers.session` to name the declared root orchestrator session. From a user
+terminal, start another instance with `workspace start SESSION-N` (N from 2
+through 999). Each orchestrator starts workers with `workspace start --checkout
+ID --role executor|reviewer`. Add `--label L` to distinguish workers or
+`--show` to start the worker beside its owner.
+
+Use `workspace status --json` to find a worker's name, checkout, and owner.
+`workspace show NAME` joins the worker to its owner's window. `workspace hide NAME`
+moves it to a separate window in that session. `SESSION_WORKSPACE_HIDDEN_SIZE`
+defaults to `160x48` and accepts `COLSxROWS` of at least `40x10`.
+The engine pins `XDG_STATE_HOME` for every launched pane so they share the
+registry. Stop an idle worker with `workspace stop --worker NAME --confirmed`.
+A held name or checkout reports its owner and exits 3. A reached limit exits 1.
+See the [peer configuration, ownership rules and migration procedure](references/environments.md#peer-orchestrators-schema-6).
 
 Session-workspace 0.12.0 removed the optional Jev diagnostic helper. A v5 config
 that still has `integrations`, `environments[].jev`, or `"integrations"` in

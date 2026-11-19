@@ -43,7 +43,7 @@ if [ -n "$CONFIG" ] && [ -z "$MODE" ]; then
   # jq is already a hard dependency of session-workspace. A v1 config or an
   # explicit v2+ enabled=false config is a true hook no-op.
   if [ ! -f "$CONFIG" ] || ! command -v jq >/dev/null 2>&1 || \
-     ! jq -e '(.schema_version == 2 or .schema_version == 3 or .schema_version == 4 or .schema_version == 5) and (.harness.enabled // false)' "$CONFIG" >/dev/null 2>&1; then
+     ! jq -e '(.schema_version == 2 or .schema_version == 3 or .schema_version == 4 or .schema_version == 5 or .schema_version == 6) and (.harness.enabled // false)' "$CONFIG" >/dev/null 2>&1; then
     if ! claims_reviewer; then
       cat >/dev/null 2>&1 || true
       exit 0

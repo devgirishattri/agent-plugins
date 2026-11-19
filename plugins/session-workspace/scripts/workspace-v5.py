@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Closed v5 environment validation; no network or credential reads."""
+"""Closed v5/v6 environment validation; no network or credential reads.
+
+Schema 6 without `peers` is validated exactly as schema 5. With `peers` the
+config is the loader's expanded form (config.sh sw_apply_instances): the
+declared orchestrator session, its numbered copies and the worker panes the
+engine recorded. Several rules that assume one fixed set of declared panes
+then give way to checks of the expanded fleet (validate_peers)."""
 import json
 import re
 import sys
@@ -68,11 +74,44 @@ def removed_features(cfg):
     return found
 
 
+def validate_peers(cfg, root, envs, sessions, roles, require):
+    peers = cfg['peers']
+    sid = peers['session']
+    require(cfg.get('harness', {}).get('enabled', False) is True and bool(envs), 'peers requires an enabled harness and non-empty environments')
+    require(sid in sessions, 'peers.session must name a declared session')
+    env_cwds = {e['id']: e['cwd'] for e in envs}
+    declared = sessions[sid]
+    fixed = [p for p in declared['panes'] if 'worker' not in p]
+    require(len(fixed) == 1 and fixed[0]['role'] == roles['orchestrator'],
+            'peers.session %s must declare exactly one pane, with the orchestrator role' % sid)
+    orchestrator = fixed[0]
+    require((root / orchestrator.get('cwd', '.')).resolve(strict=True) == root, 'the peers orchestrator pane must run at the workspace root')
+    require(not orchestrator.get('optional', False) and 'launch' not in orchestrator, 'the peers orchestrator pane must not be optional and must not set launch')
+    layout = declared.get('layout', {})
+    require(layout.get('kind', 'standard') == 'standard', 'peers.session must use the standard layout (no split_tree)')
+    require(not declared.get('retain_layout', False), 'peers.session must not set retain_layout')
+    for s in sessions.values():
+        mine = [p for p in s['panes'] if p['role'] == roles['orchestrator']]
+        for p in mine:
+            require(s.get('instance', {}).get('of') == sid, 'orchestrator pane %s must be the pane of the peers session %s; further orchestrators are started with `workspace start %s-N`' % (p['name'], sid, sid))
+        require(len(mine) <= 1, 'session %s holds more than one orchestrator pane' % s['id'])
+        for p in s['panes']:
+            if p['role'] not in (roles['executor'], roles['reviewer']):
+                require('worker' not in p, 'pane %s: only executor and reviewer panes carry worker' % p['name'])
+                continue
+            worker = p.get('worker')
+            require(isinstance(worker, dict) and worker.get('checkout') in env_cwds,
+                    'pane %s has the executor or reviewer role but is not an engine-started worker of a configured environment; workers are started with `workspace start --checkout`' % p['name'])
+            require(p.get('cwd') == env_cwds[worker['checkout']] and (root / p['cwd']).resolve() == (root / env_cwds[worker['checkout']]).resolve(),
+                    'worker pane %s must use exactly the cwd of environment %s' % (p['name'], worker['checkout']))
+
+
 def validate(cfg, root):
     def require(ok, message):
         if not ok:
             raise ValueError(message)
 
+    peers = cfg.get('schema_version') == 6 and 'peers' in cfg
     removed = removed_features(cfg)
     require(not removed, '; '.join(removed))
 
@@ -87,11 +126,22 @@ def validate(cfg, root):
     panes = {p['name']: p for s in sessions.values() for p in s['panes']}
     roles = cfg.get('harness', {}).get('roles', {})
     active = cfg.get('harness', {}).get('enabled', False)
+    if peers:
+        require(isinstance(cfg['peers'], dict) and isinstance(cfg['peers'].get('session'), str), 'peers must be an object with a session')
+        for e in envs:
+            require(isinstance(e, dict), 'environment must be an object')
+            for key in ('orchestrator', 'shared_sessions'):
+                require(key not in e, 'environments[].%s is not allowed with peers: orchestrators are peers, not per-environment' % key)
+            require(e.get('development', []) == [], 'environments[].development must be empty or absent with peers: workers are started on demand')
+            require(e.get('executors', 'one') in ('one', 'many'), 'environments[].executors must be "one" or "many"')
     declared = [e.get('orchestrator') for e in envs if isinstance(e, dict) and 'orchestrator' in e]
     require(all(isinstance(name, str) for name in declared) and len(declared) == len(set(declared)), 'environment orchestrator requires a unique pane')
     seen_ids, seen_sessions, seen_roots, coordinators, control_roots = set(), set(), [], set(), []
     for e in envs:
-        shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator', 'shared_sessions', 'branch'], ['id', 'cwd', 'development', 'services'], 'environment')
+        if peers:
+            shape(e, ['id', 'cwd', 'development', 'services', 'branch', 'executors'], ['id', 'cwd', 'services'], 'environment')
+        else:
+            shape(e, ['id', 'cwd', 'development', 'services', 'orchestrator', 'shared_sessions', 'branch'], ['id', 'cwd', 'development', 'services'], 'environment')
         require(isinstance(e['id'], str) and re.fullmatch(r'[a-z0-9][a-z0-9-]*', e['id']), 'invalid environment id')
         require(e['id'] != 'root' and e['id'] not in seen_ids, 'reserved or duplicate environment id')
         seen_ids.add(e['id'])
@@ -102,9 +152,9 @@ def validate(cfg, root):
         seen_roots.append(cwd)
         selected = []
         for kind in ['development', 'services']:
-            ids = e[kind]
+            ids = e.get(kind, []) if peers else e[kind]
             require(isinstance(ids, list) and all(isinstance(i, str) for i in ids), kind + ' must contain session ids')
-            require(kind != 'development' or bool(ids), 'development must not be empty')
+            require(kind != 'development' or peers or bool(ids), 'development must not be empty')
             for sid in ids:
                 require(sid in sessions and sid not in seen_sessions, 'unknown or multiply owned environment session')
                 seen_sessions.add(sid)
@@ -128,7 +178,7 @@ def validate(cfg, root):
             if control != root:
                 control_roots.append(control)
             coordinators.add(name)
-        if active:
+        if active and not peers:
             workers = [p for p in selected if p['role'] in [roles['executor'], roles['reviewer']]]
             require(len([p for p in workers if p['role'] == roles['executor']]) == 1 and len([p for p in workers if p['role'] == roles['reviewer']]) == 1, 'each environment requires one executor/reviewer pair')
             require(all((root / p['cwd']).resolve() == cwd and p['cwd'] == e['cwd'] for p in workers), 'environment workers must bind exactly to repository root')
@@ -161,7 +211,9 @@ def validate(cfg, root):
         require(cfg.get('behavior', {}).get('stop_scope', 'selected') == 'selected', 'environments require stop_scope selected')
         require(not any(inside(c, r) or inside(r, c) for c in control_roots for r in seen_roots), 'coordinator directories must not overlap repositories')
         require(not any(inside(a, b) or inside(b, a) for i, a in enumerate(control_roots) for b in control_roots[i+1:]), 'coordinator directories overlap')
-        if active:
+        if peers:
+            validate_peers(cfg, root, envs, sessions, roles, require)
+        elif active:
             roots = [p for p in panes.values() if p['role'] == roles['orchestrator'] and p['name'] not in coordinators]
             require(len(roots) <= 1 and all((root / p.get('cwd', '.')).resolve() == root for p in roots), 'zero or one unbound root orchestrator at workspace root is required')
             require(bool(roots) or all('orchestrator' in e for e in envs), 'workers require an environment orchestrator when no unbound root exists')

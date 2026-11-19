@@ -47,6 +47,13 @@ ESTABLISHED_STATE = '01'
 TIME_WAIT_STATE = '06'
 
 
+def tmux_argv(*args):
+    """tmux ARGS, pinned (-N -S) to the server the calling engine verb bound
+    (SESSION_WORKSPACE_TMUX_SOCKET, lib.sh). Unbound: plain tmux."""
+    sock = os.environ.get('SESSION_WORKSPACE_TMUX_SOCKET')
+    return ['tmux', '-N', '-S', sock, *args] if sock else ['tmux', *args]
+
+
 def listening(port):
     for family, host in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
         try:
@@ -311,7 +318,7 @@ def preflight(plan, target, selected=()):
                 continue
             # A managed live pane is kept by the idempotent lifecycle. This is
             # only a conflict preflight, not proof it owns the listening socket.
-            proc = subprocess.run(['tmux', 'list-panes', '-t', '=' + session['name'], '-F', '#{@session_workspace_project}\t#{@session_workspace_pane}\t#{pane_dead}\t#{@session_workspace_launched}'], capture_output=True, text=True)
+            proc = subprocess.run(tmux_argv('list-panes', '-t', '=' + session['name'], '-F', '#{@session_workspace_project}\t#{@session_workspace_pane}\t#{pane_dead}\t#{@session_workspace_launched}'), capture_output=True, text=True)
             expected = [plan['project']['id'], pane['name'], '0', pane['runtime']['name']]
             if not any(line.split('\t') == expected for line in proc.stdout.splitlines()):
                 print('ERROR: service port occupied before launch: %d (%s) is held by %s; nothing was started for it.'

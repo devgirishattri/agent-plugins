@@ -21,9 +21,9 @@ The `floor (strict-v1, not configurable):` lines follow. They show the immutable
 - `<name> (confined)` is an environment coordinator whose cwd is not the project root.
 - A bracketed count, such as `[31 read commands]`, is the size of the policy table behind that clause.
 
-The `optional guard packs:` line follows the floor. It shows the configured schema-v3–v5 `harness.guards` packs as canonical JSON, or `none (schema-v2-compatible behavior)`. The packs add to the floor. They are not the complete list of what is enforced. "No packs" never means that reviewer read-only or executor containment is off.
+The `optional guard packs:` line follows the floor. It shows the configured schema-v3–v6 `harness.guards` packs as canonical JSON, or `none (schema-v2-compatible behavior)`. The packs add to the floor. They are not the complete list of what is enforced. "No packs" never means that reviewer read-only or executor containment is off.
 
-The `identity:` line reads this pane's engine-owned environment. The variables are `SESSION_WORKSPACE_CONFIG`, `_PROJECT_ROOT`, `_PANE_NAME`, `_ROLE`, `_PANE_CWD`, and `_HARNESS_MODE`. A guarded schema-v3–v5 launch adds `_GUARDS_JSON`, which must equal the validated `harness.guards` exactly. The line shows one of these values:
+The `identity:` line reads this pane's engine-owned environment. The variables are `SESSION_WORKSPACE_CONFIG`, `_PROJECT_ROOT`, `_PANE_NAME`, `_ROLE`, `_PANE_CWD`, and `_HARNESS_MODE`. A guarded schema-v3–v6 launch adds `_GUARDS_JSON`, which must equal the validated `harness.guards` exactly. The line shows one of these values:
 
 - `not present` — `workspace-start` did not launch this process. The PreToolUse hook is a no-op here.
 - `MATCH` — identity agrees with the validated plan. An active harness enforces the strict-v1 floor for the shown role.

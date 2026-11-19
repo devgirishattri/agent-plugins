@@ -1,6 +1,6 @@
 ---
 name: workspace-orchestrator
-description: Coordinate a schema-v4/v5 session-workspace reviewed Git lifecycle across orchestrator, executor, and reviewer panes. Use for workspace status, plan review, executor dispatch, post-execution review, commit, push, deploy, selftest, prompt preview, or when replacing equivalent project-local orchestration commands.
+description: Coordinate a schema-v4/v5/v6 session-workspace reviewed Git lifecycle across orchestrator, executor, and reviewer panes. Use for workspace status, plan review, executor dispatch, post-execution review, commit, push, deploy, selftest, prompt preview, or when replacing equivalent project-local orchestration commands.
 ---
 
 # Workspace Orchestrator
@@ -74,6 +74,26 @@ Do not require the retired aliases to exist.
   Git floor, deploy preflight, and evidence rules.
 - [references/workspace-json.md](references/workspace-json.md) — schema-v4
   configuration contract and example.
+
+## Peer orchestrators (v6)
+
+Under schema 6 with `peers`, a target has no fixed executor, reviewer or
+orchestrator pane (`executor`, `reviewer` and `orchestrator` are null). Use your
+own workers on that checkout:
+
+1. Run `workspace status --json`. Select rows whose `worker.owner` is your pane
+   name and whose `worker.checkout` equals the target's `environment`.
+2. If the role you need is missing, start it:
+   `workspace start --checkout ENVIRONMENT --role executor|reviewer [--label L]`.
+   Give a label for a second worker of the same role.
+3. `[held]` (exit 3) or `[limit]` (exit 1) means you may not start it. Report
+   the line. Do not use `--owner`, `--force` or raw tmux.
+4. Address, assign to and close tasks with your own workers only
+   (`routing.owner`, `task.scope`). Tasks need no `environment` tag.
+5. Stop a worker with `workspace stop --worker NAME --confirmed` when it is idle.
+
+Never parse pane names to find workers. Read
+`../session-workspace/references/environments.md` "Peer orchestrators (schema 6)".
 
 ## Scoped ownership (v5)
 

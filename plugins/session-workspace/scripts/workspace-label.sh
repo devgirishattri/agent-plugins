@@ -74,7 +74,11 @@ if ! validate_workspace_config "$CONFIG_JSON" "$CONFIG_PATH"; then
 fi
 PROJECT_ID="$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')"
 
-if ! printf '%s' "$CONFIG_JSON" | jq -e --arg e "$ENVIRONMENT" '.schema_version == 5 and ([(.environments // [])[].id] | index($e) != null)' >/dev/null; then
+if printf '%s' "$CONFIG_JSON" | jq -e '.schema_version == 6 and has("peers")' >/dev/null; then
+  echo "ERROR: labels are not used with peers: give the label when you start a worker, with --label" >&2
+  exit 1
+fi
+if ! printf '%s' "$CONFIG_JSON" | jq -e --arg e "$ENVIRONMENT" '(.schema_version == 5 or .schema_version == 6) and ([(.environments // [])[].id] | index($e) != null)' >/dev/null; then
   echo "ERROR: unknown environment \"$ENVIRONMENT\" (labels need a schema-v5 environment)" >&2
   exit 1
 fi
@@ -102,7 +106,7 @@ report() {
   local label="$1" names="$2" changed="$3"
   if [ "$JSON_MODE" -eq 1 ]; then
     jq -cn --arg e "$ENVIRONMENT" --arg l "$label" --argjson n "$names" --argjson c "$changed" \
-      '{environment: $e, label: (if $l == "" then null else $l end), workers: $n, changed: $c}'
+      '{environment: $e, "label": (if $l == "" then null else $l end), workers: $n, changed: $c}'
   else
     printf 'environment %s: label %s\n' "$ENVIRONMENT" "${label:-(none)}"
     printf '%s' "$names" | jq -r '.[] | "  worker: " + .'
@@ -127,7 +131,7 @@ fi
 sw_lock_acquire "$PROJECT_ID" || exit 1
 
 # Every current worker of this environment must be stopped.
-if command -v tmux >/dev/null 2>&1; then
+if [ -n "$(type -P tmux 2>/dev/null)" ]; then
   running="$(tmux list-panes -a -F "#{$MARKER_PROJECT}	#{$MARKER_PANE}" 2>/dev/null | awk -F '\t' -v p="$PROJECT_ID" '$1 == p { print $2 }')"
   while IFS= read -r name; do
     [ -n "$name" ] || continue

@@ -197,7 +197,7 @@ class Envelope(unittest.TestCase):
         socket = str(self.root / 'tmux.sock')
 
         def tmux(*args):
-            result = subprocess.run(['tmux', '-S', socket, *args], env=self.env,
+            result = subprocess.run(['tmux', '-f', '/dev/null', '-S', socket, *args], env=self.env,
                                     capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout.strip()

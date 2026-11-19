@@ -28,6 +28,10 @@ reply is pending.
    An executor or reviewer whose plan pane has `"launch": "on_demand"` may be
    down; report it as on demand, not missing, and start it as in "On-demand
    workers" before you send it anything.
+   Under schema 6 with `peers`, the target has no fixed panes. Use the workers
+   you own on that checkout (`status --json` rows whose `worker.owner` is your
+   pane and `worker.checkout` is the target's `environment`), and start missing
+   ones with `workspace start --checkout ENVIRONMENT --role executor|reviewer`.
 2. Verify harness status/identity and run harness doctor when identity or hook
    health is uncertain.
 3. Inspect the root read-only. When the orchestrator may read the target checkout,

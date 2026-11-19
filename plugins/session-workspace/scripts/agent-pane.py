@@ -27,6 +27,14 @@ busy --pane-id ID --pane NAME [--tasks-dir DIR] [--queue FILE]...
     a scheduler task assigned to it that is still `assigned`, a task it
     reviews that is in `review`, unread rows in its session-chat inbox
     queue, or a turn running on its screen ("esc to interrupt").
+
+leftover --pane NAME --owner OWNER [--tasks-dir DIR] [--queue FILE]...
+    Print one line per piece of unfinished work under NAME that another
+    owner left, as `<reason><TAB><that owner>`, and exit 1, or exit 0: a task
+    assigned to NAME (still `assigned`) or reviewed by NAME (still `review`)
+    whose assigner is not OWNER, or unread inbox rows from a sender that is not
+    OWNER. `workspace start --checkout` reads this before it hands a pane name
+    to a new owner. It reads the same files as `busy`, with the same checks.
 """
 import argparse
 import json
@@ -43,9 +51,16 @@ MENU_RE = re.compile(r"\A(?:›|❯)\s*\d+[.)]\s")
 TURN_RE = re.compile(r"esc to interrupt", re.IGNORECASE)
 
 
+def tmux_argv(*args):
+    """tmux ARGS, pinned (-N -S) to the server the calling engine verb bound
+    (SESSION_WORKSPACE_TMUX_SOCKET, lib.sh). Unbound: plain tmux."""
+    sock = os.environ.get('SESSION_WORKSPACE_TMUX_SOCKET')
+    return ['tmux', '-N', '-S', sock, *args] if sock else ['tmux', *args]
+
+
 def tmux(*args):
     try:
-        run = subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=10)
+        run = subprocess.run(tmux_argv(*args), capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return run.stdout if run.returncode == 0 else None
@@ -178,6 +193,51 @@ def cmd_busy(opts):
     return 1 if reasons else 0
 
 
+def cmd_leftover(opts):
+    lines = []
+    if opts.tasks_dir:
+        tasks = Path(opts.tasks_dir)
+        if tasks.is_dir() and not tasks.is_symlink():
+            for entry in sorted(tasks.glob("*.json")):
+                if not safe_regular(entry):
+                    continue
+                try:
+                    task = json.loads(entry.read_text())
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(task, dict):
+                    continue
+                assigner = task.get("assigner")
+                assigner = assigner if isinstance(assigner, str) and assigner else "unknown"
+                if assigner == opts.owner:
+                    continue
+                status = task.get("status")
+                task_id = str(task.get("id") or entry.stem)
+                if task.get("assignee") == opts.pane and status == "assigned":
+                    lines.append("task %s was assigned to it by %s and is not finished\t%s" % (task_id, assigner, assigner))
+                elif task.get("reviewer") == opts.pane and status == "review":
+                    lines.append("task %s from %s is waiting for its review\t%s" % (task_id, assigner, assigner))
+    for queue in opts.queue or []:
+        path = Path(queue)
+        if not safe_regular(path):
+            continue
+        try:
+            rows = [line for line in path.read_text().splitlines() if line.strip()]
+        except OSError:
+            continue
+        senders = {}
+        for row in rows:
+            cols = row.split("\t")
+            sender = cols[2] if len(cols) > 2 and cols[2] else "unknown"
+            if sender != opts.owner:
+                senders[sender] = senders.get(sender, 0) + 1
+        for sender in sorted(senders):
+            lines.append("%d unread message(s) from %s in %s\t%s" % (senders[sender], sender, path, sender))
+    for line in lines:
+        print(line)
+    return 1 if lines else 0
+
+
 def main(argv):
     parser = argparse.ArgumentParser(prog="agent-pane.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -190,7 +250,14 @@ def main(argv):
     busy.add_argument("--pane", required=True)
     busy.add_argument("--tasks-dir")
     busy.add_argument("--queue", action="append")
+    leftover = sub.add_parser("leftover")
+    leftover.add_argument("--pane", required=True)
+    leftover.add_argument("--owner", required=True)
+    leftover.add_argument("--tasks-dir")
+    leftover.add_argument("--queue", action="append")
     opts = parser.parse_args(argv)
+    if opts.command == "leftover":
+        return cmd_leftover(opts)
     if not re.fullmatch(r"%[0-9]+", opts.pane_id):
         print("--pane-id must be a tmux pane id such as %12", file=sys.stderr)
         return 64

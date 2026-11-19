@@ -103,10 +103,14 @@ def run(repo, provider, output, timeout):
                 finally:
                     if process is not None:
                         stop_group(process)
-                    # TMUX is removed and TMUX_TMPDIR is unique to this run.
-                    subprocess.run(["tmux", "kill-server"], env=env,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=10, check=False)
+                    # Address the run's own default socket by path. A bare
+                    # kill-server falls back to the user's default server when
+                    # TMUX_TMPDIR no longer exists.
+                    socket = fixture / ("tmux-%d" % os.getuid()) / "default"
+                    if socket.is_socket():
+                        subprocess.run(["tmux", "-S", str(socket), "kill-server"], env=env,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       timeout=10, check=False)
     if receipt["result"] == "passed":
         summary = (r"session-scheduler smoke tests: ([1-9][0-9]*) passed, 0 failed"
                    if provider == "codex" else r"=== Results: ([1-9][0-9]*) passed, 0 failed ===")

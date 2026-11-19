@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.23 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.11 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.14 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.16.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4/v5 reviewed Git orchestration |
+| `session-workspace` | 0.17.0 | Config-driven tmux workspace with strict-v1 role policy, reviewed Git orchestration, and peer orchestrators with on-demand workers |
 | `chronos` | 0.1.5 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.1 | Walk users through session changes with a live in-browser overlay tour |
 
@@ -46,7 +46,7 @@ rather than assumed: the `session-scheduler` Claude suite passes 81/81 under 3.2
 | `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
 | `python3` | `knowledge` v2 handoffs | Required to save or regenerate structured scope/items. Legacy v1 and plain snapshot writes retain their existing behavior. |
 | `python3` | `session-manager` on Codex | Required to read names from `session_index.jsonl` for listing, search, deletion selection, and statistics. |
-| `python3` | `session-workspace` harness policy | Hard only when a schema-v2–v5 harness is active or the hook must validate a claimed reviewer identity. |
+| `python3` | `session-workspace` harness policy | Required when a schema 2–6 harness is active or the hook must validate a claimed reviewer identity. |
 | `python3` | `knowledge` doctor, `session-chat` message surfacing | Optional. Both degrade rather than fail. |
 | `codex` CLI | `session-manager` on Codex | Required for native deletion, archive and unarchive. Single-session delete, archive and unarchive exit 127 if the CLI is unavailable. Bulk deletion can return 1 when planning or deletion fails. |
 | GNU or BSD `date` plus a zoneinfo tree | `chronos` | Hard. It validates `AGENT_PLUGINS_TIME_ZONE` against the system zoneinfo. |
@@ -629,7 +629,7 @@ to every session marked for this project. `/workspace-restart` passes confirmati
 to its own stop phase. With `behavior.stop_scope: all`, a targeted restart can stop other project-marked sessions and start only the named one.
 See the [workspace configuration](plugins/session-workspace/README.md).
 
-Schemas v4 and v5 support the `workspace-orchestrator` skill and its fixed
+Schemas 4–6 support the `workspace-orchestrator` skill and its fixed
 `reviewed-git-v1` lifecycle. The orchestrator assigns work, the executor implements
 it and performs authorized Git operations, and the reviewer records the audit.
 Commit, push and deploy have separate gates. For ordinary targets the executor
@@ -844,9 +844,12 @@ session-manager operations do not honor `CLAUDE_HOME`.
 | `SESSION_WORKSPACE_CONFIG` | Yes | Yes | Discovered | Explicit path to the project's `.agent-workspace/workspace.json`. The bootstrap shim exports it; set it directly to drive a config outside the current project root. |
 | `SESSION_WORKSPACE_PLUGIN_ROOT` | Yes | Yes | Resolved | Explicit engine root, used by the bootstrap shim and the machine-wide dispatcher when the installed plugin cannot be located by the normal search. |
 | `SESSION_WORKSPACE_SOURCE_TREE_DIR` | Yes | Yes | Unset | Development override for finding sibling dependency plugins in a source checkout. |
+| `SESSION_WORKSPACE_TMUX_SOCKET` | Yes | Yes | Derived at entry | Absolute tmux socket path for a workspace operation and its children. Inside tmux it must match the socket in `TMUX`. Outside tmux the default is `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default`. Set it explicitly to select a private test server. |
 | `SESSION_WORKSPACE_LOCK_TIMEOUT` | Yes | Yes | `30` | Seconds to wait for the tmux lifecycle lock before giving up. |
 | `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` | Yes | Yes | `120` | Total seconds to wait for each targeted worker pane to become ready, including its settle window. |
 | `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS` | Yes | Yes | `1500` | Settle window in milliseconds for a worker's input line. A menu or missing input line restarts the window. Set to `0` to accept the first input line. |
+| `SESSION_WORKSPACE_HIDDEN_SIZE` | Yes | Yes | `160x48` | Size for a hidden peer worker's tmux window, in `COLSxROWS`. Minimum 40 columns and 10 rows. Read when starting or hiding a worker. |
+| `XDG_STATE_HOME` | Yes | Yes | `$HOME/.local/state` | With schema 6 peers, the engine exports the resolved state home to each pane. The engine and hook use the same `session-workspace/<project.id>/instances.json`. Configure the state home in the launcher. |
 | `SESSION_WORKSPACE_STOP_GRACE_SECONDS` | Yes | Yes | `5` | Grace period given to a pane's agent to exit before `workspace-stop` escalates. |
 | `SESSION_WORKSPACE_IDLE_OBSERVE` | Yes | Yes | Unset | Set to `connections` to make the browser's idle watcher count client connections instead of CDP traffic. Read when `start` arms the watcher. |
 | `SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS` | Yes | Yes | `30` | Seconds between idle-watcher samples, at most the idle window. Read when `start` arms the watcher. |
@@ -1166,7 +1169,26 @@ These checks do not themselves enable repository merge protection.
   appropriate to the reviewed fixture. Generated `evals/results/` reports stay
   local and are gitignored.
 - `session-scheduler` is intentionally a file-backed ledger layered on `session-chat`; keep scheduling state out of the transport plugin.
-- `session-workspace` owns tmux lifecycle, the optional role-policy harness and the schema-v4/v5 `reviewed-git-v1` workflow. The project's root `workspace.sh` is a bootstrap. `workspace.json` supplies validated pane and Git coordinates. Correlated session-chat replies and the pinned scheduler ledger record gate evidence. Product-specific checks belong in `AGENTS.md`, and the user gives the required confirmations in conversation.
+- `session-workspace` owns tmux lifecycle, the optional role-policy harness and the `reviewed-git-v1` workflow in schemas 4–6. The project's root `workspace.sh` is a bootstrap. `workspace.json` supplies validated pane and Git coordinates. Correlated session-chat replies and the pinned scheduler ledger record gate evidence. Product-specific checks belong in `AGENTS.md`, and the user gives the required confirmations in conversation.
+
+### Peer orchestrators (schema 6)
+
+Enable the harness and set `peers.session` to the declared root orchestrator session.
+From a user terminal, `workspace start development-2 --no-attach` creates a copy of
+`development`. Inside either orchestrator, `workspace start --checkout web --role executor`
+starts its worker in a separate tmux window. From a user terminal the same worker
+command also requires `--owner PANE`. Use `workspace show NAME` to bring it beside
+its owner and `workspace hide NAME` to move it back. Both keep the running process.
+
+Read `workspace plan --running --json` for worker names, owners, and checkouts.
+Use `workspace status --json` for live visibility. A held worker name or checkout
+reports its holder and exits 3. A reached orchestrator or worker limit exits 1.
+Finish queued work before reusing a name under another owner.
+
+Upgrade both providers to 0.17.0 before switching to schema 6. A schema 6 config
+without `peers` retains schema 5 behavior. For migration and rollback, stop the
+current sessions under their current config before changing it.
+[Example config](codex/plugins/session-workspace/templates/workspace-peers.json) · [Configuration and migration](codex/plugins/session-workspace/skills/session-workspace/references/environments.md#peer-orchestrators-schema-6)
 
 ### Independent workspace environments (schema v5)
 
@@ -1201,7 +1223,8 @@ The existing Codex enforce caveats still apply.
 
 Task creation requires `--meta environment=<own-id>`; assignment checks that
 metadata on the stored task and permits only that master's workers. `root` is
-reserved for an unbound root master. Shared-root writes remain user-coordinated;
+reserved for an unbound root master. When it manages an environment directly,
+its executor and reviewer accept the root's `environment=root` task tag. Shared-root writes remain user-coordinated;
 no new master lock is added. Service panes with commands stay in their environment
 checkout; command-less shells/browser panes can use any project-contained cwd.
 Those shells carry no harness policy, so checkout confinement protects no role

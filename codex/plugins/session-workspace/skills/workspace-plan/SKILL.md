@@ -25,6 +25,13 @@ Real flags:
 - `--running`: add a read-only `running` field to each pane (true when the
   managed pane is alive and launched, `null` without tmux).
 
+Under schema 6 with `peers`, `--json` adds top-level `peers` (`session`,
+`limits`) and `workers: [{name, role, checkout, owner, visible, running,
+session}]`. `role` is `executor` or `reviewer`. `running` is `null` unless
+`--running`. A worker's pane row carries `worker: {checkout, role, label, owner,
+visible}`, and an orchestrator copy's session row carries `instance`. A TARGET
+filters `workers[]` to that session. Read these fields and never parse pane names.
+
 The plan reads the config, resolves pane working directories, and applies worker names from the project's `labels.json` when present. It writes no state.
 Only `--running` reads tmux.
 Unknown targets fail with the known session ids. The human report shows env
