@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.23 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.11 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.14 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.16.1 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4/v5 reviewed Git orchestration |
+| `session-workspace` | 0.16.2 | Config-driven tmux workspace, fail-closed multi-agent harness, shared guard packs, and schema-v4/v5 reviewed Git orchestration |
 | `chronos` | 0.1.5 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.1 | Walk users through session changes with a live in-browser overlay tour |
 
@@ -845,7 +845,8 @@ session-manager operations do not honor `CLAUDE_HOME`.
 | `SESSION_WORKSPACE_PLUGIN_ROOT` | Yes | Yes | Resolved | Explicit engine root, used by the bootstrap shim and the machine-wide dispatcher when the installed plugin cannot be located by the normal search. |
 | `SESSION_WORKSPACE_SOURCE_TREE_DIR` | Yes | Yes | Unset | Development override for finding sibling dependency plugins in a source checkout. |
 | `SESSION_WORKSPACE_LOCK_TIMEOUT` | Yes | Yes | `30` | Seconds to wait for the tmux lifecycle lock before giving up. |
-| `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` | Yes | Yes | `120` | Seconds to wait for a targeted worker pane to display an agent prompt. |
+| `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` | Yes | Yes | `120` | Total seconds to wait for each targeted worker pane to become ready, including its settle window. |
+| `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS` | Yes | Yes | `1500` | Settle window in milliseconds for a worker's input line. A menu or missing input line restarts the window. Set to `0` to accept the first input line. |
 | `SESSION_WORKSPACE_STOP_GRACE_SECONDS` | Yes | Yes | `5` | Grace period given to a pane's agent to exit before `workspace-stop` escalates. |
 | `SESSION_WORKSPACE_IDLE_OBSERVE` | Yes | Yes | Unset | Set to `connections` to make the browser's idle watcher count client connections instead of CDP traffic. Read when `start` arms the watcher. |
 | `SESSION_WORKSPACE_IDLE_SAMPLE_SECONDS` | Yes | Yes | `30` | Seconds between idle-watcher samples, at most the idle window. Read when `start` arms the watcher. |

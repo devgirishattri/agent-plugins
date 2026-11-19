@@ -91,9 +91,10 @@ plan session that holds the pane.
    reviewer before plan review and again before the audit, the executor before
    the assignment and before each authorized commit, push, or deploy step.
    `[kept]` means it is already running.
-2. On `[not ready]`, the pane is running but its agent shows no input line.
-   Read the pane: a first-run question such as folder trust needs the user.
-   Do not dispatch until a later start reports `[ready]`.
+2. On `[not ready]`, read the reason and inspect the pane if it is still
+   running. Its input line may have appeared too briefly, or a choice may
+   have replaced it. A first-run question such as folder trust needs the user.
+   Wait for a later start to report `[ready]` before dispatching.
 3. A started worker has an empty conversation. Every packet must stand alone;
    the shared packet, the scheduler task, and the session-chat archive are the
    record, never the worker's memory of an earlier step.

@@ -42,9 +42,12 @@ Real flags:
 
 A full start leaves on-demand workers down and reports each as `[on-demand]
 ... start it with: workspace start SESSION --pane NAME`. `--pane` for a worker
-waits until its agent shows its input line and prints `[ready]`. `[not ready]`
-means the agent did not get there in time, or shows a choice such as a folder
-trust question; the pane is left running and the start exits non-zero. Relay
+prints `[ready]` only after its agent has shown its input line on every check
+for a settle window. The window is `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS`
+milliseconds (default `1500`). `0` accepts the first input line. A choice, or a
+screen without an input line, restarts the window. `[not ready]` means the
+agent did not keep its input line in time, or shows a choice such as a folder
+trust question. The pane is left running and the start exits non-zero. Relay
 it, and do not send the worker a message until it is ready.
 
 Safety gates:

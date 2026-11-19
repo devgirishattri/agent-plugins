@@ -17,7 +17,7 @@
 # NAME is a pane's full name or the part after "<project.id>-". Each selected
 # dev server's port must be free (or held by that pane's own live launch) or
 # nothing is started and the holder's PID is named. Each selected agent pane
-# must show its input line within SESSION_WORKSPACE_AGENT_READY_TIMEOUT
+# must show and keep its input line within SESSION_WORKSPACE_AGENT_READY_TIMEOUT
 # seconds (default 120) or the run fails, leaving the pane running. A --pane
 # start never attaches: it brings panes up in the background. A full start
 # leaves on-demand panes down (and keeps them when they already run).
@@ -226,7 +226,7 @@ for BROWSER_PORT in "${BROWSER_PORTS[@]:-}"; do
   fi
 done
 
-# An on-demand worker is ready when its agent shows an input line, so a
+# An on-demand worker is ready when its agent keeps an input line on screen, so a
 # message sent right after this command lands in it. A pane that does not get
 # there in time is reported and left running for a look, and the run fails.
 if [ "$SW_PANE_SUBSET" -eq 1 ] && [ "$SW_FAILED_SLOTS" -eq 0 ]; then

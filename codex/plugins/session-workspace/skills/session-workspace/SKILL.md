@@ -81,12 +81,14 @@ A project opts in by creating `.agent-workspace/workspace.json`. Set
   holding a taken port instead of colliding. [Starting selected panes](../workspace-start/SKILL.md)
 - Executor and reviewer panes marked `"launch": "on_demand"` (active strict-v1
   harness, standard layout) stay down on a full start. The orchestrator starts
-  one with `workspace start SESSION --pane NAME`, which waits until its agent
-  shows its input line, and closes it with `workspace stop SESSION --pane NAME
+  one with `workspace start SESSION --pane NAME`. Every check must show the
+  agent's input line for `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS` milliseconds
+  (default `1500`). Set it to `0` to accept the first input line.
+  `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` sets the total readiness wait in
+  seconds (default `120`). [Worker readiness](../workspace-start/SKILL.md)
+  The orchestrator closes the worker with `workspace stop SESSION --pane NAME
   --confirmed`, which leaves a busy worker running. The orchestrator may not
   stop or restart the session holding its own pane (`orchestrator.self_stop`).
-  `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` sets the readiness wait in seconds
-  (default `120`). [Worker readiness](../workspace-start/SKILL.md)
   - The idle watcher reads these variables when `start` arms it, so a change
     applies from the next start. `SESSION_WORKSPACE_IDLE_OBSERVE=connections`
     makes the browser count client connections instead of CDP traffic.

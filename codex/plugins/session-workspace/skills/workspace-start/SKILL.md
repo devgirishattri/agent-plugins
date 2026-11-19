@@ -41,11 +41,18 @@ Real flags:
   be combined with `--no-agents`, `--no-services` or `--adopt`.
 
 A full start leaves on-demand workers down and reports each as `[on-demand]
-... start it with: workspace start SESSION --pane NAME`. `--pane` for a worker
-waits until its agent shows its input line and prints `[ready]`. `[not ready]`
-means the agent did not get there in time, or shows a choice such as a folder
-trust question; the pane is left running and the start exits non-zero. Relay
-it, and do not send the worker a message until it is ready.
+... start it with: workspace start SESSION --pane NAME`. For a targeted
+worker, start prints `[ready]` after every check shows the agent's input line
+for `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS` milliseconds. A numbered choice
+or a missing input line restarts the window. An unset or empty value uses
+`1500`. Use a finite, nonnegative number. For an invalid value, start reports
+`[not ready]` and names the variable. With `0`, the first check that sees an
+input line succeeds even if that check finishes after the timeout.
+
+If the window cannot finish within `SESSION_WORKSPACE_AGENT_READY_TIMEOUT`,
+start reports `[not ready]`, exits nonzero and leaves the pane running. Relay
+the reason. A first-run folder trust question needs the user. Wait for
+`[ready]` before sending the worker a message.
 
 Safety gates:
 

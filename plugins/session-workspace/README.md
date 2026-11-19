@@ -168,12 +168,19 @@ workspace stop development --pane web-executor --confirmed
 ```
 
 - **Ready means ready to take a message.** `start --pane` for a worker
-  returns once the agent draws its input line (Codex's `›`, Claude Code's
-  `❯`), so a `session-chat` send right after it is not typed into a booting
-  agent. A numbered choice on that line, such as a first-run folder trust
-  question, is not ready. A worker that does not get there within
-  `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` seconds (default 120) is reported as
-  `[not ready] ... the pane is left running`, and the start exits non-zero.
+  reports `[ready]` only after the agent has shown its input line (Codex's
+  `›`, Claude Code's `❯`) on every check for a settle window, so a
+  `session-chat` send right after it is not typed into a booting agent or a
+  first-run choice. The window is `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS`
+  milliseconds (default `1500`). `0` accepts the first input line. A numbered
+  choice on that line, or a screen without an input line, restarts the
+  window. So an input line that a first-run choice replaces a moment later
+  (Codex's hook review or folder trust) is not reported ready. The window
+  counts inside `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` seconds (default 120),
+  so a timeout shorter than the window never reports ready. An ordinary start
+  takes about the settle window longer. A worker that does not get there in
+  time is reported as `[not ready] ... the pane is left running`, and the
+  start exits non-zero.
 - **Closed only when idle.** `stop --pane` for a worker first checks that it
   is idle. It leaves the worker running, reports `[busy] ... left running:
   <reasons>` and exits 1 when a scheduler task assigned to it is still

@@ -69,12 +69,15 @@ A project opts in by creating `.agent-workspace/workspace.json`. Set
   service panes on demand".
 - Executor and reviewer panes marked `"launch": "on_demand"` (active strict-v1
   harness, standard layout) stay down on a full start. The orchestrator starts
-  one with `workspace start SESSION --pane NAME`, which waits until its agent
-  shows its input line, and closes it with `workspace stop SESSION --pane NAME
-  --confirmed`, which leaves a busy worker running. The orchestrator may not
+  one with `workspace start SESSION --pane NAME`. That command waits until the
+  agent has kept its input line on screen for a settle window. The
+  orchestrator closes it with `workspace stop SESSION --pane NAME --confirmed`,
+  which leaves a busy worker running. The orchestrator may not
   stop or restart the session holding its own pane (`orchestrator.self_stop`).
   `SESSION_WORKSPACE_AGENT_READY_TIMEOUT` sets the readiness wait in seconds
-  (default `120`). See the README section "On-demand workers".
+  (default `120`). `SESSION_WORKSPACE_AGENT_READY_SETTLE_MS` sets the settle
+  window in milliseconds (default `1500`; `0` accepts the first input line).
+  See the README section "On-demand workers".
   - The idle watcher reads these variables when `start` arms it, so a change
     applies from the next start. `SESSION_WORKSPACE_IDLE_OBSERVE=connections`
     makes the browser count client connections instead of CDP traffic.
