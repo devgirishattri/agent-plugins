@@ -3368,6 +3368,10 @@ def segment_identity_override(segment: List[str]) -> Optional[str]:
             index += 1
             continue
         if name in ENV_BUILTINS:
+            # An exported function (export -f, declare -fx, ...) replaces a
+            # command the engine runs by name, such as env or jq.
+            if name != "unset" and any(re.fullmatch(r"[-+][A-Za-z]*f[A-Za-z]*", word) for word in segment[index + 1:]):
+                return name + " -f"
             for word in segment[index + 1:]:
                 if word.startswith("-") or word == REDIR_WRITE_MARK or word.startswith(REDIR_PATH_PREFIX):
                     continue
@@ -3405,7 +3409,9 @@ TMUX_FORMAT_MODIFIER_RE = re.compile(r"#\{[^}]*:")
 # anywhere in such a segment is tmux outside the read-only grammar.
 TMUX_INDIRECT_RUNNERS = frozenset({"eval", "xargs", "find", "parallel", "watch", "script", "expect", "su", "sudo", "doas",
                                    "ssh", "at", "batch", "awk", "gawk", "mawk", "nawk", "sed", "gsed", "busybox", "make",
-                                   "gmake", "vi", "vim", "nvim", "ex", "emacs", "tclsh", "wish", "expect"})
+                                   "gmake", "vi", "vim", "nvim", "ex", "emacs", "tclsh", "wish", "timeout", "gtimeout",
+                                   "nice", "setsid", "stdbuf", "flock", "ionice", "chroot", "caffeinate", "unbuffer",
+                                   "nohup", "time", "exec", "command", "builtin", "env", "chronic", "strace", "dtruss"})
 # Shells and interpreters run a tmux word only as inline code (sh -c, bash -lc,
 # python3 -c, perl -e, node --eval, php -r, osascript -e, ...). Their other
 # arguments are a script file and its data, such as a message that mentions
@@ -3414,11 +3420,18 @@ TMUX_INDIRECT_RUNNERS = frozenset({"eval", "xargs", "find", "parallel", "watch",
 TMUX_SHELL_RE = re.compile(r"\A(?:sh|bash|zsh|dash|ksh|mksh|fish|csh|tcsh)\Z")
 TMUX_INTERPRETER_RE = re.compile(r"\A(?:python|perl|ruby|node|nodejs|php|lua|luajit|osascript|Rscript|pwsh|deno|bun)[0-9.]*\Z")
 TMUX_INLINE_CODE_OPTIONS = frozenset({"-c", "-e", "-E", "-r", "-p", "--eval", "--print", "--command", "-Command"})
+# Options of a shell or interpreter that take the next word as their value.
+TMUX_VALUE_OPTIONS_BY_KIND = {
+    "shell": frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}),
+    "interpreter": frozenset({"-W", "-X", "-I", "-M", "--require", "-R", "--import", "--loader", "--env-file"}),
+}
 TMUX_WORD_RE = re.compile(r"(?<![A-Za-z0-9_.-])tmux(?![A-Za-z0-9_.-])")
 
 
-def tmux_indirect(argv: List[str]) -> bool:
-    """True when ARGV runs a tmux word through another program."""
+def tmux_indirect(argv: List[str]):
+    """True when ARGV runs a tmux word through another program, "stdin" when
+    ARGV is a shell or interpreter that reads its code from standard input
+    (no script file and no inline code), False otherwise."""
     if not argv:
         return False
     name = Path(argv[0]).name
@@ -3432,12 +3445,24 @@ def tmux_indirect(argv: List[str]) -> bool:
         return any(TMUX_WORD_RE.search(value) for value in values)
     shell = TMUX_SHELL_RE.fullmatch(name) is not None
     if shell or TMUX_INTERPRETER_RE.fullmatch(name):
-        for index, word in enumerate(words):
+        valued = TMUX_VALUE_OPTIONS_BY_KIND["shell" if shell else "interpreter"]
+        index = 0
+        while index < len(words):
+            word = words[index]
             inline = word in TMUX_INLINE_CODE_OPTIONS or (shell and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word) is not None)
             if inline:
                 return any(TMUX_WORD_RE.search(rest) for rest in words[index + 1:])
-            if not word.startswith("-"):
+            if word in valued:
+                index += 2
+                continue
+            if word == "-" or word == "-s" or word == "--":
+                return "stdin"
+            if word == "-m" and not shell:
+                return False  # python -m MODULE: a module file, like a script
+            if not word.startswith(("-", "+")):
                 return False  # a script file and its arguments
+            index += 1
+        return "stdin"
     return False
 
 
@@ -3474,7 +3499,10 @@ def peers_tmux(ctx: Context, command: str, tokens: List[str]) -> None:
     (the shell hands tmux a second command that no segment shows)."""
     for part in segments(tokens):
         argv = unwrap_prefixes(part)
-        if tmux_indirect(argv):
+        found = tmux_indirect(argv)
+        # A shell or interpreter that reads its code from a pipe, a here-string
+        # or a here-document runs whatever text the command carries.
+        if found is True or (found == "stdin" and TMUX_WORD_RE.search(command)):
             raise PolicyFailure("orchestrator.tmux", "tmux run through %s is outside the read-only tmux grammar" % Path(argv[0]).name)
     tmux_segments = [part for part in segments(tokens) if command_basename(part) == "tmux"]
     if not tmux_segments:

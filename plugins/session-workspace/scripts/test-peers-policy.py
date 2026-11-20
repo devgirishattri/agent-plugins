@@ -382,6 +382,10 @@ class Tmux(Base):
                 "python3.12 -c 'import os; os.system(\"tmux kill-server\")'", "node -e 'require(\"child_process\").execSync(\"tmux kill-server\")'",
                 "awk 'BEGIN { system(\"tmux kill-server\") }'", "sed -n '1e tmux kill-server' notes.md",
                 "git -c alias.k='!tmux kill-server' k", "busybox sh -c 'tmux kill-server'",
+                # code read from a pipe, a here-string or a here-document; valued options before -c
+                "echo 'tmux kill-server' | sh", "printf 'tmux kill-server' | bash -s", "sh <<< 'tmux kill-server'",
+                "echo 'import os; os.system(\"tmux kill-server\")' | python3 -", "bash -o pipefail -c 'tmux kill-server'",
+                "bash --rcfile /dev/null -c 'tmux kill-server'", "timeout 5 tmux kill-server", "nice -n 5 tmux kill-server",
                 # format modifiers that expand text the format does not spell out
                 "tmux display-message -p '#{E:@x}'", "tmux display-message -p '#{T:@x}'",
                 "tmux list-panes -F '#{S:#{session_name}}'", "tmux display -p '#{s/a/b/:pane_id}'"]
@@ -401,6 +405,9 @@ class Tmux(Base):
         self.assertFalse(POLICY.tmux_indirect(['bash', '/x/session-chat/scripts/send-message.sh', B, 'restart the tmux server later']))
         self.assertFalse(POLICY.tmux_indirect(['python3', 'notes.py', 'tmux']))
         self.assertTrue(POLICY.tmux_indirect(['bash', '-c', 'tmux kill-server']))  # control
+        self.assertFalse(POLICY.tmux_indirect(['bash', '-o', 'pipefail', 'build.sh', 'tmux']))  # a script after a valued option
+        self.assertEqual(POLICY.tmux_indirect(['sh']), 'stdin')
+        self.ok(a, 'ls | sh')  # control: piped code without a tmux word
 
     def test_workers_keep_their_own_tmux_rule_and_v5_root_is_unchanged(self):
         self.bad(self.r.ctx(AE), 'routing.master', 'tmux kill-pane -t %1')
@@ -482,7 +489,11 @@ class Override(Base):
                  'LD_PRELOAD=/tmp/x.so workspace plan',
                  'PYTHONPATH=/tmp/x workspace plan',
                  'TMUX_TMPDIR=/tmp/x workspace show ' + AE,
-                 'export PATH=/tmp/x:$PATH; workspace plan']
+                 'export PATH=/tmp/x:$PATH; workspace plan',
+                 # an exported function replaces a command the engine runs by name
+                 'env() { true; }; export -f env; workspace plan',
+                 'jq() { true; }; declare -fx jq; workspace status',
+                 'typeset -xf env && workspace plan']
         for command in cases:
             self.bad(a, 'identity.override', command)
             self.bad(ae, 'identity.override', command)
@@ -492,6 +503,7 @@ class Override(Base):
         self.ok(a, 'XDG_STATE_HOME=/tmp/x ls')
         self.ok(a, 'export TMUX_PANE=%9')
         self.ok(a, 'PATH=/tmp/x:$PATH ls')
+        self.ok(a, 'export FOO=1; workspace status')
         self.ok(ae, 'workspace plan')
         self.ok(ae, 'FOO=1 workspace plan')
 
