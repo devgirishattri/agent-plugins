@@ -386,6 +386,9 @@ class Tmux(Base):
                 "echo 'tmux kill-server' | sh", "printf 'tmux kill-server' | bash -s", "sh <<< 'tmux kill-server'",
                 "echo 'import os; os.system(\"tmux kill-server\")' | python3 -", "bash -o pipefail -c 'tmux kill-server'",
                 "bash --rcfile /dev/null -c 'tmux kill-server'", "timeout 5 tmux kill-server", "nice -n 5 tmux kill-server",
+                # flags that look like valued options must not hide the inline code after them
+                "python3 -I -c 'import os; os.system(\"tmux kill-server\")'", "python3 -R -c 'import os; os.system(\"tmux kill-server\")'",
+                "perl -M strict -e 'system(\"tmux kill-server\")'",
                 # format modifiers that expand text the format does not spell out
                 "tmux display-message -p '#{E:@x}'", "tmux display-message -p '#{T:@x}'",
                 "tmux list-panes -F '#{S:#{session_name}}'", "tmux display -p '#{s/a/b/:pane_id}'"]
@@ -493,7 +496,10 @@ class Override(Base):
                  # an exported function replaces a command the engine runs by name
                  'env() { true; }; export -f env; workspace plan',
                  'jq() { true; }; declare -fx jq; workspace status',
-                 'typeset -xf env && workspace plan']
+                 'typeset -xf env && workspace plan',
+                 'set -a; env() { true; }; workspace plan',
+                 'set -o allexport; workspace status',
+                 'set -ae && workspace plan']
         for command in cases:
             self.bad(a, 'identity.override', command)
             self.bad(ae, 'identity.override', command)
@@ -504,6 +510,9 @@ class Override(Base):
         self.ok(a, 'export TMUX_PANE=%9')
         self.ok(a, 'PATH=/tmp/x:$PATH ls')
         self.ok(a, 'export FOO=1; workspace status')
+        self.ok(a, 'set -euo pipefail; workspace status')  # control: set without allexport
+        # the earlier identity checks still hold next to the function check
+        self.bad(a, 'identity.override', 'export SESSION_WORKSPACE_PANE_NAME=x; workspace plan')
         self.ok(ae, 'workspace plan')
         self.ok(ae, 'FOO=1 workspace plan')
 

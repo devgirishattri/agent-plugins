@@ -3377,6 +3377,12 @@ def segment_identity_override(segment: List[str]) -> Optional[str]:
                     continue
                 if IDENTITY_NAME_RE.fullmatch(word.split("=", 1)[0]):
                     return word.split("=", 1)[0]
+        if name == "set":
+            # set -a / set -o allexport exports every function defined after it.
+            words = segment[index + 1:]
+            if any(re.fullmatch(r"-[A-Za-z]*a[A-Za-z]*", word) for word in words) or \
+                    any(word == "-o" and following == "allexport" for word, following in zip(words, words[1:])):
+                return "set -a"
         return ""
     return ""
 
@@ -3445,6 +3451,12 @@ def tmux_indirect(argv: List[str]):
         return any(TMUX_WORD_RE.search(value) for value in values)
     shell = TMUX_SHELL_RE.fullmatch(name) is not None
     if shell or TMUX_INTERPRETER_RE.fullmatch(name):
+        # Fail closed first: an inline-code option anywhere, followed by a
+        # tmux word, is tmux, however the options before it parse.
+        for index, word in enumerate(words):
+            if word in TMUX_INLINE_CODE_OPTIONS or (shell and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word) is not None):
+                if any(TMUX_WORD_RE.search(rest) for rest in words[index + 1:]):
+                    return True
         valued = TMUX_VALUE_OPTIONS_BY_KIND["shell" if shell else "interpreter"]
         index = 0
         while index < len(words):
