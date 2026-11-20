@@ -275,7 +275,11 @@ def coordination_var_name(store):
     mcp_server_name: ($browser.mcp_server_name // "chrome-devtools")
   } end)
 } + (if $peers then {
-  peers: {session: $cfg.peers.session, limits: ($cfg.peers.limits // {})},
+  # scheduler_store: the scheduler store a config pins, whether or not any
+  # pane is granted it or any worker runs. The policy guards a peer
+  # orchestrator's task ledger from it; it grants no pane anything.
+  peers: {session: $cfg.peers.session, limits: ($cfg.peers.limits // {}),
+          scheduler_store: (if ($pin | index("scheduler")) != null then store_path($store_base; $store_overrides; "scheduler") else null end)},
   workers: [
     ($cfg.sessions // [])[] | . as $s | ($s.panes // [])[] | select(has("worker"))
     | {name, role: .worker.role, checkout: .worker.checkout, owner: .worker.owner, visible: .worker.visible, running: null, session: $s.id}

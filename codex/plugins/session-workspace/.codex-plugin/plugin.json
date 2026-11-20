@@ -1,6 +1,6 @@
 {
   "name": "session-workspace",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "Config-driven tmux workspace, strict-v1 role policy, reviewed Git orchestration, and on-demand peer orchestrators for Codex sessions.",
   "author": {
     "name": "Girish Attri",

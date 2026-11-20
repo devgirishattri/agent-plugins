@@ -15,7 +15,7 @@ Every plugin below ships for both providers at the same version number.
 | `session-chat` | 0.17.23 | Name tmux panes, send messages, and dispatch tasks between sessions |
 | `session-scheduler` | 0.7.11 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.14 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.17.0 | Config-driven tmux workspace with strict-v1 role policy, reviewed Git orchestration, and peer orchestrators with on-demand workers |
+| `session-workspace` | 0.17.1 | Config-driven tmux workspace with strict-v1 role policy, reviewed Git orchestration, and peer orchestrators with on-demand workers |
 | `chronos` | 0.1.5 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.1 | Walk users through session changes with a live in-browser overlay tour |
 
@@ -1185,7 +1185,8 @@ Use `workspace status --json` for live visibility. A held worker name or checkou
 reports its holder and exits 3. A reached orchestrator or worker limit exits 1.
 Finish queued work before reusing a name under another owner.
 
-Upgrade both providers to 0.17.0 before switching to schema 6. A schema 6 config
+Use session-workspace 0.17.1 or later on both providers to protect the configured
+task ledger while peer orchestrators have no workers. A schema 6 config
 without `peers` retains schema 5 behavior. For migration and rollback, stop the
 current sessions under their current config before changing it.
 [Example config](codex/plugins/session-workspace/templates/workspace-peers.json) · [Configuration and migration](codex/plugins/session-workspace/skills/session-workspace/references/environments.md#peer-orchestrators-schema-6)
