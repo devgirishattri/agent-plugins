@@ -149,7 +149,120 @@ pass() { PASS=$((PASS + 1)); echo "  PASS  $1"; }
 fail() { FAIL=$((FAIL + 1)); FAILURES+=("$1: $2"); echo "  FAIL  $1 — $2"; }
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/session-workspace-test.XXXXXX")"
-trap 'rm -rf "$TMPROOT"' EXIT
+
+# Decoy home for the whole suite. A confirmed stop runs the tmux-resurrect save
+# found under $HOME, and a tmux server loads ~/.tmux.conf and its plugins, so
+# no process of this suite may see the user's HOME or XDG config/data/cache.
+mkdir -p "$TMPROOT/home/.config" "$TMPROOT/home/.local/share" "$TMPROOT/home/.cache"
+export HOME="$TMPROOT/home" XDG_CONFIG_HOME="$TMPROOT/home/.config" \
+  XDG_DATA_HOME="$TMPROOT/home/.local/share" XDG_CACHE_HOME="$TMPROOT/home/.cache"
+
+# Private tmux servers. tmux falls back to its default server
+# (/tmp/tmux-UID/default) when TMUX_TMPDIR names a missing directory, so a test
+# isolated by TMUX_TMPDIR alone fails open. Every private server of this suite
+# therefore has a socket under SW_SOCKROOT (short, because macOS caps socket
+# paths at 104 bytes, and with the fixed prefix swtmux- so a server left by an
+# interrupted run is recognizable), every engine call reaches it through a
+# wrapper on PATH that adds `-S SOCKET`, and teardown addresses only such a
+# socket, only while it exists, before any directory is removed.
+# Never run a tmux kill-server without -S in this file.
+SW_REAL_TMUX="$(command -v tmux 2>/dev/null || true)"
+SW_SOCKROOT="$(mktemp -d /tmp/swtmux-XXXXXX)" || { echo "cannot create a private tmux socket directory" >&2; exit 1; }
+SW_SOCKETS=""
+sw_tmux_teardown_one() {
+  local sock="$1"
+  [ -n "$sock" ] || return 0
+  [ -n "$SW_REAL_TMUX" ] || return 0
+  case "$sock" in
+    "$SW_SOCKROOT"/*) ;;
+    *) echo "REFUSING to tear down tmux socket outside $SW_SOCKROOT: $sock" >&2; return 0 ;;
+  esac
+  case "$SW_SOCKROOT" in
+    /tmp/swtmux-*) ;;
+    *) echo "REFUSING to tear down tmux sockets: unexpected socket root $SW_SOCKROOT" >&2; return 0 ;;
+  esac
+  if [ ! -e "$sock" ] && [ ! -L "$sock" ]; then
+    log "tmux teardown: no socket at $sock; nothing to stop"
+    return 0
+  fi
+  if [ -L "$sock" ] || [ ! -S "$sock" ]; then
+    echo "tmux teardown: $sock is not a socket of our own; keeping $SW_SOCKROOT" >&2
+    SW_TEARDOWN_FAILED=1
+    return 1
+  fi
+  "$SW_REAL_TMUX" -f /dev/null -S "$sock" kill-server >/dev/null 2>&1
+  # Only tmux's own "nothing listens here" confirms the stop; any other
+  # failure proves nothing and keeps the directory.
+  # A server takes a moment to exit (on Linux a client in that moment sees
+  # "lost server"); only tmux's own "no server" ends the wait.
+  local i err=""
+  for i in $(seq 1 50); do
+    if ! err="$("$SW_REAL_TMUX" -f /dev/null -S "$sock" list-sessions 2>&1 >/dev/null)"; then
+      case "$err" in
+        "no server running on "*|*"(No such file or directory)"*|*"(Connection refused)"*) return 0 ;;
+      esac
+    fi
+    sleep 0.1
+  done
+  echo "tmux teardown: could not confirm the server on $sock stopped (tmux said: ${err:-nothing}); keeping $SW_SOCKROOT" >&2
+  SW_TEARDOWN_FAILED=1
+  return 1
+}
+SW_TEARDOWN_FAILED=0
+sw_tmux_teardown_all() {
+  local sock
+  for sock in $SW_SOCKETS; do sw_tmux_teardown_one "$sock"; done
+}
+# sw_tmux_register SOCKET — record a socket for teardown. Call it in the
+# suite's own shell, before the server starts (never inside $(...), where the
+# record would be lost).
+sw_tmux_register() { SW_SOCKETS="$SW_SOCKETS $1"; }
+# sw_tmux_sandbox NAME — a private server for NAME, registered for teardown.
+# Sets SW_SANDBOX_BIN to the directory that holds the PATH wrapper (`tmux`
+# pinned to $SW_SOCKROOT/NAME.sock, with no config file) and inert claude/codex
+# stubs, so an engine start never launches a real agent.
+# One pinning wrapper for every private server of this suite:
+#   sw-pin-tmux REAL SOCKET CONF ARGS... runs REAL -f CONF -S SOCKET ARGS, and
+# refuses (exit 99) a call whose global options name another server. The
+# engine adds its own -N -S SOCKET (lib.sh); it must be the same socket.
+SW_PIN_TMUX="$SW_SOCKROOT/sw-pin-tmux"
+cat > "$SW_PIN_TMUX" <<'EOF'
+#!/bin/sh
+real=$1 own=$2 conf=$3
+shift 3
+skip=
+for a do
+  if [ -n "$skip" ]; then
+    if [ "$skip" = S ] && [ "$a" != "$own" ]; then echo "tmux sandbox: refusing a call for another server ($a)" >&2; exit 99; fi
+    skip=
+    continue
+  fi
+  case "$a" in
+    -S) skip=S ;;
+    -L|-L*|-S*) echo "tmux sandbox: refusing a call for another server ($a)" >&2; exit 99 ;;
+    -f|-c|-T) skip=x ;;
+    --) break ;;
+    -*) ;;
+    *) break ;;
+  esac
+done
+exec "$real" -f "$conf" -S "$own" "$@"
+EOF
+chmod +x "$SW_PIN_TMUX"
+SW_SANDBOX_BIN=""
+sw_tmux_sandbox() {
+  local name="$1" bin="$SW_SOCKROOT/$1.bin" sock="$SW_SOCKROOT/$1.sock"
+  mkdir -p "$bin" "$SW_SOCKROOT/$name.tmp"
+  chmod 700 "$SW_SOCKROOT/$name.tmp"
+  printf '#!/usr/bin/env bash\nexec "%s" "%s" "%s" /dev/null "$@"\n' "$SW_PIN_TMUX" "$SW_REAL_TMUX" "$sock" > "$bin/tmux"
+  for prog in claude codex; do printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$bin/$prog"; done
+  chmod +x "$bin/tmux" "$bin/claude" "$bin/codex"
+  sw_tmux_register "$sock"
+  SW_SANDBOX_BIN="$bin"
+}
+# Servers first, then files: a removed directory must never send a teardown
+# to the default server, and a server that did not stop keeps its directory.
+trap 'sw_tmux_teardown_all; if [ "$SW_TEARDOWN_FAILED" -eq 0 ]; then rm -rf "$TMPROOT" "$SW_SOCKROOT"; else rm -rf "$TMPROOT"; exit 1; fi' EXIT
 
 # Guard against the whole class of bug fixed on 2026-07-26: a mutating verb
 # invoked WITHOUT --config falls back to walking up from $PWD, so running this
@@ -224,11 +337,14 @@ echo "== Phase D verbs are wired (no longer scaffold stubs) =="
 # is expected to FAIL against that empty private server — failure is fine and
 # irrelevant here; only the absence of the scaffold message is asserted.
 SW_WIRED_DIR="$TMPROOT/verb-wiring"
-mkdir -p "$SW_WIRED_DIR/tmuxtmp" "$SW_WIRED_DIR/state"
-chmod 700 "$SW_WIRED_DIR/tmuxtmp"
+mkdir -p "$SW_WIRED_DIR/state"
+SW_WIRED_BIN=""
+if [ -n "$SW_REAL_TMUX" ]; then sw_tmux_sandbox verb-wiring; SW_WIRED_BIN="$SW_SANDBOX_BIN"; fi
 for verb in start status stop reconcile restart; do
   OUT="$(env -u TMUX -u TMUX_PANE -u SESSION_WORKSPACE_CONFIG \
-    TMUX_TMPDIR="$SW_WIRED_DIR/tmuxtmp" \
+    PATH="${SW_WIRED_BIN:+$SW_WIRED_BIN:}$PATH" \
+    TMUX_TMPDIR="$SW_SOCKROOT/verb-wiring.tmp" \
+    SESSION_WORKSPACE_TMUX_SOCKET="$SW_SOCKROOT/verb-wiring.sock" \
     XDG_STATE_HOME="$SW_WIRED_DIR/state" \
     SESSION_WORKSPACE_STOP_GRACE_SECONDS=0 \
     bash "$HERE/workspace.sh" "$verb" --config "$HERE/fixtures/valid/project-d.json" 2>&1)"
@@ -238,6 +354,9 @@ for verb in start status stop reconcile restart; do
     pass "workspace.sh $verb — implemented (no scaffold message)"
   fi
 done
+# `start` and `restart` bring the fixture session up (with the inert agent
+# stubs) on the private server; end it now rather than at exit.
+sw_tmux_teardown_one "$SW_SOCKROOT/verb-wiring.sock"
 
 echo "== adapters.sh CLI: no subcommand / bad subcommand =="
 OUT="$(bash "$HERE/adapters.sh" 2>&1)"
@@ -1160,7 +1279,7 @@ fi
 
 echo "== every static invalid fixture fails validation =="
 declare -a RULE_FIXTURES=(
-  "schema-version.json:schema_version must be 1, 2, 3, 4, or 5"
+  "schema-version.json:schema_version must be 1, 2, 3, 4, 5, or 6"
   "harness-v2-guards.json:unknown key in harness: guards"
   "harness-v3-disabled-guards.json:harness.enabled=false must not include"
   "harness-v3-bad-guards.json:unknown key in harness.guards: unknown"
@@ -1202,8 +1321,15 @@ declare -a RULE_FIXTURES=(
   "idle-activity-no-idle-stop.json:idle_activity needs idle_stop_minutes"
   "launch-bad-value.json:launch must be \"always\" or \"on_demand\""
   "launch-not-worker.json:applies only to the harness executor or reviewer role, not role \"master\""
-  "launch-no-harness.json:needs schema_version 2-5 with harness.enabled true"
+  "launch-no-harness.json:needs schema_version 2-6 with harness.enabled true"
   "launch-split-tree.json:is not supported in a split_tree session \(development\)"
+  "peers-in-schema-5.json:unknown key in top-level: peers"
+  "peers-unknown-key.json:unknown key in peers: extra"
+  "peers-limits-zero.json:peers.limits.orchestrators must be an integer >= 1"
+  "peers-no-harness.json:peers requires harness.enabled=true"
+  "peers-reserved-session-id.json:reserved for peer orchestrator sessions"
+  "peers-xdg-state-home.json:must not set XDG_STATE_HOME"
+  "peers-environment-orchestrator.json:environments\[\].orchestrator is not allowed with peers"
 )
 for entry in "${RULE_FIXTURES[@]}"; do
   fx="${entry%%:*}"
@@ -1932,7 +2058,7 @@ fi
 # ============================================================================
 echo "== Phase D: tmux lifecycle (isolated tmux server) =="
 
-SWT_REAL_TMUX="$(command -v tmux 2>/dev/null || true)"
+SWT_REAL_TMUX="$SW_REAL_TMUX"
 SWT_SOCKET=""
 # A second, fully independent private socket used only by the "forced split
 # failure" regression test below — it needs its own from-scratch server (no
@@ -1942,22 +2068,12 @@ SWT_SOCKET=""
 # the final EXIT trap, so it never lingers as a second live server for the
 # rest of this file's run).
 SWT_SOCKET2=""
-sw_tmux_teardown_one() {
-  local sock="$1"
-  [ -n "$sock" ] || return 0
-  [ -n "$SWT_REAL_TMUX" ] || return 0
-  # Hard guard: only ever tear down a socket we created under $TMPROOT.
-  case "$sock" in
-    "$TMPROOT"/*) ;;
-    *) echo "REFUSING to tear down tmux socket outside \$TMPROOT: $sock" >&2; return 0 ;;
-  esac
-  "$SWT_REAL_TMUX" -S "$sock" kill-server >/dev/null 2>&1 || true
-}
+# Teardown is the suite's guarded sw_tmux_teardown_one (top of this file):
+# only sockets under $SW_SOCKROOT, only while they exist.
 sw_tmux_teardown() {
   sw_tmux_teardown_one "$SWT_SOCKET"
   sw_tmux_teardown_one "$SWT_SOCKET2"
 }
-trap 'sw_tmux_teardown; rm -rf "$TMPROOT"' EXIT
 
 if [ -z "$SWT_REAL_TMUX" ]; then
   log "tmux not installed; skipping the entire Phase D lifecycle section"
@@ -1967,7 +2083,11 @@ SWT_ROOT="$TMPROOT/lifecycle"
 SWT_BIN="$SWT_ROOT/bin"
 SWT_STATE="$SWT_ROOT/state"
 SWT_TMPDIR="$SWT_ROOT/tmuxtmp"
-SWT_SOCKET="$SWT_ROOT/sock"
+SWT_SOCKET="$SW_SOCKROOT/lifecycle.sock"
+# Every engine verb of Phase D binds this server (lib.sh); unset at its end.
+export SESSION_WORKSPACE_TMUX_SOCKET="$SWT_SOCKET"
+# Registered for teardown only once the preflight below proves the server on
+# it is this suite's own.
 SWT_CONF="$SWT_ROOT/tmux.conf"
 mkdir -p "$SWT_BIN" "$SWT_STATE" "$SWT_TMPDIR"
 chmod 700 "$SWT_TMPDIR"
@@ -1994,7 +2114,7 @@ cat > "$SWT_BIN/tmux" <<EOF
 #!/usr/bin/env bash
 # Isolation wrapper: pins EVERY tmux call to the test's private socket and
 # private config (large deterministic default-size — see SWT_CONF above).
-exec "$SWT_REAL_TMUX" -f "$SWT_CONF" -S "$SWT_SOCKET" "\$@"
+exec "$SW_PIN_TMUX" "$SWT_REAL_TMUX" "$SWT_SOCKET" "$SWT_CONF" "\$@"
 EOF
 chmod +x "$SWT_BIN/tmux"
 # Agent runtimes are never really launched: inert long-lived stubs stand in
@@ -2011,7 +2131,7 @@ done
 SWT_TMUX() { "$SWT_REAL_TMUX" -f "$SWT_CONF" -S "$SWT_SOCKET" "$@"; }
 # Run an engine script inside the sandbox.
 swrun() {
-  env -u TMUX \
+  env -u TMUX -u TMUX_PANE \
     TMUX_TMPDIR="$SWT_TMPDIR" \
     PATH="$SWT_BIN:$PATH" \
     XDG_STATE_HOME="$SWT_STATE" \
@@ -2027,17 +2147,32 @@ swt_ids_in_window() {
 }
 
 # --- pre-flight: prove the sandbox really is a separate server ------------
-if [ "${SWT_SOCKET#"$TMPROOT"/}" != "$SWT_SOCKET" ]; then
-  pass "lifecycle sandbox: tmux socket is inside the test tmpdir"
+case "$SW_SOCKROOT" in /tmp/swtmux-*) sw_root_ok=1 ;; *) sw_root_ok=0 ;; esac
+if [ "$sw_root_ok" -eq 1 ] && [ "${SWT_SOCKET#"$SW_SOCKROOT"/}" != "$SWT_SOCKET" ]; then
+  pass "lifecycle sandbox: tmux socket is inside the test's own /tmp/swtmux-* directory"
 else
-  fail "lifecycle sandbox: tmux socket is inside the test tmpdir" "socket=$SWT_SOCKET tmproot=$TMPROOT"
+  fail "lifecycle sandbox: tmux socket is inside the test's own /tmp/swtmux-* directory" "socket=$SWT_SOCKET sockroot=$SW_SOCKROOT"
+  echo "FATAL: the lifecycle sandbox is not isolated; stopping before any tmux mutation" >&2
+  exit 1
 fi
-SWT_TMUX new-session -d -s swt-preflight 'sleep 3600' >/dev/null 2>&1
-if [ "$(SWT_TMUX list-sessions -F '#{session_name}' 2>/dev/null | tr '\n' ' ')" = "swt-preflight " ]; then
+# Nothing may exist at the socket path before this suite starts its server.
+if [ -e "$SWT_SOCKET" ] || [ -L "$SWT_SOCKET" ]; then
+  fail "lifecycle sandbox: the socket path is unused before the suite starts" "found $SWT_SOCKET"
+  echo "FATAL: $SWT_SOCKET already exists; leaving it and $SW_SOCKROOT untouched" >&2
+  SW_TEARDOWN_FAILED=1
+  exit 1
+fi
+if SWT_TMUX new-session -d -s swt-preflight 'sleep 3600' >/dev/null 2>&1 \
+   && [ "$(SWT_TMUX list-sessions -F '#{session_name}' 2>/dev/null | tr '\n' ' ')" = "swt-preflight " ]; then
   pass "lifecycle sandbox: private server starts empty (no host sessions visible)"
+  sw_tmux_register "$SWT_SOCKET"
 else
   fail "lifecycle sandbox: private server starts empty (no host sessions visible)" \
     "sessions=$(SWT_TMUX list-sessions -F '#{session_name}' 2>/dev/null | tr '\n' ' ')"
+  # Not proven ours: never sent a shutdown, and its directory is kept.
+  echo "FATAL: the lifecycle sandbox is not a fresh server of this suite; stopping before any other tmux mutation" >&2
+  SW_TEARDOWN_FAILED=1
+  exit 1
 fi
 SWT_TMUX kill-session -t '=swt-preflight' >/dev/null 2>&1
 
@@ -2183,7 +2318,8 @@ fi
 # inherit from, so `default-size` alone (set via -f, the same
 # survives-a-server-restart mechanism documented above) fully determines the
 # geometry of the one session this test creates.
-SWT_SOCKET2="$SWT_ROOT/sock-tiny"
+SWT_SOCKET2="$SW_SOCKROOT/lifecycle-tiny.sock"
+SW_SOCKETS="$SW_SOCKETS $SWT_SOCKET2"
 SWT_TINY_CONF="$SWT_ROOT/tmux-tiny.conf"
 SWT_TINY_BIN="$SWT_ROOT/bin-tiny"
 SWT_TINY_TMPDIR="$SWT_ROOT/tmuxtmp-tiny"
@@ -2195,7 +2331,7 @@ set-option -g default-size 5x24
 EOF
 cat > "$SWT_TINY_BIN/tmux" <<EOF
 #!/usr/bin/env bash
-exec "$SWT_REAL_TMUX" -f "$SWT_TINY_CONF" -S "$SWT_SOCKET2" "\$@"
+exec "$SW_PIN_TMUX" "$SWT_REAL_TMUX" "$SWT_SOCKET2" "$SWT_TINY_CONF" "\$@"
 EOF
 chmod +x "$SWT_TINY_BIN/tmux"
 for swt_prog in claude codex; do
@@ -2215,6 +2351,7 @@ SWT_TINY_CFG="$SWT_TINY_PROJ/.agent-workspace/workspace.json"
 
 SWT_OUT="$(env -u TMUX \
   TMUX_TMPDIR="$SWT_TINY_TMPDIR" \
+  SESSION_WORKSPACE_TMUX_SOCKET="$SWT_SOCKET2" \
   PATH="$SWT_TINY_BIN:$PATH" \
   XDG_STATE_HOME="$SWT_TINY_STATE" \
   SESSION_WORKSPACE_STOP_GRACE_SECONDS=0 \
@@ -2695,7 +2832,7 @@ SWT_TMUX_ARGV_LOG="$TMPROOT/vault-tmux-argv.log"
 cat > "$SWT_BIN/tmux" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$SWT_TMUX_ARGV_LOG"
-exec "$SWT_REAL_TMUX" -S "$SWT_SOCKET" "\$@"
+exec "$SW_PIN_TMUX" "$SWT_REAL_TMUX" "$SWT_SOCKET" "$SWT_CONF" "\$@"
 EOF
 chmod +x "$SWT_BIN/tmux"
 swrun "$HERE/workspace-restart.sh" development --config "$SWT_CFG3" --no-attach --no-save >/dev/null 2>&1
@@ -2708,8 +2845,8 @@ fi
 # Restore the plain (non-logging) tmux wrapper.
 cat > "$SWT_BIN/tmux" <<EOF
 #!/usr/bin/env bash
-# Isolation wrapper: pins EVERY tmux call to the test's private socket.
-exec "$SWT_REAL_TMUX" -S "$SWT_SOCKET" "\$@"
+# Isolation wrapper: pins EVERY tmux call to the test's private socket and config.
+exec "$SW_PIN_TMUX" "$SWT_REAL_TMUX" "$SWT_SOCKET" "$SWT_CONF" "\$@"
 EOF
 chmod +x "$SWT_BIN/tmux"
 
@@ -3631,8 +3768,10 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 SWT_OUT="$(swrun_od "$HERE/workspace-start.sh" services --pane web --config "$SWT_CFG_OD" 2>&1)"
 SWT_STATUS=$?
+# The holder's process name is what the OS reports: python3 on Linux, Python
+# on macOS (the framework build's executable name).
 if [ "$SWT_STATUS" -ne 0 ] && [ -z "$(swt_od_pane sample-ondemand-web)" ] &&
-   printf '%s' "$SWT_OUT" | grep -Fq "service port occupied before launch: $SWT_OD_WPORT (sample-ondemand-web) is held by pid $SWT_OD_HOLDER (python3)"; then
+   printf '%s' "$SWT_OUT" | grep -Eq "service port occupied before launch: $SWT_OD_WPORT \(sample-ondemand-web\) is held by pid $SWT_OD_HOLDER \([Pp]ython[0-9.]*\)"; then
   pass "start --pane web: a port held by another process is refused, nothing is created, and the holder's PID is named"
 else
   fail "start --pane web: a port held by another process is refused, nothing is created, and the holder's PID is named" \
@@ -3685,9 +3824,12 @@ else
   fail "stop --pane web: only the dev server stops (full pane name accepted); status records when and why" \
     "status=$SWT_STATUS names=[$(swt_od_names)] out=$SWT_OUT status_json=$SWT_OD_STATUS"
 fi
+# Capture first: piping into `grep -q` lets grep exit early, the writer then
+# dies of SIGPIPE (141), and pipefail fails a check whose output was right.
+SWT_OD_GUARD_OUT="$(swrun_od "$HERE/workspace-stop.sh" services --pane browser --confirmed --expect-pane-id %999999 --config "$SWT_CFG_OD" 2>&1)"
 if ! swrun_od "$HERE/workspace-stop.sh" services --pane browser --config "$SWT_CFG_OD" >/dev/null 2>&1 &&
    ! swrun_od "$HERE/workspace-stop.sh" services --pane browser --all --confirmed --config "$SWT_CFG_OD" >/dev/null 2>&1 &&
-   swrun_od "$HERE/workspace-stop.sh" services --pane browser --confirmed --expect-pane-id %999999 --config "$SWT_CFG_OD" 2>&1 | grep -Fq "restarted since it was judged idle" &&
+   printf '%s' "$SWT_OD_GUARD_OUT" | grep -Fq "restarted since it was judged idle" &&
    [ "$(swt_od_names)" = "sample-ondemand-browser " ]; then
   pass "stop --pane: refused without --confirmed or with --all; the idle watcher's pane-id guard leaves a restarted pane running"
 else
@@ -3984,11 +4126,16 @@ else
   pass "idle stop (Linux TIME_WAIT): skipped, no /proc/net/tcp on this host"
 fi
 
-# idle-watch.py's own argument check (argparse exits 2). No tmux server is
-# reachable here, so an accepted call exits 1 (not armed) without touching one.
+# idle-watch.py's own argument check (argparse exits 2). Its tmux is a stub
+# that always fails, so no server is reachable and an accepted call exits 1
+# (not armed) without touching one.
+SWT_OO_NOTMUX="$SW_SOCKROOT/argcheck.bin"
+mkdir -p "$SWT_OO_NOTMUX"
+printf '#!/bin/sh\nexit 1\n' > "$SWT_OO_NOTMUX/tmux"
+chmod +x "$SWT_OO_NOTMUX/tmux"
 swt_oo_watch_rc() {
   mkdir -p "$SWT_ROOT/odout-argcheck/tmux"
-  env -u TMUX TMUX_TMPDIR="$SWT_ROOT/odout-argcheck/tmux" python3 "$HERE/idle-watch.py" watch --config "$SWT_CFG_OO" \
+  env -u TMUX PATH="$SWT_OO_NOTMUX:$PATH" TMUX_TMPDIR="$SWT_ROOT/odout-argcheck/tmux" python3 "$HERE/idle-watch.py" watch --config "$SWT_CFG_OO" \
     --project sample-odout --session services --pane sample-odout-argcheck --pane-id %999999 --port 4000 --minutes 1 \
     --state-dir "$SWT_ROOT/odout-argcheck" "$@" >/dev/null 2>&1
   echo "$?"
@@ -4215,8 +4362,12 @@ printf '{"id":"task-1","status":"done","assignee":"%s","reviewer":"%s"}\n' "$SWT
 printf '1\torchestrator\tplease pick up task-2\n' > "$SWT_W_QUEUE"
 SWT_OUT="$(swrun "$HERE/workspace-stop.sh" development --pane component-executor --config "$SWT_CFG_W" --confirmed 2>&1)"
 SWT_STATUS=$?
+# The engine names the queue by its canonical path (the plan resolves store
+# grants), which differs from $SWT_W_QUEUE when TMPDIR runs through a symlink
+# such as macOS /var -> /private/var.
+SWT_W_QUEUE_REAL="$(cd "$(dirname "$SWT_W_QUEUE")" && pwd -P)/$(basename "$SWT_W_QUEUE")"
 if [ "$SWT_STATUS" -eq 1 ] && [ -n "$(swt_w_pane "$SWT_W_EXEC")" ] &&
-   printf '%s' "$SWT_OUT" | grep -Fq "1 unread message(s) in $SWT_W_QUEUE"; then
+   printf '%s' "$SWT_OUT" | grep -Fq "1 unread message(s) in $SWT_W_QUEUE_REAL"; then
   pass "on-demand workers: stop --pane leaves a worker with unread inbox messages running"
 else
   fail "on-demand workers: stop --pane leaves a worker with unread inbox messages running" "status=$SWT_STATUS output=$SWT_OUT"
@@ -4440,7 +4591,19 @@ def pick(name, call, default):
     return items[min(call, len(items)) - 1] if items else default
 
 
-command = sys.argv[1] if len(sys.argv) > 1 else ""
+# The engine passes tmux's global options (-N -S SOCKET) first; the command
+# follows them. A bound call must name the test's synthetic socket.
+args = sys.argv[1:]
+while args and args[0].startswith("-"):
+    if args[0] == "-S":
+        if args[1:2] != [os.environ.get("SWT_READY_SOCKET", "")]:
+            sys.exit(99)
+        args = args[2:]
+    elif args[0] in ("-L", "-f", "-c", "-T"):
+        args = args[2:]
+    else:
+        args = args[1:]
+command = args[0] if args else ""
 if command == "display-message":
     state = pick("states", bump("n_display"), "live")
     if state == "gone":
@@ -4464,12 +4627,15 @@ chmod +x "$SWT_RD_DIR/bin/tmux"
 # SETTLE is a number or text for the variable, or "unset" to leave it unset.
 # Sets SWT_RD_STATUS, SWT_RD_OUT and SWT_RD_CAPS (the capture count).
 swt_ready_run() {
+  # The bound path: agent-pane.py pins its calls to this (synthetic) server.
+  # env takes its -u options before any NAME=VALUE.
   local envargs=(-u TMUX -u TMUX_PANE)
   if [ "$2" = unset ]; then
     envargs+=(-u SESSION_WORKSPACE_AGENT_READY_SETTLE_MS)
   else
     envargs+=("SESSION_WORKSPACE_AGENT_READY_SETTLE_MS=$2")
   fi
+  envargs+=("SESSION_WORKSPACE_TMUX_SOCKET=$SWT_RD_DIR/bound.sock" "SWT_READY_SOCKET=$SWT_RD_DIR/bound.sock")
   rm -rf "$SWT_RD_STATE"
   mkdir -p "$SWT_RD_STATE"
   printf '%s\n' "${3//,/ }" > "$SWT_RD_STATE/frames"
@@ -4607,9 +4773,9 @@ fi
 
 sw_tmux_teardown
 SWT_SOCKET=""
-trap 'rm -rf "$TMPROOT"' EXIT
 
 fi  # end tmux-available guard
+unset SESSION_WORKSPACE_TMUX_SOCKET
 
 # ===========================================================================
 # Phase E: bootstrap shim (templates/workspace.sh) — plugin-root resolution
@@ -5637,7 +5803,7 @@ else
 fi
 
 echo "== browser integration =="
-BROWSER_PLAN="$(HOME="$TMPROOT/browser-home" bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/valid/browser.json" --json 2>&1)"
+BROWSER_PLAN="$(env -u XDG_CACHE_HOME HOME="$TMPROOT/browser-home" bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/valid/browser.json" --json 2>&1)"
 if printf '%s' "$BROWSER_PLAN" | jq -e '
   .browser.port == 9324 and
   .browser.profile_dir == "'"$TMPROOT"'/browser-home/.cache/session-workspace/chrome/sample-browser" and
@@ -5664,7 +5830,7 @@ fi
 # Shared session: only the pane named by browser.pane_name receives the
 # derived Chrome argv / browser.port / browser=true. Siblings keep their own
 # command and port untouched and are never marked as the browser.
-BROWSER_MULTI_PLAN="$(HOME="$TMPROOT/browser-home" bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/valid/browser-multipane.json" --json 2>&1)"
+BROWSER_MULTI_PLAN="$(env -u XDG_CACHE_HOME HOME="$TMPROOT/browser-home" bash "$HERE/workspace-plan.sh" --config "$HERE/fixtures/valid/browser-multipane.json" --json 2>&1)"
 if printf '%s' "$BROWSER_MULTI_PLAN" | jq -e '
   .browser.session_id == "services" and
   .browser.pane_name == "sample-browser-multi-browser" and
@@ -5747,6 +5913,31 @@ if python3 -B "$HERE/test-environments.py"; then
   pass "schema v5 environments and removed-Jev migration regressions"
 else
   fail "schema v5 environments and removed-Jev migration regressions" "see unittest output"
+fi
+
+# Schema v6 peer orchestrators: loading, validation, plan, compatibility.
+if python3 -B "$HERE/test-peers.py"; then
+  pass "schema v6 peer orchestrators: config, validation and plan regressions"
+else
+  fail "schema v6 peer orchestrators: config, validation and plan regressions" "see unittest output"
+fi
+
+if python3 -B "$HERE/test-peers-policy.py"; then
+  pass "schema v6 peer orchestrators: strict-v1 ownership, routing and scheduler scope"
+else
+  fail "schema v6 peer orchestrators: strict-v1 ownership, routing and scheduler scope" "see unittest output"
+fi
+
+if python3 -B "$HERE/test-tmux-sandbox.py"; then
+  pass "tmux isolation: a missing TMUX_TMPDIR never reaches the default server (sandbox teardown, PATH wrapper, engine guard)"
+else
+  fail "tmux isolation: a missing TMUX_TMPDIR never reaches the default server (sandbox teardown, PATH wrapper, engine guard)" "see unittest output"
+fi
+
+if python3 -B "$HERE/test-peers-lifecycle.py"; then
+  pass "schema v6 peer orchestrators: orchestrator copies, workers, show/hide and ownership on a private tmux server"
+else
+  fail "schema v6 peer orchestrators: orchestrator copies, workers, show/hide and ownership on a private tmux server" "see unittest output"
 fi
 
 # Tier 1.3a hook diagnostics (registry completeness, DIAG protocol, adapter tests).

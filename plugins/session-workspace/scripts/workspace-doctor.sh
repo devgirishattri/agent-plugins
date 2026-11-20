@@ -51,6 +51,14 @@
 #                       and whether behavior.session_chat_helper.on_missing
 #                       would fail or warn
 #
+#   peers.state         (schema v6 with `peers` only) the instances.json path and
+#                       record counts; WARN when the file is malformed or holds
+#                       records the loader drops (an unknown checkout, owner or
+#                       duplicate), and WARN when tmux is older than 2.9 (a
+#                       hidden worker's window is sized with resize-window).
+#                       Reads the file only: the doctor never writes it and never
+#                       cleans up a stale record.
+#
 # Usage: workspace-doctor.sh [--config PATH] [--json]
 # Exit status: non-zero if any check is ERROR. WARN alone exits 0.
 set -uo pipefail
@@ -134,13 +142,13 @@ worse() {
 TMUX_MIN_VERSION="3.2"
 
 check_tooling_tmux() {
-  if ! command -v tmux >/dev/null 2>&1; then
+  if ! [ -n "$(type -P tmux 2>/dev/null)" ]; then
     add_check "tooling.tmux" "tmux" "ERROR" "tmux is not on PATH" \
       "Install tmux: brew install tmux (macOS) or apt install tmux (Ubuntu)"
     return 0
   fi
   local raw ver
-  raw="$(tmux -V 2>/dev/null)"
+  raw="$(command tmux -V 2>/dev/null)"
   # "tmux 3.6b" -> "3.6b"
   ver="${raw##* }"
   if [ -z "$ver" ] || [ "$ver" = "$raw" ]; then
@@ -305,7 +313,7 @@ check_config() {
 
   if validate_workspace_config "$CONFIG_JSON" "$CONFIG_PATH"; then
     local schema_version
-    if schema_version="$(printf '%s' "$CONFIG_JSON" | jq -er '.schema_version | select(. == 1 or . == 2 or . == 3 or . == 4 or . == 5) | tostring' 2>/dev/null)"; then
+    if schema_version="$(printf '%s' "$CONFIG_JSON" | jq -er '.schema_version | select(. == 1 or . == 2 or . == 3 or . == 4 or . == 5 or . == 6) | tostring' 2>/dev/null)"; then
       CONFIG_VALID=1
       add_check "config.validation" "config validation" "OK" \
         "$CONFIG_PATH is valid (schema_version $schema_version)"
@@ -628,6 +636,52 @@ check_state_dir() {
 }
 
 # ============================================================================
+# 6b. Peer orchestrators (schema v6 with `peers`): the engine state file. Read
+#     only. A record the loader drops is reported, never removed: cleanup is the
+#     mutating verbs' job, and only when tmux answers.
+# ============================================================================
+check_peers_state() {
+  [ -n "$CONFIG_JSON" ] || return 0
+  [ "$CONFIG_VALID" -eq 1 ] || return 0
+  printf '%s' "$CONFIG_JSON" | jq -e '.schema_version == 6 and (.peers // null) != null' >/dev/null 2>&1 || return 0
+  local project_id path status="OK" details="" raw_orch=0 raw_work=0 cfg_orch cfg_work raw ver
+  project_id="$(printf '%s' "$CONFIG_JSON" | jq -r '.project.id')"
+  path="$(sw_instances_path "$project_id")"
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    add_check "peers.state" "peers state" "OK" "$path does not exist (no extra orchestrators and no workers recorded)"
+  elif [ -L "$path" ]; then
+    add_check "peers.state" "peers state" "WARN" "$path is a symlink; the loader ignores it" \
+      "Remove the symlink; the engine rewrites the file on the next start."
+  else
+    if ! jq -e 'type == "object"' "$path" >/dev/null 2>&1; then
+      add_check "peers.state" "peers state" "WARN" "$path is malformed (not a JSON object); the loader ignores it" \
+        "Stop the peer sessions and remove the file; start recreates it."
+    else
+      raw_orch="$(jq '(.orchestrators // []) | if type == "array" then length else 0 end' "$path" 2>/dev/null || echo 0)"
+      raw_work="$(jq '(.workers // []) | if type == "array" then length else 0 end' "$path" 2>/dev/null || echo 0)"
+      cfg_orch="$(printf '%s' "$CONFIG_JSON" | jq '[(.sessions // [])[] | select((.instance.index // 1) > 1)] | length')"
+      cfg_work="$(printf '%s' "$CONFIG_JSON" | jq '[(.sessions // [])[] | (.panes // [])[] | select(.worker != null)] | length')"
+      details="$raw_orch orchestrator record(s), $raw_work worker record(s) in the file; $cfg_orch copy session(s) and $cfg_work worker pane(s) in the loaded config"
+      if [ "$raw_orch" != "$cfg_orch" ] || [ "$raw_work" != "$cfg_work" ]; then
+        status="WARN"
+        details="$details
+WARN the loader drops $((raw_orch - cfg_orch)) orchestrator and $((raw_work - cfg_work)) worker record(s) (wrong shape, unknown checkout or owner, or a duplicate)"
+      fi
+      add_check "peers.state" "peers state" "$status" "$path: $cfg_orch extra orchestrator(s), $cfg_work worker(s)" \
+        "$([ "$status" = "WARN" ] && echo "The next start/stop removes records whose pane is gone; a record that never loads stays until the file is removed.")" "$details"
+    fi
+  fi
+  if [ -n "$(type -P tmux 2>/dev/null)" ]; then
+    raw="$(command tmux -V 2>/dev/null)"
+    ver="${raw##* }"
+    if [ -n "$ver" ] && ! sw_version_ge "$ver" "2.9"; then
+      add_check "peers.tmux" "peers tmux" "WARN" "tmux $ver is older than 2.9: hidden worker windows cannot be sized (resize-window)" \
+        "Upgrade tmux to >= 3.2."
+    fi
+  fi
+}
+
+# ============================================================================
 # 7. Runtime capability — PATH resolution only, via `command -v`. NEVER
 #    executes the resolved program (no `--version`, no probe of any kind):
 #    runtimes.<key>.program is fully config-controlled and ungated (only the
@@ -855,6 +909,7 @@ check_plugin_deps
 check_pane_cwds
 check_secrets
 check_state_dir
+check_peers_state
 check_runtimes
 check_stores_drift
 check_session_chat_helper
@@ -883,12 +938,12 @@ if [ "$JSON_MODE" -eq 1 ]; then
     DETAILS_JSON="$(printf '%s' "${CHECK_DETAILS[$IDX]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
     CHECKS_JSON="$(printf '%s' "$CHECKS_JSON" | jq -c \
       --arg id "${CHECK_IDS[$IDX]}" \
-      --arg label "${CHECK_LABELS[$IDX]}" \
+      --arg check_label "${CHECK_LABELS[$IDX]}" \
       --arg status "${CHECK_STATUSES[$IDX]}" \
       --arg message "${CHECK_MESSAGES[$IDX]}" \
       --arg remediation "${CHECK_REMEDIATIONS[$IDX]}" \
       --argjson details "$DETAILS_JSON" \
-      '. + [{id: $id, label: $label, status: $status, message: $message, remediation: $remediation, details: $details}]')"
+      '. + [{id: $id, "label": $check_label, status: $status, message: $message, remediation: $remediation, details: $details}]')"
     IDX=$((IDX + 1))
   done
   jq -n \

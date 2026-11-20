@@ -29,7 +29,14 @@ Real flags:
   service panes, or on-demand executor/reviewer workers, of one session. Sibling panes keep running.
   Stopping the last pane ends the tmux session. Cannot be combined with `--all` or
   `--no-save`. Prints `stopped: N  not running: N  skipped: N  busy: N`.
-- `--force` (with `--pane` only): stop an on-demand worker even while it is
+- `--worker NAME --confirmed`: schema 6 with `peers`. Stop one peer worker.
+  `NAME` is the full pane name or the part after `<project.id>-`. The owner or
+  the user may run it; another orchestrator gets `[held] ... owner X` (exit 3).
+  It follows the same busy check as `--pane`. The worker's record is removed.
+- Stopping an orchestrator session, declared or a copy (`SESSION-N`), is the
+  user's: it ends all that session's workers and removes their records. An
+  orchestrator pane gets `orchestrator.peer_lifecycle`.
+- `--force` (with `--pane` or `--worker`): stop an on-demand worker even while it is
   busy. Use it only when the user asks.
 
 An on-demand worker is stopped only when it is idle. A worker with a task

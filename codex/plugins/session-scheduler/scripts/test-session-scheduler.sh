@@ -6,14 +6,102 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TEST_HOME="$(mktemp -d "${TMPDIR:-/tmp}/session-scheduler-test.XXXXXX")"
-SESSION="session-scheduler-test-$$"
+SMOKE_TMUX="$(type -P tmux)"
+smoke_tmux_dir="$(cd -P -- "$(dirname "$SMOKE_TMUX")" && pwd -P)"
+SMOKE_TMUX="$smoke_tmux_dir/${SMOKE_TMUX##*/}"
+smoke_base="$(cd -P -- "${TMPDIR:-/tmp}" && pwd -P)"
+# macOS limits Unix socket paths to 104 bytes, including the terminator.
+if [[ "$smoke_base" = *,* ]] || [ "$(printf '%s' "$smoke_base" | wc -c)" -gt 65 ]; then smoke_base=/tmp; fi
+TEST_HOME="$(mktemp -d "$smoke_base/swtmux-scheduler-XXXXXX")"
+SMOKE_SOCKET="$TEST_HOME/sock"
+SMOKE_PID=""
+SMOKE_SOCKET_ID=""
+
+smoke_file_id() {
+  stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1"
+}
+SMOKE_HOME_ID="$(smoke_file_id "$TEST_HOME")"
+
+smoke_client() {
+  "$SMOKE_TMUX" -f /dev/null -N -S "$SMOKE_SOCKET" "$@"
+}
 
 cleanup() {
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  local status=$? i
+  trap - EXIT
+  if [ -L "$TEST_HOME" ] || [ ! -d "$TEST_HOME" ] || [ ! -O "$TEST_HOME" ] ||
+     [ "$(smoke_file_id "$TEST_HOME")" != "$SMOKE_HOME_ID" ] || [ -L "$SMOKE_SOCKET" ]; then
+    echo "Cannot verify ownership of $TEST_HOME. Keeping the fixture." >&2
+    exit 1
+  fi
+  if [ -n "$SMOKE_PID" ] && kill -0 "$SMOKE_PID" 2>/dev/null; then
+    if [ ! -S "$SMOKE_SOCKET" ] || [ "$(smoke_client display-message -p '#{pid}' 2>/dev/null)" != "$SMOKE_PID" ]; then
+      echo "Cannot verify the smoke server at $SMOKE_SOCKET. Keeping $TEST_HOME." >&2
+      exit 1
+    fi
+    smoke_client kill-server || true
+    for ((i=0; i<60; i++)); do
+      kill -0 "$SMOKE_PID" 2>/dev/null || break
+      sleep 0.05
+    done
+    if kill -0 "$SMOKE_PID" 2>/dev/null; then
+      echo "The smoke server is still running. Keeping $TEST_HOME." >&2
+      exit 1
+    fi
+    wait "$SMOKE_PID" || status=1
+  fi
+  if [ -e "$SMOKE_SOCKET" ] && { [ ! -S "$SMOKE_SOCKET" ] || [ -z "$SMOKE_SOCKET_ID" ] ||
+       [ "$(smoke_file_id "$SMOKE_SOCKET")" != "$SMOKE_SOCKET_ID" ]; }; then
+    echo "Unexpected entry at $SMOKE_SOCKET. Keeping $TEST_HOME." >&2
+    exit 1
+  fi
   rm -rf "$TEST_HOME"
+  exit "$status"
 }
 trap cleanup EXIT
+
+unset TMUX TMUX_PANE
+export HOME="$TEST_HOME/home" TMPDIR="$TEST_HOME/tmp" TMUX_TMPDIR="$TEST_HOME/tmp"
+export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+export XDG_CACHE_HOME="$HOME/.cache" XDG_STATE_HOME="$HOME/.local/state"
+mkdir -p "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$TEST_HOME/tmux-bin"
+{
+  printf '#!/usr/bin/env bash\nreal=%q\nsock=%q\n' "$SMOKE_TMUX" "$SMOKE_SOCKET"
+  cat <<'SH'
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -N) shift ;;
+    -S) [ "${2:-}" = "$sock" ] || exit 2; shift 2 ;;
+    -f) [ "${2:-}" = /dev/null ] || exit 2; shift 2 ;;
+    -V) [ "$#" -eq 1 ] || exit 2; break ;;
+    -*) echo "Unexpected tmux client option: $1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+exec "$real" -f /dev/null -N -S "$sock" "$@"
+SH
+} > "$TEST_HOME/tmux-bin/tmux"
+chmod 700 "$TEST_HOME/tmux-bin/tmux"
+export PATH="$TEST_HOME/tmux-bin:$PATH"
+
+# Foreground mode keeps the server in the verifier's process group on timeout.
+# All following clients use -N, including new-session, so none can replace it.
+"$SMOKE_TMUX" -f /dev/null -S "$SMOKE_SOCKET" -D &
+SMOKE_PID=$!
+for ((i=0; i<100; i++)); do
+  if [ -S "$SMOKE_SOCKET" ] && [ "$(smoke_client display-message -p '#{pid}' 2>/dev/null)" = "$SMOKE_PID" ]; then
+    break
+  fi
+  kill -0 "$SMOKE_PID" 2>/dev/null || break
+  sleep 0.05
+done
+if [ ! -S "$SMOKE_SOCKET" ] || [ "$(smoke_client display-message -p '#{pid}' 2>/dev/null)" != "$SMOKE_PID" ]; then
+  echo "The smoke server did not start at $SMOKE_SOCKET." >&2
+  exit 1
+fi
+SMOKE_SOCKET_ID="$(smoke_file_id "$SMOKE_SOCKET")"
+
+SESSION="session-scheduler-test-$$"
 
 fail() {
   echo "FAIL: $*" >&2

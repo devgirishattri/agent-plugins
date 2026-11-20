@@ -26,6 +26,13 @@
 # labels.json (written only by workspace-label.sh, under the project lock,
 # while that environment's workers are stopped). Every consumer therefore
 # sees concrete names; a name written in the config is never changed.
+#
+# Peer orchestrators (schema v6 with `peers`, 0.17.0): the engine records the
+# extra orchestrator sessions and the worker panes it started in the project
+# state file instances.json. The loader expands that file into concrete
+# sessions and panes (sw_apply_instances), so validation, plan, lifecycle and
+# the policy hook all read one expanded config. A raw config must not carry
+# those fields itself: they are engine state.
 set -uo pipefail
 
 # Resolve this library's own directory from ${BASH_SOURCE[0]}, never $0:
@@ -143,6 +150,14 @@ load_workspace_config_raw() {
   # in that case, not this loader.
   [ -z "$proot_abs" ] && proot_abs="$cfg_dir/$proot_rel"
 
+  if printf '%s' "$raw" | jq -e '
+       .schema_version == 6 and ((.sessions // []) | type) == "array"
+       and any(.sessions[]; type == "object" and (has("instance") or (((.panes // []) | type) == "array" and any(.panes[]; type == "object" and has("worker")))))
+     ' >/dev/null 2>&1; then
+    echo "ERROR: $path: sessions[].instance and panes[].worker are engine state; remove them from the config" >&2
+    return 1
+  fi
+
   local interpolated
   interpolated="$(printf '%s' "$raw" | jq -c --arg pid "$pid" --arg root "$proot_abs" '
     def interp:
@@ -156,9 +171,21 @@ load_workspace_config_raw() {
       else . end;
     interp
   ')" || return 1
+  # A third argument replaces the stored instances in the same way. The state
+  # file is read only for a peers config, so every other config never looks
+  # at the state directory for it.
+  local instances="${3:-}" expanded
+  if [ -z "$instances" ]; then
+    if printf '%s' "$interpolated" | jq -e '.schema_version == 6 and has("peers")' >/dev/null 2>&1; then
+      instances="$(sw_read_instances "$pid")"
+    else
+      instances='{}'
+    fi
+  fi
+  expanded="$(sw_apply_instances "$interpolated" "$instances")" || return 1
   # A second argument replaces the stored labels (workspace-label.sh checks a
   # candidate label this way before it writes one).
-  sw_apply_worker_names "$interpolated" "${2:-$(sw_read_worker_labels "$pid")}"
+  sw_apply_worker_names "$expanded" "${2:-$(sw_read_worker_labels "$pid")}"
 }
 
 # sw_worker_labels_path PROJECT_ID — the project state file holding each
@@ -186,13 +213,121 @@ sw_read_worker_labels() {
   ' "$path" 2>/dev/null || printf '{}'
 }
 
+# sw_state_home — the state home the peers engine uses: $XDG_STATE_HOME when it
+# is absolute, else $HOME/.local/state (a relative value is ignored, as the XDG
+# spec says). Every pane of a peers workspace is launched with this value, so
+# the engine and the hook in any cwd read one instances.json.
+sw_state_home() {
+  case "${XDG_STATE_HOME:-}" in
+    /*) printf '%s\n' "$XDG_STATE_HOME" ;;
+    *) printf '%s\n' "$HOME/.local/state" ;;
+  esac
+}
+
+# sw_instances_path PROJECT_ID — the project state file holding the peer
+# orchestrators and the workers the engine started (see the header).
+sw_instances_path() {
+  printf '%s/session-workspace/%s/instances.json\n' "$(sw_state_home)" "$1"
+}
+
+# sw_read_instances PROJECT_ID — the shape-valid records of instances.json as
+# {"version":1,"orchestrators":[{index}],"workers":[{checkout,role,label,owner,visible}]}.
+# A missing, symlinked, unreadable or malformed file gives the empty form, and
+# a record keeps only its known keys, so nothing else passes through.
+sw_read_instances() {
+  local pid="$1" path empty='{"version":1,"orchestrators":[],"workers":[]}'
+  case "$pid" in
+    ''|*/*|.|..) printf '%s' "$empty"; return 0 ;;
+  esac
+  path="$(sw_instances_path "$pid")"
+  if [ ! -f "$path" ] || [ -L "$path" ]; then
+    printf '%s' "$empty"
+    return 0
+  fi
+  jq -c --arg re "$SW_WORKER_LABEL_RE" '
+    if type == "object" then
+      {version: 1,
+       orchestrators: [((.orchestrators // []) | arrays | .[])
+         | select(type == "object" and (.index | type) == "number" and .index == (.index | floor) and .index >= 2 and .index <= 999)
+         | {index}],
+       workers: [((.workers // []) | arrays | .[])
+         | select(type == "object"
+             and (.checkout | type) == "string" and (.owner | type) == "string"
+             and (.role == "executor" or .role == "reviewer")
+             and (.["label"] | type) == "string" and (.["label"] == "" or (.["label"] | test($re)))
+             and (.visible | type) == "boolean")
+         | {checkout, role, "label": .["label"], owner, visible}]}
+    else {version: 1, orchestrators: [], workers: []} end
+  ' "$path" 2>/dev/null || printf '%s' "$empty"
+}
+
+# sw_apply_instances CONFIG_JSON INSTANCES_JSON — expand a schema-v6 peers
+# config: the declared peers session becomes instance 1, each recorded
+# orchestrator index gets a copy of it (id, name and pane names suffixed -N),
+# and each recorded worker becomes an on-demand pane in its owner's session.
+# A record of the wrong shape (the same rules as sw_read_instances, so a
+# candidate passed by the engine is judged as the stored file is), or one that
+# names an unknown checkout or owner, or repeats a worker, is skipped
+# silently. Any other config is returned unchanged.
+sw_apply_instances() {
+  printf '%s' "$1" | jq -c --argjson inst "${2:-"{}"}" --arg re "$SW_WORKER_LABEL_RE" '
+    . as $original
+    | try ((.peers.session // null) as $ps
+      | if .schema_version == 6 and ((.peers // null) | type) == "object" and ($ps | type) == "string"
+         and ((.sessions // null) | type) == "array" and any(.sessions[]; type == "object" and .id == $ps)
+         and ((.harness.roles // null) | type) == "object" and ((.environments // null) | type) == "array"
+      then
+        .project.id as $pid
+        | .harness.roles as $roles
+        | ([.environments[] | select(type == "object" and (.id | type) == "string" and (.cwd | type) == "string") | {key: .id, value: .cwd}] | from_entries) as $cwds
+        | ([.sessions[] | select(type == "object" and .id == $ps)][0]) as $decl
+        | ([($inst.orchestrators // [])[]? | select(type == "object") | .index
+            | select(type == "number" and . == floor and . >= 2 and . <= 999)] | unique) as $indexes
+        | .sessions |= [.[] | if type == "object" and .id == $ps then
+            (. + {instance: {of: $ps, index: 1}}),
+            ($indexes[] as $n | $decl
+              | .id = (.id + "-" + ($n | tostring))
+              | .name = (.name + "-" + ($n | tostring))
+              | .panes |= map(.name = (.name + "-" + ($n | tostring)))
+              | .instance = {of: $ps, index: $n})
+          else . end]
+        | ([.sessions[] | select(type == "object") | .id as $sid | (.panes // [])[] | select(.role == $roles.orchestrator) | {key: .name, value: $sid}] | from_entries) as $owners
+        | (reduce (($inst.workers // [])[]? | select(type == "object")) as $w ({seen: [], sessions: .sessions};
+            ("worker:" + ([$w.checkout, $w.role, $w["label"]] | tojson)) as $key
+            | if ($w.checkout | type) == "string" and ($cwds[$w.checkout] // null) != null
+                 and ($w.role == "executor" or $w.role == "reviewer")
+                 and ($w["label"] | type) == "string" and ($w["label"] == "" or ($w["label"] | test($re)))
+                 and ($w.owner | type) == "string" and ($owners[$w.owner] // null) != null
+                 and ($w.visible | type) == "boolean"
+                 and (.seen | index($key)) == null
+              then
+                .seen += [$key]
+                | .sessions |= map(if type == "object" and .id == $owners[$w.owner] then
+                    .panes += [{
+                      name: ($pid + "-" + $w.checkout + "-" + $w.role + (if $w["label"] == "" then "" else "-" + $w["label"] end)),
+                      role: $roles[$w.role],
+                      cwd: $cwds[$w.checkout],
+                      launch: "on_demand",
+                      worker: {checkout: $w.checkout, role: $w.role, "label": $w["label"], owner: $w.owner, visible: $w.visible}
+                    }]
+                  else . end)
+              else . end))
+          as $built
+        | .sessions = $built.sessions
+        | .environments |= map(if type == "object" and (has("development") | not) then . + {development: []} else . end)
+      else . end)
+      # A config too malformed to expand is passed on unchanged, so validation reports it.
+      catch $original
+  '
+}
+
 # sw_apply_worker_names CONFIG_JSON LABELS_JSON — fill the name of every
-# unnamed executor/reviewer pane of a schema-v5 environment's development
+# unnamed executor/reviewer pane of a schema-v5 or v6 environment's development
 # sessions. Anything else is returned unchanged; an unnamed pane elsewhere
 # stays unnamed and fails validation as before.
 sw_apply_worker_names() {
   printf '%s' "$1" | jq -c --argjson labels "${2:-"{}"}" '
-    if .schema_version == 5 and ((.project.id // "") | type) == "string" and (.project.id // "") != ""
+    if (.schema_version == 5 or .schema_version == 6) and ((.project.id // "") | type) == "string" and (.project.id // "") != ""
        and ((.harness.roles // null) | type) == "object" and ((.environments // null) | type) == "array" then
       .project.id as $pid
       | .harness.roles as $roles

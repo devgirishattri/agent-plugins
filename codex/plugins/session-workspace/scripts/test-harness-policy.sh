@@ -1952,7 +1952,7 @@ claim_case "claim control: a name that only contains the letters (previewer) is 
 claim_case "claim control: no workspace identity at all stays a no-op" "$INACTIVE" "" "" ""
 if command -v tmux >/dev/null 2>&1; then
   CLAIM_SOCK="$TMPROOT/claim-tmux.sock"
-  if LC_ALL=C.UTF-8 tmux -S "$CLAIM_SOCK" new-session -d -s claim 'sleep 300' 2>/dev/null; then
+  if LC_ALL=C.UTF-8 tmux -f /dev/null -S "$CLAIM_SOCK" new-session -d -s claim 'sleep 300' 2>/dev/null; then
     CLAIM_PANE="$(tmux -S "$CLAIM_SOCK" display-message -p -t claim '#{pane_id}')"
     tmux -S "$CLAIM_SOCK" set-option -p -t "$CLAIM_PANE" @name example-app-api-reviewer
     claim_case "claim: a tmux pane @name naming reviewer is denied" "$CLAIM" "" "" "" TMUX="$CLAIM_SOCK,1,0" TMUX_PANE="$CLAIM_PANE"
@@ -2165,7 +2165,7 @@ report_policy() {
 FLOOR_DOC="$(env -u SESSION_WORKSPACE_CONFIG "$PY" "$POLICY" --floor-json </dev/null)"
 if printf '%s' "$FLOOR_DOC" | jq -e '
     .profile == "strict-v1" and .configurable == false and .current == null
-    and (.roles | keys) == ["confined_orchestrator","executor","orchestrator","reviewer"]
+    and (.roles | keys) == ["confined_orchestrator","executor","orchestrator","peer_orchestrator","reviewer"]
     and all(.roles[], .all; (.text | length) > 0 and (.floors | length) > 0 and (.probes | length) > 0)' >/dev/null 2>&1; then
   pass "--floor-json: the whole strict-v1 floor table, no resolved role outside a pane"
 else

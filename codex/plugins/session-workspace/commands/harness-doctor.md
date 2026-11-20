@@ -18,8 +18,8 @@ structured report, including when config validation fails.
 
 Relay these checks and the summary without applying fixes:
 
-- `config.validation` and `harness.activation` cover the normalized plan and
-  explicit opt-in state.
+- `config.validation` and `harness.activation` cover the normalized plan for
+  schemas 1–6 and the harness opt-in state.
 - `hook.registration` checks the bundled `hooks.json` entry only; it cannot
   prove that Codex loaded or trusted the hook. `runtime.python3` covers the
   active-policy runtime.

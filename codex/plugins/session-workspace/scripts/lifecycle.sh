@@ -555,6 +555,33 @@ _sw_split_extra_pane() {
   SW_LAST_SPLIT_PANE="$new_pane"
 }
 
+# _sw_hidden_window SESSION_NAME PANE_NAME — create the window a hidden worker
+# lives in (alone, detached, named after the pane) and size it BEFORE the agent
+# launches in it. Same contract as _sw_split_extra_pane: sets SW_LAST_SPLIT_PANE
+# on success or SW_LAST_SPLIT_ERROR on failure.
+SW_HIDDEN_WINDOW_ID=""
+_sw_hidden_window() {
+  local session_name="$1" pane_name="$2" out win
+  SW_LAST_SPLIT_PANE=""
+  SW_LAST_SPLIT_ERROR=""
+  if ! out="$(sw_hidden_size 2>&1)"; then
+    SW_LAST_SPLIT_ERROR="$(printf '%s' "$out" | tr -d '\n')"
+    return 1
+  fi
+  if ! out="$(tmux new-window -d -t "=$session_name:" -n "$pane_name" -P -F '#{pane_id} #{window_id}' 2>&1)"; then
+    SW_LAST_SPLIT_ERROR="$(printf '%s' "$out" | tr -d '\n')"
+    [ -n "$SW_LAST_SPLIT_ERROR" ] || SW_LAST_SPLIT_ERROR="tmux new-window failed"
+    return 1
+  fi
+  win="${out#* }"
+  SW_LAST_SPLIT_PANE="${out% *}"
+  # The exact window this run made: a failed start closes only this id, never
+  # a window that merely has the same name.
+  # shellcheck disable=SC2034  # read by workspace-start.sh
+  SW_HIDDEN_WINDOW_ID="$win"
+  sw_size_hidden_window "$win"
+}
+
 # _sw_on_demand_left_down PANE_PLAN_JSON — true when this run leaves the pane
 # down because it is an on-demand worker (launch "on_demand") and the run is a
 # full start/reconcile, not a `start --pane` that selected it.
@@ -624,8 +651,20 @@ _sw_process_session() {
     _sw_pin_session_env "$session_name" "$session_json"
   fi
 
-  local window_target
-  window_target="$(_sw_ensure_window "$session_name" "$window_index")"
+  local window_target worker_owner owner_window=""
+  # A session that holds workers (peers) uses the window of the orchestrator
+  # pane, found by its marker, so a renumbered window is neither recreated
+  # nor missed when a shown worker is split into it.
+  worker_owner="$(printf '%s' "$session_json" | jq -r '[(.panes // [])[] | select((.worker // null) != null) | .worker.owner][0] // empty')"
+  if [ "$DRY_RUN" -eq 0 ] && [ -n "$worker_owner" ] && tmux has-session -t "=$session_name" 2>/dev/null; then
+    owner_window="$(tmux list-panes -s -t "=$session_name" -F "$(printf '#{%s}\t#{window_index}' "$MARKER_PANE")" 2>/dev/null |
+      awk -F'\t' -v n="$worker_owner" '$1 == n {print $2; exit}')"
+  fi
+  if [ -n "$owner_window" ]; then
+    window_target="=$session_name:$owner_window"
+  else
+    window_target="$(_sw_ensure_window "$session_name" "$window_index")"
+  fi
 
   local panes_json pane_count
   panes_json="$(printf '%s' "$session_json" | jq -c '.panes')"
@@ -696,19 +735,24 @@ _sw_process_session() {
       pane_json="$(printf '%s' "$panes_json" | jq -c ".[$i]")"
       pane_name="$(printf '%s' "$pane_json" | jq -r '.name')"
       found_pane=""
+      # A worker pane of a peers config may sit in a window of its own (hidden),
+      # so its lookup covers the whole session; every other pane keeps the
+      # window-scoped lookup.
+      local -a lp_scope=(-t "$window_target")
+      [ "$(printf '%s' "$pane_json" | jq -r 'if (.worker // null) != null then "yes" else "no" end')" = "yes" ] && lp_scope=(-s -t "=$session_name")
       while IFS=$'\t' read -r pid pproj pmark; do
         [ -z "$pid" ] && continue
         if [ "$pproj" = "$PROJECT_ID" ] && [ "$pmark" = "$pane_name" ]; then
           found_pane="$pid"
           break
         fi
-      done < <(tmux list-panes -t "$window_target" -F "$(printf '#{pane_id}\t#{%s}\t#{%s}' "$MARKER_PROJECT" "$MARKER_PANE")" 2>/dev/null)
+      done < <(tmux list-panes "${lp_scope[@]}" -F "$(printf '#{pane_id}\t#{%s}\t#{%s}' "$MARKER_PROJECT" "$MARKER_PANE")" 2>/dev/null)
       SLOT_PANES+=("$found_pane")
       i=$((i + 1))
     done
 
     local -a SLOT_SPLIT_ERR=()
-    local j claimed candidate slot_skip
+    local j claimed candidate slot_skip hidden_worker made_rc
     i=0
     while [ "$i" -lt "$pane_count" ]; do
       if [ -n "${SLOT_PANES[$i]}" ]; then
@@ -728,7 +772,10 @@ _sw_process_session() {
         continue
       fi
       candidate=""
-      while IFS=$'\t' read -r pid pmark; do
+      # A hidden worker never takes a pane of the orchestrator's window: it gets
+      # a window of its own below.
+      hidden_worker="$(printf '%s' "$pane_json" | jq -r 'if (.worker // null) != null and .worker.visible == false then "yes" else "no" end')"
+      while [ "$hidden_worker" != "yes" ] && IFS=$'\t' read -r pid pmark; do
         [ -z "$pid" ] && continue
         # Never steal a pane that already carries a pane-scope managed
         # marker. The discriminator MUST be MARKER_PANE, not MARKER_PROJECT:
@@ -754,7 +801,13 @@ _sw_process_session() {
         # Called as a plain statement, NOT `x="$(_sw_split_extra_pane ...)"`
         # — see the function's header comment for why a command substitution
         # here would silently discard SW_LAST_SPLIT_ERROR.
-        if _sw_split_extra_pane "$window_target"; then
+        made_rc=0
+        if [ "$hidden_worker" = "yes" ]; then
+          _sw_hidden_window "$session_name" "$(printf '%s' "$pane_json" | jq -r '.name')" || made_rc=$?
+        else
+          _sw_split_extra_pane "$window_target" || made_rc=$?
+        fi
+        if [ "$made_rc" -eq 0 ]; then
           candidate="$SW_LAST_SPLIT_PANE"
         else
           SLOT_SPLIT_ERR[$i]="${SW_LAST_SPLIT_ERROR:-tmux split-window failed}"

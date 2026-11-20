@@ -40,16 +40,18 @@ the CLI contract string both entry points use for their compatibility check.
 |---|---|---|---|
 | `doctor` | `workspace-doctor [--config PATH] [--json]` | Never | Read-only health check: tooling versions, config validity, plugin dependency versions, pane cwds, secrets-file gates, state-dir writability, runtime resolution, coordination-base drift, session-chat helper resolution. |
 | `plan` | `workspace-plan [TARGET\|all] [--config PATH] [--json] [--running]` | Never | Deterministic dry-run: resolves and prints exactly what `start` would do (sessions, panes, argv, env var *names*, grants) without touching tmux. `--running` adds a read-only `running` field per pane, the only form that reads tmux. |
-| `start` | `workspace-start [TARGET\|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]`<br>`workspace-start SESSION --pane NAME [--pane NAME...] [--config PATH] [--no-attach]` | Yes | Creates only what is missing. A pane the engine already manages and is healthy is left alone (idempotent restart). `--pane` starts only the named service panes, or executor/reviewer panes marked `launch: "on_demand"`, which a full start leaves down; see "Single service panes on demand" and "On-demand workers". |
+| `start` | `workspace-start [TARGET\|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed]`<br>`workspace-start SESSION --pane NAME [--pane NAME...] [--config PATH] [--no-attach]`<br>`workspace-start SESSION-N [--no-attach]`<br>`workspace-start --checkout ID --role executor\|reviewer [--label L] [--show] [--owner PANE] [--config PATH] [--no-attach]` | Yes | Creates only what is missing. A pane the engine already manages and is healthy is left alone (idempotent restart). `--pane` starts only the named service panes, or executor/reviewer panes marked `launch: "on_demand"`, which a full start leaves down; see "Single service panes on demand" and "On-demand workers". Schema 6 with `peers`: `SESSION-N` (N 2-999, the user only) starts an extra orchestrator copy, and `--checkout` starts a worker owned by the calling orchestrator (`--owner` is for the user). `start` and `start all` never start copies. See "Peer orchestrators". |
 | `status` | `workspace-status [TARGET\|all] [--config PATH] [--json] [--pane NAME...]` | Never | Reports session/pane/role/runtime/model/cwd/process/health/running for every planned pane, one CDP health line per browser, and each idle-stop pane's watcher and last stop. |
 | `restart` | `workspace-restart [TARGET\|all] [--config PATH] [--no-save] [--no-agents] [--no-services] [--no-attach]` | Yes | `stop --confirmed` followed by `start`, for the same target. Unlike the old launchers, `restart` accepts `--no-save`. |
 | `reconcile` | `workspace-reconcile [TARGET\|all] [--config PATH] [--apply] [--adopt --confirmed]` | Only with `--apply` | Dry-run by default; `--apply` repairs missing/misnamed managed resources without respawning healthy panes. Use `--adopt --confirmed` to preview adoption, then add `--apply` to perform it; `start --adopt --confirmed` is the direct lifecycle alternative. |
-| `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes or on-demand workers. Closing the last pane ends the tmux session. A busy worker stays running unless `--force` is given. |
+| `stop` | `workspace-stop [TARGET\|all] [--config PATH] [--no-save] --confirmed [--all]`<br>`workspace-stop SESSION --pane NAME [--pane NAME...] [--config PATH] --confirmed [--force]`<br>`workspace-stop --worker NAME [--config PATH] --confirmed [--force]` | Yes | Kills only tmux sessions carrying this project's managed marker. Refuses outright without `--confirmed`. `--pane` closes only the named service panes or on-demand workers. Closing the last pane ends the tmux session. A busy worker stays running unless `--force` is given. `--worker NAME` closes one peer worker (schema 6 with `peers`) and removes its record. Stopping an orchestrator session ends its workers. |
+| `show` | `workspace-show NAME [--config PATH]` | Yes | Schema 6 with `peers`. Joins a running worker pane into its owner's window and reapplies the standard layout. The owner or the user only. Idempotent. See "Peer orchestrators". |
+| `hide` | `workspace-hide NAME [--config PATH]` | Yes | Schema 6 with `peers`. Moves a worker pane out into a window of its own in the owner's tmux session, sized by `SESSION_WORKSPACE_HIDDEN_SIZE`. Idempotent. |
 | `install` | `workspace-install [--target PATH] [--dry-run]` | Never (no tmux, no config) | Installs this plugin's `templates/workspace-dispatcher.sh` to `~/.local/bin/workspace` so `workspace <verb>` works machine-wide. Idempotent — an identical executable target reports `already current` and writes nothing, so it doubles as the refresh for that copy; an identical but non-executable target is chmod-repaired in place (no backup, no rewrite). Backs up only a differing existing target to `<target>.bak` before replacing it, verifies the result answers `--contract`, reports PATH membership, and prints (never writes) the `alias ws=workspace` line. |
 | `browser-config` | `workspace-browser-config [--config PATH] [--provider codex\|claude\|all] [--apply] [--json]` | Never | Derives project-scoped Codex and Claude MCP entries from `browser`. Dry-run by default; `--apply` writes and backs up project config files, but never touches tmux, and refuses conflicting unmanaged entries. |
-| `label` | `workspace label ENVIRONMENT [LABEL\|--clear] [--config PATH] [--json]` | Never (state file only) | Schema v5. Shows or sets the label of an environment's unnamed executor/reviewer panes, which are named `<project.id>-<environment>-<executor\|reviewer>[-<label>]`. Refuses while one of those workers runs, and refuses a label whose names the config would not accept. See "Worker names". |
+| `label` | `workspace label ENVIRONMENT [LABEL\|--clear] [--config PATH] [--json]` | Never (state file only) | Schema 5, and schema 6 without `peers`. Shows or sets the label of an environment's unnamed executor/reviewer panes, which are named `<project.id>-<environment>-<executor\|reviewer>[-<label>]`. Refuses while one of those workers runs, and refuses a label whose names the config would not accept. Refused under `peers`: give the label with `start --checkout ... --label`. See "Worker names". |
 | `harness-status` | `harness-status [--config PATH] [--json] [--probe]` | Never | Read-only view of the opt-in harness (mode/profile/roles/gates), the strict-v1 role floor for this pane's role (every role outside a pane), the optional guard packs, and whether this pane's engine identity matches the validated plan. `--probe` decides this pane's built-in floor cases without running them and exits 1 on any unexpected decision. |
-| `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3–v5 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
+| `harness-doctor` | `harness-doctor [--config PATH] [--json]` | Never | Read-only checks for config, activation, all bundled hook registrations, schema-v3–v6 guards, `python3`, and live identity. Non-zero only on `ERROR`. |
 
 `TARGET` is a `sessions[].id` from the config, or `all` (the default).
 `--json` output on `plan`/`status`/`doctor` is produced from the same
@@ -154,7 +156,7 @@ the last pane ends the tmux session. Stopping the browser pane releases its port
 
 ### On-demand workers (`launch: "on_demand"`)
 
-In an active strict-v1 harness (schema 2-5, `harness.enabled: true`), an
+In an active strict-v1 harness (schema 2-6, `harness.enabled: true`), an
 executor or reviewer pane can be marked `"launch": "on_demand"`. A full
 `workspace start` or `reconcile --apply` then leaves it down, reported as
 `[on-demand] ... not started (launch on_demand); start it with: workspace
@@ -209,6 +211,17 @@ workspace stop development --pane web-executor --confirmed
 
 ## Safety model
 
+- **One tmux server per operation.** A verb chooses its server once and
+  exports it as `SESSION_WORKSPACE_TMUX_SOCKET`: inside tmux, the socket in
+  `TMUX`; otherwise `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default`. Every tmux call
+  of the verb and its children (nested verbs, the idle watcher, the Python
+  helpers) passes `-S` with that socket, and `-N`, so a server that goes away
+  mid-operation is an error, never a different or a new server. Only `start`
+  may create the server, with `new-session`. A `TMUX_TMPDIR` that names a
+  missing directory is refused, as is a `SESSION_WORKSPACE_TMUX_SOCKET` that is
+  relative or differs from the socket in `TMUX`. Set it explicitly to select a
+  private (test) server. The guarantee is a fixed socket path: a different
+  server started later at the same path is not detected.
 - **Managed markers.** Every session and pane the engine creates carries a
   `@session_workspace_*` tmux option (`@session_workspace_project`,
   `@session_workspace_session`, `@session_workspace_pane`,
@@ -304,7 +317,7 @@ when a key the pane's role is entitled to isn't present in the file or the calle
 caller's environment wins): `"fail"` aborts
 that pane's launch outright; `"warn"` starts the pane without it.
 
-## Harness, guard packs, and reviewed orchestration (opt-in, schemas v2–v5)
+## Harness, guard packs, and reviewed orchestration (opt-in, schemas v2–v6)
 
 `schema_version: 2` adds one optional, typed `harness` block that turns the
 workspace into a fail-closed multi-agent harness: one **orchestrator** pane,
@@ -327,7 +340,7 @@ data: it names coordinates (targets, remotes, branches) and never accepts a
 command, script, regex, prompt fragment, custom gate, or permission bypass.
 
 **Activation is explicit.** With no active launcher mode, an ordinary pane
-using schema v1 or a v2–v5 config with the harness disabled skips policy
+using schema v1 or a v2–v6 config with the harness disabled skips policy
 evaluation. A pane that claims a reviewer identity goes through the Python
 check so an unreadable or missing config fails closed. A pane launched with
 an active mode blocks when its validated mode, identity, read grants, guards or
@@ -338,7 +351,7 @@ own environment scope drift. Restart the affected session to load the change. On
 
 Every pane the engine launches receives seven base **engine-owned** variables
 (the six identity values plus `SESSION_WORKSPACE_READ_PATHS_JSON`, exported
-empty when the pane has no read paths); a guarded schema-v3–v5 launch also
+empty when the pane has no read paths); a guarded schema-v3–v6 launch also
 receives `SESSION_WORKSPACE_GUARDS_JSON`, and a schema-v5 config with
 `environments` adds `SESSION_WORKSPACE_SCOPE_JSON`. They live in the pane's own process environment — never mirrored into the tmux
 session env, never settable from `env.groups`/`pane_name_aliases` (both are
@@ -352,9 +365,10 @@ validation errors) — and `workspace-plan` lists their names:
 | `SESSION_WORKSPACE_ROLE` | the pane's configured role name |
 | `SESSION_WORKSPACE_PANE_CWD` | the pane's resolved cwd |
 | `SESSION_WORKSPACE_HARNESS_MODE` | `audit` or `enforce` when active; empty for v1, no `harness`, or `enabled: false` |
-| `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3–v5 launch; absent for v1/v2 and v3–v5 without guards |
+| `SESSION_WORKSPACE_GUARDS_JSON` | canonical guard JSON for a guarded v3–v6 launch; absent for v1/v2 and v3–v6 without guards |
 | `SESSION_WORKSPACE_READ_PATHS_JSON` | canonical `[{path, kind}]` for a reviewer or executor with `read_paths`; exported empty for every other pane so an inherited value is cleared |
-| `SESSION_WORKSPACE_SCOPE_JSON` | canonical scope identity for a pane of a schema-v5 config with `environments`: its environment, the root orchestrator's name, and its own environment entry (`own`), or for the unbound root orchestrator the environments it coordinates directly (`direct`); absent otherwise |
+| `XDG_STATE_HOME` | schema 6 with `peers` only: the launcher's resolved state home, exported to every pane so the hook and the engine read one state file. Not an identity value. `env.groups` may not set it. |
+| `SESSION_WORKSPACE_SCOPE_JSON` | canonical scope identity for a pane of a schema-v5 config with `environments`: its environment, the root orchestrator's name, and its own environment entry (`own`), or for the unbound root orchestrator the environments it coordinates directly (`direct`); under `peers`, a worker's environment, `own` entry and `owner`, and an orchestrator's `peer` (its own pane name); absent otherwise |
 
 A pane launched while the harness is `audit` or `enforce` also gets
 `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1`. A Claude Code `@file` mention inserts
@@ -410,7 +424,7 @@ health/lifecycle packs only add non-blocking context. Today they provide:
   `workspace_health` warnings never appeared.
 
 The lifecycle/health wrappers exit silently before jq/Python when the guarded
-v3–v5 launcher identity is absent or the feature is off. Lifecycle reminders use
+v3–v6 launcher identity is absent or the feature is off. Lifecycle reminders use
 event-specific `hookSpecificOutput.additionalContext` JSON on both providers.
 Stop checks are bounded, skip non-git roots and absent refs, and never block
 stopping.
@@ -1072,7 +1086,7 @@ checkout before relying on them. `--help` documents it, and
 `harness-status.sh --help` prints the exact line. An incomplete or repeated
 option is a usage error (exit 2, no decision).
 
-For guarded schema-v3–v5 launches, the same manifest also registers generic
+For guarded schema-v3–v6 launches, the same manifest also registers generic
 `SessionStart`/`UserPromptSubmit` reminders and the non-blocking Stop health
 check. The `SessionStart` reminder matches `startup`, `resume`, `clear`,
 `compact`, and `fork`, so a forked session gets the same reminder as the
@@ -1382,10 +1396,10 @@ roadmap items — read them before depending on the behavior they describe.
 
 ## Configuration reference
 
-`.agent-workspace/workspace.json`, `schema_version: 1`, `2`, `3`, `4`, or `5`
+`.agent-workspace/workspace.json`, `schema_version: 1`, `2`, `3`, `4`, `5`, or `6`
 (v2 adds the harness; v3 adds optional shared guards; v4 adds optional
 reviewed Git orchestration; v5 adds scoped environments, described at the end
-of this file). `validate-config.sh` is the runtime authority: it
+of this file; v6 keeps v5 and adds peer orchestrators, see "Peer orchestrators"). `validate-config.sh` is the runtime authority: it
 enforces its explicit key, safety, and cross-field checks
 (`validate-structural.jq` for the pure-jq structural half — unknown/missing
 keys, uniqueness, charset/safety rules, the harness/guards/orchestration
@@ -1561,16 +1575,26 @@ hand-added pane in that session present itself as a different pane.
 | `sessions[].layout.pane_order` | array of node ids | yes (if `kind: split_tree`) | — | Explicit, authoritative mapping from split-tree node id to `panes[]` slot order — a visual layout can't otherwise express "pane order differs from split order." |
 | `sessions[].panes[].name` | string | optional for v5 environment development workers | derived for an unnamed worker | The pane's `@name` (session-chat addressing identity) and managed-marker pane value. Enforced unique across the whole config. |
 | `sessions[].panes[].role` | string | yes | — | A key from `roles`. |
-| `sessions[].panes[].runtime` | string | no (v5 only) | role runtime | Declared `runtimes` key or `shell`; pane overrides role. Harness panes cannot resolve to shell; browser-selected panes must resolve to shell. |
+| `sessions[].panes[].runtime` | string | no (v5, v6) | role runtime | Declared `runtimes` key or `shell`; pane overrides role. Harness panes cannot resolve to shell; browser-selected panes must resolve to shell. |
 | `sessions[].panes[].cwd` | string | no | session/window default | Relative (to `project.root`) or absolute working directory. Validated to resolve inside the project root; a missing directory is a hard validation error **unless** `optional: true`. |
 | `sessions[].panes[].optional` | boolean | no | `false` | A missing `cwd` for an optional pane is reported (INFO in `doctor`, "skipped" in `start`) rather than failing validation/the slot. |
 | `sessions[].panes[].command` | array of strings, min 1 item | no | (agent argv, or interactive shell) | For a `shell`-runtime (typically `service`-role) pane: literal argv to run instead of an interactive shell. A bare string command is rejected — it must be an array, so there's never a shell re-parsing step. |
 | `sessions[].panes[].port` | integer, 1-65535 | no | — | First-class metadata (surfaced in `plan`/`status` output); does not change what gets launched or add a `--port` flag anywhere. A pane with `port` and `command` is refused by `start --pane` (and by a schema-v5 start) while another process holds the port, naming the holder's PID. |
 | `sessions[].panes[].idle_stop_minutes` | integer, 1-1440 | no | — (never stopped) | `service` panes only, and only one with a port to watch: the browser pane or a pane with `port`. A watcher stops the pane after this many minutes with no inbound connection to that port (for the browser, no CDP commands; keepalive pings on an open connection do not count) and records why. See "Single service panes on demand". |
 | `sessions[].panes[].idle_activity` | array of unique strings: `connections`, `output` | no | `["connections"]` | What counts as use for a pane with `idle_stop_minutes` and `port`; refused without `idle_stop_minutes`, on a non-`service` pane and on the browser pane. `connections`: an inbound connection to the port (on Linux, also one the server closed in the last 60 seconds). `output`: new output in the pane since the previous sample, for a dev server that closes every connection after its response but logs each request. Use is either selected signal. Any periodic output keeps the pane up, which is why `output` is opt-in. |
-| `sessions[].panes[].launch` | enum: `always`, `on_demand` | no | `always` | `on_demand`: an executor or reviewer pane of an active strict-v1 harness (schema 2-5) that a full `start`/`reconcile --apply` leaves down; the orchestrator starts it with `start --pane` (which waits for the agent's input line) and closes it with `stop --pane` (refused while it is busy). Refused on any other role and in a `split_tree` session. See "On-demand workers". |
-| `sessions[].panes[].read_paths` | array of ≤16 strings | no | — (no extra reads) | Active strict-v1 **reviewer** or **executor** panes only (schema v2–5). Existing files/directories the pane's shell may read in addition to its cwd; see "Reviewer read paths" and "Executor read paths". Any other role, or an inactive harness, is a validation error. |
+| `sessions[].panes[].launch` | enum: `always`, `on_demand` | no | `always` | `on_demand`: an executor or reviewer pane of an active strict-v1 harness (schema 2-6) that a full `start`/`reconcile --apply` leaves down; the orchestrator starts it with `start --pane` (which waits for the agent's input line) and closes it with `stop --pane` (refused while it is busy). Refused on any other role and in a `split_tree` session. See "On-demand workers". |
+| `sessions[].panes[].read_paths` | array of ≤16 strings | no | — (no extra reads) | Active strict-v1 **reviewer** or **executor** panes only (schema v2–6). Existing files/directories the pane's shell may read in addition to its cwd; see "Reviewer read paths" and "Executor read paths". Any other role, or an inactive harness, is a validation error. |
 | `sessions[].panes[].agent.*` | see `roles.<r>.agent.*` | no | role-level value, or no flag | Pane-level override of `model`/`effort`/`profile`/`permission_mode`, taking precedence over the role's own value. |
+
+### `peers` and `environments` (schema 6)
+
+| Field | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `peers.session` | string | yes (if `peers` exists) | — | Id of the declared session that holds the one orchestrator pane (harness orchestrator role, cwd at the project root, standard layout, no `retain_layout`). Requires `harness.enabled` and `environments`. |
+| `peers.limits.orchestrators` | integer ≥ 1 | no | no limit | Most orchestrator sessions, the declared one included. |
+| `peers.limits.workers_per_orchestrator` | integer ≥ 1 | no | no limit | Most workers one orchestrator owns. |
+| `environments[].executors` | enum: `one`, `many` | no | `one` | Schema 6 with `peers`. `many` lets several executors run on the checkout. `one` allows one at a time (`[held]` otherwise). |
+| `environments[].development` | array of session ids | schema 5: yes. Schema 6 with `peers`: no | — | Under `peers` it must be empty. |
 
 ### `behavior` (optional)
 
@@ -1587,12 +1611,12 @@ hand-added pane in that session present itself as a different pane.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `harness.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires `mode`, `profile`, `roles`, and `gates`; schema-v3–v5 `guards` remain optional. |
+| `harness.enabled` | boolean | yes (if the block exists) | `false` is inactive and must be the only key. `true` requires `mode`, `profile`, `roles`, and `gates`; schema-v3–v6 `guards` remain optional. |
 | `harness.mode` | enum: `audit`, `enforce` | when enabled | Audit reports policy decisions on Claude stderr or through a Codex `systemMessage`. Enforce blocks ordinary denials. Worker audit-only rules report in both modes, and integrity failures block in both. |
 | `harness.profile` | const `strict-v1` | when enabled | The only profile. No other value is accepted. |
 | `harness.roles.orchestrator` / `.executor` / `.reviewer` | string (a `roles` key) | when enabled | Exactly these three keys; three distinct existing role names; none may be `service` or use the built-in `shell` runtime. |
 | `harness.gates.plan_review_ttl_minutes` / `.audit_ttl_minutes` | integer 1–1440 | when enabled | Exactly these two keys. Freshness windows for plan review and audit (reserved for the scheduler integration; validated now so they are stable config). |
-| `harness.guards.protected_files.profile` | const `credentials-lockfiles-v1` | v3–v5, if pack exists | Generic protected credential/lockfile basenames; orchestrator Edit-family only. |
+| `harness.guards.protected_files.profile` | const `credentials-lockfiles-v1` | v3–v6, if pack exists | Generic protected credential/lockfile basenames; orchestrator Edit-family only. |
 | `harness.guards.protected_files.extra_basenames` | unique exact-basename array | no | Additive names matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`; no slash or glob. |
 | `harness.guards.orchestrator.deny_child_chdir` | boolean | no | Deny orchestrator process-directory hops into child roots. |
 | `harness.guards.lifecycle.session_reminder` / `.prompt_reminder` | boolean | no | Generic SessionStart/UserPromptSubmit routing reminders. |
@@ -1640,6 +1664,35 @@ config values get rejected:
   statement. (`secrets.visible_to_roles` and `secrets.allow[].roles` entries are
   validated differently — as references to existing role names, not as
   export names.)
+
+## Peer orchestrators (schema 6)
+
+Schema 6 with `peers` runs several orchestrators in parallel on the same
+checkouts. The config declares one orchestrator session and the checkouts. The
+user starts more orchestrators by name (`workspace start development-2`). Each
+orchestrator starts its own executor and reviewer workers on a checkout
+(`workspace start --checkout web --role executor`). The engine keeps the copies
+and workers in a state file, not in the config.
+
+- Ownership: an orchestrator controls only the workers it started. Another
+  orchestrator gets `[held]` (exit 3). Lifecycle of orchestrator sessions is the
+  user's (`orchestrator.peer_lifecycle`).
+- Workers start hidden, in a window of the owner's tmux session. `workspace show NAME`
+  joins one into the orchestrator's window, and `workspace hide NAME` moves it out.
+- `SESSION_WORKSPACE_HIDDEN_SIZE` (default `160x48`, form `COLSxROWS`, at least
+  `40x10`) sizes the window of a hidden worker. It is read per invocation.
+- `plan --json` and `status --json` carry the registry as fields. Read the
+  fields; never parse pane names.
+- This is a guardrail on reviewed routes, not isolation.
+
+A schema-6 config without `peers` behaves exactly like schema 5. Schema 1-5
+validation, plans and pinned identity do not change. Older releases reject
+schema 6, so upgrade both providers first. See the
+[environments reference](skills/session-workspace/references/environments.md#peer-orchestrators-schema-6)
+for the config rules, the verbs, the output lines and exit codes, the ownership
+rule ids, migration and rollback, and the
+[peers template](templates/workspace-peers.json) with its
+[notes](templates/workspace-peers.md).
 
 ## Schema v5 root-scoped environment orchestrators
 

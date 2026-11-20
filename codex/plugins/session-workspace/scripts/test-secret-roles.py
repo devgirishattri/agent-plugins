@@ -314,9 +314,10 @@ class SecretRoles(unittest.TestCase):
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         wrapper = bin_dir / "tmux"
-        wrapper.write_text(f"#!/bin/sh\nexec {shlex.quote(tmux)} -S {shlex.quote(socket)} \"$@\"\n")
+        wrapper.write_text(f"#!/bin/sh\nexec {shlex.quote(tmux)} -f /dev/null -S {shlex.quote(socket)} \"$@\"\n")
         wrapper.chmod(0o700)
         self.env["PATH"] = str(bin_dir) + os.pathsep + self.env["PATH"]
+        self.env["SESSION_WORKSPACE_TMUX_SOCKET"] = socket  # the engine binds the same server
         self.addCleanup(lambda: subprocess.run([tmux, "-S", socket, "kill-server"],
                                               env=self.env, capture_output=True))
         probe = self.root / "probe.py"

@@ -18,6 +18,7 @@ what its output is for. A CONTRACT row with no hook fails too.
 
 Usage: python3 -B scripts/test-hook-output-contracts.py [-v]
 """
+from functools import partial
 import json
 import os
 import pathlib
@@ -112,7 +113,7 @@ class Box:
     """One isolated directory per hook run: home, temp and a git work tree."""
 
     def __init__(self, base, name):
-        self.dir = pathlib.Path(tempfile.mkdtemp(prefix=f"{name[:24]}-", dir=base))
+        self.dir = pathlib.Path(tempfile.mkdtemp(prefix=f"{name[:24]}-", dir=base)).resolve()
         self.home = self.dir / "home"
         self.tmp = self.dir / "tmp"
         self.repo = self.dir / "repo"
@@ -223,27 +224,35 @@ def chat_queued_message(box, provider, plugin_dir):
     return env, {}
 
 
-def workspace_env(box, provider, plugin_dir, mode="enforce"):
-    """The schema-v3 harness fixture, launched as its orchestrator pane."""
-    fixture = json.loads((plugin_dir / "scripts" / "fixtures" / "valid" / "harness-v3.json").read_text(encoding="utf-8"))
+def workspace_env(box, provider, plugin_dir, mode="enforce", fixture_name="harness-v3.json"):
+    """Launch identity of the declared orchestrator in the selected fixture."""
+    fixture = json.loads((plugin_dir / "scripts" / "fixtures" / "valid" / fixture_name).read_text(encoding="utf-8"))
     fixture["harness"]["mode"] = mode
     project = box.repo
     (project / ".agent-workspace").mkdir()
     (project / "component-a").mkdir()
+    for environment in fixture.get("environments", []):
+        (project / environment["cwd"]).mkdir(exist_ok=True)
     config = project / ".agent-workspace" / "workspace.json"
     config.write_text(json.dumps(fixture), encoding="utf-8")
     (project / "README.md").write_text("root\n", encoding="utf-8")
     git(project, "add", "README.md")
     git(project, "commit", "-q", "-m", "readme")
     (project / "README.md").write_text("root\ndirty\n", encoding="utf-8")
-    box.fake_tmux("harness-sample-master")
+    pane = fixture["sessions"][0]["panes"][0]
+    name = pane["name"].replace("${PROJECT_ID}", fixture["project"]["id"])
+    box.fake_tmux(name)
     guards = json.dumps(fixture["harness"]["guards"], sort_keys=True, separators=(",", ":"))
-    return {
+    env = {
         "SESSION_WORKSPACE_CONFIG": str(config), "SESSION_WORKSPACE_PROJECT_ROOT": str(project),
-        "SESSION_WORKSPACE_PANE_NAME": "harness-sample-master", "SESSION_WORKSPACE_ROLE": "master",
+        "SESSION_WORKSPACE_PANE_NAME": name, "SESSION_WORKSPACE_ROLE": pane["role"],
         "SESSION_WORKSPACE_PANE_CWD": str(project), "SESSION_WORKSPACE_HARNESS_MODE": mode,
         "SESSION_WORKSPACE_GUARDS_JSON": guards,
     }
+    if "peers" in fixture:
+        env["XDG_STATE_HOME"] = str(box.dir / "state")
+        env["SESSION_WORKSPACE_SCOPE_JSON"] = json.dumps({"environment": None, "peer": name}, separators=(",", ":"))
+    return env
 
 
 def workspace_active(box, provider, plugin_dir):
@@ -260,6 +269,13 @@ def workspace_protected_write(box, provider, plugin_dir, mode="enforce"):
 
 def workspace_protected_write_audit(box, provider, plugin_dir):
     return workspace_protected_write(box, provider, plugin_dir, mode="audit")
+
+
+def peer_patch(box, provider, plugin_dir, *, mode, state):
+    env = workspace_env(box, provider, plugin_dir, mode, "peers-v6.json")
+    target = (box.dir / "state/session-workspace/sample/instances.json") if state else (box.repo / "notes.txt")
+    patch = f"*** Begin Patch\n*** Add File: {target}\n+sample\n*** End Patch"
+    return env, {"tool_name": "apply_patch", "tool_input": {"input": patch}}
 
 
 # key -> [(name, setup, expected effect per provider; None = anything valid)]
@@ -293,7 +309,13 @@ SCENARIOS = {
         ("enforce denies a protected file", workspace_protected_write, {"claude": "blocks", "codex": "blocks"}),
         # Claude's audit line goes to stderr on exit 0, which only the debug
         # log shows; Codex gets an inert systemMessage instead.
-        ("audit notes a protected file", workspace_protected_write_audit, {"claude": "silent", "codex": "user_message"})],
+        ("audit notes a protected file", workspace_protected_write_audit, {"claude": "silent", "codex": "user_message"}),
+        ("peer state patch in enforce", partial(peer_patch, mode="enforce", state=True),
+         {"codex": ("blocks", "orchestrator.state_write")}),
+        ("peer state patch in audit", partial(peer_patch, mode="audit", state=True),
+         {"codex": ("user_message", "orchestrator.state_write")}),
+        ("peer root patch in enforce", partial(peer_patch, mode="enforce", state=False), {"codex": "silent"}),
+        ("peer root patch in audit", partial(peer_patch, mode="audit", state=False), {"codex": "silent"})],
     ("session-workspace", "Stop", "guard-health.sh", ""): [
         ("dirty root, missing panes", workspace_active, {"claude": "user_message", "codex": "user_message"})],
 }
@@ -302,6 +324,8 @@ SCENARIOS = {
 def run(hook, box, env_extra, payload_extra):
     env = box.env(hook["provider"], hook["plugin_dir"], env_extra)
     data = payload(hook["provider"], hook["event"], box.repo, **payload_extra)
+    if hook["event"] == "PreToolUse" and not re.fullmatch(hook["matcher"], json.loads(data)["tool_name"]):
+        raise ValueError("PreToolUse matcher does not register the scenario's tool")
     proc = subprocess.run(["bash", "-c", hook["command"]], input=data, cwd=box.repo, env=env,
                           capture_output=True, text=True, timeout=max(30, int(hook["timeout"])))
     return proc.stdout, proc.stderr, proc.returncode
@@ -311,6 +335,18 @@ def check(hook, label, stdout, stderr, code, expect):
     intent = CONTRACT[hook["key"]]
     effect = hook_output_effect(hook["provider"], hook["event"], stdout, stderr, code)
     check_hook_intent(intent, hook["event"], effect)
+    if isinstance(expect, tuple):
+        expect, rule = expect
+        if expect == "blocks":
+            lines = stderr.splitlines()
+            if (len(lines) != 2 or not lines[0].startswith(f"BLOCKED by session-workspace strict-v1 [{rule}]")
+                    or not lines[1].startswith("DIAG ") or json.loads(lines[1][5:]).get("reason") != f"hook.{rule}"):
+                raise ValueError(f"expected BLOCKED and DIAG for {rule}, got {stderr[:200]!r}")
+        else:
+            notice = json.loads(stdout)
+            if (stderr or set(notice) != {"systemMessage"}
+                    or not notice["systemMessage"].startswith(f"AUDIT by session-workspace strict-v1 [{rule}]")):
+                raise ValueError(f"expected an audit systemMessage for {rule}, got {stdout[:200]!r}")
     if expect == "silent":
         if stdout.strip() or any(effect[k] for k in ("model_context", "user_message", "continues_turn", "blocks", "stops")):
             raise ValueError(f"expected no output the runtime acts on, got {stdout.strip()[:200]!r}")

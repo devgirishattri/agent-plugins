@@ -148,6 +148,18 @@ sw_pane_is_blank() {
 SW_LOCK_DIR=""
 SW_LOCK_ACQUIRED=0
 
+# sw_owner_window_index SESSION_NAME OWNER_PANE FALLBACK_INDEX — the index of the
+# window that holds the pane carrying OWNER_PANE's marker, so a window the user
+# renumbered or moved does not change which window counts as "the
+# orchestrator's". FALLBACK_INDEX (the configured window_index) is printed only
+# when that pane is not found.
+sw_owner_window_index() {
+  local idx
+  idx="$(tmux list-panes -s -t "=$1" -F "$(printf '#{%s}\t#{window_index}' "$MARKER_PANE")" 2>/dev/null |
+    awk -F'\t' -v n="$2" '$1 == n {print $2; exit}')"
+  printf '%s\n' "${idx:-$3}"
+}
+
 sw_state_root() {
   printf '%s/session-workspace\n' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
@@ -266,6 +278,7 @@ sw_lock_acquire() {
 }
 
 sw_lock_release() {
+  sw_tmux_bootstrap_done  # a start that ends before its first new-session
   [ "$SW_LOCK_ACQUIRED" -eq 1 ] || return 0
   [ -n "$SW_LOCK_DIR" ] && _sw_release_lock "$SW_LOCK_DIR"
   SW_LOCK_ACQUIRED=0
@@ -482,4 +495,41 @@ sw_restore_layout() {
   val="$(cat "$file" 2>/dev/null)"
   [ -n "$val" ] || return 1
   tmux select-layout -t "$window_target" "$val" 2>/dev/null
+}
+
+# ============================================================================
+# Hidden worker windows (schema v6 peers). A hidden worker lives alone in its
+# own window of its owner's tmux session; showing it joins the pane into the
+# orchestrator's window, hiding it breaks it back out. Both keep the pane id
+# and the process.
+# ============================================================================
+
+# sw_hidden_size — print "COLS ROWS" from SESSION_WORKSPACE_HIDDEN_SIZE
+# (COLSxROWS, default 160x48). Two positive integers, at least 40x10 and at
+# most 4 digits each; anything else prints the reason on stderr and returns 1.
+sw_hidden_size() {
+  local raw="${SESSION_WORKSPACE_HIDDEN_SIZE:-160x48}" cols="" rows=""
+  if [[ "$raw" =~ ^([0-9]{1,4})x([0-9]{1,4})$ ]]; then
+    cols="$((10#${BASH_REMATCH[1]}))"
+    rows="$((10#${BASH_REMATCH[2]}))"
+  fi
+  if [ -z "$cols" ] || [ "$cols" -lt 40 ] || [ "$rows" -lt 10 ]; then
+    echo "ERROR: SESSION_WORKSPACE_HIDDEN_SIZE must be COLSxROWS, two whole numbers of at least 40x10 (got \"$raw\")" >&2
+    return 1
+  fi
+  printf '%s %s\n' "$cols" "$rows"
+}
+
+# sw_size_hidden_window WINDOW_ID — pin the window's name and size. The size
+# is fixed on purpose: a detached window would otherwise take tmux's small
+# default and the agent would draw its screen for 80x24.
+sw_size_hidden_window() {
+  local win="$1" size cols rows
+  size="$(sw_hidden_size)" || return 1
+  cols="${size% *}"
+  rows="${size#* }"
+  tmux set-window-option -t "$win" automatic-rename off 2>/dev/null || true
+  tmux resize-window -t "$win" -x "$cols" -y "$rows" 2>/dev/null || {
+    echo "WARNING: could not resize window $win to ${cols}x${rows} (resize-window needs tmux 2.9 or newer)" >&2
+  }
 }

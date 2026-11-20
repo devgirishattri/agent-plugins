@@ -175,7 +175,7 @@ class Contracts(unittest.TestCase):
     def test_real_wrapper_and_transport_cycle(self):
         socket=self.base/'tmux-socket'
         def tmux(*args):
-            return subprocess.run(['tmux','-S',str(socket),*args],check=True,capture_output=True,text=True).stdout.strip()
+            return subprocess.run(['tmux','-f','/dev/null','-S',str(socket),*args],check=True,capture_output=True,text=True).stdout.strip()
         tmux('new-session','-d','-x','220','-y','40','-s','contract','cat')
         try:
             tmux('split-window','-t','contract','cat');tmux('split-window','-t','contract','cat')

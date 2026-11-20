@@ -1,6 +1,6 @@
 ---
 description: Tear down session-workspace sessions/panes (destructive; requires --confirmed)
-argument-hint: "[TARGET|all] [--config PATH] [--no-save] --confirmed [--all] | SESSION --pane NAME [--pane NAME...] --confirmed [--force]"
+argument-hint: "[TARGET|all] [--config PATH] [--no-save] --confirmed [--all] | SESSION --pane NAME [--pane NAME...] --confirmed [--force] | --worker NAME --confirmed [--force]"
 allowed-tools: Bash(bash:*)
 ---
 
@@ -24,6 +24,8 @@ Lead with the result. Add text only for errors or the follow-ups below. Report t
 An on-demand worker is stopped only when it is idle. A worker with a task still `assigned` to it, a task it reviews in `review`, unread session-chat messages, or a running turn on screen is reported `[busy] ... left running: <reasons>`, and the command exits 1. Relay the reasons. `--force` stops a busy worker anyway; use it only when the user asks.
 
 Relay the `killed: N` summary verbatim. Never run this without the user having asked for it.
+
+Schema 6 with `peers` adds `--worker NAME --confirmed` to stop one peer worker. See the `workspace-stop` skill.
 
 Schema v5 accepts `--environment ID` with optional `--services` or `--development`.
 Group selection cannot be combined with a positional session or `--all`; it never

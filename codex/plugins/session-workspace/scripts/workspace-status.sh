@@ -13,6 +13,12 @@
 # smoke. `--pane NAME` (repeatable, with a session TARGET) narrows the report
 # to those service panes.
 #
+# Peer orchestrators (schema v6 with `peers`): a worker pane may sit in a window
+# of its own (hidden), so its lookup covers the whole session, and its row
+# gains `worker: {name, role, checkout, owner, visible, running}`. `visible` is
+# read from tmux when the pane runs (its window is the orchestrator's window),
+# else it is the recorded value. The human report adds one line per worker.
+#
 # Usage: workspace-status.sh [TARGET|all] [--config PATH] [--json] [--pane NAME...]
 set -uo pipefail
 
@@ -47,6 +53,7 @@ done
 
 ensure_jq
 ensure_tmux
+sw_tmux_bind
 
 CONFIG_PATH="$(resolve_project_config_path "$CONFIG_OVERRIDE")" || exit 1
 CONFIG_JSON="$(load_workspace_config_raw "$CONFIG_PATH")" || exit 1
@@ -108,8 +115,8 @@ _sw_browser_endpoint() {
 # record for an earlier incarnation contributes only its stop.
 _sw_pane_run_record() {
   local pane_name="$1" found_pane="$2" running="$3" record watcher_alive="false" pid
-  record="$(cat "$(sw_pane_record_path "$PROJECT_ID" "$pane_name")" 2>/dev/null)"
-  printf '%s' "$record" | jq -e 'type == "object"' >/dev/null 2>&1 || record='{}'
+  record="$(jq -cs 'if length == 1 and (.[0] | type) == "object" then .[0] else {} end' \
+    "$(sw_pane_record_path "$PROJECT_ID" "$pane_name")" 2>/dev/null)" || record='{}'
   pid="$(printf '%s' "$record" | jq -r '.watcher_pid // empty')"
   case "$pid" in
     ''|*[!0-9]*) ;;
@@ -167,19 +174,29 @@ while IFS= read -r session_json; do
     p_browser="$(printf '%s' "$pane_json" | jq -r '.browser // false')"
     p_port="$(printf '%s' "$pane_json" | jq -r '.port // empty')"
 
-    found_pane="" cur_cmd="" started_by="" managed=0 dead=0 launched=0
+    found_pane="" cur_cmd="" started_by="" managed=0 dead=0 launched=0 found_win=""
+    pane_scope=(-t "=$s_name:$s_win")
+    worker_json="$(printf '%s' "$pane_json" | jq -c '.worker // null')"
+    p_win="$s_win"
+    if [ "$worker_json" != "null" ]; then
+      pane_scope=(-s -t "=$s_name")
+      # The owner's window is found by its orchestrator pane's marker, so a
+      # renumbered window still counts; the configured index is the fallback.
+      [ "$session_exists" -eq 1 ] && p_win="$(sw_owner_window_index "$s_name" "$(printf '%s' "$worker_json" | jq -r '.owner')" "$s_win")"
+    fi
     if [ "$session_exists" -eq 1 ]; then
       # Scoped to THIS session's window, never `-a` (server-wide): a stale
       # same-named marker left on a pane in some OTHER session (an old
       # orphaned session, a different project's leftover pane) must never be
       # able to false-report this slot as healthy.
-      while IFS=$'\t' read -r pid pmark; do
+      while IFS=$'\t' read -r pid pmark pwin; do
         [ -z "$pid" ] && continue
         if [ "$pmark" = "$p_name" ]; then
           found_pane="$pid"
+          found_win="$pwin"
           break
         fi
-      done < <(tmux list-panes -t "=$s_name:$s_win" -F "$(printf '#{pane_id}\t#{%s}' "$MARKER_PANE")" 2>/dev/null)
+      done < <(tmux list-panes "${pane_scope[@]}" -F "$(printf '#{pane_id}\t#{%s}\t#{window_index}' "$MARKER_PANE")" 2>/dev/null)
       if [ -n "$found_pane" ]; then
         sw_pane_is_managed "$found_pane" "$PROJECT_ID" "$p_name" && managed=1
         sw_pane_dead "$found_pane" && dead=1
@@ -201,7 +218,7 @@ while IFS= read -r session_json; do
     [ "$health" = "healthy" ] && [ "$launched" -eq 1 ] && running=true
 
     readiness="n/a"
-    if [ "$(printf '%s' "$PLAN_JSON" | jq -r '.schema_version')" = "5" ] && [ -n "$p_port" ] && [ "$p_browser" != "true" ]; then
+    if printf '%s' "$PLAN_JSON" | jq -e '.schema_version == 5 or .schema_version == 6' >/dev/null && [ -n "$p_port" ] && [ "$p_browser" != "true" ]; then
       readiness="$(python3 "$HERE/service-ports.py" probe "$p_port")"
     fi
     endpoint="null"
@@ -216,6 +233,12 @@ while IFS= read -r session_json; do
         '. + [$e + {pane: $pane, session: $sid, running: $running}]')"
     fi
     run_record="$(_sw_pane_run_record "$p_name" "$found_pane" "$running")"
+    if [ "$worker_json" != "null" ]; then
+      worker_visible="$(printf '%s' "$worker_json" | jq -r '.visible')"
+      [ "$running" = "true" ] && { [ "$found_win" = "$p_win" ] && worker_visible=true || worker_visible=false; }
+      worker_json="$(printf '%s' "$worker_json" | jq -c --arg name "$p_name" --argjson visible "$worker_visible" --argjson running "$running" \
+        '{name: $name, role, checkout, owner, visible: $visible, running: $running}')"
+    fi
 
     row="$(jq -n \
       --arg session "$s_id" --arg session_name "$s_name" \
@@ -228,9 +251,10 @@ while IFS= read -r session_json; do
       --argjson idle_stop_minutes "$(printf '%s' "$pane_json" | jq -c '.idle_stop_minutes // null')" \
       --argjson idle_activity "$(printf '%s' "$pane_json" | jq -c '.idle_activity // null')" \
       --arg launch "$(printf '%s' "$pane_json" | jq -r '.launch // "always"')" \
-      --arg started_by "${started_by:-}" \
+      --arg started_by "${started_by:-}" --argjson worker "$worker_json" \
       '{session:$session, session_name:$session_name, session_exists:($session_exists == 1), session_managed:($session_managed == 1), pane:$pane, role:$role, runtime:$runtime, model:$model, cwd:$cwd, read_paths:$read_paths, pane_id:$pane_id, process:$process, health:$health, running:$running, readiness:$readiness, port:(if $port == "" then null else ($port|tonumber) end), idle_stop_minutes:$idle_stop_minutes, idle_activity:$idle_activity, launch:$launch, started_by:(if $running and $started_by != "" then $started_by else null end), idle:$run_record.idle, last_stop:$run_record.last_stop}
-       + (if $endpoint == null then {} else {endpoint:$endpoint} end)')"
+       + (if $endpoint == null then {} else {endpoint:$endpoint} end)
+       + (if $worker == null then {} else {worker:$worker} end)')"
     ROWS="$(printf '%s' "$ROWS" | jq -c --argjson r "$row" '. + [$r]')"
   done < <(printf '%s' "$session_json" | jq -c '.panes[]')
 done < <(printf '%s' "$PLAN_JSON" | jq -c '.sessions[]')
@@ -257,6 +281,7 @@ printf '%s\n' "$ROWS" | jq -r '
   (.[] | "  pane: \(.pane)  role=\(.role) runtime=\(.runtime) model=\(.model)\n    cwd=\(.cwd)\n    pane_id=\(.pane_id // "(none)")  process=\(.process // "(n/a)")  health=\(.health)  running=\(if .running then "yes" else "no" end)  readiness=\(.readiness)",
     (if (.read_paths | length) > 0 then "    read_paths (shell only): " + (.read_paths | tojson) else empty end),
     (if .started_by != null then "    started by: \(.started_by)" else empty end),
+    (if .worker != null then "    worker: checkout \(.worker.checkout), role \(.worker.role), owner \(.worker.owner), \(if .worker.visible then "shown" else "hidden" end)" else empty end),
     (if .launch == "on_demand" then
        "    launch: on demand" + (if .running then "" else " — not running; start it with: workspace start \(.session) --pane \(.pane)" end)
      else empty end),

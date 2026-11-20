@@ -14,7 +14,26 @@ import unittest
 from unittest.mock import patch
 
 HERE = Path(os.environ.get('WORKSPACE_TEST_SCRIPTS', Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmux_sandbox  # noqa: E402  (test infrastructure, always from this directory)
 ENV = {k: v for k, v in os.environ.items() if not k.startswith(('SESSION_', 'KNOWLEDGE_')) and k not in ('TMUX', 'TMUX_PANE')}
+# Every default run is pinned to a private tmux server and a decoy HOME, so no
+# test here reads or writes the user's server or its tmux-resurrect saves.
+# Allocated by the test run only (setUpModule), never on import: other suites
+# import this module for its config() helper alone.
+DEFAULT_BOX = None
+
+
+def setUpModule():
+    global DEFAULT_BOX, ENV
+    if tmux_sandbox.real_tmux():
+        DEFAULT_BOX = tmux_sandbox.Sandbox()
+        ENV = DEFAULT_BOX.env(ENV)
+
+
+def tearDownModule():
+    if DEFAULT_BOX:
+        DEFAULT_BOX.teardown()
 
 
 def module(name, file):
@@ -166,20 +185,20 @@ class Environments(unittest.TestCase):
         self.shared_root()
         # Start the exact topology on a private tmux server, suppressing external
         # agents/services. Runtime argv and browser commands are covered separately.
-        with tempfile.TemporaryDirectory(prefix='w7t-', dir='/tmp') as socket_dir:
-            env = dict(ENV, TMUX_TMPDIR=socket_dir, XDG_STATE_HOME=str(self.root/'state'), SESSION_WORKSPACE_STOP_GRACE_SECONDS='0')
-            try:
-                for eid in ['web', 'vue3']:
-                    result = self.run_script('workspace', 'start', '--environment', eid, '--no-agents', '--no-services', '--no-attach', env=env)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                def panes():
-                    return subprocess.check_output(['tmux', 'list-panes', '-t', '=shared-root-development', '-F', '#{pane_id}:#{pane_pid}'], env=env, text=True)
-                before = panes()
-                result = self.run_script('workspace', 'stop', '--environment', 'vue3', '--confirmed', env=env)
+        box = tmux_sandbox.Sandbox(agent_stubs=True)
+        env = box.env(dict(ENV, XDG_STATE_HOME=str(self.root/'state'), SESSION_WORKSPACE_STOP_GRACE_SECONDS='0'))
+        try:
+            for eid in ['web', 'vue3']:
+                result = self.run_script('workspace', 'start', '--environment', eid, '--no-agents', '--no-services', '--no-attach', env=env)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(panes(), before)
-            finally:
-                subprocess.run(['tmux', 'kill-server'], env=env, capture_output=True)
+            def panes():
+                return subprocess.check_output(['tmux', 'list-panes', '-t', '=shared-root-development', '-F', '#{pane_id}:#{pane_pid}'], env=env, text=True)
+            before = panes()
+            result = self.run_script('workspace', 'stop', '--environment', 'vue3', '--confirmed', env=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(panes(), before)
+        finally:
+            box.teardown()
 
     def test_shared_root_guards_and_argv(self):
         self.shared_root()
@@ -677,8 +696,8 @@ class Environments(unittest.TestCase):
         self.assertIn('does not accept', r.stderr)
         self.assertEqual(json.loads((state/'session-workspace/harness-sample/labels.json').read_text()), {'web': 'auth'})
         # A running worker keeps its label.
-        socket_tmp = tempfile.TemporaryDirectory(prefix='w5l-', dir='/tmp')
-        tenv = dict(env, TMUX_TMPDIR=socket_tmp.name)
+        box = tmux_sandbox.Sandbox()
+        tenv = box.env(env)
         try:
             subprocess.run(['tmux', 'new-session', '-d', '-s', 'lbl'], env=tenv, check=True)
             for option, value in [('@session_workspace_project', 'harness-sample'), ('@session_workspace_pane', 'harness-sample-web-reviewer-auth')]:
@@ -687,8 +706,7 @@ class Environments(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn('worker harness-sample-web-reviewer-auth is running', r.stderr)
         finally:
-            subprocess.run(['tmux', 'kill-server'], env=tenv, capture_output=True)
-            socket_tmp.cleanup()
+            box.teardown()
         r = label('web', '--clear')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(names(), ['web-master', 'harness-sample-web-executor', 'harness-sample-web-reviewer'])
@@ -997,8 +1015,8 @@ class Environments(unittest.TestCase):
 
     def test_live_session_isolation(self):
         # Private tmux server. Never touch the inherited/default user server.
-        socket_tmp=tempfile.TemporaryDirectory(prefix='w5t-',dir='/tmp')
-        env=dict(ENV,TMUX_TMPDIR=socket_tmp.name,XDG_STATE_HOME=str(self.root/'state'),SESSION_WORKSPACE_STOP_GRACE_SECONDS='0')
+        box=tmux_sandbox.Sandbox(agent_stubs=True)
+        env=box.env(dict(ENV,XDG_STATE_HOME=str(self.root/'state'),SESSION_WORKSPACE_STOP_GRACE_SECONDS='0'))
         try:
             for target in ['control','dev-web','service-web','dev-vue3','service-vue3']:
                 r=self.run_script('workspace-start',target,'--no-agents','--no-attach',env=env)
@@ -1013,8 +1031,7 @@ class Environments(unittest.TestCase):
             self.assertEqual(r.returncode,0,r.stderr+r.stdout)
             self.assertEqual(before,(panes('test-control'),panes('test-dev-web'),panes('test-service-web')))
         finally:
-            subprocess.run(['tmux','kill-server'],env=env,capture_output=True)
-            socket_tmp.cleanup()
+            box.teardown()
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

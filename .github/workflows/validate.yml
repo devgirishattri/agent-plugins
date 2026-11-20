@@ -119,7 +119,7 @@ jobs:
   smoke-claude-workspace:
     name: smoke-claude-workspace
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -135,8 +135,7 @@ jobs:
             TMUX_TMPDIR="$RUNNER_TEMP/claude-session-workspace" \
             python3 scripts/ci-smoke.py bash plugins/session-workspace/scripts/test-session-workspace.sh
 
-  # The harness-policy suite takes about as long as the workspace suite, so it
-  # runs on its own runner; together they came within a minute of the timeout.
+  # Each provider runs the workspace and harness-policy suites in parallel.
   smoke-claude-policy:
     name: smoke-claude-policy
     runs-on: ubuntu-latest
@@ -155,7 +154,7 @@ jobs:
   smoke-codex-workspace:
     name: smoke-codex-workspace
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -171,8 +170,6 @@ jobs:
             TMUX_TMPDIR="$RUNNER_TEMP/codex-session-workspace" \
             python3 scripts/ci-smoke.py bash codex/plugins/session-workspace/scripts/test-session-workspace.sh
 
-  # The harness-policy suite takes about as long as the workspace suite, so it
-  # runs on its own runner; together they came within a minute of the timeout.
   smoke-codex-policy:
     name: smoke-codex-policy
     runs-on: ubuntu-latest

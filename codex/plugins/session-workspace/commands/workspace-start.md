@@ -1,6 +1,6 @@
 ---
 description: Bring up session-workspace sessions/panes/agents/services
-argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed] | SESSION --pane NAME [--pane NAME...]"
+argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no-attach] [--adopt --confirmed] | SESSION --pane NAME [--pane NAME...] | SESSION-N | --checkout ID --role executor|reviewer [--label L] [--show] [--owner PANE]"
 ---
 
 ## Instructions
@@ -29,6 +29,9 @@ argument-hint: "[TARGET|all] [--config PATH] [--no-agents] [--no-services] [--no
    - `--no-attach`: suppress post-start attach behavior regardless of
      `behavior.attach`.
    - `--adopt --confirmed`: allow occupied unmanaged panes to be claimed.
+   - With schema 6 peers, a user can start a copy using `SESSION-N` (N from 2 through 999).
+   - An orchestrator starts a worker with `--checkout ID --role executor|reviewer [--label L] [--show]`.
+     From a user terminal, supply `--owner PANE`. Report the named holder on exit 3.
    - `SESSION --pane NAME` (repeatable): start only the named service panes
      (role `service`, such as the debug browser or a dev server) of one
      session, or executor/reviewer panes marked `"launch": "on_demand"`.

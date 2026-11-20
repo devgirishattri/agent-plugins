@@ -24,6 +24,10 @@ Real flags:
 - `--apply`: perform repairs. Without it, reconcile is a dry run.
 - `--adopt --confirmed`: allow an occupied unmanaged pane to be claimed.
 
+Under schema 6 with `peers`, `reconcile all` skips orchestrator copies that are
+not running. `reconcile --apply` of an orchestrator session is the user's; an
+orchestrator pane gets `orchestrator.peer_lifecycle`.
+
 Safety gates: dry-run mode mutates nothing; applying takes the project lock;
 unknown targets fail; adoption is refused unless both `--adopt` and
 `--confirmed` are present. Applying repairs missing or unhealthy managed slots

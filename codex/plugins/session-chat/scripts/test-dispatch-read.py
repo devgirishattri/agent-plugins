@@ -11,21 +11,26 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parent
 WORKSPACE = HERE.parent.parent / 'session-workspace' / 'scripts'
+sys.path.insert(0, str(WORKSPACE))
+from tmux_sandbox import Sandbox  # noqa: E402
 
 
 class DispatchRead(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='dispatch-read-', dir='/tmp')
+        self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
-        self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(('SESSION_', 'KNOWLEDGE_')) and k not in ('TMUX', 'TMUX_PANE')}
-        # The socket is separate from the surrounding plugin suite's server.
-        self.socket = str(self.root / 'tmux.sock')
+        self.sandbox = Sandbox()
+        self.addCleanup(self.sandbox.teardown)
+        self.env = self.sandbox.env({k: v for k, v in os.environ.items()
+                                     if not k.startswith(('SESSION_', 'KNOWLEDGE_'))})
+        self.env.update(TMPDIR=str(self.sandbox.tmpdir), XDG_STATE_HOME=str(self.root / 'state'))
         self.messages = self.root / "it's messages"
         self.messages.mkdir(mode=0o700)
         for name in ('component-a', '.agent-workspace', 'claude-home', 'codex-home'):
@@ -54,12 +59,8 @@ class DispatchRead(unittest.TestCase):
         self.draft.write_bytes(self.body)
         self.draft.chmod(0o600)
 
-    def tearDown(self):
-        subprocess.run(['tmux', '-S', self.socket, 'kill-server'], env=self.env, capture_output=True)
-        self.tmp.cleanup()
-
     def tmux(self, *args):
-        result = subprocess.run(['tmux', '-S', self.socket, *args], env=self.env, capture_output=True, text=True, timeout=20)
+        result = self.sandbox.tmux(*args, env=self.env, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result
 

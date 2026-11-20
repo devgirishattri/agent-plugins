@@ -1,6 +1,6 @@
 ---
 description: Tear down session-workspace sessions/panes (destructive; requires --confirmed)
-argument-hint: "[TARGET|all] [--config PATH] [--no-save] --confirmed [--all] | SESSION --pane NAME [--pane NAME...] --confirmed [--force]"
+argument-hint: "[TARGET|all] [--config PATH] [--no-save] --confirmed [--all] | SESSION --pane NAME [--pane NAME...] --confirmed [--force] | --worker NAME --confirmed [--force]"
 ---
 
 ## Instructions
@@ -26,8 +26,10 @@ argument-hint: "[TARGET|all] [--config PATH] [--no-save] --confirmed [--all] | S
      named service panes, or on-demand executor/reviewer workers, of one
      session. Sibling panes keep running. Closing the last pane ends the tmux session. Cannot be
      combined with `--all` or `--no-save`.
-   - `--force` (with `--pane` only): stop an on-demand worker even while it
-     is busy. Use it only when the user asks.
+   - With schema 6 peers, the owner or user can stop an idle worker with
+     `--worker NAME --confirmed`. Only the user may stop an orchestrator session.
+   - `--force` with `--pane` or `--worker` stops a busy worker. With peers it
+     requires a user terminal. Use it only when the user asks.
 
 4. Safety/behavior:
    - Stop is destructive and must not be run without explicit user intent.

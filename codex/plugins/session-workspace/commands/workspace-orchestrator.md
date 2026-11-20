@@ -1,5 +1,5 @@
 ---
-description: Coordinate the schema-v4/v5 reviewed Git lifecycle (status/plan/dispatch/review/commit/push/deploy) across configured executor/reviewer panes
+description: Coordinate the schema-v4/v5/v6 reviewed Git lifecycle (status/plan/dispatch/review/commit/push/deploy) across configured executor/reviewer panes
 argument-hint: "<intent, e.g. 'status', 'plan review for <target>: <task>', 'authorize push for <target>'>"
 ---
 
@@ -11,10 +11,12 @@ argument-hint: "<intent, e.g. 'status', 'plan review for <target>: <task>', 'aut
    duplicate its gates.
 
 2. Refuse early unless the current pane is the configured semantic
-   orchestrator, the normalized schema-v4 plan reports active orchestration and
+   orchestrator, the normalized plan reports active orchestration and
    harness state, and live harness identity matches.
 
-3. Map the request to exactly one workflow and one configured target. Plan and
+3. Map the request to exactly one workflow and one configured target. With peers,
+   select workers in the registry by your pane name and the target's environment.
+   Start any missing workers before dispatch. Plan and
    audit approval require fresh, explicit `APPROVE` evidence from the configured
    reviewer; dispatch, pane output, or a bare scheduler `done` state is not an
    approval.

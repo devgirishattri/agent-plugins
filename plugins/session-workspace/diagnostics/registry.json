@@ -289,6 +289,19 @@
       "description": "The launcher harness mode is invalid or does not match the validated config."
     },
     {
+      "code": "hook.identity.override",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A workspace command set or unset an engine identity variable (SESSION_WORKSPACE_*, TMUX, XDG_STATE_HOME, HOME, pane-name aliases)."
+    },
+    {
       "code": "hook.identity.pane",
       "subjects": [
         "admission"
@@ -484,6 +497,19 @@
       "description": "An orchestrator ran a local Git mutation that belongs to its executor."
     },
     {
+      "code": "hook.orchestrator.peer_lifecycle",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An orchestrator tried to start, stop, restart or reconcile an orchestrator session, started everything, or passed --force or --owner."
+    },
+    {
       "code": "hook.orchestrator.protected_file",
       "subjects": [
         "admission"
@@ -521,6 +547,32 @@
         "refused"
       ],
       "description": "The orchestrator tried to stop or restart the session that holds its own pane."
+    },
+    {
+      "code": "hook.orchestrator.state_write",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An orchestrator edit or mutating command targeted the engine state directory."
+    },
+    {
+      "code": "hook.orchestrator.tmux",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "An orchestrator ran raw tmux other than a read verb, or chained tmux commands with a semicolon."
     },
     {
       "code": "hook.path.dynamic",
@@ -781,6 +833,19 @@
         "refused"
       ],
       "description": "Coordination transport ran outside the selected session-chat helper."
+    },
+    {
+      "code": "hook.routing.owner",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "A message, task, stop, show or hide named a worker that another orchestrator owns, or a worker addressed someone other than its owner."
     },
     {
       "code": "hook.routing.scope",

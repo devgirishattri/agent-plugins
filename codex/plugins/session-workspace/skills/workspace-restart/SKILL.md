@@ -24,6 +24,10 @@ Real flags:
 - `--no-save`: skip layout/resurrect save during stop.
 - `--no-agents`, `--no-services`, `--no-attach`: pass through to start.
 
+Under schema 6 with `peers`, restarting an orchestrator session (declared or
+`SESSION-N`) is the user's. It ends the session's workers and drops their
+records. An orchestrator pane gets `orchestrator.peer_lifecycle`.
+
 Restart is destructive because it stops the selected managed session(s) before
 starting them again. The script passes `--confirmed` internally to
 `workspace-stop.sh` after restart is invoked; `--confirmed` is not a

@@ -344,6 +344,19 @@ class Context:
     # allowlist) and every declared lane branch (the orchestrator denylist).
     lane_branch: str = ""
     lane_branches: frozenset = frozenset()
+    # The `--meta environment=` tag this pane's scheduler tasks carry. A worker
+    # whose environment has no local orchestrator is run by the unbound root,
+    # which must tag with "root"; "" falls back to environment-or-root.
+    task_tag: str = ""
+    # Peer orchestrators (schema 6 with `peers`): `owner` is the orchestrator
+    # that owns this worker; the tables below come from the validated plan.
+    peers: bool = False
+    owner: str = ""
+    peers_session: str = ""
+    orchestrator_session_ids: frozenset = frozenset()
+    worker_owners: tuple = ()  # (worker pane name, owner pane name) for every worker in the plan
+    environment_ids: frozenset = frozenset()
+    state_dir: Optional[Path] = None
 
     @property
     def confined_orchestrator(self):
@@ -504,7 +517,7 @@ def read_raw_config(path: Path) -> Optional[dict]:
 
 
 def raw_harness_state(config: Optional[dict]) -> Tuple[bool, str]:
-    if not config or config.get("schema_version") not in {2, 3, 4, 5}:
+    if not config or config.get("schema_version") not in {2, 3, 4, 5, 6}:
         return False, ""
     harness = config.get("harness")
     if not isinstance(harness, dict) or harness.get("enabled") is not True:
@@ -548,6 +561,15 @@ def scheduler_store_root(pane: dict, owned_panes: List[dict], semantic: str) -> 
 # config such a pane is refused instead of running unguarded: the reviewer
 # floor is its only read-only guard.
 REVIEWER_CLAIM_RE = re.compile(r"(?:\A|[^a-z0-9])reviewer(?:\Z|[^a-z0-9])")
+
+
+def engine_state_dir() -> Path:
+    """The engine's state directory, resolved like config.sh sw_state_home: an
+    absolute XDG_STATE_HOME, else $HOME/.local/state."""
+    base = os.environ.get("XDG_STATE_HOME", "")
+    if not base.startswith("/"):
+        base = str(Path(os.environ.get("HOME", str(Path.home()))) / ".local" / "state")
+    return canonical(Path(base) / "session-workspace")
 
 
 def tmux_pane_name() -> str:
@@ -594,7 +616,7 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         # config must never brick a shell: true no-op. A readable config with
         # a known schema that leaves the harness off stays a no-op for a
         # claimed reviewer too; an unreadable one does not.
-        if raw_config is not None and raw_config.get("schema_version") in {1, 2, 3, 4, 5}:
+        if raw_config is not None and raw_config.get("schema_version") in {1, 2, 3, 4, 5, 6}:
             return None, None
         return None, reviewer_claim_denial("its workspace config is missing, unreadable or not a known schema")
     failure_mode = env_mode if env_mode in {"audit", "enforce"} else raw_mode
@@ -719,8 +741,49 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
     scoped = scope is not None
     own = None
     owned_panes = panes
+    task_tag = ""
+    peers_plan = plan.get("peers") if isinstance(plan.get("peers"), dict) else None
+    peer_fields: dict = {}
     orchestrators = [p for p in panes if p.get("role") == roles.get("orchestrator")]
-    if scoped:
+    if peers_plan is not None:
+        # Peer orchestrators: sessions, workers and owners come from the
+        # validated plan (the engine's instances.json is already expanded
+        # into it), never from the launcher environment.
+        if not scoped:
+            return None, deny(None, tool, "identity.scope", "peers pane carries no scope", mode, integrity=True)
+        orchestrator_role = roles.get("orchestrator")
+        orchestrator_names = {str(p.get("name")) for p in panes if p.get("role") == orchestrator_role}
+        worker_record = pane.get("worker") if isinstance(pane.get("worker"), dict) else None
+        scheduler_grants = {canonical(Path(g["path"])) for entry in panes for g in entry.get("grants", []) or []
+                            if isinstance(g, dict) and g.get("store") == "scheduler" and isinstance(g.get("path"), str) and g["path"]}
+        if worker_record is not None:
+            owner = str(worker_record.get("owner", ""))
+            if semantic not in WORKER_ROLES or owner not in orchestrator_names:
+                return None, deny(None, tool, "identity.topology", "peers worker has no orchestrator owner in the validated plan", mode, integrity=True)
+            owner_pane = owner
+            environment = str(worker_record.get("checkout", ""))
+            own = next((e for e in scope.get("environments", []) if isinstance(e, dict) and e.get("id") == environment), None)
+            if own is None:
+                return None, deny(None, tool, "identity.scope", "peers worker names an unknown checkout", mode, integrity=True)
+        elif semantic == "orchestrator":
+            owner_pane = pane_name
+        else:
+            return None, deny(None, tool, "identity.topology", "peers executor/reviewer pane is not a registered worker", mode, integrity=True)
+        owned_panes = [p for p in panes if isinstance(p.get("worker"), dict) and str(p["worker"].get("owner")) == owner_pane]
+        orchestrators = [p for p in panes if p.get("name") == owner_pane]
+        if semantic == "orchestrator":
+            route_peers = frozenset(orchestrator_names - {pane_name})
+        peer_fields = {
+            "peers": True,
+            "owner": owner_pane if worker_record is not None else "",
+            "peers_session": str(peers_plan.get("session", "")),
+            "orchestrator_session_ids": frozenset(str(s["id"]) for s in plan["sessions"] if isinstance(s, dict)
+                                                  and (s.get("instance") or str(s.get("id")) == str(peers_plan.get("session", "")))),
+            "worker_owners": tuple((str(p["name"]), str(p["worker"].get("owner"))) for p in panes if isinstance(p.get("worker"), dict)),
+            "environment_ids": frozenset(str(e["id"]) for e in scope.get("environments", []) if isinstance(e, dict) and "id" in e),
+            "scheduler_fallback": next(iter(scheduler_grants)) if len(scheduler_grants) == 1 else None,
+        }
+    elif scoped:
         root_name = scope.get("root_orchestrator")
         environments = scope.get("environments", [])
         current_session = next(s["id"] for s in plan["sessions"] if any(p["name"] == pane_name for p in s["panes"]))
@@ -732,6 +795,9 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
             own_ids = own["development"] + own["services"]
             owned_panes = [p for s in plan["sessions"] if s["id"] in own_ids for p in s["panes"]]
             coordinator = own.get("orchestrator", root_name)
+            # An environment with no local orchestrator is run by the root,
+            # whose tasks carry environment=root (scoped_task).
+            task_tag = environment if own.get("orchestrator") else "root"
             orchestrators = [p for p in panes if p["name"] == coordinator]
             if semantic == "orchestrator":
                 route_peers = (frozenset(p["name"] for p in panes if p.get("role") == roles.get("orchestrator") and p["name"] != pane_name)
@@ -750,6 +816,10 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
     executor_panes = frozenset(str(p["name"]) for p in owned_panes if p.get("role") == roles.get("executor"))
     reviewer_panes = frozenset(str(p["name"]) for p in owned_panes if p.get("role") == roles.get("reviewer"))
     worker_roots = {canonical(Path(str(p["cwd"]))) for p in panes if p.get("cwd") and p.get("role") in {roles.get("executor"), roles.get("reviewer")}}
+    if peers_plan is not None:
+        # Every checkout is child content whether or not a worker runs on it.
+        worker_roots = {canonical(project_root / str(e["cwd"]) if not Path(str(e["cwd"])).is_absolute() else Path(str(e["cwd"])))
+                        for e in scope.get("environments", []) if isinstance(e, dict) and e.get("cwd")}
     # Lanes on linked worktrees share one git common dir (refs, hooks, config)
     # and, for a non-bare repository, the main checkout that holds it. Both are
     # child content: an orchestrator that may not write a lane's worktree must
@@ -804,12 +874,18 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
         route_peers=route_peers,
         scoped=scoped,
         read_paths=tuple((Path(entry["path"]), entry["kind"]) for entry in read_paths) if semantic in {"reviewer", "executor"} else (),
-        session_ids=frozenset(own["development"] + own["services"]) if scoped and own else frozenset(),
+        session_ids=frozenset(own["development"] + own["services"]) if scoped and own and peers_plan is None else frozenset(),
         shared_session_ids=frozenset(own.get("shared_sessions", [])) if scoped and own and semantic == "orchestrator" else frozenset(),
+        task_tag=task_tag,
+        state_dir=engine_state_dir() if peers_plan is not None else None,
         lane_branch=str(own["branch"]) if scoped and own and semantic == "executor" and isinstance(own.get("branch"), str) else "",
         lane_branches=frozenset(str(e["branch"]) for e in (scope.get("environments", []) if scoped else [])
                                 if isinstance(e, dict) and isinstance(e.get("branch"), str)) if semantic == "orchestrator" else frozenset(),
-        scheduler_root=scheduler_store_root(pane, owned_panes, semantic),
+        # An orchestrator with no workers yet still resolves the one scheduler
+        # grant any pane of the plan carries.
+        scheduler_root=scheduler_store_root(pane, owned_panes, semantic) or (
+            peer_fields.get("scheduler_fallback") if semantic == "orchestrator" else None),
+        **{k: v for k, v in peer_fields.items() if k != "scheduler_fallback"},
     )
     return context, None
 
@@ -1712,7 +1788,13 @@ def own_message_readable(ctx: Context, raw: Path, path: Path) -> bool:
     pairs = [(tail[:m.start()], tail[m.start() + 4:]) for m in re.finditer(r"(?=-to-)", tail)]
     pairs = [(sender, recipient) for sender, recipient in pairs
              if sender in ctx.plan_panes and recipient in ctx.plan_panes]
-    return len(pairs) == 1 and ctx.pane_name in pairs[0]
+    if len(pairs) != 1:
+        return False
+    if ctx.peers and ctx.semantic_role in WORKER_ROLES:
+        # A worker reads only messages between itself and its owner, so a
+        # worker name reused under a new owner cannot read the old owner's.
+        return set(pairs[0]) == {ctx.pane_name, ctx.owner}
+    return ctx.pane_name in pairs[0]
 
 
 def file_list_read(tokens: List[str]) -> bool:
@@ -2297,6 +2379,18 @@ def require_route_target(ctx: Context, target: str) -> None:
     orchestrator may address only its configured executor/reviewer panes."""
     if not LABEL_RE.fullmatch(target):
         raise PolicyFailure("helper.argv", "recipient must be a literal pane name")
+    if ctx.peers:
+        # An orchestrator addresses its own workers and the other orchestrators;
+        # a worker addresses only its owner.
+        if ctx.semantic_role == "orchestrator":
+            if target in ctx.executor_panes | ctx.reviewer_panes | ctx.route_peers:
+                return
+            if target in dict(ctx.worker_owners):
+                raise PolicyFailure("routing.owner", "%s belongs to another orchestrator; address that orchestrator instead" % target)
+            raise PolicyFailure("routing.master", "orchestrator may route only to its own workers and the other orchestrators")
+        if target != ctx.orchestrator_pane:
+            raise PolicyFailure("routing.owner", "a worker's outbound coordination must target its owner %s" % ctx.orchestrator_pane)
+        return
     if ctx.semantic_role == "orchestrator":
         if target not in ctx.executor_panes | ctx.reviewer_panes | ctx.route_peers:
             raise PolicyFailure("routing.master", "orchestrator may route only to configured executor/reviewer panes")
@@ -2484,7 +2578,7 @@ def contract_actor(ctx: Context, script: str, task_id: str) -> dict:
         if data.get('assigner')!=ctx.orchestrator_pane or data.get('reviewer') not in ctx.reviewer_panes:
             raise ValueError('foreign route')
         if data.get('assignee') and data['assignee'] not in ctx.executor_panes: raise ValueError('foreign executor')
-        if ctx.scoped and data.get('meta',{}).get('environment')!=(ctx.environment or 'root'): raise ValueError('foreign scope')
+        if ctx.scoped and not ctx.peers and data.get('meta',{}).get('environment')!=(getattr(ctx,'task_tag','') or ctx.environment or 'root'): raise ValueError('foreign scope')
         return data
     except (OSError,ValueError,TypeError,AttributeError):
         raise PolicyFailure('task.contract','contract task identity or route mismatch')
@@ -2535,6 +2629,8 @@ def task_assign(ctx: Context, script: str, args: List[str]) -> None:
         raise PolicyFailure("helper.argv", "task-assign.sh requires <pane> <id> [options] <prompt-text>")
     pane, task_id = args[0], args[1]
     if pane not in ctx.executor_panes | ctx.reviewer_panes:
+        if ctx.peers and pane in dict(ctx.worker_owners):
+            raise PolicyFailure("routing.owner", "task-assign.sh may target only this orchestrator's own workers; %s belongs to another" % pane)
         raise PolicyFailure("routing.master", "task-assign.sh may target only configured executor/reviewer panes")
     if not LABEL_RE.fullmatch(task_id):
         raise PolicyFailure("helper.argv", "task-assign.sh requires a literal task id")
@@ -2551,7 +2647,11 @@ def task_assign(ctx: Context, script: str, args: List[str]) -> None:
         if flag in {"--stage", "--context", "--workflow", "--workflow-id"} and LABEL_RE.fullmatch(value):
             continue
         if flag == "--reviewer" and value in ctx.reviewer_panes:
+            if ctx.peers and value == pane:
+                raise PolicyFailure("task.scope", "task-assign.sh --reviewer must differ from the assignee")
             continue
+        if flag == "--reviewer" and ctx.peers and value in dict(ctx.worker_owners) and value not in ctx.executor_panes | ctx.reviewer_panes:
+            raise PolicyFailure("routing.owner", "task-assign.sh --reviewer must be one of this orchestrator's own reviewers; %s belongs to another" % value)
         raise PolicyFailure("helper.argv", "task-assign.sh accepts [--eta N] [--stage NAME] [--context NAME] [--reviewer REVIEWER-PANE] [--workflow ID] before the prompt")
     if not remaining:
         raise PolicyFailure("helper.argv", "task-assign.sh requires literal prompt text after the options")
@@ -2814,6 +2914,8 @@ WORKSPACE_VERB_SCRIPT = {
     "install": "workspace-install.sh",
     "browser-config": "workspace-browser-config.sh",
     "label": "workspace-label.sh",
+    "show": "workspace-show.sh",
+    "hide": "workspace-hide.sh",
 }
 
 
@@ -2846,6 +2948,8 @@ def resolve_service_panes(ctx: Context, script: str, session: str, values: List[
             raise PolicyFailure("helper.argv", "%s --pane selects service panes only, or an executor/reviewer marked launch on_demand; %s has role %s"
                                 % (script, match[0][1], match[0][2]))
         if on_demand and match[0][1] not in ctx.executor_panes | ctx.reviewer_panes:
+            if ctx.peers:
+                raise PolicyFailure("routing.owner", "%s --pane %s names a worker another orchestrator owns" % (script, match[0][1]))
             raise PolicyFailure("routing.scope", "%s --pane %s names an on-demand worker this orchestrator does not coordinate" % (script, match[0][1]))
         if match[0][1] in resolved:
             raise PolicyFailure("helper.argv", "%s --pane names each pane once (%s)" % (script, match[0][1]))
@@ -2918,6 +3022,8 @@ def orchestrator_self_stop(ctx: Context, script: str, args: List[str]) -> None:
     workers, never an orchestrator, so it is not a self-stop."""
     if ctx.semantic_role != "orchestrator" or script not in {"workspace-stop.sh", "workspace-restart.sh"} or "--pane" in args:
         return
+    if ctx.peers and any(a == "--worker" or a.startswith("--worker=") for a in args):
+        return  # a worker stop names a worker, never a session
     own = own_session_id(ctx)
     if not own:
         return
@@ -2995,6 +3101,11 @@ def environment_selector_scope(ctx: Context, args: List[str]) -> None:
             raise PolicyFailure("routing.scope", "environment selector escapes this coordinator scope")
 
 
+def peers_forbidden_flags(ctx: Context, args: List[str]) -> None:
+    if ctx.peers and ctx.semantic_role == "orchestrator" and any(a in {"--force", "--owner"} or a.startswith(("--force=", "--owner=")) for a in args):
+        raise PolicyFailure("orchestrator.peer_lifecycle", "--force and --owner are for the user, outside the harness")
+
+
 def orchestrator_lifecycle_routes(ctx: Context, tokens: List[str]) -> None:
     """Apply the self-stop rule, and an environment coordinator's session
     scope, to lifecycle routes in an orchestrator's free shell (`workspace`
@@ -3010,15 +3121,459 @@ def orchestrator_lifecycle_routes(ctx: Context, tokens: List[str]) -> None:
                 if "--environment" in rest:
                     orchestrator_self_stop_environment(ctx, rest)
                     environment_selector_scope(ctx, rest)
+                    peers_forbidden_flags(ctx, rest)
                 else:
                     if rest[0] in {"stop", "restart"}:
                         orchestrator_self_stop(ctx, "workspace-%s.sh" % rest[0], rest[1:])
                     if rest[0] in WORKSPACE_VERB_SCRIPT:
+                        peers_lifecycle(ctx, WORKSPACE_VERB_SCRIPT[rest[0]], rest[1:])
                         environment_lifecycle_scope(ctx, WORKSPACE_VERB_SCRIPT[rest[0]], rest[1:])
             elif name in WORKSPACE_LIFECYCLE_SCRIPTS:
                 if name in {"workspace-stop.sh", "workspace-restart.sh"}:
                     orchestrator_self_stop(ctx, name, rest)
+                peers_lifecycle(ctx, name, rest)
                 environment_lifecycle_scope(ctx, name, rest)
+
+
+# --- Peer orchestrators (schema 6 with `peers`) ---------------------------------
+# One function judges every route into the engine (the reviewed helper, the
+# `workspace` dispatcher, workspace.sh, a lifecycle script by name): the
+# caller normalizes to (script, args) and the same checks run.
+PEERS_LIFECYCLE_SCRIPTS = frozenset({"workspace-start.sh", "workspace-stop.sh", "workspace-restart.sh",
+                                     "workspace-reconcile.sh", "workspace-show.sh", "workspace-hide.sh"})
+PEERS_VALUE_FLAGS = frozenset({"--config", "--expect-pane-id", "--pane", "--worker", "--checkout", "--role", "--label",
+                               "--owner", "--target", "--provider", "--browser", "--environment"})
+PEERS_ROLE_VALUES = frozenset({"executor", "reviewer"})
+
+
+def lifecycle_words(args: List[str]) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """(positionals, [(flag, value)]) of a lifecycle argv, without a grammar:
+    `--flag=value` and `--flag value` both yield the value for the flags that
+    take one."""
+    positional: List[str] = []
+    flags: List[Tuple[str, str]] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg.startswith("--") and "=" in arg:
+            name, value = arg.split("=", 1)
+            flags.append((name, value))
+        elif arg in PEERS_VALUE_FLAGS:
+            flags.append((arg, args[index + 1] if index + 1 < len(args) else ""))
+            index += 1
+        elif arg.startswith("-"):
+            flags.append((arg, ""))
+        else:
+            positional.append(arg)
+        index += 1
+    return positional, flags
+
+
+def peers_worker_name(ctx: Context, name: str) -> Optional[str]:
+    """NAME as the engine resolves a worker: the full pane name or the part
+    after "<project.id>-"."""
+    owners = dict(ctx.worker_owners)
+    for candidate in (name, "%s-%s" % (ctx.project_id, name)):
+        if candidate in owners:
+            return candidate
+    return None
+
+
+def peers_is_orchestrator_session(ctx: Context, session: str) -> bool:
+    """The plan session named by peers.session, any plan session with an
+    instance record, and any `<peers.session>-<digits>` id (in the plan or
+    not)."""
+    return session in ctx.orchestrator_session_ids or re.fullmatch(re.escape(ctx.peers_session) + r"-[0-9]+", session) is not None
+
+
+def peers_own_worker(ctx: Context, script: str, name: str) -> None:
+    resolved = peers_worker_name(ctx, name)
+    if resolved is None:
+        raise PolicyFailure("helper.argv", "%s names no worker: %s" % (script, name))
+    if resolved not in ctx.executor_panes | ctx.reviewer_panes:
+        raise PolicyFailure("routing.owner", "%s: %s is a worker another orchestrator owns" % (script, resolved))
+
+
+def peers_lifecycle(ctx: Context, script: str, args: List[str]) -> None:
+    """Orchestrator lifecycle in a peers config. Refuses start/stop/restart/
+    reconcile --apply of an orchestrator session (stop and restart of its own
+    session stay orchestrator.self_stop, judged first), a bare start, --force
+    and --owner, and any show/hide/stop/start of a worker another orchestrator
+    owns."""
+    if not ctx.peers or ctx.semantic_role != "orchestrator" or script not in PEERS_LIFECYCLE_SCRIPTS:
+        return
+    positional, flags = lifecycle_words(args)
+    names = [name for name, _ in flags]
+    verb = script[len("workspace-"):-len(".sh")]
+    for flag in ("--force", "--owner"):
+        if flag in names:
+            raise PolicyFailure("orchestrator.peer_lifecycle", "%s is for the user, outside the harness; an orchestrator never passes it" % flag)
+    if verb in {"show", "hide"}:
+        if positional:
+            peers_own_worker(ctx, script, positional[0])
+        return
+    orchestrator_panes = ctx.route_peers | {ctx.pane_name}
+    for flag, value in flags:
+        if flag == "--worker":
+            peers_own_worker(ctx, script, value)
+        elif flag == "--pane":
+            row = next((r for r in ctx.session_panes if positional and r[0] == positional[0]
+                        and (r[1] == value or r[1] == "%s-%s" % (ctx.project_id, value))), None)
+            if row is not None and row[1] in orchestrator_panes:
+                raise PolicyFailure("orchestrator.peer_lifecycle", "%s --pane %s would act on an orchestrator pane" % (verb, value))
+            if row is not None and peers_worker_name(ctx, row[1]) is not None:
+                peers_own_worker(ctx, script, row[1])
+    if "--worker" in names or "--pane" in names:
+        return  # worker-scoped forms never name an orchestrator session
+    target = positional[0] if positional else "all"
+    if "--all" in names:
+        target = "all"
+    if verb == "start":
+        if "--checkout" in names and not positional:
+            return
+        if target == "all":
+            raise PolicyFailure("orchestrator.peer_lifecycle", "a bare start or start all would start orchestrator sessions; name a worker with --checkout")
+    elif verb == "reconcile" and "--apply" not in names:
+        return
+    if target == "all" and verb != "start":
+        raise PolicyFailure("orchestrator.peer_lifecycle", "%s of every session includes the orchestrator sessions" % verb)
+    if peers_is_orchestrator_session(ctx, target):
+        raise PolicyFailure("orchestrator.peer_lifecycle", "%s of orchestrator session %s belongs to the user" % (verb, target))
+
+
+def peers_option_values(script: str, args: List[str], values: Tuple[str, ...], bare: Tuple[str, ...]) -> dict:
+    """Closed option list: each option at most once, values never dash-led."""
+    found: dict = {}
+    remaining = list(args)
+    while remaining:
+        arg = remaining.pop(0)
+        if arg in found or (arg not in values and arg not in bare):
+            raise PolicyFailure("helper.argv", "%s argument is outside its reviewed grammar: %s" % (script, arg))
+        if arg in bare:
+            found[arg] = ""
+            continue
+        if not remaining or remaining[0].startswith("-"):
+            raise PolicyFailure("helper.argv", "%s %s requires a value" % (script, arg))
+        found[arg] = remaining.pop(0)
+    return found
+
+
+def peers_config_flag(ctx: Context, script: str, found: dict) -> None:
+    if "--config" in found:
+        path = candidate_path(found["--config"], ctx.pane_cwd)
+        if path is None or path != ctx.config_path:
+            raise PolicyFailure("helper.argv", "%s --config must name this workspace's config" % script)
+
+
+def peers_start_checkout(ctx: Context, script: str, args: List[str]) -> None:
+    """start --checkout ID --role executor|reviewer [--label L] [--show]
+    [--config PATH] [--no-attach]; no positional target, nothing else."""
+    found = peers_option_values(script, args, ("--checkout", "--role", "--label", "--config"), ("--show", "--no-attach"))
+    if "--checkout" not in found or "--role" not in found:
+        raise PolicyFailure("helper.argv", "%s --checkout requires --role" % script)
+    if found["--checkout"] not in ctx.environment_ids:
+        raise PolicyFailure("helper.argv", "%s --checkout must name a declared environment id" % script)
+    if found["--role"] not in PEERS_ROLE_VALUES:
+        raise PolicyFailure("helper.argv", "%s --role must be executor or reviewer" % script)
+    if "--label" in found and not WORKER_LABEL_RE.fullmatch(found["--label"]):
+        raise PolicyFailure("helper.argv", "%s --label is 1-24 characters of a-z, 0-9 and -" % script)
+    peers_config_flag(ctx, script, found)
+
+
+def peers_stop_worker(ctx: Context, script: str, args: List[str]) -> None:
+    """stop --worker NAME --confirmed [--config PATH]."""
+    found = peers_option_values(script, args, ("--worker", "--config"), ("--confirmed",))
+    if "--worker" not in found or "--confirmed" not in found or not LABEL_RE.fullmatch(found["--worker"]):
+        raise PolicyFailure("helper.argv", "%s --worker requires a literal name and --confirmed" % script)
+    peers_config_flag(ctx, script, found)
+
+
+def workspace_show_hide(ctx: Context, script: str, args: List[str]) -> None:
+    """show NAME [--config PATH] / hide NAME [--config PATH]: peers only."""
+    if not ctx.peers:
+        raise PolicyFailure("helper.argv", "%s applies only to a peers configuration" % script)
+    remaining = list(args)
+    names: List[str] = []
+    found: dict = {}
+    while remaining:
+        arg = remaining.pop(0)
+        if arg == "--config" and "--config" not in found and remaining and not remaining[0].startswith("-"):
+            found["--config"] = remaining.pop(0)
+        elif not arg.startswith("-") and LABEL_RE.fullmatch(arg) and not names:
+            names.append(arg)
+        else:
+            raise PolicyFailure("helper.argv", "%s argument is outside its reviewed grammar: %s" % (script, arg))
+    if not names:
+        raise PolicyFailure("helper.argv", "%s requires a literal worker name" % script)
+    peers_config_flag(ctx, script, found)
+
+
+# Variables that carry or redirect a pane's engine identity, or change which
+# programs and startup code the engine runs (and so what it reads as the
+# caller's identity: a tmux of the caller's choosing on PATH, a BASH_ENV
+# script, a preloaded library). Setting or unsetting one in a command that
+# runs a workspace route would let a pane act as another owner
+# (identity.override).
+IDENTITY_NAME_RE = re.compile(
+    r"\A(?:SESSION_WORKSPACE_[A-Za-z0-9_]*|SESSION_CHAT_PANE_NAME|KNOWLEDGE_PANE_NAME|TMUX|TMUX_PANE|TMUX_TMPDIR"
+    r"|XDG_STATE_HOME|HOME|PATH|BASH_ENV|ENV|SHELLOPTS|BASHOPTS|CDPATH|IFS|GLOBIGNORE|BASH_FUNC_[A-Za-z0-9_%]*"
+    r"|LD_[A-Za-z0-9_]*|DYLD_[A-Za-z0-9_]*|PYTHON[A-Za-z0-9_]*|PERL5LIB|PERL5OPT|PERLLIB|RUBYOPT|RUBYLIB|NODE_OPTIONS|NODE_PATH|JQ_LIBRARY_PATH)\Z")
+ENV_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local", "unset"})
+
+
+def segment_identity_override(segment: List[str]) -> Optional[str]:
+    """The identity variable one segment sets or unsets, or "": prefix
+    assignments, env NAME=v / -u / --unset / -i, and export/declare/typeset/
+    readonly/local/unset. Walks the same wrapper order as parse_wrappers."""
+    index = 0
+    while index < len(segment):
+        token = segment[index]
+        if token == REDIR_WRITE_MARK or token.startswith(REDIR_PATH_PREFIX):
+            index += 1
+            continue
+        if ASSIGNMENT_RE.fullmatch(token):
+            if IDENTITY_NAME_RE.fullmatch(token.split("=", 1)[0]):
+                return token.split("=", 1)[0]
+            index += 1
+            continue
+        name = Path(token).name
+        if name == "env":
+            index += 1
+            while index < len(segment):
+                option = segment[index]
+                if ASSIGNMENT_RE.fullmatch(option):
+                    if IDENTITY_NAME_RE.fullmatch(option.split("=", 1)[0]):
+                        return option.split("=", 1)[0]
+                    index += 1
+                elif option in {"-i", "--ignore-environment"}:
+                    return "env " + option
+                elif option in {"-u", "--unset"}:
+                    if index + 1 < len(segment) and IDENTITY_NAME_RE.fullmatch(segment[index + 1]):
+                        return segment[index + 1]
+                    index += 2
+                elif option.startswith("--unset="):
+                    if IDENTITY_NAME_RE.fullmatch(option.split("=", 1)[1]):
+                        return option.split("=", 1)[1]
+                    index += 1
+                elif option in {"-C", "--chdir"}:
+                    index += 2
+                elif option.startswith("-"):
+                    index += 1
+                    if option == "--":
+                        break
+                else:
+                    break
+            continue
+        if name in {"command", "builtin", "exec", "nohup", "time"}:
+            index += 1
+            continue
+        if name in ENV_BUILTINS:
+            # An exported function (export -f, declare -fx, ...) replaces a
+            # command the engine runs by name, such as env or jq.
+            if name != "unset" and any(re.fullmatch(r"[-+][A-Za-z]*f[A-Za-z]*", word) for word in segment[index + 1:]):
+                return name + " -f"
+            for word in segment[index + 1:]:
+                if word.startswith("-") or word == REDIR_WRITE_MARK or word.startswith(REDIR_PATH_PREFIX):
+                    continue
+                if IDENTITY_NAME_RE.fullmatch(word.split("=", 1)[0]):
+                    return word.split("=", 1)[0]
+        if name == "set":
+            # set -a / set -o allexport exports every function defined after it.
+            words = segment[index + 1:]
+            if any(re.fullmatch(r"-[A-Za-z]*a[A-Za-z]*", word) for word in words) or \
+                    any(word == "-o" and following == "allexport" for word, following in zip(words, words[1:])):
+                return "set -a"
+        return ""
+    return ""
+
+
+def runs_workspace_route(segment: List[str]) -> bool:
+    return any(Path(token).name in WORKSPACE_VERB_DISPATCHERS | WORKSPACE_LIFECYCLE_SCRIPTS for token in executable_tokens(segment))
+
+
+def peers_identity_override(tokens: List[str]) -> None:
+    """A command that runs a workspace route is refused when ANY segment of it
+    sets or unsets an identity variable. A command with the assignment and no
+    workspace route is not affected."""
+    parts = segments(tokens)
+    if not any(runs_workspace_route(part) for part in parts):
+        return
+    for part in parts:
+        name = segment_identity_override(part)
+        if name:
+            raise PolicyFailure("identity.override", "a workspace command may not set or unset %s; the engine identity comes from the launch" % name)
+
+
+TMUX_READ_COMMANDS = frozenset({"list-panes", "lsp", "list-windows", "lsw", "list-sessions", "ls", "list-clients", "lsc",
+                                "display-message", "display", "capture-pane", "capturep", "show-options", "show",
+                                "show-window-options", "showw", "show-environment", "showenv", "has-session", "has"})
+TMUX_VALUE_OPTIONS = "LSfcT"
+TMUX_FLAG_OPTIONS = frozenset("2uvNlCD")
+TMUX_CHAIN_RE = re.compile(r"\\;|['\"];['\"]|\$['\"(]|`")
+TMUX_FORMAT_MODIFIER_RE = re.compile(r"#\{[^}]*:")
+# Programs that run another program named in their arguments: a `tmux` word
+# anywhere in such a segment is tmux outside the read-only grammar.
+TMUX_INDIRECT_RUNNERS = frozenset({"eval", "xargs", "find", "parallel", "watch", "script", "expect", "su", "sudo", "doas",
+                                   "ssh", "at", "batch", "awk", "gawk", "mawk", "nawk", "sed", "gsed", "busybox", "make",
+                                   "gmake", "vi", "vim", "nvim", "ex", "emacs", "tclsh", "wish", "timeout", "gtimeout",
+                                   "nice", "setsid", "stdbuf", "flock", "ionice", "chroot", "caffeinate", "unbuffer",
+                                   "nohup", "time", "exec", "command", "builtin", "env", "chronic", "strace", "dtruss"})
+# Shells and interpreters run a tmux word only as inline code (sh -c, bash -lc,
+# python3 -c, perl -e, node --eval, php -r, osascript -e, ...). Their other
+# arguments are a script file and its data, such as a message that mentions
+# tmux. A script file, or code that assembles the name at run time, is not
+# visible to any command classifier; see the peers limits in the reference.
+TMUX_SHELL_RE = re.compile(r"\A(?:sh|bash|zsh|dash|ksh|mksh|fish|csh|tcsh)\Z")
+TMUX_INTERPRETER_RE = re.compile(r"\A(?:python|perl|ruby|node|nodejs|php|lua|luajit|osascript|Rscript|pwsh|deno|bun)[0-9.]*\Z")
+TMUX_INLINE_CODE_OPTIONS = frozenset({"-c", "-e", "-E", "-r", "-p", "--eval", "--print", "--command", "-Command"})
+# Options of a shell or interpreter that take the next word as their value.
+TMUX_VALUE_OPTIONS_BY_KIND = {
+    "shell": frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}),
+    "interpreter": frozenset({"-W", "-X", "-I", "-M", "--require", "-R", "--import", "--loader", "--env-file"}),
+}
+TMUX_WORD_RE = re.compile(r"(?<![A-Za-z0-9_.-])tmux(?![A-Za-z0-9_.-])")
+
+
+def tmux_indirect(argv: List[str]):
+    """True when ARGV runs a tmux word through another program, "stdin" when
+    ARGV is a shell or interpreter that reads its code from standard input
+    (no script file and no inline code), False otherwise."""
+    if not argv:
+        return False
+    name = Path(argv[0]).name
+    words = argv[1:]
+    if name in TMUX_INDIRECT_RUNNERS:
+        return any(TMUX_WORD_RE.search(word) for word in words)
+    if name == "git":
+        # git -c alias.x='!tmux ...', core.pager, core.editor, ... run a shell.
+        values = [words[i + 1] for i, word in enumerate(words[:-1]) if word == "-c"]
+        values += [word[2:] for word in words if word.startswith("-c") and len(word) > 2]
+        return any(TMUX_WORD_RE.search(value) for value in values)
+    shell = TMUX_SHELL_RE.fullmatch(name) is not None
+    if shell or TMUX_INTERPRETER_RE.fullmatch(name):
+        # Fail closed first: an inline-code option anywhere, followed by a
+        # tmux word, is tmux, however the options before it parse.
+        for index, word in enumerate(words):
+            if word in TMUX_INLINE_CODE_OPTIONS or (shell and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word) is not None):
+                if any(TMUX_WORD_RE.search(rest) for rest in words[index + 1:]):
+                    return True
+        valued = TMUX_VALUE_OPTIONS_BY_KIND["shell" if shell else "interpreter"]
+        index = 0
+        while index < len(words):
+            word = words[index]
+            inline = word in TMUX_INLINE_CODE_OPTIONS or (shell and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word) is not None)
+            if inline:
+                return any(TMUX_WORD_RE.search(rest) for rest in words[index + 1:])
+            if word in valued:
+                index += 2
+                continue
+            if word == "-" or word == "-s" or word == "--":
+                return "stdin"
+            if word == "-m" and not shell:
+                return False  # python -m MODULE: a module file, like a script
+            if not word.startswith(("-", "+")):
+                return False  # a script file and its arguments
+            index += 1
+        return "stdin"
+    return False
+
+
+def tmux_read_only(argv: List[str]) -> bool:
+    """True when this tmux argv is exactly one read command (or a bare -V).
+    tmux's own leading options are skipped: -L/-S/-f/-c/-T take a value,
+    -2 -u -v -N -l -C -D do not."""
+    # tmux ends a command at any argument ending in an unescaped `;`, and a
+    # format `#(cmd)` runs cmd through the server; shell spellings (`$'..'`,
+    # `$(..)`, backticks, backslashes) can build either. Read verbs need none.
+    if any(char in word for word in argv[1:] for char in (";", "$", "\\", "`")) or any("#(" in word for word in argv[1:]):
+        return False
+    # A format modifier (#{E:..}, #{T:..}, #{S:..}, #{s/../..:..}, ...) can
+    # expand text a format did not spell out, such as an option holding #(..).
+    # Read verbs need plain #{name} and #{?cond,a,b} only.
+    if any(TMUX_FORMAT_MODIFIER_RE.search(word) for word in argv[1:]):
+        return False
+    index = 1
+    while index < len(argv) and argv[index].startswith("-") and len(argv[index]) > 1:
+        option = argv[index]
+        if option == "-V":
+            return index == len(argv) - 1
+        if option[1] in TMUX_VALUE_OPTIONS:
+            index += 1 if len(option) > 2 else 2
+        elif all(char in TMUX_FLAG_OPTIONS for char in option[1:]):
+            index += 1
+        else:
+            return False
+    return index < len(argv) and argv[index] in TMUX_READ_COMMANDS
+
+
+def peers_tmux(ctx: Context, command: str, tokens: List[str]) -> None:
+    """Raw tmux in a peers orchestrator: read verbs only, never a `\\;` chain
+    (the shell hands tmux a second command that no segment shows)."""
+    for part in segments(tokens):
+        argv = unwrap_prefixes(part)
+        found = tmux_indirect(argv)
+        # A shell or interpreter that reads its code from a pipe, a here-string
+        # or a here-document runs whatever text the command carries.
+        if found is True or (found == "stdin" and TMUX_WORD_RE.search(command)):
+            raise PolicyFailure("orchestrator.tmux", "tmux run through %s is outside the read-only tmux grammar" % Path(argv[0]).name)
+    tmux_segments = [part for part in segments(tokens) if command_basename(part) == "tmux"]
+    if not tmux_segments:
+        return
+    if TMUX_CHAIN_RE.search(command):
+        raise PolicyFailure("orchestrator.tmux", "a tmux command chain (\\;) is outside the read-only tmux grammar")
+    for part in tmux_segments:
+        if not tmux_read_only(unwrap_prefixes(part)):
+            raise PolicyFailure("orchestrator.tmux", "an orchestrator runs only read-only tmux verbs (list-*, display-message, capture-pane, show-*, has-session)")
+
+
+def peers_state_write(ctx: Context, tokens: List[str]) -> None:
+    """A mutating segment that names the engine state directory, or runs with
+    its cwd inside it, is refused. Reads stay allowed."""
+    roots = tuple(root for root in (ctx.state_dir, peers_task_ledger(ctx)) if root is not None)
+    if not roots:
+        return
+    for segment, cwd, after in walk_segments(tokens, ctx.pane_cwd):
+        if not segment_mutates(segment):
+            continue
+        exec_cwd = segment_exec_cwd(segment, cwd)
+        if references_child(segment, ctx, cwd, roots) or references_child(unwrap_prefixes(segment), ctx, exec_cwd, roots) \
+                or any(within(exec_cwd, root) for root in roots) \
+                or references_ancestor(segment, ctx, cwd, roots) or references_ancestor(unwrap_prefixes(segment), ctx, exec_cwd, roots):
+            raise PolicyFailure("orchestrator.state_write",
+                                "the engine state directory and the scheduler task ledger are written only by the engine and the scheduler helpers")
+
+
+def references_ancestor(segment: List[str], ctx: Context, cwd: Optional[Path], roots: tuple) -> bool:
+    """True when a path in SEGMENT is a directory above a protected root (so
+    removing or moving it takes the root along), below the project root and
+    the home directory: for the ledger .tmp and .tmp/scheduler, for the state
+    directory the state home."""
+    base = cwd if cwd is not None else ctx.project_root
+    floors = [canonical(ctx.project_root), canonical(Path.home())]
+    # Bare names (`rm -rf scheduler` from inside .tmp) count as paths too.
+    above = {parent for root in roots for parent in root.parents
+             if not any(within(floor, parent) for floor in floors)}
+    rel = tuple(str(parent.relative_to(base)) for parent in above if within(parent, base) and parent != base)
+    try:
+        wrapped = parse_wrappers(segment)
+        paths = [candidate_path(value, base, rel) for value in wrapped.values]
+        paths.extend(path for _, path, _ in argv_paths(wrapped.argv, base, rel))
+    except PolicyFailure:
+        return True
+    for path in paths:
+        if path is None:
+            continue
+        for root in roots:
+            if path != root and within(root, path) and not any(within(floor, path) for floor in floors):
+                return True
+    return False
+
+
+def peers_task_ledger(ctx: Context) -> Optional[Path]:
+    """The scheduler's task files: a task's assigner is its owner, so under
+    peers only the scheduler helpers write them, never an orchestrator."""
+    root = getattr(ctx, "scheduler_root", None)
+    return None if root is None else root / "tasks"
 
 
 def workspace_read(ctx: Context, script: str, args: List[str]) -> None:
@@ -3038,11 +3593,17 @@ def harness_status_args(ctx: Context, script: str, args: List[str]) -> None:
 # only --no-attach and --config beside it; stop requires --confirmed and admits
 # nothing else. The HELPERS table already keeps both scripts orchestrator-only.
 def workspace_start(ctx: Context, script: str, args: List[str]) -> None:
+    if ctx.peers and "--checkout" in args:
+        peers_start_checkout(ctx, script, args)
+        return
     workspace_args(ctx, script, args, ("--no-agents", "--no-services", "--no-attach", "--adopt", "--confirmed"),
                    pane_flags=("--no-attach",))
 
 
 def workspace_stop(ctx: Context, script: str, args: List[str]) -> None:
+    if ctx.peers and "--worker" in args:
+        peers_stop_worker(ctx, script, args)
+        return
     workspace_args(ctx, script, args, ("--no-save", "--confirmed", "--all"),
                    pane_flags=("--confirmed",), pane_requires=("--confirmed",))
 
@@ -3216,6 +3777,8 @@ HELPERS = {
         "workspace-install.sh": ("o", workspace_install),
         "workspace-browser-config.sh": ("o", workspace_browser_config),
         "workspace-label.sh": ("o", workspace_label),
+        "workspace-show.sh": ("o", workspace_show_hide),
+        "workspace-hide.sh": ("o", workspace_show_hide),
     },
     "session-manager": {
         "list-sessions.sh": ("o", sessions_filter),
@@ -3267,8 +3830,44 @@ def helper_invocation(ctx: Context, tokens: List[str], raw: str) -> Optional[Tup
     return plugin, script_name, args
 
 
+def peers_task_file(ctx: Context, task_id: str) -> dict:
+    """The task file of a peers scheduler operation, under the usual file
+    safety checks (inside the scheduler root, no symlink, single link)."""
+    if not LABEL_RE.fullmatch(task_id) or ctx.scheduler_root is None:
+        raise PolicyFailure("task.scope", "a peers task operation requires a valid id and the configured scheduler grant")
+    task = ctx.scheduler_root / "tasks" / (task_id + ".json")
+    try:
+        if not within(canonical(task), ctx.scheduler_root) or task.is_symlink() or task.stat().st_nlink != 1:
+            raise ValueError("unsafe task")
+        return task_object(json.loads(task.read_text()))
+    except (OSError, ValueError, TypeError, AttributeError):
+        raise PolicyFailure("task.scope", "task file is missing or unsafe")
+
+
+def peers_task_scope(ctx: Context, script: str, args: List[str]) -> None:
+    """Scheduler scope by owner. No environment tag is required; the task's
+    assigner is the owner. task-assign needs the caller to be that assigner; a
+    worker's transition needs its owner as assigner and its own name as the
+    task's assignee or reviewer, with a reviewer that is not the assignee."""
+    if script == "task-assign.sh" and ctx.semantic_role == "orchestrator":
+        data = peers_task_file(ctx, args[1] if len(args) > 1 else "")
+        if data.get("assigner") != ctx.pane_name:
+            raise PolicyFailure("task.scope", "task belongs to another orchestrator (assigner %s)" % data.get("assigner"))
+    elif script in {"task-review.sh", "task-done.sh", "task-block.sh"} and ctx.semantic_role in WORKER_ROLES:
+        data = peers_task_file(ctx, args[0] if args else "")
+        if data.get("assigner") != ctx.owner:
+            raise PolicyFailure("task.scope", "task belongs to another orchestrator, not this worker's owner %s" % ctx.owner)
+        if ctx.pane_name not in (data.get("assignee"), data.get("reviewer")):
+            raise PolicyFailure("task.scope", "task does not name this pane as assignee or reviewer")
+        if data.get("reviewer") and data.get("reviewer") == data.get("assignee"):
+            raise PolicyFailure("task.scope", "task names one pane as both assignee and reviewer")
+
+
 def scoped_task(ctx: Context, script: str, args: List[str]) -> None:
-    expected = ctx.environment or "root"
+    if getattr(ctx, "peers", False):
+        peers_task_scope(ctx, script, args)
+        return
+    expected = getattr(ctx, "task_tag", "") or ctx.environment or "root"
     if script == "task-new.sh":
         fields = [args[i+1] for i, a in enumerate(args[:-1]) if a == "--meta" and args[i+1].startswith("environment=")]
         if fields != ["environment=" + expected]:
@@ -3307,8 +3906,10 @@ def validate_helper(ctx: Context, plugin: str, script: str, args: List[str]) -> 
         raise PolicyFailure("coordination.write", "%s is not a %s operation in strict-v1" % (script, ctx.semantic_role))
     if ctx.scoped and plugin == "session-scheduler":
         scoped_task(ctx, script, args)
+
     if plugin == "session-workspace":
         orchestrator_self_stop(ctx, script, args)
+        peers_lifecycle(ctx, script, args)
         environment_lifecycle_scope(ctx, script, args)
     if ctx.environment and (plugin, script) in {("session-scheduler", "tasks-clean.sh"), ("session-chat", "messages-clean.sh"), ("session-chat", "clean-messages.sh"), ("session-manager", "delete-all-sessions.sh"), ("session-manager", "delete-session.sh")}:
         raise PolicyFailure("routing.scope", "shared-store cleanup belongs to root coordinator")
@@ -4133,7 +4734,7 @@ def child_transport_bypass(tokens: List[str], child: bool) -> Optional[str]:
 # dispatcher on PATH (workspace-install), the project bootstrap shim
 # (workspace.sh), and a lifecycle script run by name or through an
 # interpreter. Read verbs (plan, status, doctor, harness-*) stay available.
-WORKSPACE_LIFECYCLE_VERBS = {"start", "stop", "restart", "reconcile", "install", "browser-config", "label"}
+WORKSPACE_LIFECYCLE_VERBS = {"start", "stop", "restart", "reconcile", "install", "browser-config", "label", "show", "hide"}
 WORKSPACE_VERB_DISPATCHERS = {"workspace", "workspace.sh", "workspace-environment.sh"}
 WORKSPACE_LIFECYCLE_SCRIPTS = {
     "workspace-start.sh",
@@ -4143,6 +4744,8 @@ WORKSPACE_LIFECYCLE_SCRIPTS = {
     "workspace-install.sh",
     "workspace-browser-config.sh",
     "workspace-label.sh",
+    "workspace-show.sh",
+    "workspace-hide.sh",
 }
 
 
@@ -4182,15 +4785,16 @@ def segment_mutates(segment: List[str]) -> bool:
     return True
 
 
-def references_child(segment: List[str], ctx: Context, cwd: Optional[Path] = None) -> bool:
+def references_child(segment: List[str], ctx: Context, cwd: Optional[Path] = None, roots: Optional[tuple] = None) -> bool:
+    roots = ctx.child_roots if roots is None else roots
     base = cwd if cwd is not None else ctx.project_root
-    child_rel = tuple(str(root.relative_to(base)) for root in ctx.child_roots if within(root, base) and root != base)
+    child_rel = tuple(str(root.relative_to(base)) for root in roots if within(root, base) and root != base)
     try:
         wrapped = parse_wrappers(segment)
         paths = [candidate_path(value, base, child_rel) for value in wrapped.values]
         paths.append(executable_path(wrapped.argv[0], base) if wrapped.argv else None)
         paths.extend(path for _, path, _ in argv_paths(wrapped.argv, base, child_rel))
-        if any(path is not None and any(within(path, root) for root in ctx.child_roots) for path in paths):
+        if any(path is not None and any(within(path, root) for root in roots) for path in paths):
             return True
     except PolicyFailure:
         return True
@@ -5290,6 +5894,18 @@ def validate_bash(ctx: Context, command: str, tool_input: dict) -> Optional[str]
         if token == "--permission-mode" and index + 1 < len(tokens) and tokens[index + 1] == "bypassPermissions":
             raise PolicyFailure("shell.sandbox_escape", "sandbox/approval/permission escape flags are outside strict-v1: bypassPermissions")
 
+    if ctx.peers:
+        # Peers: identity overrides are refused for every role, before any
+        # route classifier can judge the same command by its argv alone.
+        peers_identity_override(tokens)
+        if line_tokens is not tokens:
+            peers_identity_override(line_tokens)
+        if ctx.semantic_role == "orchestrator":
+            peers_tmux(ctx, command, tokens)
+            peers_state_write(ctx, tokens)
+            if line_tokens is not tokens:
+                peers_state_write(ctx, line_tokens)
+
     # Installed-helper invocations are gated identically for EVERY role: exact
     # selected provenance, one literal segment, reviewed argv grammar, and
     # master-only routing (children -> orchestrator; orchestrator -> its
@@ -5489,6 +6105,11 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
             extras = protected.get("extra_basenames", [])
             if generic or (isinstance(extras, list) and basename in extras):
                 raise PolicyFailure("orchestrator.protected_file", "orchestrator cannot edit protected credential/lockfile: %s" % value)
+        if ctx.peers and ctx.semantic_role == "orchestrator" and ctx.state_dir is not None and within(path, ctx.state_dir):
+            raise PolicyFailure("orchestrator.state_write", "the engine state directory is written only by the engine: %s" % value)
+        ledger = peers_task_ledger(ctx) if ctx.peers and ctx.semantic_role == "orchestrator" else None
+        if ledger is not None and within(path, ledger):
+            raise PolicyFailure("orchestrator.state_write", "the scheduler task ledger is written only by the scheduler helpers: %s" % value)
         if ctx.semantic_role == "executor" or ctx.confined_orchestrator:
             if not within(path, ctx.pane_cwd):
                 raise PolicyFailure("executor.containment", "executor edit escapes its configured child cwd: %s" % value)
@@ -5647,6 +6268,21 @@ _FLOOR_TO_PANES = ("routing", "outbound coordination only through the selected h
 # whether through a helper, the `workspace` dispatcher on PATH or a copy.
 _FLOOR_LIFECYCLE = ("lifecycle", "workspace lifecycle verbs denied by any route", ("coordination.write",), ())
 _FLOOR_SELF_STOP = ("self_stop", "no stop or restart of the session holding this pane", ("orchestrator.self_stop",), ())
+# A peers orchestrator (schema 6): the orchestrator floor plus the owner,
+# lifecycle, tmux, state-directory and identity clauses.
+_FLOOR_PEERS = (
+    ("peer_lifecycle", "no start, stop, restart or reconcile of an orchestrator session; no --force or --owner; no bare start",
+     ("orchestrator.peer_lifecycle",), ()),
+    ("peer_lifecycle", "no addressing, stopping, showing or hiding of another orchestrator's workers",
+     ("routing.owner",), ()),
+    ("tmux", "raw tmux limited to read verbs, no command chains", ("orchestrator.tmux",), ()),
+    ("state", "no edit or mutating command against the engine state directory", ("orchestrator.state_write",), ()),
+    ("identity", "no identity variable set or unset on a workspace command", ("identity.override",), ()),
+)
+_FLOOR_ORCHESTRATOR = (
+    ("child_write", "no edit or mutating shell against a child checkout", ("orchestrator.child_write",), ()),
+    ("push", "no git push", ("orchestrator.push",), ()),
+) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_SELF_STOP)
 ROLE_FLOOR = {
     "reviewer": (
         ("readonly", "edit family denied, except this pane's own message drafts", ("reviewer.readonly", "coordination.draft"),
@@ -5658,10 +6294,10 @@ ROLE_FLOOR = {
          (("EXACT_FORMS", "read programs"), ("EXACT_GIT", "git read subcommands"))),
     ) + _FLOOR_TO_MASTER + (_FLOOR_LIFECYCLE,),
     "executor": _FLOOR_CONTAINMENT + _FLOOR_TO_MASTER + (_FLOOR_LIFECYCLE,),
-    "orchestrator": (
-        ("child_write", "no edit or mutating shell against a child checkout", ("orchestrator.child_write",), ()),
-        ("push", "no git push", ("orchestrator.push",), ()),
-    ) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_SELF_STOP),
+    "orchestrator": _FLOOR_ORCHESTRATOR,
+    # A peers orchestrator keeps the whole orchestrator floor (one shared
+    # definition, so a table edit changes both) and adds the peers clauses.
+    "peer_orchestrator": _FLOOR_ORCHESTRATOR + _FLOOR_PEERS,
     # An environment coordinator whose cwd is not the project root.
     "confined_orchestrator": _FLOOR_CONTAINMENT + (
         ("git", "no local Git mutation, push included", ("orchestrator.git",), (("READ_GIT", "git read subcommands"),)),
@@ -5716,6 +6352,19 @@ _PROBE_CONTAINMENT = (
 )
 _PROBE_SELF_STOP = ("shell", "orchestrator.self_stop", "stop of its own session through the PATH dispatcher",
                     "workspace stop {session} --confirmed")
+_PROBES_PEERS = (
+    ("shell", "orchestrator.peer_lifecycle", "stop of another orchestrator session through the PATH dispatcher",
+     "workspace stop {peer_session} --confirmed"),
+    ("shell", "orchestrator.peer_lifecycle", "a bare start through the PATH dispatcher", "workspace start"),
+    ("shell", "routing.owner", "stop of a worker another orchestrator owns", "workspace stop --worker {other_worker} --confirmed"),
+    ("shell", "orchestrator.tmux", "tmux kill-pane", "tmux kill-pane -t probe"),
+    ("shell", "allow", "tmux list-panes", "tmux list-panes"),
+    ("edit_one", "orchestrator.state_write", "Edit inside the engine state directory", "{state}"),
+    ("shell", "orchestrator.state_write", "touch inside the engine state directory", "touch {state}"),
+    ("shell", "identity.override", "identity variable set on a workspace command",
+     "SESSION_WORKSPACE_PANE_NAME=probe workspace status"),
+    ("shell", "allow", "an unrelated variable on a workspace command", "FOO=1 workspace status"),
+)
 FLOOR_PROBES = {
     "reviewer": (
         ("edit", "reviewer.readonly", "edit inside the pane checkout", "{probe}"),
@@ -5752,6 +6401,15 @@ FLOOR_PROBES = {
         ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
         _PROBE_SELF_STOP,
     ),
+    "peer_orchestrator": (
+        ("edit", "orchestrator.child_write", "edit inside a child checkout", "{child}"),
+        ("edit_one", "allow", "Edit in the pane's own checkout", "{probe}"),
+        ("shell", "orchestrator.child_write", "touch inside a child checkout", "touch {child}"),
+        ("shell", "orchestrator.push", "git push", "git push"),
+        ("shell", "orchestrator.gh_mutation", "gh pr merge", "gh pr merge 1"),
+        ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
+        _PROBE_SELF_STOP,
+    ) + _PROBES_PEERS,
     "confined_orchestrator": _PROBE_CONTAINMENT + (
         ("shell", "orchestrator.git", "git commit", "git commit -m probe"),
         ("shell", "orchestrator.git", "git push", "git push"),
@@ -5769,6 +6427,8 @@ COMMON_PROBES = (
 
 
 def floor_key(ctx: Context) -> str:
+    if ctx.peers and ctx.semantic_role == "orchestrator":
+        return "peer_orchestrator"
     return "confined_orchestrator" if ctx.confined_orchestrator else ctx.semantic_role
 
 
@@ -5825,7 +6485,9 @@ def probe_payloads(ctx: Context, case: tuple) -> List[Tuple[str, str, str]]:
     kind, expected, label, value = case
     child = next((root for root in ctx.child_roots if not within(ctx.pane_cwd, root)), None)
     messages = ctx.message_roots[0] if ctx.message_roots else None
-    if ("{child}" in value and child is None) or ("{messages}" in value and messages is None):
+    other_worker = next((name for name, owner in ctx.worker_owners if owner != ctx.pane_name), None)
+    if ("{child}" in value and child is None) or ("{messages}" in value and messages is None) \
+            or ("{other_worker}" in value and other_worker is None) or ("{state}" in value and ctx.state_dir is None):
         return []
     if expected == "allow" and kind == "edit_one" and any(within(ctx.pane_cwd, root) for root in ctx.child_roots) \
             and ctx.semantic_role == "orchestrator" and not ctx.confined_orchestrator:
@@ -5837,6 +6499,11 @@ def probe_payloads(ctx: Context, case: tuple) -> List[Tuple[str, str, str]]:
         "messages": str((messages or ctx.pane_cwd) / FLOOR_PROBE_NAME),
         "cwd": str(ctx.pane_cwd),
         "session": own_session_id(ctx) or "all",
+        "other_worker": other_worker or "",
+        "state": str((ctx.state_dir or ctx.pane_cwd) / FLOOR_PROBE_NAME),
+        # An orchestrator session that is not this pane's own: ids of the form
+        # <peers.session>-N need no plan entry.
+        "peer_session": (ctx.peers_session + "-2") if own_session_id(ctx) != ctx.peers_session + "-2" else ctx.peers_session,
     }
     if kind == "shell":
         command = value.format(**{k: shlex.quote(v) for k, v in places.items()})

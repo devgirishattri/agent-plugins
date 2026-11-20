@@ -29,6 +29,7 @@ read-only.
 
 The `floor (strict-v1, not configurable):` lines are the role floor, generated
 from `harness-policy.py`'s own tables, for this pane's role or for every role.
+In a schema 6 peer orchestrator, `floor.current` is `peer_orchestrator`.
 The `optional guard packs:` line lists only the configured `harness.guards`
 packs, which add to the floor. "No packs" never means that reviewer read-only
 or executor containment is off. Report every `UNEXPECTED` probe line verbatim.

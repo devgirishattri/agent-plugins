@@ -118,9 +118,16 @@ def positive_env(name, default):
     return value if value > 0 else default
 
 
+def tmux_argv(*args):
+    """tmux ARGS, pinned (-N -S) to the server the calling engine verb bound
+    (SESSION_WORKSPACE_TMUX_SOCKET, lib.sh). Unbound: plain tmux."""
+    sock = os.environ.get('SESSION_WORKSPACE_TMUX_SOCKET')
+    return ['tmux', '-N', '-S', sock, *args] if sock else ['tmux', *args]
+
+
 def tmux(*args):
     try:
-        run = subprocess.run(['tmux'] + list(args), capture_output=True, text=True, timeout=10)
+        run = subprocess.run(tmux_argv(*args), capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
     return run.stdout.rstrip('\n') if run.returncode == 0 else None
@@ -140,7 +147,7 @@ def output_fingerprint(pane_id):
         return None
     geometry, history = shape.split()
     try:
-        run = subprocess.run(['tmux', 'capture-pane', '-p', '-J', '-t', pane_id, '-S', '-%d' % OUTPUT_TAIL_LINES],
+        run = subprocess.run(tmux_argv('capture-pane', '-p', '-J', '-t', pane_id, '-S', '-%d' % OUTPUT_TAIL_LINES),
                              capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -244,6 +251,16 @@ def idle_reason(kind, mode, signals, port, minutes):
     return 'idle: %s for %d %s' % (' and '.join(parts), minutes, unit)
 
 
+def stop_env(pane, pane_id, reason):
+    """Run the guarded stop as the watched pane. Its starter may have exited."""
+    env = os.environ.copy()
+    env.pop('SESSION_CHAT_PANE_NAME', None)
+    env.pop('KNOWLEDGE_PANE_NAME', None)
+    env.update(SESSION_WORKSPACE_PANE_NAME=pane, TMUX_PANE=pane_id,
+               SESSION_WORKSPACE_STOP_REASON=reason)
+    return env
+
+
 def observe(ports, port, use_traffic, previous, elapsed, count_closed):
     """One connections sample: (clients, mode, active, bytes_in|None, closed).
     mode is "traffic", "connections" or None (unobservable, which counts as
@@ -305,6 +322,12 @@ def watch(args, ready_fd=None):
         elif previous.get('last_stop'):
             record['last_stop'] = previous['last_stop']
 
+    # Claim nothing on a pane that is not the one this watcher was started
+    # for: no option, no record (a newer watcher may own it), no readiness.
+    if pane_option(args.pane_id, MARKER_PROJECT) != args.project or pane_option(args.pane_id, MARKER_PANE) != args.pane:
+        print('idle-watch: pane %s is not pane %s of project %s; not armed' % (args.pane_id, args.pane, args.project),
+              file=sys.stderr)
+        return 1
     if tmux('set-option', '-p', '-t', args.pane_id, WATCH_OPTION, own) is None:
         record.update(state='not-armed', stop_reason='could not register the watcher on pane %s' % args.pane_id)
         with record_lock(state_path):
@@ -394,12 +417,11 @@ def watch(args, ready_fd=None):
         record.update(state='stopping', stop_reason=reason)
         if not publish(state_path, record, args.pane_id, int(own)):
             return 0
-        env = dict(os.environ, SESSION_WORKSPACE_STOP_REASON=reason)
         try:
             run = subprocess.run(
                 ['bash', str(HERE / 'workspace-stop.sh'), args.session, '--pane', args.pane,
                  '--confirmed', '--config', args.config, '--expect-pane-id', args.pane_id],
-                capture_output=True, text=True, env=env, timeout=300)
+                capture_output=True, text=True, env=stop_env(args.pane, args.pane_id, reason), timeout=300)
             rc, detail = run.returncode, (run.stderr or run.stdout).strip()
         except (OSError, subprocess.SubprocessError) as exc:
             rc, detail = 1, str(exc)

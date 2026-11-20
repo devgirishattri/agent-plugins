@@ -224,7 +224,7 @@ class DraftCases:
                    SESSION_CHAT_TARGET_MESSAGES_DIR=str(self.store), SESSION_CHAT_ALLOW_SHELL_TARGET="1", SESSION_CHAT_INCOMING_MODE="auto")
         socket = str(self.root / "socket")
         def tmux(*args):
-            return subprocess.check_output(["tmux", "-S", socket, *args], env=env, text=True).strip()
+            return subprocess.check_output(["tmux", "-f", "/dev/null", "-S", socket, *args], env=env, text=True).strip()
         try:
             tmux("new-session", "-d", "-s", "draft-test", "-x", "240", "-y", "30", "cat")
             sender = tmux("display-message", "-p", "-t", "draft-test", "#{pane_id}")

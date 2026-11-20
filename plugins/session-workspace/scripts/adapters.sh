@@ -322,6 +322,9 @@ _env_pin_mark() {
 #   ENV_HARNESS_MODE        audit/enforce when active, empty when inactive
 #   ENV_GUARDS_JSON         canonical guards JSON when schema-v3+ configured,
 #                           empty otherwise
+#   ENV_STATE_HOME          the launcher's resolved state home under peers
+#                           (hook and engine read one instances.json), empty
+#                           otherwise
 _env_build_map() {
   local i n
 
@@ -406,6 +409,10 @@ _env_build_map() {
   fi
   if [ -n "${ENV_GUARDS_JSON:-}" ]; then
     _env_set "SESSION_WORKSPACE_GUARDS_JSON" "$ENV_GUARDS_JSON"
+  fi
+  # Set last so no config value or alias can override it; never pinnable.
+  if [ -n "${ENV_STATE_HOME:-}" ]; then
+    _env_set "XDG_STATE_HOME" "$ENV_STATE_HOME"
   fi
 }
 
@@ -731,6 +738,10 @@ _env_prepare_inputs() {
   # lane must not fail closed every pane that is already running.
   ENV_SCOPE_JSON="$(printf '%s' "$PANE_PLAN" | jq -cS 'if .scope_identity != null then .scope_identity else empty end')"
   ENV_READ_PATHS_JSON="$(printf '%s' "$PANE_PLAN" | jq -cS 'if (.read_paths // [] | length) > 0 then .read_paths else empty end')"
+  ENV_STATE_HOME=""
+  if printf '%s' "$PLAN_JSON" | jq -e 'has("peers")' >/dev/null; then
+    ENV_STATE_HOME="$(sw_state_home)"
+  fi
   ENV_PANE_NAME="$pane_name"
   ENV_TMUX_PANE_ID="$tmux_pane_id"
   ENV_WORKSPACE_CONFIG="$CONFIG_PATH"
@@ -738,13 +749,13 @@ _env_prepare_inputs() {
   ENV_ROLE_NAME="$ROLE_NAME"
   ENV_PANE_CWD="$(printf '%s' "$PANE_PLAN" | jq -r '.cwd // ""')"
   ENV_HARNESS_MODE="$(printf '%s' "$CONFIG_JSON" | jq -r '
-    if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false)
+    if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and (.harness.enabled // false)
     then .harness.mode
     else ""
     end
   ')"
   ENV_GUARDS_JSON="$(printf '%s' "$CONFIG_JSON" | jq -cS '
-    if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) and (.harness | has("guards"))
+    if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and (.harness.enabled // false) and (.harness | has("guards"))
     then .harness.guards
     else empty
     end

@@ -41,7 +41,7 @@ Lead with the result. Add text only for errors or the follow-ups below.
      floor (`--probe` decides its cases), and whether this pane's identity matches the plan
    - `/session-workspace:harness-doctor` — read-only harness health (config, activation, hook
      registration, python3, live identity)
-   - `/session-workspace:workspace-orchestrator` — schema-v4/v5 reviewed Git
+   - `/session-workspace:workspace-orchestrator` — schema-v4/v5/v6 reviewed Git
      lifecycle (status/plan/dispatch/review/commit/push/deploy) across the
      configured executor/reviewer pairs. It runs only from the configured
      orchestrator pane.
@@ -66,10 +66,10 @@ Lead with the result. Add text only for errors or the follow-ups below.
      mode. Drift (a stale launcher mode, identity/config mismatch) fails
      closed in both modes. To recover, restart the pane's configured session via
      `/session-workspace:workspace-restart <session-id>`. Check `behavior.stop_scope` first. If it is `all`, a targeted restart stops all project-marked sessions and starts only the named session. A full start leaves on-demand workers down.
-   - Schema v3–v5 may add typed `harness.guards` for shared protected-file and
+   - Schema v3–v6 may add typed `harness.guards` for shared protected-file and
      child-chdir denials, generic lifecycle reminders, and bounded Stop
      health diagnostics. Guard changes require `workspace restart`.
-   - Schema v4 and v5 may add a closed `orchestration` block (`reviewed-git-v1`).
+   - Schema v4, v5 and v6 may add a closed `orchestration` block (`reviewed-git-v1`).
      It holds declarative targets. Each target binds a child cwd to its
      executor/reviewer pair, a named remote, and distinct work/release refs.
      It allows no commands, scripts, regexes, prompts, or gate bypasses.

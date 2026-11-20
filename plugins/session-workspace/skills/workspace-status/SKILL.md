@@ -32,6 +32,11 @@ runtime, configured model, cwd, foreground process, and health (`missing`,
 `dead`, `healthy`, or `unmanaged-occupant`). An unknown target fails with
 an error that lists the known session ids.
 
+Under schema 6 with `peers`, a worker's row in `--json` carries
+`worker: {name, role, checkout, owner, visible, running}`. Read these fields.
+Never parse pane names. `visible` comes from tmux while the pane runs. To find
+your own workers, select rows whose `worker.owner` is your pane name.
+
 Each pane also reports `running=yes|no`, and a pane with `idle_stop_minutes`
 shows its watcher and its last stop with the reason. A session with a browser
 pane gets one CDP endpoint health line, such as `browser: browser

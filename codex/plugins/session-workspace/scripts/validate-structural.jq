@@ -105,25 +105,25 @@ def harness_engine_vars: [
 [
   # ---- schema_version ----
   (.schema_version as $version |
-   if (has("schema_version") | not) or ([1, 2, 3, 4, 5] | index($version)) == null then
-     "schema_version must be 1, 2, 3, 4, or 5 (got: " + ((.schema_version // "missing") | tostring) + ")"
+   if (has("schema_version") | not) or ([1, 2, 3, 4, 5, 6] | index($version)) == null then
+     "schema_version must be 1, 2, 3, 4, 5, or 6 (got: " + ((.schema_version // "missing") | tostring) + ")"
    else empty end),
 
   # ---- structural: unknown/missing keys, one call per object shape ----
-  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) then
-     chk(.; (["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser", "harness"] + (if (.schema_version == 4 or .schema_version == 5) then ["orchestration"] else [] end) + (if .schema_version == 5 then ["environments", "browsers"] else [] end)); ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) then
+     chk(.; (["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser", "harness"] + (if (.schema_version == 4 or .schema_version == 5 or .schema_version == 6) then ["orchestration"] else [] end) + (if (.schema_version == 5 or .schema_version == 6) then ["environments", "browsers"] else [] end) + (if .schema_version == 6 then ["peers"] else [] end)); ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
    else
      chk(.; ["schema_version", "project", "runtimes", "roles", "stores", "env", "secrets", "sessions", "behavior", "browser"]; ["project", "runtimes", "roles", "stores", "sessions"]; "top-level")
    end),
-  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and has("harness") then
-     chk(.harness; (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled"]; "harness")
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and has("harness") then
+     chk(.harness; (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled"]; "harness")
    else empty end),
-  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) == true then
-     chk(.harness; (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled", "mode", "profile", "roles", "gates"]; "harness"),
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and (.harness.enabled // false) == true then
+     chk(.harness; (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) then ["enabled", "mode", "profile", "roles", "gates", "guards"] else ["enabled", "mode", "profile", "roles", "gates"] end); ["enabled", "mode", "profile", "roles", "gates"]; "harness"),
      chk(.harness.roles // {}; ["orchestrator", "executor", "reviewer"]; ["orchestrator", "executor", "reviewer"]; "harness.roles"),
      chk(.harness.gates // {}; ["plan_review_ttl_minutes", "audit_ttl_minutes"]; ["plan_review_ttl_minutes", "audit_ttl_minutes"]; "harness.gates")
    else empty end),
-  (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) == true and (.harness | has("guards")) then
+  (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and (.harness.enabled // false) == true and (.harness | has("guards")) then
      chk(.harness.guards; ["protected_files", "orchestrator", "lifecycle", "workspace_health"]; []; "harness.guards"),
      (if (.harness.guards | has("protected_files")) then
         chk(.harness.guards.protected_files; ["profile", "extra_basenames"]; ["profile"]; "harness.guards.protected_files")
@@ -141,7 +141,7 @@ def harness_engine_vars: [
          else empty end)
       else empty end)
    else empty end),
-  (if (.schema_version == 4 or .schema_version == 5) and has("orchestration") then
+  (if (.schema_version == 4 or .schema_version == 5 or .schema_version == 6) and has("orchestration") then
      chk(.orchestration; ["enabled", "profile", "targets"]; ["enabled"]; "orchestration"),
      (if (.orchestration | type) == "object" and (.orchestration.enabled // false) == true then
         chk(.orchestration; ["enabled", "profile", "targets"]; ["enabled", "profile", "targets"]; "orchestration"),
@@ -154,6 +154,39 @@ def harness_engine_vars: [
          else empty end)
       else empty end)
    else empty end),
+  # ---- schema-v6 peer orchestrators. Shape only; workspace-v5.py checks the
+  #      sessions, panes and environments against the expanded config. ----
+  (if .schema_version == 6 and has("peers") then
+     chk(.peers; ["session", "limits"]; ["session"]; "peers"),
+     (if (.peers | type) == "object" then
+        .peers as $peers |
+        (if ($peers | has("session")) and (($peers.session | type) != "string" or ($peers.session | length) == 0) then
+           "peers.session must be a non-empty string"
+         else empty end),
+        (if $peers | has("limits") then
+           chk($peers.limits; ["orchestrators", "workers_per_orchestrator"]; []; "peers.limits"),
+           (if ($peers.limits | type) == "object" then
+              ($peers.limits | to_entries[] | select(.key == "orchestrators" or .key == "workers_per_orchestrator")
+               | select((.value | type) != "number" or (.value | floor) != .value or .value < 1)
+               | "peers.limits." + .key + " must be an integer >= 1")
+            else empty end)
+         else empty end),
+        (if (.harness.enabled // false) != true then
+           "peers requires harness.enabled=true"
+         else empty end),
+        (if ((.environments // null) | type) != "array" or (.environments | length) == 0 then
+           "peers requires a non-empty environments array"
+         else empty end),
+        (if ($peers.session | type) == "string" then
+           ([(.sessions // [])[] | select(type == "object" and (has("instance") | not)) | .id
+             | select(type == "string" and startswith($peers.session + "-") and (.[($peers.session | length) + 1:] | test("\\A[0-9]+\\z")))]
+            | .[] | "session " + . + ": ids of the form \"" + $peers.session + "-<number>\" are reserved for peer orchestrator sessions")
+         else empty end),
+        ((.env.groups // {}) | to_entries[] | select((.value | type) == "object" and ((.value.values // {}) | type) == "object" and ((.value.values // {}) | has("XDG_STATE_HOME")))
+         | "env.groups." + .key + ".values must not set XDG_STATE_HOME: the engine pins it when peers is configured")
+      else empty end)
+   else empty end),
+
   chk(.project // {}; ["id", "display_name", "root"]; ["id", "root"]; "project"),
   chk(.stores // {}; ["base", "pin", "overrides", "memory"]; ["pin"]; "stores"),
   chk(.stores.memory // {}; ["mode", "root", "shard"]; []; "stores.memory"),
@@ -189,12 +222,12 @@ def harness_engine_vars: [
     chk($e.value; ["values", "pin_to_session"]; ["values"]; "env.groups." + $e.key)),
 
   (. as $cfg | (.sessions // []) | to_entries[] | . as $s | ($s.value.id // ("sessions[" + ($s.key | tostring) + "]")) as $slabel | (
-    chk($s.value; ["id", "name", "window_index", "layout", "retain_layout", "panes"]; ["id", "name", "panes"]; "sessions." + $slabel),
+    chk($s.value; (["id", "name", "window_index", "layout", "retain_layout", "panes"] + (if $cfg.schema_version == 6 then ["instance"] else [] end)); ["id", "name", "panes"]; "sessions." + $slabel),
     chk($s.value.layout // {}; ["kind", "name", "only_when_fresh", "mask_after_split_hook", "nodes", "pane_order"]; ($s.value.layout | if . then ["kind"] else [] end); "sessions." + $slabel + ".layout"),
     (($s.value.layout.nodes // []) | to_entries[] | . as $n |
       chk($n.value; ["id", "from", "dir", "percent"]; ["id"]; "sessions." + $slabel + ".layout.nodes[" + ($n.key | tostring) + "]")),
     (($s.value.panes // []) | to_entries[] | . as $p | ($p.value.name // ("panes[" + ($p.key | tostring) + "]")) as $plabel | (
-      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths", "idle_stop_minutes", "idle_activity", "launch"] + (if $cfg.schema_version == 5 then ["runtime"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
+      chk($p.value; (["name", "role", "cwd", "optional", "command", "port", "agent", "read_paths", "idle_stop_minutes", "idle_activity", "launch"] + (if ($cfg.schema_version == 5 or $cfg.schema_version == 6) then ["runtime"] else [] end) + (if $cfg.schema_version == 6 then ["worker"] else [] end)); ["name", "role"]; "sessions." + $slabel + ".panes." + $plabel),
       chk($p.value.agent // {}; ["model", "effort", "profile", "permission_mode"]; []; "sessions." + $slabel + ".panes." + $plabel + ".agent")
     ))
   )),
@@ -202,7 +235,7 @@ def harness_engine_vars: [
   # ---- schema-v2 opt-in harness contract. The executable policy owns a
   #      non-configurable safety floor; config only selects the typed profile,
   #      mode, semantic role names, and gate freshness windows. ----
-  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and has("harness") then
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and has("harness") then
      (if (.harness.enabled | type) != "boolean" then
         "harness.enabled must be a boolean"
       else empty end),
@@ -210,7 +243,7 @@ def harness_engine_vars: [
         "harness.enabled=false must not include mode, profile, roles, gates, or guards"
       else empty end)
    else empty end),
-  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) == true then
+  (if (.schema_version == 2 or .schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and (.harness.enabled // false) == true then
      .harness as $h |
      (if (["audit", "enforce"] | index($h.mode)) == null then
         "harness.mode must be one of [\"audit\",\"enforce\"]"
@@ -233,11 +266,13 @@ def harness_engine_vars: [
          elif (. as $cfg | any((.sessions // [])[] | (.panes // [])[]; .role == $role_name and pane_runtime($cfg; .) == "shell")) then
            "harness role \"" + $role_name + "\" must not use the built-in shell runtime"
          else empty end),
-       ([.sessions[] | .panes[]] as $panes |
+       # Under peers the orchestrator, executor and reviewer counts and pairings
+       # are checked in workspace-v5.py against the whole expanded fleet.
+       (if (.schema_version == 6 and has("peers")) then empty else ([.sessions[] | .panes[]] as $panes |
          ([ $panes[] | select(.role == $hr.orchestrator) ] | length) as $orchestrators |
          ([ $panes[] | select(.role == $hr.executor) ] | length) as $executors |
          ([ $panes[] | select(.role == $hr.reviewer) ] | length) as $reviewers |
-         (if (if .schema_version == 5 and ((.environments // []) | length) > 0 then
+         (if (if (.schema_version == 5 or .schema_version == 6) and ((.environments // []) | length) > 0 then
             ([.environments[] | select(has("orchestrator"))] | length) as $bound |
             ($orchestrators < $bound or $orchestrators > ($bound + 1))
           else $orchestrators != 1 end) then
@@ -267,7 +302,7 @@ def harness_engine_vars: [
                "harness reviewer pane " + ($reviewer.name // "?") + " must have exactly one executor pane with cwd \"" + $reviewer.cwd + "\" (got: " + ($matches | tostring) + ")"
              else empty end
            end)
-       )
+        ) end)
      ),
      (($h.gates.plan_review_ttl_minutes // null) as $ttl |
        if ($ttl | type) != "number" or ($ttl | floor) != $ttl or $ttl < 1 or $ttl > 1440 then
@@ -281,7 +316,7 @@ def harness_engine_vars: [
 
   # ---- schema-v3 additive guard packs. These are closed, typed, and may
   #      only add denials or warnings; they never accept scripts/regexes. ----
-  (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and (.harness.enabled // false) == true and (.harness | has("guards")) then
+  (if (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and (.harness.enabled // false) == true and (.harness | has("guards")) then
      (.harness.guards // {}) as $g |
      (if ($g | type) != "object" then
         "harness.guards must be an object"
@@ -335,14 +370,14 @@ def harness_engine_vars: [
               else empty end))
          else empty end)
       else empty end)
-   elif (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5)) and has("harness") and (.harness | has("guards")) and (.harness.enabled // false) != true then
+   elif (.schema_version == 3 or (.schema_version == 4 or .schema_version == 5 or .schema_version == 6)) and has("harness") and (.harness | has("guards")) and (.harness.enabled // false) != true then
      "harness.guards requires harness.enabled=true"
    else empty end),
 
   # ---- schema-v4 reviewed orchestration. Configuration names only literal
   #      coordinates; the workspace-orchestrator skill owns the immutable
   #      review, confirmation, executor-locus, and Git safety gates. ----
-  (if (.schema_version == 4 or .schema_version == 5) and has("orchestration") and (.orchestration | type) == "object" then
+  (if (.schema_version == 4 or .schema_version == 5 or .schema_version == 6) and has("orchestration") and (.orchestration | type) == "object" then
      .orchestration as $o |
      (if ($o.enabled | type) != "boolean" then
         "orchestration.enabled must be a boolean"
@@ -390,7 +425,8 @@ def harness_engine_vars: [
                 "orchestration target " + (($t.id // "?") | tostring) + " deploy.align_work_after_release must be a boolean"
               else empty end)
            else empty end),
-          (if (.harness | type) == "object" and (.harness.roles | type) == "object" then
+          (if (.schema_version == 6 and has("peers")) then empty
+           elif (.harness | type) == "object" and (.harness.roles | type) == "object" then
              (.harness.roles as $hr |
               [.sessions[] | .panes[]] as $panes |
               ([ $panes[] | select(.role == $hr.executor and (.cwd // null) == $t.cwd) ] | length) as $executors |
@@ -465,8 +501,8 @@ def harness_engine_vars: [
    | if ($p.launch | type) != "string" or (["always", "on_demand"] | index($p.launch)) == null then
        $l + " must be \"always\" or \"on_demand\""
      elif $p.launch == "always" then empty
-     elif (([2, 3, 4, 5] | index($cfg.schema_version)) == null) or (($cfg.harness.enabled // false) != true) then
-       $l + " \"on_demand\" needs schema_version 2-5 with harness.enabled true: the orchestrator starts on-demand workers"
+     elif (([2, 3, 4, 5, 6] | index($cfg.schema_version)) == null) or (($cfg.harness.enabled // false) != true) then
+       $l + " \"on_demand\" needs schema_version 2-6 with harness.enabled true: the orchestrator starts on-demand workers"
      elif ([$cfg.harness.roles.executor, $cfg.harness.roles.reviewer] | index($p.role)) == null then
        $l + " \"on_demand\" applies only to the harness executor or reviewer role, not role \"" + (($p.role // "") | tostring) + "\""
      elif ($s.layout.kind // "standard") == "split_tree" then

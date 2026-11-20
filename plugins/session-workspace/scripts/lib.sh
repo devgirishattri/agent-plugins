@@ -126,11 +126,145 @@ ensure_jq() {
 }
 
 ensure_tmux() {
-  if ! command -v tmux >/dev/null 2>&1; then
+  # `type -P`, not `command -v`: the tmux() function below would satisfy it.
+  if [ -z "$(type -P tmux 2>/dev/null)" ]; then
     echo "ERROR: tmux is not installed." >&2
     echo "Install with: brew install tmux (macOS) or apt install tmux (Ubuntu)" >&2
     exit 1
   fi
+}
+
+# --- one tmux server per operation -----------------------------------------
+# An engine verb chooses its tmux server once and every tmux call it or its
+# children make (nested verbs, the idle watcher, the Python helpers) goes to
+# that server's socket with `-S`. A server that disappears mid-operation is an
+# error (`-N`: the client never starts a replacement), never a different server.
+#
+# The choice, made at the outermost verb and exported to its children:
+#   SESSION_WORKSPACE_TMUX_SOCKET set  -> that socket (a nested verb, or a test
+#                                         fixture); absolute, and equal to the
+#                                         $TMUX socket when both are set
+#   inside tmux ($TMUX)                -> the socket field of $TMUX
+#   otherwise                          -> ${TMUX_TMPDIR:-/tmp}/tmux-UID/default
+# tmux uses /tmp/tmux-UID/default when TMUX_TMPDIR names a missing directory,
+# so that is refused, before the first tmux call.
+#
+# The guarantee is a fixed socket path and an error on loss of its server. A
+# different server started later at the same path is not detected.
+
+# Kept for callers that predate the binding: it now binds.
+sw_require_usable_tmux_tmpdir() { sw_tmux_bind; }
+
+sw_tmux_canon() {
+  local p="$1" d
+  d="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || { printf '%s\n' "$p"; return 0; }
+  printf '%s/%s\n' "$d" "$(basename "$p")"
+}
+
+# sw_tmux_resolve — set and export SESSION_WORKSPACE_TMUX_SOCKET; return 1
+# (with a message) when no server can be chosen safely.
+sw_tmux_resolve() {
+  local inside="" sock base
+  if [ -n "${TMUX_TMPDIR:-}" ] && [ ! -d "$TMUX_TMPDIR" ]; then
+    echo "ERROR: TMUX_TMPDIR is \"$TMUX_TMPDIR\", which is not an existing directory; tmux would fall back to its default server. Nothing was changed." >&2
+    return 1
+  fi
+  [ -n "${TMUX:-}" ] && inside="${TMUX%%,*}"
+  if [ -n "${SESSION_WORKSPACE_TMUX_SOCKET:-}" ]; then
+    sock="$SESSION_WORKSPACE_TMUX_SOCKET"
+    case "$sock" in
+      /*) ;;
+      *) echo "ERROR: SESSION_WORKSPACE_TMUX_SOCKET must be an absolute path, not \"$sock\". Nothing was changed." >&2; return 1 ;;
+    esac
+    if [ -n "$inside" ] && [ "$(sw_tmux_canon "$inside")" != "$(sw_tmux_canon "$sock")" ]; then
+      echo "ERROR: SESSION_WORKSPACE_TMUX_SOCKET ($sock) names a different tmux server from the one this pane runs in ($inside). Nothing was changed." >&2
+      return 1
+    fi
+  elif [ -n "$inside" ]; then
+    sock="$inside"
+  else
+    base="${TMUX_TMPDIR:-/tmp}"
+    base="${base%/}"
+    sock="${base:-}/tmux-$(id -u)/default"
+  fi
+  export SESSION_WORKSPACE_TMUX_SOCKET="$sock"
+}
+
+# sw_tmux_bind [--may-start] — choose the server for this verb (see above).
+# Only --may-start (workspace start) may create a server, only when none runs
+# at bind time, only with `new-session`, and only once: SW_TMUX_BOOTSTRAP names
+# a one-use file (it must survive command substitutions and grouped children,
+# where a variable change would be lost). The first new-session that succeeds
+# removes it; every later call, and every call when a server was already
+# running, carries -N. So a server that goes away mid-start is an error too.
+SW_TMUX_BOOTSTRAP=""
+# sw_tmux_server_state — prints live, absent (tmux itself reports that nothing
+# listens on the socket) or unknown (any other failure, which proves nothing).
+# A server that is exiting answers "lost server" for a moment, so an unknown
+# answer is asked again (up to 1s) before it counts.
+sw_tmux_server_state() {
+  local err i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if err="$(env -u SESSION_WORKSPACE_TMUX_SOCKET tmux -N -S "$SESSION_WORKSPACE_TMUX_SOCKET" list-sessions 2>&1 >/dev/null)"; then
+      echo live
+      return 0
+    fi
+    case "$err" in
+      "no server running on "*|*"(No such file or directory)"*|*"(Connection refused)"*) echo absent; return 0 ;;
+    esac
+    sleep 0.1
+  done
+  echo unknown
+}
+sw_tmux_bootstrap_done() {
+  [ -n "$SW_TMUX_BOOTSTRAP" ] && rm -f "$SW_TMUX_BOOTSTRAP"
+  return 0
+}
+sw_tmux_bind() {
+  sw_tmux_resolve || exit 1
+  if [ "${1:-}" = "--may-start" ]; then
+    # `-S` skips tmux's own creation and check of its private directory.
+    local dir
+    dir="$(dirname "$SESSION_WORKSPACE_TMUX_SOCKET")"
+    if [ ! -d "$dir" ]; then
+      (umask 077 && mkdir -p "$dir") || { echo "ERROR: cannot create the tmux socket directory $dir" >&2; exit 1; }
+    fi
+    if [ ! -O "$dir" ]; then
+      echo "ERROR: the tmux socket directory $dir is not owned by you. Nothing was changed." >&2
+      exit 1
+    fi
+    local state
+    state="$(sw_tmux_server_state)"
+    if [ "$state" = unknown ]; then
+      echo "ERROR: cannot tell whether a tmux server runs on $SESSION_WORKSPACE_TMUX_SOCKET (tmux list-sessions failed for another reason). Nothing was changed." >&2
+      exit 1
+    fi
+    if [ "$state" = absent ]; then
+      SW_TMUX_BOOTSTRAP="$(mktemp "${TMPDIR:-/tmp}/sw-tmux-bootstrap.XXXXXX")" || exit 1
+      # Removed on exit too (the project lock's trap, set later, also removes it).
+      trap 'sw_tmux_bootstrap_done' EXIT
+    fi
+  fi
+}
+
+# tmux — every engine tmux call, pinned to the bound server. Binds on first
+# use for a verb that did not bind explicitly. The client runs without
+# SESSION_WORKSPACE_TMUX_SOCKET, so a server it starts never passes the
+# binding on to the panes of the user's sessions.
+tmux() {
+  if [ -z "${SESSION_WORKSPACE_TMUX_SOCKET:-}" ]; then
+    sw_tmux_resolve || return 1
+  fi
+  if [ -n "$SW_TMUX_BOOTSTRAP" ] && [ -e "$SW_TMUX_BOOTSTRAP" ]; then
+    case "${1:-}" in
+      new-session|new)
+        env -u SESSION_WORKSPACE_TMUX_SOCKET tmux -S "$SESSION_WORKSPACE_TMUX_SOCKET" "$@" || return $?
+        sw_tmux_bootstrap_done
+        return 0
+        ;;
+    esac
+  fi
+  env -u SESSION_WORKSPACE_TMUX_SOCKET tmux -N -S "$SESSION_WORKSPACE_TMUX_SOCKET" "$@"
 }
 
 # Persistent Chrome profiles are derived from the validated project id, never

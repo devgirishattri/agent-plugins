@@ -32,6 +32,16 @@ Real flags:
 - `--no-attach`: suppress post-start attach behavior regardless of
   `behavior.attach`.
 - `--adopt --confirmed`: allow occupied unmanaged panes to be claimed.
+- `SESSION-N [--no-attach]`: schema 6 with `peers`, the user only. Starts the
+  orchestrator copy `SESSION-N` (N 2-999) of the declared orchestrator session
+  without a config edit. `start` and `start all` never start copies. An
+  orchestrator pane may not run it (`orchestrator.peer_lifecycle`).
+- `--checkout ID --role executor|reviewer [--label L] [--show] [--owner PANE]`:
+  schema 6 with `peers`. Starts a worker owned by the calling orchestrator on
+  checkout `ID` (a declared environment id). `L` matches `^[a-z0-9][a-z0-9-]{0,23}$`.
+  The worker starts hidden unless `--show`. `--owner` is for the user and is
+  refused for an orchestrator. No positional target. Other configs give
+  `ERROR: --checkout needs a schema-6 config with peers`.
 - `SESSION --pane NAME` (repeatable): start only the named service panes
   (role `service`, such as the debug browser or a dev server) of one session,
   or executor/reviewer panes marked `"launch": "on_demand"`.
@@ -49,6 +59,17 @@ screen without an input line, restarts the window. `[not ready]` means the
 agent did not keep its input line in time, or shows a choice such as a folder
 trust question. The pane is left running and the start exits non-zero. Relay
 it, and do not send the worker a message until it is ready.
+
+A peer worker start prints `worker: NAME (checkout C, role R, owner O, hidden)`,
+then `[started]` and `[ready]`, exit 0. The same owner starting it again gives
+`[kept]`, exit 0. `[held] ... — owner X` (exit 3) means another owner holds that
+name, the checkout allows one executor (`executors: "one"`) and one runs, or the
+name has unfinished work from another owner. `[limit]` (exit 1) means
+`peers.limits.orchestrators` or `peers.limits.workers_per_orchestrator` is
+reached. Relay the line. Do not retry with `--owner` or `--force`. See
+`../session-workspace/references/environments.md` "Peer orchestrators (schema 6)".
+`SESSION_WORKSPACE_HIDDEN_SIZE` (`COLSxROWS`, default `160x48`) sizes the hidden
+worker window.
 
 Safety gates:
 
