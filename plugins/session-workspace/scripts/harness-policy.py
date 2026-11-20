@@ -3308,10 +3308,16 @@ def workspace_show_hide(ctx: Context, script: str, args: List[str]) -> None:
     peers_config_flag(ctx, script, found)
 
 
-# Variables that carry or redirect a pane's engine identity. Setting or
-# unsetting one in a command that runs a workspace route would let a pane act
-# as another owner (identity.override).
-IDENTITY_NAME_RE = re.compile(r"\A(?:SESSION_WORKSPACE_[A-Za-z0-9_]*|SESSION_CHAT_PANE_NAME|KNOWLEDGE_PANE_NAME|TMUX|TMUX_PANE|XDG_STATE_HOME|HOME)\Z")
+# Variables that carry or redirect a pane's engine identity, or change which
+# programs and startup code the engine runs (and so what it reads as the
+# caller's identity: a tmux of the caller's choosing on PATH, a BASH_ENV
+# script, a preloaded library). Setting or unsetting one in a command that
+# runs a workspace route would let a pane act as another owner
+# (identity.override).
+IDENTITY_NAME_RE = re.compile(
+    r"\A(?:SESSION_WORKSPACE_[A-Za-z0-9_]*|SESSION_CHAT_PANE_NAME|KNOWLEDGE_PANE_NAME|TMUX|TMUX_PANE|TMUX_TMPDIR"
+    r"|XDG_STATE_HOME|HOME|PATH|BASH_ENV|ENV|SHELLOPTS|BASHOPTS|CDPATH|IFS|GLOBIGNORE|BASH_FUNC_[A-Za-z0-9_%]*"
+    r"|LD_[A-Za-z0-9_]*|DYLD_[A-Za-z0-9_]*|PYTHON[A-Za-z0-9_]*|PERL5LIB|PERL5OPT|PERLLIB|RUBYOPT|RUBYLIB|NODE_OPTIONS|NODE_PATH|JQ_LIBRARY_PATH)\Z")
 ENV_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local", "unset"})
 
 
@@ -3394,6 +3400,45 @@ TMUX_READ_COMMANDS = frozenset({"list-panes", "lsp", "list-windows", "lsw", "lis
 TMUX_VALUE_OPTIONS = "LSfcT"
 TMUX_FLAG_OPTIONS = frozenset("2uvNlCD")
 TMUX_CHAIN_RE = re.compile(r"\\;|['\"];['\"]|\$['\"(]|`")
+TMUX_FORMAT_MODIFIER_RE = re.compile(r"#\{[^}]*:")
+# Programs that run another program named in their arguments: a `tmux` word
+# anywhere in such a segment is tmux outside the read-only grammar.
+TMUX_INDIRECT_RUNNERS = frozenset({"eval", "xargs", "find", "parallel", "watch", "script", "expect", "su", "sudo", "doas",
+                                   "ssh", "at", "batch", "awk", "gawk", "mawk", "nawk", "sed", "gsed", "busybox", "make",
+                                   "gmake", "vi", "vim", "nvim", "ex", "emacs", "tclsh", "wish", "expect"})
+# Shells and interpreters run a tmux word only as inline code (sh -c, bash -lc,
+# python3 -c, perl -e, node --eval, php -r, osascript -e, ...). Their other
+# arguments are a script file and its data, such as a message that mentions
+# tmux. A script file, or code that assembles the name at run time, is not
+# visible to any command classifier; see the peers limits in the reference.
+TMUX_SHELL_RE = re.compile(r"\A(?:sh|bash|zsh|dash|ksh|mksh|fish|csh|tcsh)\Z")
+TMUX_INTERPRETER_RE = re.compile(r"\A(?:python|perl|ruby|node|nodejs|php|lua|luajit|osascript|Rscript|pwsh|deno|bun)[0-9.]*\Z")
+TMUX_INLINE_CODE_OPTIONS = frozenset({"-c", "-e", "-E", "-r", "-p", "--eval", "--print", "--command", "-Command"})
+TMUX_WORD_RE = re.compile(r"(?<![A-Za-z0-9_.-])tmux(?![A-Za-z0-9_.-])")
+
+
+def tmux_indirect(argv: List[str]) -> bool:
+    """True when ARGV runs a tmux word through another program."""
+    if not argv:
+        return False
+    name = Path(argv[0]).name
+    words = argv[1:]
+    if name in TMUX_INDIRECT_RUNNERS:
+        return any(TMUX_WORD_RE.search(word) for word in words)
+    if name == "git":
+        # git -c alias.x='!tmux ...', core.pager, core.editor, ... run a shell.
+        values = [words[i + 1] for i, word in enumerate(words[:-1]) if word == "-c"]
+        values += [word[2:] for word in words if word.startswith("-c") and len(word) > 2]
+        return any(TMUX_WORD_RE.search(value) for value in values)
+    shell = TMUX_SHELL_RE.fullmatch(name) is not None
+    if shell or TMUX_INTERPRETER_RE.fullmatch(name):
+        for index, word in enumerate(words):
+            inline = word in TMUX_INLINE_CODE_OPTIONS or (shell and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word) is not None)
+            if inline:
+                return any(TMUX_WORD_RE.search(rest) for rest in words[index + 1:])
+            if not word.startswith("-"):
+                return False  # a script file and its arguments
+    return False
 
 
 def tmux_read_only(argv: List[str]) -> bool:
@@ -3404,6 +3449,11 @@ def tmux_read_only(argv: List[str]) -> bool:
     # format `#(cmd)` runs cmd through the server; shell spellings (`$'..'`,
     # `$(..)`, backticks, backslashes) can build either. Read verbs need none.
     if any(char in word for word in argv[1:] for char in (";", "$", "\\", "`")) or any("#(" in word for word in argv[1:]):
+        return False
+    # A format modifier (#{E:..}, #{T:..}, #{S:..}, #{s/../..:..}, ...) can
+    # expand text a format did not spell out, such as an option holding #(..).
+    # Read verbs need plain #{name} and #{?cond,a,b} only.
+    if any(TMUX_FORMAT_MODIFIER_RE.search(word) for word in argv[1:]):
         return False
     index = 1
     while index < len(argv) and argv[index].startswith("-") and len(argv[index]) > 1:
@@ -3422,6 +3472,10 @@ def tmux_read_only(argv: List[str]) -> bool:
 def peers_tmux(ctx: Context, command: str, tokens: List[str]) -> None:
     """Raw tmux in a peers orchestrator: read verbs only, never a `\\;` chain
     (the shell hands tmux a second command that no segment shows)."""
+    for part in segments(tokens):
+        argv = unwrap_prefixes(part)
+        if tmux_indirect(argv):
+            raise PolicyFailure("orchestrator.tmux", "tmux run through %s is outside the read-only tmux grammar" % Path(argv[0]).name)
     tmux_segments = [part for part in segments(tokens) if command_basename(part) == "tmux"]
     if not tmux_segments:
         return
@@ -3435,16 +3489,51 @@ def peers_tmux(ctx: Context, command: str, tokens: List[str]) -> None:
 def peers_state_write(ctx: Context, tokens: List[str]) -> None:
     """A mutating segment that names the engine state directory, or runs with
     its cwd inside it, is refused. Reads stay allowed."""
-    if ctx.state_dir is None:
+    roots = tuple(root for root in (ctx.state_dir, peers_task_ledger(ctx)) if root is not None)
+    if not roots:
         return
-    roots = (ctx.state_dir,)
     for segment, cwd, after in walk_segments(tokens, ctx.pane_cwd):
         if not segment_mutates(segment):
             continue
         exec_cwd = segment_exec_cwd(segment, cwd)
         if references_child(segment, ctx, cwd, roots) or references_child(unwrap_prefixes(segment), ctx, exec_cwd, roots) \
-                or within(exec_cwd, ctx.state_dir):
-            raise PolicyFailure("orchestrator.state_write", "the engine state directory is written only by the engine")
+                or any(within(exec_cwd, root) for root in roots) \
+                or references_ancestor(segment, ctx, cwd, roots) or references_ancestor(unwrap_prefixes(segment), ctx, exec_cwd, roots):
+            raise PolicyFailure("orchestrator.state_write",
+                                "the engine state directory and the scheduler task ledger are written only by the engine and the scheduler helpers")
+
+
+def references_ancestor(segment: List[str], ctx: Context, cwd: Optional[Path], roots: tuple) -> bool:
+    """True when a path in SEGMENT is a directory above a protected root (so
+    removing or moving it takes the root along), below the project root and
+    the home directory: for the ledger .tmp and .tmp/scheduler, for the state
+    directory the state home."""
+    base = cwd if cwd is not None else ctx.project_root
+    floors = [canonical(ctx.project_root), canonical(Path.home())]
+    # Bare names (`rm -rf scheduler` from inside .tmp) count as paths too.
+    above = {parent for root in roots for parent in root.parents
+             if not any(within(floor, parent) for floor in floors)}
+    rel = tuple(str(parent.relative_to(base)) for parent in above if within(parent, base) and parent != base)
+    try:
+        wrapped = parse_wrappers(segment)
+        paths = [candidate_path(value, base, rel) for value in wrapped.values]
+        paths.extend(path for _, path, _ in argv_paths(wrapped.argv, base, rel))
+    except PolicyFailure:
+        return True
+    for path in paths:
+        if path is None:
+            continue
+        for root in roots:
+            if path != root and within(root, path) and not any(within(floor, path) for floor in floors):
+                return True
+    return False
+
+
+def peers_task_ledger(ctx: Context) -> Optional[Path]:
+    """The scheduler's task files: a task's assigner is its owner, so under
+    peers only the scheduler helpers write them, never an orchestrator."""
+    root = getattr(ctx, "scheduler_root", None)
+    return None if root is None else root / "tasks"
 
 
 def workspace_read(ctx: Context, script: str, args: List[str]) -> None:
@@ -5978,6 +6067,9 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
                 raise PolicyFailure("orchestrator.protected_file", "orchestrator cannot edit protected credential/lockfile: %s" % value)
         if ctx.peers and ctx.semantic_role == "orchestrator" and ctx.state_dir is not None and within(path, ctx.state_dir):
             raise PolicyFailure("orchestrator.state_write", "the engine state directory is written only by the engine: %s" % value)
+        ledger = peers_task_ledger(ctx) if ctx.peers and ctx.semantic_role == "orchestrator" else None
+        if ledger is not None and within(path, ledger):
+            raise PolicyFailure("orchestrator.state_write", "the scheduler task ledger is written only by the scheduler helpers: %s" % value)
         if ctx.semantic_role == "executor" or ctx.confined_orchestrator:
             if not within(path, ctx.pane_cwd):
                 raise PolicyFailure("executor.containment", "executor edit escapes its configured child cwd: %s" % value)

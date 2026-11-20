@@ -193,18 +193,18 @@ sw_tmux_teardown_one() {
   "$SW_REAL_TMUX" -f /dev/null -S "$sock" kill-server >/dev/null 2>&1
   # Only tmux's own "nothing listens here" confirms the stop; any other
   # failure proves nothing and keeps the directory.
-  local i err
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    if err="$("$SW_REAL_TMUX" -f /dev/null -S "$sock" list-sessions 2>&1 >/dev/null)"; then
-      sleep 0.1
-      continue
+  # A server takes a moment to exit (on Linux a client in that moment sees
+  # "lost server"); only tmux's own "no server" ends the wait.
+  local i err=""
+  for i in $(seq 1 50); do
+    if ! err="$("$SW_REAL_TMUX" -f /dev/null -S "$sock" list-sessions 2>&1 >/dev/null)"; then
+      case "$err" in
+        "no server running on "*|*"(No such file or directory)"*|*"(Connection refused)"*) return 0 ;;
+      esac
     fi
-    case "$err" in
-      "no server running on "*|*"(No such file or directory)"*|*"(Connection refused)"*) return 0 ;;
-    esac
-    break
+    sleep 0.1
   done
-  echo "tmux teardown: could not confirm the server on $sock stopped; keeping $SW_SOCKROOT" >&2
+  echo "tmux teardown: could not confirm the server on $sock stopped (tmux said: ${err:-nothing}); keeping $SW_SOCKROOT" >&2
   SW_TEARDOWN_FAILED=1
   return 1
 }

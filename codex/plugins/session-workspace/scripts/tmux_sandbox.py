@@ -140,8 +140,10 @@ class Sandbox:
 
     def state(self):
         """'running', 'absent' (tmux itself says no server listens on this
-        socket) or 'unknown' (any other failure, which proves nothing)."""
+        socket) or 'unknown' (any other failure, which proves nothing; for
+        example "lost server" from a server that is still shutting down)."""
         r = self.tmux('list-sessions')
+        self.last_error = (r.stderr or '').strip()
         if r.returncode == 0:
             return 'running'
         if r.returncode == 1 and any(m in (r.stderr or '') for m in self.ABSENT):
@@ -159,14 +161,14 @@ class Sandbox:
         if not self.owns(self.socket):
             return False
         self.tmux('kill-server')
-        for _ in range(40):
-            current = self.state()
-            if current == 'absent':
+        # A server takes a moment to exit (on Linux a client in that moment
+        # sees "lost server"); only tmux's own "no server" ends the wait.
+        for _ in range(100):
+            if self.state() == 'absent':
                 return True
-            if current == 'unknown':
-                break
             time.sleep(0.05)
-        raise RuntimeError('tmux_sandbox: could not confirm the server on %s stopped; %s kept' % (self.socket, self.root))
+        raise RuntimeError('tmux_sandbox: could not confirm the server on %s stopped (tmux said: %s); %s kept'
+                           % (self.socket, self.last_error or 'nothing', self.root))
 
     def teardown(self):
         """Kill the server, then remove the directory, in that order. A socket

@@ -200,16 +200,21 @@ sw_tmux_resolve() {
 SW_TMUX_BOOTSTRAP=""
 # sw_tmux_server_state — prints live, absent (tmux itself reports that nothing
 # listens on the socket) or unknown (any other failure, which proves nothing).
+# A server that is exiting answers "lost server" for a moment, so an unknown
+# answer is asked again (up to 1s) before it counts.
 sw_tmux_server_state() {
-  local err
-  if err="$(env -u SESSION_WORKSPACE_TMUX_SOCKET tmux -N -S "$SESSION_WORKSPACE_TMUX_SOCKET" list-sessions 2>&1 >/dev/null)"; then
-    echo live
-    return 0
-  fi
-  case "$err" in
-    "no server running on "*|*"(No such file or directory)"*|*"(Connection refused)"*) echo absent ;;
-    *) echo unknown ;;
-  esac
+  local err i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if err="$(env -u SESSION_WORKSPACE_TMUX_SOCKET tmux -N -S "$SESSION_WORKSPACE_TMUX_SOCKET" list-sessions 2>&1 >/dev/null)"; then
+      echo live
+      return 0
+    fi
+    case "$err" in
+      "no server running on "*|*"(No such file or directory)"*|*"(Connection refused)"*) echo absent; return 0 ;;
+    esac
+    sleep 0.1
+  done
+  echo unknown
 }
 sw_tmux_bootstrap_done() {
   [ -n "$SW_TMUX_BOOTSTRAP" ] && rm -f "$SW_TMUX_BOOTSTRAP"

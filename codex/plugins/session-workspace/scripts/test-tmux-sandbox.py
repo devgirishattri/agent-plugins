@@ -242,7 +242,12 @@ class FallbackSentinel(unittest.TestCase):
             box.teardown()
         self.assertTrue(box.root.exists())
         box.real = str(self.strict)
-        self.assertEqual(box.state(), 'absent')  # the kill itself went through
+        # The kill itself went through: tmux reports no server once it has exited.
+        for _ in range(100):
+            if box.state() == 'absent':
+                break
+            time.sleep(0.05)
+        self.assertEqual(box.state(), 'absent', box.last_error)
         box.teardown()
         self.assertFalse(box.root.exists())
 

@@ -5,6 +5,9 @@ firebase-debug.log
 tmp/
 upgrade.sh
 
+__pycache__/
+*.pyc
+
 # Local dev-workspace launcher (machine-specific; not part of the marketplace).
 # The .bak is the pre-migration launcher kept as the rollback copy — it can hold
 # uncommitted local edits, so it must never be published.

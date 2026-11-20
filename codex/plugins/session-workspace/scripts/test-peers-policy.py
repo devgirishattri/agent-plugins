@@ -375,12 +375,32 @@ class Tmux(Base):
               "tmux list-panes -F 'x;' kill-pane -t %1", r'tmux list-panes -F x\; kill-pane', "tmux list-panes $'\\x3b' kill-pane",
               'tmux list-panes -F "$(id)"', 'tmux list-panes -F `id`']
 
+    INDIRECT = ["sh -c 'tmux kill-server'", "bash -c 'tmux kill-pane -t %1'", "eval 'tmux kill-server'",
+                "echo kill-server | xargs tmux", "find . -maxdepth 0 -exec tmux kill-server ';'",
+                "python3 -c 'import os; os.system(\"tmux kill-server\")'", "perl -e 'system(\"tmux kill-server\")'",
+                "nohup sh -c 'tmux kill-server'", "bash -lc 'tmux kill-server'", "zsh -c 'tmux kill-server'",
+                "python3.12 -c 'import os; os.system(\"tmux kill-server\")'", "node -e 'require(\"child_process\").execSync(\"tmux kill-server\")'",
+                "awk 'BEGIN { system(\"tmux kill-server\") }'", "sed -n '1e tmux kill-server' notes.md",
+                "git -c alias.k='!tmux kill-server' k", "busybox sh -c 'tmux kill-server'",
+                # format modifiers that expand text the format does not spell out
+                "tmux display-message -p '#{E:@x}'", "tmux display-message -p '#{T:@x}'",
+                "tmux list-panes -F '#{S:#{session_name}}'", "tmux display -p '#{s/a/b/:pane_id}'"]
+
     def test_read_verbs_and_denials(self):
         a = self.r.ctx(A)
         for command in self.ALLOWED:
             self.ok(a, command)
-        for command in self.DENIED:
+        for command in self.DENIED + self.INDIRECT:
             self.bad(a, 'orchestrator.tmux', command)
+        # controls: plain formats and conditionals, and tmux named only as data
+        for command in ("tmux display-message -p '#{?pane_active,yes,no}'", "rg tmux README.md",
+                        "sh -c 'ls -l'", "grep -n tmux notes.md", "git log --grep tmux -1",
+                        "python3 notes.py --topic tmux", "awk '{print $1}' notes.md"):
+            self.ok(a, command)
+        # a message that mentions tmux is data for its sender script, not tmux
+        self.assertFalse(POLICY.tmux_indirect(['bash', '/x/session-chat/scripts/send-message.sh', B, 'restart the tmux server later']))
+        self.assertFalse(POLICY.tmux_indirect(['python3', 'notes.py', 'tmux']))
+        self.assertTrue(POLICY.tmux_indirect(['bash', '-c', 'tmux kill-server']))  # control
 
     def test_workers_keep_their_own_tmux_rule_and_v5_root_is_unchanged(self):
         self.bad(self.r.ctx(AE), 'routing.master', 'tmux kill-pane -t %1')
@@ -408,6 +428,28 @@ class StateDir(Base):
         for command in ('cat %s' % target, 'ls %s' % state, 'jq . %s' % target, 'touch notes.md', 'echo x > notes.md'):
             self.ok(a, command)
 
+    def test_task_ledger_writes(self):
+        # A task's assigner is its owner: an orchestrator that could rewrite a
+        # task file could take another orchestrator's task.
+        a = self.r.ctx(A)
+        tasks = self.r.root / '.tmp/scheduler/tasks'
+        self.assertEqual(a.scheduler_root / 'tasks', tasks)
+        for path in (tasks / 'task-1.json', tasks / 'new.json'):
+            self.refuses(a, 'orchestrator.state_write', POLICY.validate_edit, {'file_path': str(path)}, {})
+        for command in ('echo x > %s/task-1.json' % tasks, 'cp notes.md %s/task-1.json' % tasks,
+                        "jq '.assigner=\"%s\"' %s/task-1.json > /tmp/t && mv /tmp/t %s/task-1.json" % (A, tasks, tasks),
+                        'cd %s && touch task-1.json' % tasks, 'rm %s/task-1.json' % tasks):
+            self.bad(a, 'orchestrator.state_write', command)
+        # the directories above the ledger take it along
+        for command in ('rm -rf %s' % tasks.parent, 'mv %s /tmp/x' % tasks.parent, 'rm -rf %s' % tasks.parent.parent,
+                        'cd %s && rm -rf scheduler' % tasks.parent.parent, 'mv .tmp/scheduler /tmp/x'):
+            self.bad(a, 'orchestrator.state_write', command)
+        # controls: reads stay allowed, and so do writes elsewhere (also beside the ledger's parents)
+        for command in ('cat %s/task-1.json' % tasks, 'ls %s' % tasks, 'jq . %s/task-1.json' % tasks,
+                        'touch notes-2.md', 'cp notes.md .', 'ls %s' % tasks.parent.parent):
+            self.ok(a, command)
+        POLICY.validate_edit(a, {'file_path': str(self.r.root / 'notes.md')}, {})
+
     def test_workers_are_not_given_the_orchestrator_rule(self):
         ae = self.r.ctx(AE)
         self.assertIsNone(ae.state_dir if not ae.semantic_role == 'orchestrator' else None) if False else None
@@ -430,7 +472,17 @@ class Override(Base):
                  'readonly KNOWLEDGE_PANE_NAME=x; workspace.sh plan',
                  'workspace plan; TMUX=1 true',
                  'SESSION_WORKSPACE_CONFIG=/tmp/x bash %s --worker %s --confirmed' % (self.r.script('workspace-stop.sh'), AE),
-                 'HOME=/tmp/x true; workspace plan']
+                 'HOME=/tmp/x true; workspace plan',
+                 # what the engine runs: a tmux, a startup script or a library of the caller's choosing
+                 'PATH=/tmp/x:$PATH workspace stop --worker %s --confirmed' % AE,
+                 'env PATH=/tmp/x workspace plan',
+                 'BASH_ENV=/tmp/x workspace plan',
+                 'env ENV=/tmp/x workspace status',
+                 'DYLD_INSERT_LIBRARIES=/tmp/x.dylib workspace plan',
+                 'LD_PRELOAD=/tmp/x.so workspace plan',
+                 'PYTHONPATH=/tmp/x workspace plan',
+                 'TMUX_TMPDIR=/tmp/x workspace show ' + AE,
+                 'export PATH=/tmp/x:$PATH; workspace plan']
         for command in cases:
             self.bad(a, 'identity.override', command)
             self.bad(ae, 'identity.override', command)
@@ -439,6 +491,7 @@ class Override(Base):
         self.ok(a, 'FOO=1 workspace status')
         self.ok(a, 'XDG_STATE_HOME=/tmp/x ls')
         self.ok(a, 'export TMUX_PANE=%9')
+        self.ok(a, 'PATH=/tmp/x:$PATH ls')
         self.ok(ae, 'workspace plan')
         self.ok(ae, 'FOO=1 workspace plan')
 
