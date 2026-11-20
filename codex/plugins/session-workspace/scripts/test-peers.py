@@ -128,7 +128,8 @@ class Peers(Base):
         self.assert_valid()
         plan = self.plan()
         self.assertEqual(plan['schema_version'], 6)
-        self.assertEqual(plan['peers'], {'session': 'development', 'limits': {}})
+        self.assertEqual(plan['peers'], {'session': 'development', 'limits': {},
+                                         'scheduler_store': str(self.root / '.tmp/scheduler')})
         self.assertEqual(plan['workers'], [])
         dev = plan['sessions'][0]
         self.assertEqual(dev['instance'], {'of': 'development', 'index': 1})

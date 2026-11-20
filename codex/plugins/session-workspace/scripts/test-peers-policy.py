@@ -444,6 +444,7 @@ class StateDir(Base):
         a = self.r.ctx(A)
         tasks = self.r.root / '.tmp/scheduler/tasks'
         self.assertEqual(a.scheduler_root / 'tasks', tasks)
+        self.assertEqual(a.task_ledger, tasks)
         for path in (tasks / 'task-1.json', tasks / 'new.json'):
             self.refuses(a, 'orchestrator.state_write', POLICY.validate_edit, {'file_path': str(path)}, {})
         for command in ('echo x > %s/task-1.json' % tasks, 'cp notes.md %s/task-1.json' % tasks,

@@ -321,6 +321,14 @@ peer_decision sample-master "only a user can start an orchestrator copy" "worksp
 peer_decision sample-master "peer can list tmux panes" "tmux list-panes" allow
 peer_decision sample-master "peer cannot change the tmux layout directly" "tmux select-layout tiled" deny orchestrator.tmux
 
+for policy in "$CODEX_POLICY" "$CLAUDE_POLICY"; do
+  if python3 -B "$ROOT_DIR/scripts/test-peer-state-write.py" "$(dirname "$policy")"; then
+    pass "peer state and ledger decisions for ${policy#"$ROOT_DIR/"}"
+  else
+    fail "peer state and ledger decisions for ${policy#"$ROOT_DIR/"}" "decision regression"
+  fi
+done
+
 printf '\n-----------------------------------------------\n'
 printf 'session-workspace policy parity: %d passed, %d failed\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then
