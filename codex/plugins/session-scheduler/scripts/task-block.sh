@@ -8,6 +8,7 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
+ACTOR=$(resolve_pane_actor) || exit 1
 sched_diag_reset
 ensure_dirs || { sched_diag_emit; exit 1; }
 
@@ -45,7 +46,6 @@ validate_task_id "$ID" || { sched_diag_emit task="$ID"; exit 1; }
 [ -f "$(task_file "$ID")" ] || { echo "ERROR: task '$ID' not found." >&2; sched_diag_emit reason=sched.task.not_found task="$ID" lib=0; exit 1; }
 
 FILE=$(task_file "$ID") || exit 1
-ACTOR=$(current_pane_name)
 
 HIST_NOTE="$REASON"
 VERDICT_ARG="null"

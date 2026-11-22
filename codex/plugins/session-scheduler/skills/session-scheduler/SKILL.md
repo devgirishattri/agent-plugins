@@ -107,7 +107,7 @@ Intentionally includes task ids, assignment, explicit reviewer routes, workflow 
 
 ## Requirements
 
-- `session-chat` 0.13.0 or newer must be available. Its durable inbox means a dispatch or ack to a busy pane is recovered on that pane's next turn rather than lost.
+- Install `session-chat` 0.17.24 or newer for notifications and `--note-file` verdicts. It verifies the calling pane and recovers dispatches to busy panes from the durable inbox. The scheduler checks the chat version before reading a verdict draft and again before consuming it after commit.
 - Executor panes must have unique session-chat names.
 - Executor panes should use `SESSION_CHAT_INCOMING_MODE=auto` or `assist` to act on assigned dispatches.
 - Task files are stored under `SESSION_SCHEDULER_HOME`, which must already be present in each pane's environment, inherited when the agent process started: the launcher/parent shell establishes it before the agent starts, and every participating pane must be launched with the same absolute value. The `$session-scheduler:*` skills and commands never export or derive it — an already-running agent invokes each helper as exactly one literal Bash segment using the inherited value.
@@ -135,6 +135,9 @@ A crash can leave a staging file named `<task-id>.json.tmp.*`. Confirm there is
 no live task-lock holder before manually removing an exact stale staging file.
 Do not remove a task JSON file or an active writer's staging file.
 
+The scheduler resolves the actor for review, block and completion from the calling process's tmux pane.
+The inherited `SESSION_CHAT_PANE_NAME` must match that pane when set. If verification fails, the helper refuses the transition.
+
 ## Reviewer verdicts from a note file (`--note-file`)
 
 A reviewer puts the complete verdict in the reviewer's own session-chat draft (`<messages>/drafts/<own-pane>/<name>.md`) and gives the path to the helper. Use `--note-file` instead of sending a separate `[re:]` reply to the master:
@@ -144,7 +147,7 @@ $session-scheduler:task-done  <id> --note-file <own draft>                      
 $session-scheduler:task-block <id> --note-file <own draft> [short summary]        (contracted task only: <id> --generation <N> --note-file <own draft>)
 ```
 
-Before any change, the helper checks the draft with session-chat's `own-draft-check.sh` (run as a subprocess). It refuses a draft that is not this pane's own private regular file (peer draft, symlink, hardlink, other directory, bad name, unreadable). It also refuses a file larger than `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536; read on each call; the check uses the file size before it hashes or copies anything), a file with a NUL byte, and a file that is not valid UTF-8. An older session-chat with no `own-draft-check.sh` makes the helper refuse `--note-file` with an upgrade message before it reads the file. Inline notes still work with an older session-chat.
+Before any change, the helper checks the draft with session-chat's `own-draft-check.sh` (run as a subprocess). It refuses a draft that is not this pane's own private regular file (peer draft, symlink, hardlink, other directory, bad name, unreadable). It also refuses a file larger than `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536; read on each call; the check uses the file size before it hashes or copies anything), a file with a NUL byte, and a file that is not valid UTF-8. Upgrade session-chat in each participating pane before recording verdicts or sending correlated replies.
 
 After the checks, the helper copies the verdict to an exclusive file `prompts/<id>-verdict-<event>.md` (mode 0600) and verifies its SHA-256. `<event>` is 16 random hex characters. One atomic ledger write then records the transition and the event `meta.verdict_events[<event>]`: transition (`done` or `blocked`), actor, `route_to` (the assigner at that time), `request_msg_id`, `generation`, artifact path, `artifact_sha256`, and `notification`. The history note is a short excerpt (at most 200 bytes of the first line) plus the artifact path and SHA-256.
 

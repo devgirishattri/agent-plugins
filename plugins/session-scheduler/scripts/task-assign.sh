@@ -7,6 +7,11 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
+# The assigner is resolved before the first write. A caller with no pane
+# identity in its environment is anonymous ('?'); a claimed pane identity is
+# verified against the tmux pane that owns this process and a failure stops
+# here, changing nothing (see current_pane_name in lib.sh).
+ASSIGNER=$(current_pane_name) || exit 1
 ensure_dirs || exit 1
 
 USAGE="Usage: task-assign.sh <pane> <id> [--eta MINUTES] [--stage NAME] [--context NAME|auto] [--reviewer PANE] [--workflow ID] [--force] <prompt-text>"
@@ -140,7 +145,6 @@ elif [ -n "$CONTEXT" ]; then
 fi
 
 NAME=$(task_get "$ID" '.name')
-ASSIGNER=$(current_pane_name)
 PROMPT_FILE=$(prompt_path "$ID")
 
 # Canonical absolute ledger home, embedded in the prompt as PROVENANCE: the

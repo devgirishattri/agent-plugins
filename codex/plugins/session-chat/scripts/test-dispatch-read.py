@@ -21,6 +21,10 @@ sys.path.insert(0, str(WORKSPACE))
 from tmux_sandbox import Sandbox  # noqa: E402
 
 
+sys.path.insert(0, str(next(parent / 'scripts' for parent in HERE.parents if (parent / 'scripts/tmux_test_fixtures.py').is_file())))
+from tmux_test_fixtures import run_in_pane  # noqa: E402
+
+
 class DispatchRead(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='dispatch-read-', dir='/tmp')
@@ -67,8 +71,8 @@ class DispatchRead(unittest.TestCase):
     def probe(self, role, limit):
         name = 'harness-sample-component-' + role
         env = dict(self.env, TMUX_PANE=self.panes[self.master])
-        result = subprocess.run(['bash', str(HERE / 'dispatch-to-session.sh'), name, str(self.draft)],
-                                env=env, capture_output=True, text=True, timeout=45)
+        result = run_in_pane(self.tmux, self.panes[self.master],
+                             ['bash', str(HERE / 'dispatch-to-session.sh'), name, str(self.draft)], env, self.root, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.draft.exists(), result.stdout + result.stderr)
         self.assertIn('Removed delivered draft:', result.stdout)
@@ -80,9 +84,8 @@ class DispatchRead(unittest.TestCase):
         prompt = '[from:%s pane:%s msg:%s id:%s] dispatch (20 KB) — read msg file id:%s' % (
             self.master, self.panes[self.master], delivered, uid, uid)
         env.update(TMUX_PANE=self.panes[name], SESSION_CHAT_DISPATCH_INLINE_MAX=str(limit))
-        hook = subprocess.run(['bash', str(HERE / 'detect-incoming-message.sh')], env=env,
-                              input=json.dumps({'hook_event_name': 'UserPromptSubmit', 'prompt': prompt}),
-                              capture_output=True, text=True, timeout=20)
+        hook = run_in_pane(self.tmux, self.panes[name], ['bash', str(HERE / 'detect-incoming-message.sh')], env, self.root,
+                           input=json.dumps({'hook_event_name': 'UserPromptSubmit', 'prompt': prompt}), timeout=20)
         self.assertEqual(hook.returncode, 0, hook.stderr)
         output = json.loads(hook.stdout)
         text = output.get('systemMessage', output.get('hookSpecificOutput', {}).get('additionalContext', ''))

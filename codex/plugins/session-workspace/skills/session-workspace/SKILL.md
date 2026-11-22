@@ -325,9 +325,22 @@ above (writes under `$TMPDIR` are refused by containment).
 
 ### Orchestrator
 
-An orchestrator cannot edit or run mutating commands against a child
-checkout; routes only to its configured executor/reviewer panes;
-`broadcast` is not available under strict-v1.
+An orchestrator reads child checkouts and routes writes to their executors.
+An ordinary `cp` or shell redirection may read from a child and write outside
+every child checkout. A loop may run read commands on child files. Inside a
+child, `cd` and `pushd` permit reads. Writes, installs, commits, pushes, and
+every form of child `git config` or `git fetch` are refused. An optional
+`deny_child_chdir` guard also refuses the directory change itself.
+These checks follow literal command operands and child paths bound by a
+`for` loop, including in a visible shell program supplied on standard input.
+Other variable assignments and filenames produced by pipelines have limited coverage.
+The orchestrator routes messages to its configured panes. Strict-v1 refuses broadcasts.
+
+Use scheduler helpers to update the task ledger. Strict-v1 checks direct writes,
+ledger paths in `xargs` or `parallel` input, inline interpreter arguments, and
+interpreter input from a here-document. The hook inspects visible command text.
+A program loaded from a separate file or a path computed inside a program is
+outside this check.
 
 - Root and confined orchestrators also deny direct remote-mutating
   `gh` commands even without a child filesystem operand. Route mutations to the
@@ -355,9 +368,8 @@ checkout; routes only to its configured executor/reviewer panes;
   | `orchestrator.gh_mutation` | The command mutates remote state. Route it to the executor. |
   | `orchestrator.gh_unsupported` | The command is outside the supported grammar. It is denied. |
 
-  Existing containment and integrity rules still apply.
-  Executor/reviewer permissions and Git redirects/loops are unchanged. No new
-  config key or schema/store migration; update both providers and restart agents.
+  Existing containment and integrity rules also apply to these GitHub CLI calls.
+  Update both providers and reload the affected agents.
   Downgrading restores the remote-mutation gap and earlier read restrictions.
   This is an argv guardrail for root and confined orchestrators, not subprocess
   isolation: scripts and stdin-fed interpreters (and root inline code) can still
@@ -365,6 +377,13 @@ checkout; routes only to its configured executor/reviewer panes;
   must be impossible. Unclassified MCP calls retain their existing limits.
 ### Rules for every role
 
+- Strict-v1 refuses `rm`, `mv`, `rmdir`, and `find -delete` when they can
+  remove or move the project root, any ancestor, or the home directory.
+  A destructive `find` starting at a protected directory can be refused even
+  when its name predicates narrow the matches.
+  The check resolves directory changes, supported launch wrappers and literal
+  paths supplied to these commands. Other utilities and paths constructed by
+  a running program are outside this rule.
 - Shared shell path checks include attached short-option values
   and literal operands after `--`, including through accepted wrappers.
   Known `grep`/`rg` pattern and `sort` key/separator values remain data;
@@ -383,6 +402,13 @@ checkout; routes only to its configured executor/reviewer panes;
 - Installed helpers must be invoked as one literal
   `bash <selected-cache-path>/scripts/<name>.sh args...` — no env prefix,
   wrapper, chaining, expansion, stale version, or copied script.
+  A helper named inside shell code, `eval`, a variable, a here-document, a
+  literal pipe into a shell, or a sourced process substitution triggers
+  `helper.launch` or `helper.segment`. `env -S` triggers `shell.wrapper`.
+- Verdict attribution trusts the tmux server and its pane metadata. A process
+  with control of that server can rename or drive a pane. Non-peer workspaces
+  permit raw tmux administration. The ancestry check identifies the process
+  that actually invoked the helper in the pane.
 
 ### Codex permission boundaries
 

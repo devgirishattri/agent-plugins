@@ -203,10 +203,19 @@ class PositiveControl(Fixture):
 
     def test_1b_cli_entrypoint_from_cache_passes(self):
         self.contract()
-        env = dict(os.environ, TASK_CONTRACT_ACTOR=EXEC)
+        env = dict(os.environ, PATH=str(REPO / 'scripts/fixtures/pane-actor') + os.pathsep + os.environ['PATH'],
+                   TMUX='contract-fixture', TMUX_PANE='%1', SESSION_CHAT_PANE_NAME=EXEC,
+                   TEST_PANE_PID=str(os.getpid()), TEST_PANE_NAME=EXEC)
         engine = self.cache / 'session-scheduler' / self.sched_ver / 'scripts/task-contract.py'
-        result = subprocess.run(['python3', '-B', str(engine), 'verify', 'T1', '--generation', '1', '--spec-digest', self.mod.hashed(self.spec)],
-                                env=env, capture_output=True, text=True)
+        args = ['python3', '-B', str(engine), 'verify', 'T1', '--generation', '1', '--spec-digest', self.mod.hashed(self.spec)]
+        before = self.task.read_bytes()
+        refused = subprocess.run(args, env=dict(env, TEST_PANE_NAME=REVIEW),
+                                 capture_output=True, text=True)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('disagrees', refused.stderr)
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(self.task.read_bytes(), before)
+        result = subprocess.run(args, env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
         self.assertEqual(json.loads(result.stdout)['state'], 'passed')
         self.assertEqual(self.receipt()['policy_decisions'], ['harness-decided'])

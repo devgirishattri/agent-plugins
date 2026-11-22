@@ -1049,7 +1049,7 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
     # successful empty list, empty name, or healthy-fleet report.
     for script_name in ("list-panes.sh", "pane-health.sh", "get-my-name.sh", "broadcast-message.sh"):
         script_path = chat / script_name
-        require_one_of(script_path, "tmux_capture_checked", "_tmux_err_file", "pop_pane_name_err")
+        require_one_of(script_path, "tmux_capture_checked", "_tmux_err_file", "resolve_pane_actor", "get_my_name --read-only")
         reject_pattern(
             script_path,
             r"\btmux\b[^\n]*2>/dev/null",
@@ -1094,7 +1094,7 @@ for provider_root in (root / "plugins", root / "codex/plugins"):
     require_tokens(context / "lib.sh", "umask 077", "chmod 700", "chmod 600", "[ -L")
 
     scheduler = provider_root / "session-scheduler" / "scripts"
-    require_tokens(scheduler / "lib.sh", 'SESSION_CHAT_MIN_VERSION="0.13.0"')
+    require_tokens(scheduler / "lib.sh", 'SESSION_CHAT_MIN_VERSION="0.17.24"')
     require_tokens(scheduler / "task-new.sh", "--reviewer", "workflow_id")
     require_tokens(scheduler / "task-assign.sh", "--context auto", ".meta.workflow_id", ".meta.scheduler_home", ".meta.handoff_file", "Auto handoff (read it first):")
     reject_pattern(scheduler / "task-assign.sh", r"chmod 400", "auto handoffs are 0600 scheduler artifacts, not immutable knowledge snapshots")

@@ -138,7 +138,13 @@ if [ ${#files[@]} -eq 0 ]; then
   exit 0
 fi
 
-ME=$(current_pane_name)
+# Display-only identity for --mine: the verified pane name, or the inherited
+# name only when tmux cannot be reached. Other filters never resolve it.
+ME=""
+if [ "$FILTER" = "mine" ]; then
+  ME=$(resolve_pane_actor --read-only) || exit 1
+  [ -n "$ME" ] || ME="?"
+fi
 
 if [ "$FILTER" = "by-stage" ]; then
   rows=""

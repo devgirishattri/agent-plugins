@@ -359,9 +359,8 @@ class Context:
     worker_owners: tuple = ()  # (worker pane name, owner pane name) for every worker in the plan
     environment_ids: frozenset = frozenset()
     state_dir: Optional[Path] = None
-    # A peer orchestrator's protected task ledger: <pinned scheduler store>/tasks
-    # from the validated plan, with or without a scheduler grant or a running
-    # worker. It guards writes only; helper task operations keep scheduler_root.
+    # The pinned scheduler store's tasks/ directory, independent of grants.
+    # Protecting it never grants access to a scheduler helper.
     task_ledger: Optional[Path] = None
 
     @property
@@ -824,9 +823,6 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
             "environment_ids": frozenset(str(e["id"]) for e in scope.get("environments", []) if isinstance(e, dict) and "id" in e),
             "scheduler_fallback": next(iter(scheduler_grants)) if len(scheduler_grants) == 1 else None,
         }
-        scheduler_store = peers_plan.get("scheduler_store")
-        if semantic == "orchestrator" and isinstance(scheduler_store, str) and scheduler_store.startswith("/"):
-            peer_fields["task_ledger"] = canonical(Path(scheduler_store)) / "tasks"
     elif scoped:
         root_name = scope.get("root_orchestrator")
         environments = scope.get("environments", [])
@@ -857,6 +853,9 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
             orchestrators = [p for p in panes if p["name"] == root_name]
     if len(orchestrators) != 1:
         return None, deny(None, tool, "identity.topology", "validated topology has no unique scope orchestrator", mode, integrity=True)
+    scheduler_store = (peers_plan if peers_plan is not None else plan).get("scheduler_store")
+    if semantic == "orchestrator" and isinstance(scheduler_store, str) and scheduler_store.startswith("/"):
+        peer_fields["task_ledger"] = canonical(Path(scheduler_store)) / "tasks"
     executor_panes = frozenset(str(p["name"]) for p in owned_panes if p.get("role") == roles.get("executor"))
     reviewer_panes = frozenset(str(p["name"]) for p in owned_panes if p.get("role") == roles.get("reviewer"))
     worker_roots = {canonical(Path(str(p["cwd"]))) for p in panes if p.get("cwd") and p.get("role") in {roles.get("executor"), roles.get("reviewer")}}
@@ -944,12 +943,14 @@ def load_context() -> Tuple[Optional[Context], Optional[Decision]]:
 PEER_KEYWORD = "\x00keyword:"
 PEER_SHELL_PART = re.compile(
     r"""'[^']*'|"(?:\\.|[^"\\])*"|\\.|(?<![^ \t\n])[0-9]+(?=[<>])|"""
-    r"(?<![^ \t\n;&|()<>])(?:if|then|elif|else|do|while|until|!)(?![^ \t\n;&|()<>])", re.S)
+    r"(?<![^ \t\n;&|()<>])(?P<keyword>if|then|elif|else|do|while|until|for|!|time(?=[ \t]+\{)|[{}])"
+    r"(?![^ \t\n;&|()<>])", re.S)
 PEER_LITERAL = {ord(c): "\x00%02x" % ord(c) for c in "*?{}[]~$`;&|()<>\\"}
 PEER_ESCAPE = re.compile(r"\x00([0-9a-f]{2})")
 PEER_SUBSTITUTION = re.compile(r"\$\x00sub:([0-9a-f]+):")
 PEER_QUOTED = "\x00q"
 PEER_SCALAR = re.compile(r"[A-Za-z_0-9]|\{[A-Za-z_][A-Za-z_0-9]*\}|\x00sub:")
+PEER_VARIABLE = re.compile(r"\$(?:\{|\x007b)?([A-Za-z_][A-Za-z_0-9]*)")
 
 
 def peer_substitution_text(match: re.Match) -> str:
@@ -1055,15 +1056,35 @@ def peer_filename(word: str) -> Path:
 def parse_shell(command: str, *, peer_paths: bool = False) -> List[str]:
     if "\x00" in command or "\r" in command:
         raise PolicyFailure("bash.parse", "shell command contains a forbidden control byte")
+    braces = "{" in command or "}" in command
     if peer_paths:
         command = PEER_SHELL_PART.sub(peer_shell_part, mask_peer_substitutions(command))
+    elif braces:
+        # Remember which reserved words were unquoted before shlex drops quotes.
+        command = PEER_SHELL_PART.sub(lambda m: PEER_KEYWORD + m[0] if m.lastgroup else m[0], command)
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>")
         lexer.whitespace_split = True
         lexer.commenters = ""
-        return list(lexer)
+        tokens = list(lexer)
     except ValueError as exc:
         raise PolicyFailure("bash.parse", "could not parse shell command safely: %s" % exc) from exc
+    if braces:
+        command_start = True
+        for index, token in enumerate(tokens):
+            if token.startswith(PEER_KEYWORD):
+                word = token[len(PEER_KEYWORD):]
+                # A brace in command position delimits a group. Within an
+                # argument list, a standalone brace is ordinary data.
+                if word in {"{", "}"} and command_start:
+                    tokens[index] = ";"
+                else:
+                    if not peer_paths or word in {"{", "}", "time"}:
+                        tokens[index] = word
+                    command_start = command_start and word not in {"for", "{", "}"}
+            else:
+                command_start = is_control(token) and "<" not in token and ">" not in token
+    return tokens
 
 
 def has_unquoted_expansion(command: str) -> bool:
@@ -1118,7 +1139,7 @@ def heredoc_delimiters(line: str) -> List[Tuple[str, bool]]:
     return out
 
 
-def command_lines(command: str) -> str:
+def command_lines(command: str, heredocs: Optional[List[str]] = None) -> str:
     """COMMAND as the shell runs it line by line: an unquoted newline ends a
     command (it becomes `;`), a backslash-newline joins lines, an unquoted
     `#` comment is dropped and a heredoc body is dropped (it is the stdin of
@@ -1157,13 +1178,19 @@ def command_lines(command: str) -> str:
             line = []
             index += 1
             for delimiter, strip in heredoc_delimiters(text):
+                start = index
+                stop = length
                 while index < length:
                     end = command.find("\n", index)
                     end = length if end < 0 else end
+                    line_start = index
                     body = command[index:end]
                     index = min(end + 1, length)
                     if (body.lstrip("\t") if strip else body) == delimiter:
+                        stop = line_start
                         break
+                if heredocs is not None:
+                    heredocs.append(command[start:stop])
             continue
         line.append(char)
         in_single = char == "'"
@@ -1183,6 +1210,7 @@ WRITE_REDIRECT_OPS = {">", ">>", ">|", "<>", "&>", "&>>", ">&"}
 # a NUL so it can never be mistaken for a path operand or a command.
 REDIR_WRITE_MARK = "\x00redirect-write"
 REDIR_PATH_PREFIX = "\x00redirect-path:"
+STDIN_TEXT_PREFIX = "\x00stdin:"
 
 
 def segments(tokens: List[str], *, peer_paths: bool = False) -> List[List[str]]:
@@ -1263,7 +1291,7 @@ def parse_wrappers(segment: List[str]) -> Wrapped:
     index = 0
     chdirs: List[List[str]] = []
     values: List[str] = [t[len(REDIR_PATH_PREFIX):] for t in segment if t.startswith(REDIR_PATH_PREFIX)]
-    segment = [t for t in segment if not t.startswith(REDIR_PATH_PREFIX)]
+    segment = [t for t in segment if not t.startswith((REDIR_PATH_PREFIX, STDIN_TEXT_PREFIX))]
     while index < len(segment):
         token = segment[index]
         if token == REDIR_WRITE_MARK:
@@ -1374,7 +1402,7 @@ def git_subcommand(tokens: List[str], flags: Optional[set] = None) -> Tuple[str,
             continue
         if token.startswith("-C") and len(token) > 2:
             # attached form `-C<dir>`: the directory is a path operand that
-            # ensure_paths_within / references_child resolve separately
+            # containment and child-write checks resolve separately
             index += 1
             continue
         if any(token.startswith(option + "=") for option in READ_GIT_VALUE_OPTIONS if option.startswith("--")):
@@ -3732,7 +3760,7 @@ def peer_dynamic_invocation(argv: List[str]) -> bool:
     return False
 
 
-def peer_glob_paths(word: str, base: Path, roots: tuple) -> Iterable[Tuple[Path, bool]]:
+def peer_glob_paths(word: str, base: Path, roots: tuple, *, exact: bool = False) -> Iterable[Tuple[Path, bool]]:
     """Resolve filename patterns without running a shell. Include missing
     protected paths and existing symlink matches. The bool marks a match that
     requires implicit dotfile matching, a shell option the hook cannot attest."""
@@ -3750,7 +3778,7 @@ def peer_glob_paths(word: str, base: Path, roots: tuple) -> Iterable[Tuple[Path,
         folded_pattern = folded_spelling(pattern)
         matches = set()
         for parent, hidden in parents:
-            if any(peer_within(parent, root) for root in roots):
+            if not exact and any(peer_within(parent, root) for root in roots):
                 yield parent, hidden
                 continue
             depth = len(parent.parts)
@@ -3775,7 +3803,494 @@ def peer_glob_paths(word: str, base: Path, roots: tuple) -> Iterable[Tuple[Path,
     yield from parents
 
 
-def check_peer_writes(ctx: Context, tokens: List[str], base: Path, *, state: bool) -> None:
+def find_starts(argv: List[str]) -> List[str]:
+    starts = []
+    for word in argv[1:]:
+        if word in {"-H", "-L", "-P", "-E", "-X", "-s", "-f", "--"}:
+            continue
+        if word.startswith("-") or peer_literal(word) in {"(", "!"}:
+            break
+        starts.append(word)
+    return starts or ["."]
+
+
+def find_input_paths(argv: List[str], action_index: int) -> List[str]:
+    # A regular-file-only conjunct cannot supply a protected directory to
+    # this action. Later tests do not constrain an action that already ran.
+    predicates = [peer_literal(word) for word in argv[1:action_index]]
+    if not any(word in {"!", "-not", "-o", "-or", ",", "("} for word in predicates):
+        index = 0
+        while index < len(predicates):
+            word = predicates[index]
+            if word in {"-type", "-name", "-iname", "-path", "-ipath", "-maxdepth", "-mindepth"}:
+                if word == "-type" and predicates[index + 1:index + 2] == ["f"]:
+                    return []
+                index += 2
+            elif not word.startswith("-") or word in {"-H", "-L", "-P", "-E", "-X", "-s", "-f", "--", "-a", "-and"}:
+                index += 1
+            else:
+                break  # an unreviewed predicate may consume later words as data
+    return find_starts(argv)
+
+
+def destructive_operands(argv: List[str]) -> List[str]:
+    """Directory entries the command removes or renames, before shell expansion."""
+    name = Path(argv[0]).name
+    if name == "find":
+        return find_starts(argv) if "-delete" in argv else []
+    if name not in {"rm", "mv", "rmdir"}:
+        return []
+    paths = []
+    options = True
+    directory = replace = parents = False
+    index = 1
+    while index < len(argv):
+        word = argv[index]
+        index += 1
+        if options and word == "--":
+            options = False
+        elif options and word.startswith("-") and word != "-":
+            if name == "rmdir":
+                parents |= word == "--parents" or (not word.startswith("--") and "p" in word)
+            if name == "mv":
+                if word.startswith("--"):
+                    option, equals, _ = word.partition("=")
+                    if long_prefix(option, "--target-directory") or long_prefix(option, "--suffix"):
+                        directory |= long_prefix(option, "--target-directory")
+                        index += not equals
+                    replace |= long_prefix(option, "--no-target-directory")
+                else:
+                    for offset, flag in enumerate(word[1:], 2):
+                        if flag in "tS":
+                            directory |= flag == "t"
+                            index += offset == len(word)
+                            break
+                        replace |= flag == "T"
+        else:
+            paths.append(word)
+    if parents:
+        paths += [str(parent) for word in paths for parent in Path(word).parents if parent != Path(".")]
+    # An ordinary mv into an existing directory writes a child of it. -T
+    # can replace the directory itself. With -t every positional is a source.
+    return paths[:-1] if name == "mv" and not directory and not replace else paths
+
+
+def pipeline_path_inputs(argv: List[str]) -> List[str]:
+    """Visible path arguments that the producer can pass on as text."""
+    if not argv:
+        return []
+    program = Path(argv[0]).name
+    if program == "find":
+        output = next((i for i, word in enumerate(argv) if word in FIND_ACTIONS or
+                       word in {"-print", "-print0", "-printf", "-ls"}), len(argv))
+        return find_input_paths(argv, output)
+    if program == "printf" and len(argv) > 1:
+        literals = re.split(r"(?:\\|\x005c)(?:n|0+)|\n", argv[1])
+        return argv[2:] + [word for word in literals if word and "%" not in word]
+    if program in {"echo", "ls"}:
+        return [word for word in argv[1:] if not word.startswith("-")]
+    return []
+
+
+def feeder_template(argv: List[str], upstream: List[str]) -> tuple:
+    """The xargs or GNU parallel command, replacement token and visible inputs."""
+    parallel = Path(argv[0]).name == "parallel"
+    marker = "{}" if parallel else ""
+    index = 1
+    short_values = "adEIJLnPRSs" if not parallel else "aIdjlnNPS"
+    long_values = {"--arg-file", "--delimiter", "--max-args", "--max-lines", "--max-procs",
+                   "--max-chars", "--process-slot-var", "--jobs", "--argfile", "--colsep",
+                   "--workdir", "--block", "--joblog", "--halt", "--sshlogin"}
+    while index < len(argv):
+        option = peer_literal(argv[index])
+        index += 1
+        if option == "--":
+            break
+        if option == "-" or not option.startswith("-"):
+            index -= 1
+            break
+        if option.startswith("--"):
+            flag, equals, value = option.partition("=")
+            if flag == "--replace":
+                marker = value if equals else "{}"
+            elif flag in long_values and not equals:
+                index += 1
+        else:
+            for offset, flag in enumerate(option[1:], 2):
+                if flag == "i" and not parallel:
+                    marker = option[offset:] or "{}"
+                    break
+                if flag not in short_values:
+                    continue
+                value = option[offset:]
+                if not value and index < len(argv):
+                    value = peer_literal(argv[index])
+                    index += 1
+                if flag in {"I", "J"}:
+                    marker = value
+                break
+    action = argv[index:]
+    inputs = list(upstream)
+    if parallel:
+        split = next((i for i, word in enumerate(action) if word in {":::", ":::+", "::::", "::::+"}), len(action))
+        if split < len(action):
+            inputs = []
+            literal_group = False
+            for word in action[split:]:
+                if word in {":::", ":::+", "::::", "::::+"}:
+                    literal_group = word in {":::", ":::+"}
+                elif literal_group:
+                    inputs.append(word)
+            action = action[:split]
+        if action and any(char.isspace() for char in action[0]):
+            action = parse_shell(peer_literal(action[0]), peer_paths=True) + action[1:]
+    return action, marker, inputs
+
+
+def removal_actions(argv: List[str], upstream: List[str]) -> Iterable[List[str]]:
+    """Literal removal templates, including find/feeder substitution positions."""
+    name = Path(argv[0]).name
+    if name == "find":
+        index = 1
+        while index < len(argv):
+            if argv[index] not in FIND_EXEC_ACTIONS:
+                index += 1
+                continue
+            end = next((i for i in range(index + 1, len(argv)) if peer_literal(argv[i]) in {";", "+"}), len(argv))
+            yield from expand_removal_action(argv[index + 1:end], "{}", find_input_paths(argv, index), append=False)
+            index = end + 1
+    elif name in {"xargs", "parallel"}:
+        action, marker, inputs = feeder_template(argv, upstream)
+        yield from expand_removal_action(action, marker, inputs, append=not marker or name == "parallel")
+
+
+def expand_removal_action(action: List[str], marker: str, inputs: List[str], *, append: bool) -> Iterable[List[str]]:
+    if not action:
+        return
+    # Quotes protecting {} in the outer shell have been removed by the time
+    # find/xargs/parallel substitute it. Preserve all other quoting.
+    if marker:
+        escaped = marker.translate(PEER_LITERAL)
+        action = [word.replace(escaped, marker) for word in action]
+    if marker and any(marker in word for word in action):
+        for value in inputs or [marker]:
+            yield [word.replace(marker, value) for word in action]
+    else:
+        yield action + inputs if append else action
+
+
+def check_project_removal(ctx: Context, argv: List[str], cwd: Path, upstream: Optional[List[str]] = None) -> None:
+    while argv and Path(argv[0]).name in INLINE_LAUNCHERS:
+        wrapped = parse_wrappers(launcher_command(Path(argv[0]).name, argv))
+        cwd = resolve_chdir_hops(wrapped.chdirs, cwd, peer_paths=True)
+        argv = wrapped.argv
+    if not argv:
+        return
+    for action in removal_actions(argv, upstream or []):
+        wrapped = parse_wrappers(action)
+        if wrapped.argv:
+            action_cwd = resolve_chdir_hops(wrapped.chdirs, cwd, peer_paths=True)
+            for nested in inline_launches(wrapped.argv):
+                if Path(nested[0]).name in {"rm", "mv", "rmdir"}:
+                    check_project_removal(ctx, nested, action_cwd)
+    operands = destructive_operands(argv)
+    if not operands:
+        return
+    protected = (ctx.project_root, canonical(Path.home()))
+    for operand in operands:
+        alternatives = [operand]
+        if "{" in operand and "}" in operand and ("," in operand or ".." in operand):
+            match = PEER_BRACE_LIST.fullmatch(operand)
+            if not match or match[2].count(",") > 64:
+                raise PolicyFailure("shell.project_root", "could not resolve the destructive brace pattern safely")
+            alternatives = [match[1] + item + match[3] for item in match[2].split(",")]
+        for word in alternatives:
+            check_removal_path(word, cwd, protected)
+
+
+def check_removal_path(word: str, cwd: Path, protected: tuple) -> None:
+    if "$" in word:
+        literal = peer_literal(word)
+        for variable, value in (("HOME", protected[1]), ("PWD", cwd), ("SESSION_WORKSPACE_PROJECT_ROOT", protected[0])):
+            match = re.match(r"^\$(?:%s|\{%s\})(?=/|$)" % (variable, variable), literal)
+            if match:
+                word = str(value) + literal[match.end():]
+                break
+        else:
+            return
+    try:
+        if glob.has_magic(word):
+            paths = [p for p, _ in peer_glob_paths(word, cwd, protected, exact=True)]
+        else:
+            paths = [canonical(cwd / peer_filename(word))]
+    except (OSError, RuntimeError, ValueError):
+        raise PolicyFailure("shell.project_root", "could not resolve the destructive path safely")
+    if any(peer_within(protected[0], path) or peer_same_path(protected[1], path) for path in paths):
+        raise PolicyFailure("shell.project_root", "command could remove or move the project, its ancestor, or the home directory")
+
+
+def shell_body(argv: List[str]) -> Optional[str]:
+    """Literal command text a shell or eval would reparse. No shell is run."""
+    name = Path(argv[0]).name
+    if name == "eval":
+        return " ".join(argv[1:])
+    if not TMUX_SHELL_RE.fullmatch(name):
+        return None
+    index = 1
+    while index < len(argv):
+        option = argv[index]
+        index += 1
+        if option in {"-", "--"} or not option.startswith(("-", "+")):
+            break
+        if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", option) or (name == "fish" and option in {"-C", "--command", "--init-command"}):
+            return argv[index] if index < len(argv) else None
+        if option in {"-o", "+o", "-O", "+O"} or option in SHELL_VALUE_LONG.get(name, ()):
+            index += 1
+    return None
+
+
+def ledger_in_text(text: str, ledger: Path, cwd: Path) -> bool:
+    """Look for literal paths in argv or embedded program text, without evaluating either."""
+    if "/" not in text and text not in {".", "..", ledger.name}:
+        return False
+    # Quoted paths may contain spaces. Bare path words stop at program
+    # punctuation such as Python's open(...), and at shell operators.
+    candidates = [text]
+    candidates.extend(match[1] or match[2] or match[3] for match in
+                      re.finditer(r"""'([^'\n]+)'|"([^"\n]+)"|([A-Za-z0-9_.~$/{\}+-]+)""", text))
+    for value in candidates:
+        if "/" not in value and value not in {".", "..", ledger.name}:
+            continue
+        if value.partition("/")[0] in {"$SESSION_SCHEDULER_HOME", "$" + "{SESSION_SCHEDULER_HOME}"}:
+            value = str(ledger.parent / value.partition("/")[2])
+        try:
+            path = canonical(cwd / Path(value))
+        except (OSError, ValueError, RuntimeError):
+            continue
+        if peer_within(path, canonical(ledger)) or peer_within(path, ledger):
+            return True
+    return False
+
+
+def shell_target_tokens(source: str) -> List[str]:
+    heredocs: List[str] = []
+    lines = command_lines(source, heredocs) if "\n" in source else source
+    tokens = iter(parse_shell(lines, peer_paths=True))
+    bodies = iter(heredocs)
+    result = []
+    for word in tokens:
+        if word in {"<<", "<<<"}:
+            delimiter = next(tokens, "")
+            if word == "<<" and delimiter == "-":
+                next(tokens, "")
+            body = next(bodies, "") if word == "<<" else peer_literal(delimiter)
+            result.append(STDIN_TEXT_PREFIX + body)
+        else:
+            result.append(word)
+    return result
+
+
+def shell_task_ledger(ctx: Context) -> Optional[Path]:
+    if ctx.task_ledger is not None:
+        return ctx.task_ledger
+    if not ctx.peers and ctx.semantic_role == "orchestrator" and ctx.scheduler_root:
+        return ctx.scheduler_root / "tasks"
+    return None
+
+
+def cache_reference(word: str, variables: set) -> bool:
+    return ("/plugins/cache/" in word or word.endswith("/plugins/cache") or
+            any(match[1] in variables for match in PEER_VARIABLE.finditer(word)))
+
+
+def remember_cache_variables(segment: List[str], variables: set) -> None:
+    # Shell loop variables remain assigned after `done`. A later conditional
+    # reassignment may not run, so keep a possible cache binding for this call.
+    while segment and segment[0].startswith(PEER_KEYWORD) and segment[0] != PEER_KEYWORD + "for":
+        segment = segment[1:]
+    if segment[:1] == [PEER_KEYWORD + "for"] and segment[2:3] == ["in"]:
+        if any(cache_reference(word, variables) for word in segment[3:]):
+            variables.add(segment[1])
+        return
+    declarations = {"export", "readonly", "local", "declare", "typeset", "env"}
+    words = segment[1:] if segment and segment[0] in declarations else segment
+    for word in words:
+        if not ASSIGNMENT_RE.fullmatch(word):
+            break
+        name, _, value = word.partition("=")
+        if cache_reference(value, variables):
+            variables.add(name)
+
+
+def indirect_cache_script(argv: List[str], cwd: Path, variables: set, inline: bool) -> bool:
+    # An executable with a slash, or an interpreter's script operand, can
+    # be relative to a prior cd or env -C. A plain command name uses PATH.
+    program = Path(argv[0]).name
+    words = [argv[0]]
+    if not inline and (program in {"source", "."} or TMUX_SHELL_RE.fullmatch(program) or interpreter_family(program)):
+        script = next((word for word in argv[1:] if not word.startswith("-")), None)
+        if script:
+            words.append(script)
+    for index, word in enumerate(words):
+        if cache_reference(word, variables):
+            return True
+        literal = peer_literal(word)
+        if (index or "/" in literal) and "/plugins/cache/" in str(cwd) and not Path(literal).is_absolute():
+            if "/plugins/cache/" in str(canonical(cwd / literal)):
+                return True
+    return False
+
+
+def literal_pipe_output(argv: List[str], stdin: str) -> str:
+    """Visible shell text from common producers. Never run the producer or open a file."""
+    if not argv:
+        return ""
+    program = Path(argv[0]).name
+    words = [peer_literal(word) for word in argv[1:]]
+    if program == "cat" and words in ([], ["-"]):
+        return stdin
+    if program == "echo":
+        while words and words[0] in {"-n", "-e", "-E"}:
+            words.pop(0)
+        return " ".join(words)
+    if program == "printf" and words:
+        if words[0] in {"%s", "%s\\n", "%s\n"}:
+            return ("" if words[0] == "%s" else "\n").join(words[1:])
+        if len(words) == 1 and "%" not in words[0]:
+            return words[0].replace("\\n", "\n")
+    return ""
+
+
+def check_shell_targets(ctx: Context, source: str, base: Path, depth: int = 0,
+                        cache_variables: Optional[set] = None) -> None:
+    """Check nested launches, destructive operands and ledger names in visible shell source."""
+    if depth > 16:
+        raise PolicyFailure("bash.parse", "shell commands are nested too deeply")
+    tokens = shell_target_tokens(source)
+    ledger = shell_task_ledger(ctx)
+    variables = set(cache_variables or ())
+    # Examine each feeder with its own upstream pipeline. Cwd and the
+    # directory stack persist across pipeline and command-list boundaries.
+    walk = iter(walk_segments(tokens, base, peer_paths=True))
+    for boundary, words in itertools.groupby(tokens, key=lambda word: word in {";", ";;", "&&", "||", "&"}):
+        if boundary:
+            continue
+        group = list(words)
+        upstream_ledger = upstream_helper = False
+        upstream_paths: List[str] = []
+        upstream_source = ""
+        for _ in segments(group, peer_paths=True):
+            segment, cwd, _ = next(walk)
+            remember_cache_variables(segment, variables)
+            for word in segment:
+                for match in PEER_SUBSTITUTION.finditer(word):
+                    sub = peer_substitution_text(match)
+                    check_shell_targets(ctx, sub[2:-1] if sub.startswith("$(") else sub[1:-1], cwd, depth + 1, variables)
+            while segment and segment[0].startswith(PEER_KEYWORD):
+                segment = segment[1:]
+            wrapped = parse_wrappers(segment)
+            exec_cwd = resolve_chdir_hops(wrapped.chdirs, cwd, peer_paths=True)
+            inputs = [word[len(STDIN_TEXT_PREFIX):] if word.startswith(STDIN_TEXT_PREFIX)
+                      else peer_literal(word.removeprefix(REDIR_PATH_PREFIX)) for word in segment]
+            names_helper = any("/plugins/cache/" in text and ("/scripts/" in text or text.rstrip("/").endswith("/scripts"))
+                               for text in inputs)
+            find_action = bool(wrapped.argv and Path(wrapped.argv[0]).name == "find" and
+                               any(word in FIND_EXEC_ACTIONS for word in wrapped.argv))
+            stdin_bodies = [word[len(STDIN_TEXT_PREFIX):] for word in segment if word.startswith(STDIN_TEXT_PREFIX)]
+            stdin_paths = [line for body in stdin_bodies for line in body.splitlines() if line]
+            stdin_source = stdin_bodies[-1] if stdin_bodies else upstream_source
+            check_project_removal(ctx, wrapped.argv, exec_cwd, stdin_paths or upstream_paths)
+            for argv in inline_launches(wrapped.argv):
+                literal = [peer_literal(word) for word in argv]
+                program = Path(literal[0]).name
+                inline = executor_inline_code(literal)
+                nested = shell_body(literal)
+                # Direct helpers already went through the literal invocation
+                # grammar. Catch a helper inside code or supplied through
+                # stdin to a launcher. Ordinary file reads remain data.
+                runner = (program in TMUX_INDIRECT_RUNNERS and program != "find" or
+                          program == "tmux" and not tmux_read_only(literal))
+                reads_code = program in {"source", "."} or bool(TMUX_SHELL_RE.fullmatch(program)) or bool(interpreter_family(program))
+                source_input = "<(" in group and reads_code and (program in {"source", "."} or len(argv) == 1)
+                if (indirect_cache_script(argv, exec_cwd, variables, inline) or
+                        names_helper and (runner or inline or nested is not None or find_action and (reads_code or program == "{}")) or
+                        source_input and any(cache_reference(peer_literal(word), variables) for word in group) or
+                        upstream_helper and (inline or program in {"xargs", "parallel"})):
+                    raise PolicyFailure("helper.launch", "invoke the installed helper directly as one literal Bash segment")
+                if nested is None and program in INLINE_SHELLS and shell_inline_code(program, literal):
+                    nested = stdin_source
+                if nested:
+                    check_shell_targets(ctx, nested, exec_cwd, depth + 1, variables)
+                if ledger is None or ctx.semantic_role != "orchestrator":
+                    continue
+                feeder = program in {"xargs", "parallel"}
+                if not (feeder or inline or "|" in group or "|&" in group):
+                    continue
+                names_ledger = peer_within(exec_cwd, canonical(ledger)) or any(
+                    ledger_in_text(text, ledger, exec_cwd) for text in inputs)
+                if (inline or feeder) and (names_ledger or upstream_ledger):
+                    raise PolicyFailure("orchestrator.state_write", "inline code or an operand feeder names the scheduler task ledger")
+                upstream_ledger |= names_ledger
+            upstream_helper |= names_helper
+            if "|" in group or "|&" in group:
+                upstream_paths.extend(pipeline_path_inputs(wrapped.argv))
+                upstream_source = literal_pipe_output(wrapped.argv, stdin_source)
+
+    # The outer command's child/state walker sees shell arguments as data.
+    # Apply the same operand checks to an actual nested shell program, in
+    # that shell's own cwd. A here-document supplied to a reader stays data.
+    if depth and ctx.semantic_role == "orchestrator":
+        nested_words = parse_shell(command_lines(source) if "\n" in source else source, peer_paths=True)
+        if ctx.peers or ctx.task_ledger is not None:
+            check_peer_writes(ctx, nested_words, base, state=True)
+        if ctx.peers or not ctx.confined_orchestrator:
+            check_peer_writes(ctx, nested_words, base, state=False)
+
+
+def copy_outputs(argv: List[str], cwd: Path) -> Optional[List[str]]:
+    """Write operands for ordinary cp. Unreviewed options keep the full operand check."""
+    if not argv or Path(argv[0]).name != "cp":
+        return None
+    sources = []
+    options = True
+    directory = None
+    index = 1
+    while index < len(argv):
+        word = argv[index]
+        index += 1
+        if options and word == "--":
+            options = False
+        elif options and word in {"-t", "--target-directory"} and index < len(argv):
+            directory = argv[index]
+            index += 1
+        elif options and word.startswith("--target-directory="):
+            directory = word.partition("=")[2]
+        elif options and word.startswith("-t") and len(word) > 2:
+            directory = word[2:]
+        elif options and word.startswith("-"):
+            if not re.fullmatch(r"-[finpv]+", word):
+                return None
+        else:
+            sources.append(word)
+    if directory is None and len(sources) < 2:
+        return None
+    target = sources.pop() if directory is None else directory
+    if not target or not sources:
+        return None
+    # An unquoted expansion can inject options. Retain the conservative
+    # grammar when a source could change which operand names the destination.
+    if any("$" in word.replace(PEER_QUOTED + "$", "") or
+           (options and glob.has_magic(word) and "/" not in word) for word in sources):
+        return None
+    outputs = [target]
+    if not any(ch in target for ch in "$*?[{") and (cwd / peer_filename(target)).is_dir():
+        # cp src dir writes dir/basename(src), which can itself be a symlink.
+        outputs.extend(str(Path(target) / Path(src).name) for src in sources)
+    return outputs
+
+
+def check_peer_writes(ctx: Context, tokens: List[str], base: Path, *, state: bool,
+                      loop_paths: Iterable[str] = ()) -> None:
     if state:
         # When tasks/ is a symlink, protect its target and the store directory
         # that holds the link. Removing the latter would disconnect the ledger.
@@ -3787,6 +4302,7 @@ def check_peer_writes(ctx: Context, tokens: List[str], base: Path, *, state: boo
     scope = "the engine state directory or the scheduler task ledger" if state else "a child repository"
     floors = (ctx.project_root, canonical(Path.home()))
     ancestors = {p for root in roots for p in root.parents if state and not any(peer_within(floor, p) for floor in floors)}
+    protected_vars = set(loop_paths)
 
     def refusal(reason: str) -> PolicyFailure:
         return PolicyFailure("orchestrator.state_write" if state else "orchestrator.child_write", reason)
@@ -3795,7 +4311,25 @@ def check_peer_writes(ctx: Context, tokens: List[str], base: Path, *, state: boo
         if not word:
             return
         parameter = "$" in word or "`" in word
-        if parameter and not file_operand and "/" not in word:
+        if parameter and any(match[1] in protected_vars for match in PEER_VARIABLE.finditer(word)):
+            raise refusal("mutating command references %s through loop variable %r" % (scope, peer_literal(word)))
+        if parameter and state and not ctx.peers:
+            # Expand only roots known to the policy, including the scheduler
+            # pin rather than a caller-supplied SESSION_SCHEDULER_HOME.
+            first, slash, tail = word.removeprefix("./").partition("/")
+            for name, path in (("SESSION_SCHEDULER_HOME", ctx.task_ledger.parent),
+                               ("SESSION_WORKSPACE_PROJECT_ROOT", ctx.project_root), ("PWD", cwd), ("HOME", Path.home())):
+                if "$" in first and peer_literal(first) in {"$" + name, "${" + name + "}"}:
+                    cwd, word = path, "." + slash + tail
+                    parameter = "$" in word or "`" in word
+                    break
+            # Opaque variables outside the ledger keep their existing shell
+            # and child classification. A relative destination inside it may
+            # still address a record in the current directory.
+            if parameter and not any(peer_within(cwd, root) for root in roots) and not ledger_in_text(
+                    peer_literal(word), ctx.task_ledger, cwd):
+                return
+        if parameter and "/" not in word and (not file_operand or (not state and not ctx.peers)):
             return  # a scalar such as a duration, PID or helper message
         braced = "{" in word and "}" in word and ("," in word or ".." in word)
         dynamic = parameter or braced or glob.has_magic(word)
@@ -3814,7 +4348,11 @@ def check_peer_writes(ctx: Context, tokens: List[str], base: Path, *, state: boo
             elif glob.has_magic(word):
                 paths = peer_glob_paths(word, cwd, roots + ctx.child_roots if state else roots)
             else:
-                paths = ((canonical(cwd / peer_filename(word)), False),)
+                raw = cwd / peer_filename(word)
+                paths = ((canonical(raw), False),)
+                if state and raw.is_symlink():
+                    # rm/mv change the directory entry even when its target is elsewhere.
+                    paths += ((canonical(raw.parent) / raw.name, False),)
             hidden_hit = visible_child = False
             for path, hidden in paths:
                 if any(peer_within(path, root) for root in roots) or any(peer_same_path(path, parent) for parent in ancestors):
@@ -3844,27 +4382,59 @@ def check_peer_writes(ctx: Context, tokens: List[str], base: Path, *, state: boo
                 inner = source[2:-1] if source.startswith("$(") else source[1:-1]
                 if "\n" in inner:
                     inner = command_lines(inner)
-                check_peer_writes(ctx, parse_shell(inner, peer_paths=True), cwd, state=state)
+                check_peer_writes(ctx, parse_shell(inner, peer_paths=True), cwd, state=state, loop_paths=protected_vars)
         # A condition can read the ledger. Classify its actual command, but
         # never treat a conditional chdir as an unconditional cwd transition.
         body = segment
-        while body and body[0].startswith(PEER_KEYWORD):
+        while body and body[0].startswith(PEER_KEYWORD) and body[0] != PEER_KEYWORD + "for":
             body = body[1:]
         if body is not segment and command_basename(body) not in CD_COMMANDS | {"popd"}:
             segment = body
         wrapped = parse_wrappers(segment)
         argv = wrapped.argv
-        test_only = REDIR_WRITE_MARK not in segment and (argv[:1] == ["test"] or (argv[:1] == ["["] and argv[-1:] == ["]"]))
-        if test_only or (not peer_dynamic_invocation(argv) and not segment_mutates([peer_literal(word) for word in segment])):
+        literal_argv = [peer_literal(word) for word in argv]
+        # The shell reads a for-list and executes its body in later segments.
+        # Substitutions above and redirects below still have their own effects.
+        for_list = (argv[:1] == [PEER_KEYWORD + "for"] and len(argv) >= 2 and
+                    re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argv[1]) and (len(argv) == 2 or argv[2] == "in"))
+        if for_list:
+            # The loop leaves its last value in the shell after done. Keep
+            # this binding across later segments, which may run conditionally.
+            try:
+                for item in argv[3:]:
+                    check(item, cwd, file_operand=False)
+            except PolicyFailure:
+                protected_vars.add(argv[1])
+        test_only = argv[:1] == ["test"] or (argv[:1] == ["["] and argv[-1:] == ["]"])
+        writes_argv = not (test_only or for_list) and (peer_dynamic_invocation(argv) or segment_mutates(literal_argv))
+        if not writes_argv and REDIR_WRITE_MARK not in segment:
             continue
         exec_cwd = resolve_chdir_hops(wrapped.chdirs, cwd, peer_paths=True)
-        if any(peer_within(exec_cwd, root) for root in roots):
+        destinations = copy_outputs(argv, exec_cwd) if writes_argv else None
+        # A non-peer ledger may be the cwd for a read or a copy out. The
+        # explicit destinations below decide both of those cases.
+        if (not state or ctx.peers or (writes_argv and destinations is None)) and any(
+                peer_within(exec_cwd, root) for root in roots):
             raise refusal("mutating command runs inside %s at %s" % (scope, exec_cwd))
-        for value in wrapped.values:
-            # Redirections carry an explicit path. A plain assignment can be data.
+        # The shell opens redirection targets before an env -C hop. Only
+        # write redirects carry the mark immediately after their path.
+        for path, mark in zip(segment, segment[1:]):
+            if mark == REDIR_WRITE_MARK and path.startswith(REDIR_PATH_PREFIX):
+                check(path[len(REDIR_PATH_PREFIX):], cwd)
+        if not writes_argv:
+            continue
+        for value in parse_wrappers([word for word in segment if not word.startswith(REDIR_PATH_PREFIX)]).values:
             check(value, cwd, file_operand=False)
-        if argv and "/" in peer_literal(argv[0]):
-            check(argv[0], exec_cwd)
+        if argv and ("/" in peer_literal(argv[0]) or "$" in argv[0]):
+            check(argv[0], exec_cwd, file_operand="/" in peer_literal(argv[0]))
+        if destinations is not None:
+            for dest in destinations:
+                check(dest, exec_cwd)
+            continue
+        if argv and Path(argv[0]).name == "git":
+            for directory in git_globals(argv)[3]:
+                check(directory, exec_cwd)
+                exec_cwd = canonical(exec_cwd / peer_filename(directory)) if directory else exec_cwd
         files = bool(argv) and Path(argv[0]).name in PEER_FILE_COMMANDS
         for kind, value in argv_fields(argv, peer_paths=True):
             if kind == "literal":
@@ -4123,10 +4693,13 @@ def helper_invocation(ctx: Context, tokens: List[str], raw: str) -> Optional[Tup
     return (plugin, script, args). Returns None when no cache script is
     executed at all. Raises PolicyFailure on any malformed attempt."""
     if not is_helper_attempt(tokens):
+        lines = parse_shell(command_lines(raw)) if "\n" in raw else tokens
+        if lines is not tokens and is_helper_attempt(lines):
+            raise PolicyFailure("helper.segment", "installed helpers require one literal, uncomposed Bash segment")
         return None
     if any(is_control(token) for token in tokens) or has_unquoted_expansion(raw):
         raise PolicyFailure("helper.segment", "installed helpers require one literal, uncomposed Bash segment")
-    if len(tokens) < 2 or tokens[0] != "bash":
+    if len(tokens) < 2 or tokens[0] != "bash" or "/plugins/cache/" not in tokens[1]:
         raise PolicyFailure("helper.launch", "installed helpers require literal `bash` followed by one canonical script path")
     _, plugin, script_name = trusted_script(ctx, tokens[1])
     _note_parsed_helper(plugin, script_name)
@@ -5091,22 +5664,6 @@ def segment_mutates(segment: List[str]) -> bool:
     if executable == "git":
         return not git_is_read_only(segment)
     return True
-
-
-def references_child(segment: List[str], ctx: Context, cwd: Optional[Path] = None, roots: Optional[tuple] = None) -> bool:
-    roots = ctx.child_roots if roots is None else roots
-    base = cwd if cwd is not None else ctx.project_root
-    child_rel = tuple(str(root.relative_to(base)) for root in roots if within(root, base) and root != base)
-    try:
-        wrapped = parse_wrappers(segment)
-        paths = [candidate_path(value, base, child_rel) for value in wrapped.values]
-        paths.append(executable_path(wrapped.argv[0], base) if wrapped.argv else None)
-        paths.extend(path for _, path, _ in argv_paths(wrapped.argv, base, child_rel))
-        if any(path is not None and any(within(path, root) for root in roots) for path in paths):
-            return True
-    except PolicyFailure:
-        return True
-    return False
 
 
 def validate_tool_workdir(ctx: Context, tool_input: dict) -> None:
@@ -6202,7 +6759,11 @@ def validate_bash(ctx: Context, command: str, tool_input: dict, hook_cwd: Option
         if token == "--permission-mode" and index + 1 < len(tokens) and tokens[index + 1] == "bypassPermissions":
             raise PolicyFailure("shell.sandbox_escape", "sandbox/approval/permission escape flags are outside strict-v1: bypassPermissions")
 
-    peer_shells = []
+    base = ctx.pane_cwd
+    if isinstance(hook_cwd, str) and hook_cwd.strip():
+        base = canonical(base / Path(hook_cwd).expanduser())
+    bases = {canonical(base / Path(value).expanduser()) for key in ("cwd", "workdir")
+             for value in (tool_input.get(key),) if isinstance(value, str) and value.strip()} or {base}
     if ctx.peers:
         # Peers: identity overrides are refused for every role, before any
         # route classifier can judge the same command by its argv alone.
@@ -6211,23 +6772,22 @@ def validate_bash(ctx: Context, command: str, tool_input: dict, hook_cwd: Option
             peers_identity_override(line_tokens)
         if ctx.semantic_role == "orchestrator":
             peers_tmux(ctx, command, tokens)
-            base = ctx.pane_cwd
-            if isinstance(hook_cwd, str) and hook_cwd.strip():
-                base = canonical(base / Path(hook_cwd).expanduser())
-            bases = {canonical(base / Path(value).expanduser()) for key in ("cwd", "workdir")
-                     for value in (tool_input.get(key),) if isinstance(value, str) and value.strip()} or {base}
-            peer_tokens = [parse_shell(command, peer_paths=True)]
-            if line_tokens is not tokens:
-                peer_tokens.append(parse_shell(command_lines(command), peer_paths=True))
-            peer_shells = list(itertools.product(peer_tokens, bases))
-            for words, shell_cwd in peer_shells:
-                check_peer_writes(ctx, words, shell_cwd, state=True)
 
     # Installed-helper invocations are gated identically for EVERY role: exact
     # selected provenance, one literal segment, reviewed argv grammar, and
     # master-only routing (children -> orchestrator; orchestrator -> its
     # configured executor/reviewer panes).
     helper = helper_invocation(ctx, tokens, command)
+    if helper is None:
+        for shell_cwd in bases:
+            check_shell_targets(ctx, command, shell_cwd)
+    peer_shells = []
+    if ctx.semantic_role == "orchestrator":
+        words = parse_shell(command_lines(command) if "\n" in command else command, peer_paths=True)
+        peer_shells = [(words, shell_cwd) for shell_cwd in bases]
+        if ctx.peers or (ctx.task_ledger is not None and helper is None):
+            for words, shell_cwd in peer_shells:
+                check_peer_writes(ctx, words, shell_cwd, state=True)
     if helper is not None:
         if ctx.semantic_role == "reviewer" and reviewer_base != ctx.pane_cwd:
             raise PolicyFailure("helper.workdir", "reviewer helpers require the configured pane cwd")
@@ -6336,12 +6896,6 @@ def validate_bash(ctx: Context, command: str, tool_input: dict, hook_cwd: Option
             orchestrator_in_child(ctx, after) or orchestrator_in_child(ctx, exec_cwd)
         ):
             raise PolicyFailure("orchestrator.child_chdir", "orchestrator cannot change its execution directory into a child repository")
-        if not ctx.peers and segment_mutates(segment) and (
-            references_child(segment, ctx, cwd)
-            or references_child(unwrap_prefixes(segment), ctx, exec_cwd)
-            or any(within(exec_cwd, root) for root in ctx.child_roots)
-        ):
-            raise PolicyFailure("orchestrator.child_write", "orchestrator cannot run a mutating/unknown command against a child repository")
     for words, shell_cwd in peer_shells:
         check_peer_writes(ctx, words, shell_cwd, state=False)
 
@@ -6388,10 +6942,14 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
         if isinstance(value, str) and value.strip():
             base = canonical(Path(value.strip()))
     resolved = []
+    ledger = peers_task_ledger(ctx) if ctx.semantic_role == "orchestrator" else None
     for value in sorted(targets):
         raw = Path(value).expanduser()
         raw = raw if raw.is_absolute() else base / raw
-        resolved.append((value, raw, canonical(raw)))
+        path = canonical(raw)
+        if ledger is not None and (peer_within(path, ledger) or (raw.is_symlink() and peer_within(canonical(raw.parent), ledger))):
+            raise PolicyFailure("orchestrator.state_write", "the scheduler task ledger is written only by the scheduler helpers: %s" % value)
+        resolved.append((value, raw, path))
     if ctx.semantic_role in {"reviewer", "executor"} or ctx.confined_orchestrator:
         # Check the lexical path as well: a symlink under the messages grant
         # must not fall through to ordinary checkout edit authority.
@@ -6425,9 +6983,6 @@ def validate_edit(ctx: Context, tool_input: dict, payload: dict) -> None:
                 raise PolicyFailure("orchestrator.protected_file", "orchestrator cannot edit protected credential/lockfile: %s" % value)
         if ctx.peers and ctx.semantic_role == "orchestrator" and ctx.state_dir is not None and peer_within(path, ctx.state_dir):
             raise PolicyFailure("orchestrator.state_write", "the engine state directory is written only by the engine: %s" % value)
-        ledger = peers_task_ledger(ctx) if ctx.peers and ctx.semantic_role == "orchestrator" else None
-        if ledger is not None and peer_within(path, ledger):
-            raise PolicyFailure("orchestrator.state_write", "the scheduler task ledger is written only by the scheduler helpers: %s" % value)
         if ctx.semantic_role == "executor" or ctx.confined_orchestrator:
             if not within(path, ctx.pane_cwd):
                 raise PolicyFailure("executor.containment", "executor edit escapes its configured child cwd: %s" % value)
@@ -6586,6 +7141,8 @@ _FLOOR_TO_PANES = ("routing", "outbound coordination only through the selected h
 # whether through a helper, the `workspace` dispatcher on PATH or a copy.
 _FLOOR_LIFECYCLE = ("lifecycle", "workspace lifecycle verbs denied by any route", ("coordination.write",), ())
 _FLOOR_SELF_STOP = ("self_stop", "no stop or restart of the session holding this pane", ("orchestrator.self_stop",), ())
+_FLOOR_LEDGER = ("state", "no direct scheduler ledger edits or writes, or ledger paths in inline code or operand feeders",
+                 ("orchestrator.state_write",), ())
 # A peers orchestrator (schema 6): the orchestrator floor plus the owner,
 # lifecycle, tmux, state-directory and identity clauses.
 _FLOOR_PEERS = (
@@ -6600,7 +7157,9 @@ _FLOOR_PEERS = (
 _FLOOR_ORCHESTRATOR = (
     ("child_write", "no edit or mutating shell against a child checkout", ("orchestrator.child_write",), ()),
     ("push", "no git push", ("orchestrator.push",), ()),
-) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_SELF_STOP)
+) + _FLOOR_GH + (
+    _FLOOR_TO_PANES, _FLOOR_SELF_STOP, _FLOOR_LEDGER,
+)
 ROLE_FLOOR = {
     "reviewer": (
         ("readonly", "edit family denied, except this pane's own message drafts", ("reviewer.readonly", "coordination.draft"),
@@ -6619,7 +7178,7 @@ ROLE_FLOOR = {
     # An environment coordinator whose cwd is not the project root.
     "confined_orchestrator": _FLOOR_CONTAINMENT + (
         ("git", "no local Git mutation, push included", ("orchestrator.git",), (("READ_GIT", "git read subcommands"),)),
-    ) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_TMUX, _FLOOR_SELF_STOP),
+    ) + _FLOOR_GH + (_FLOOR_TO_PANES, _FLOOR_TMUX, _FLOOR_SELF_STOP, _FLOOR_LEDGER),
 }
 COMMON_FLOOR = (
     ("helpers", "selected installed version only, reviewed argv, gated by role",
@@ -6629,6 +7188,8 @@ COMMON_FLOOR = (
      (("PRIVILEGE_WRAPPERS", "privilege wrappers"),)),
     ("sandbox_escape", "no sandbox, approval or permission escape flags", ("shell.sandbox_escape",),
      (("ESCAPE_FLAG_TOKENS", "escape flags"),)),
+    ("project_root", "preserve the project root, its ancestors and the home directory",
+     ("shell.project_root",), ()),
 )
 # Rules that only an optional harness.guards pack turns on. They are never floor.
 GUARD_PACK_RULES = {
@@ -6670,6 +7231,17 @@ _PROBE_CONTAINMENT = (
 )
 _PROBE_SELF_STOP = ("shell", "orchestrator.self_stop", "stop of its own session through the PATH dispatcher",
                     "workspace stop {session} --confirmed")
+_PROBES_LEDGER = (
+    ("edit_one", "orchestrator.state_write", "native edit inside the task ledger", "{ledger}/probe.json"),
+    ("shell", "orchestrator.state_write", "scheduler ledger path in xargs input", "echo {ledger} | xargs ls"),
+    ("shell", "orchestrator.state_write", "scheduler ledger path in inline code", "python3 -c {ledger_code}"),
+)
+_PROBES_WORKSPACE_FILES = _PROBES_LEDGER + (
+    ("shell", "allow", "copy a child file to an external destination", "cp {child} {external_output}"),
+    ("shell", "allow", "redirect a child file read to an external destination", "jq . {child} > {external_output}"),
+    ("shell", "allow", "read a child file in a loop", 'for f in {child}; do wc -l "$f"; done'),
+    ("shell", "orchestrator.child_write", "mutate a child file through the loop variable", 'for f in {child}; do git add "$f"; done'),
+)
 _PROBES_PEERS = (
     ("shell", "orchestrator.peer_lifecycle", "stop of another orchestrator session through the PATH dispatcher",
      "workspace stop {peer_session} --confirmed"),
@@ -6708,7 +7280,7 @@ FLOOR_PROBES = {
         ("shell", "reviewer.path", "read outside the pane's read roots", "cat {outside}"),
     ) + _PROBE_TO_MASTER + (_PROBE_LIFECYCLE,),
     "executor": _PROBE_CONTAINMENT + _PROBE_TO_MASTER + (_PROBE_LIFECYCLE,),
-    "orchestrator": (
+    "orchestrator": _PROBES_WORKSPACE_FILES + (
         ("edit", "orchestrator.child_write", "edit inside a child checkout", "{child}"),
         ("edit_one", "allow", "Edit in the pane's own checkout", "{probe}"),
         ("shell", "orchestrator.child_write", "touch inside a child checkout", "touch {child}"),
@@ -6719,7 +7291,7 @@ FLOOR_PROBES = {
         ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
         _PROBE_SELF_STOP,
     ),
-    "peer_orchestrator": (
+    "peer_orchestrator": _PROBES_WORKSPACE_FILES + (
         ("edit", "orchestrator.child_write", "edit inside a child checkout", "{child}"),
         ("edit_one", "allow", "Edit in the pane's own checkout", "{probe}"),
         ("shell", "orchestrator.child_write", "touch inside a child checkout", "touch {child}"),
@@ -6728,7 +7300,7 @@ FLOOR_PROBES = {
         ("shell", "routing.master", "copied outbound helper", "bash {cwd}/send-message.sh probe"),
         _PROBE_SELF_STOP,
     ) + _PROBES_PEERS,
-    "confined_orchestrator": _PROBE_CONTAINMENT + (
+    "confined_orchestrator": _PROBE_CONTAINMENT + _PROBES_LEDGER + (
         ("shell", "orchestrator.git", "git commit", "git commit -m probe"),
         ("shell", "orchestrator.git", "git push", "git push"),
         ("shell", "orchestrator.git", "git reflog expire", "git reflog expire --all --expire=now"),
@@ -6737,6 +7309,8 @@ FLOOR_PROBES = {
     ) + _PROBE_TO_MASTER,
 }
 COMMON_PROBES = (
+    ("shell", "shell.project_root", "remove the project directory", "rmdir {project}"),
+    ("shell", "helper.launch", "installed helper inside an inline shell", "sh -c 'bash /probe/plugins/cache/probe/0/scripts/probe.sh'"),
     ("shell", "helper.provenance", "helper outside the selected install",
      "bash {outside}/plugins/cache/probe/0/scripts/probe.sh"),
     ("shell", "shell.privilege", "sudo", "sudo true"),
@@ -6804,15 +7378,22 @@ def probe_payloads(ctx: Context, case: tuple) -> List[Tuple[str, str, str]]:
     child = next((root for root in ctx.child_roots if not within(ctx.pane_cwd, root)), None)
     messages = ctx.message_roots[0] if ctx.message_roots else None
     other_worker = next((name for name, owner in ctx.worker_owners if owner != ctx.pane_name), None)
+    ledger = shell_task_ledger(ctx)
+    if "{ledger" in value and ledger is None:
+        return []
     if ("{child}" in value and child is None) or ("{messages}" in value and messages is None) \
             or ("{other_worker}" in value and other_worker is None) or ("{state}" in value and ctx.state_dir is None):
         return []
-    if expected == "allow" and kind == "edit_one" and any(within(ctx.pane_cwd, root) for root in ctx.child_roots) \
+    if expected == "allow" and (kind == "edit_one" or "{external_output}" in value) and any(within(ctx.pane_cwd, root) for root in ctx.child_roots) \
             and ctx.semantic_role == "orchestrator" and not ctx.confined_orchestrator:
         return []  # The orchestrator's own cwd is itself a child checkout here.
     places = {
+        "project": str(ctx.project_root),
         "probe": str(ctx.pane_cwd / FLOOR_PROBE_NAME),
         "outside": FLOOR_PROBE_OUTSIDE,
+        "external_output": FLOOR_PROBE_OUTSIDE,
+        "ledger": str(ledger),
+        "ledger_code": "print(%r)" % str(ledger),
         "child": str((child or ctx.pane_cwd) / FLOOR_PROBE_NAME),
         "messages": str((messages or ctx.pane_cwd) / FLOOR_PROBE_NAME),
         "cwd": str(ctx.pane_cwd),

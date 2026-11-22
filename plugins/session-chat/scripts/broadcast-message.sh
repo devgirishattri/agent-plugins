@@ -58,19 +58,11 @@ fi
 
 ensure_tmux
 
-MY_NAME=$(get_my_name)
-MY_NAME_ERR=$(pop_pane_name_err)
-if [ -z "$MY_NAME" ]; then
-  # Distinguish a genuinely-unnamed pane from a sandbox denial of the self-name
-  # query: the former is a user error (run /whoami), the latter is an escalation
-  # problem. Misreporting a denial as "no name" sends the user down the wrong path.
-  if [ -n "$MY_NAME_ERR" ]; then
-    echo "ERROR: could not resolve this pane's name.$(pane_name_err_detail "$MY_NAME_ERR")" >&2
-  else
-    echo "ERROR: This pane has no name. Run /whoami <name> first." >&2
-  fi
-  exit 1
-fi
+# The sender is the tmux pane that owns this process, verified before any
+# send. The resolver reports an unnamed pane, a socket denial and a
+# SESSION_CHAT_PANE_NAME that disagrees with the owning pane as distinct errors.
+ORIGIN=$(get_my_name --with-id) || exit 1
+IFS=$'\t' read -r MY_NAME ORIGIN_PANE <<< "$ORIGIN"
 
 if [ "$SCOPE" = "all" ]; then
   LIST_ARGS=(-a)
@@ -79,7 +71,7 @@ else
   # yields an empty session name and is the ROOT failure, to be classified at
   # its source rather than only inferred from the follow-on list-panes probe.
   if ! tmux_capture_checked broadcast-session CURRENT_SESSION TMUX_ERR \
-      display-message -p -t "${TMUX_PANE:-}" '#{session_name}'; then
+      display-message -p -t "$ORIGIN_PANE" '#{session_name}'; then
     echo "ERROR: could not resolve the current tmux session.$(tmux_err_detail "$TMUX_ERR")" >&2
     exit 1
   fi
@@ -102,7 +94,7 @@ TARGETS=()
 SEEN=""
 while IFS=$'\t' read -r name pane_id; do
   [ -n "$name" ] || continue
-  [ "$pane_id" = "${TMUX_PANE:-}" ] && continue
+  [ "$pane_id" = "$ORIGIN_PANE" ] && continue
   [ "$name" = "$MY_NAME" ] && continue
   # shellcheck disable=SC2254
   case "$name" in

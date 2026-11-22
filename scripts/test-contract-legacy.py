@@ -23,12 +23,12 @@ class Cases:
         self.base=Path(self.temp.name).resolve();self.scripts=self.base/'scripts';self.scripts.mkdir()
         source=Path(os.environ.get('CONTRACT_LEGACY_'+self.provider.upper()+'_SCRIPTS',str(ROOT/self.tree/'session-scheduler/scripts')))
         for path in source.glob('*.sh'): shutil.copy(path,self.scripts/path.name)
-        with (self.scripts/'lib.sh').open('a') as handle: handle.write('\ncurrent_pane_name() { echo owner; }\n')
         self.home=self.base/'store';self.states=self.base/'states';self.states.mkdir()
         self.engine=self.scripts/'task-contract.sh';self.engine.write_text(STUB)
         self.chat=self.base/'chat';(self.chat/'scripts').mkdir(parents=True)
         for provider in ['claude','codex']:
-            folder=self.chat/('.'+provider+'-plugin');folder.mkdir();(folder/'plugin.json').write_text('{"name":"session-chat","version":"0.17.13"}')
+            folder=self.chat/('.'+provider+'-plugin');folder.mkdir();(folder/'plugin.json').write_text('{"name":"session-chat","version":"0.17.24"}')
+        (self.chat/'scripts/get-my-name.sh').write_text("echo owner\n")
         self.transport='''#!/bin/bash
 if [ -n "${TEST_ATTACH_FILE:-}" ]; then
   jq '.contract={"version":1}' "$TEST_ATTACH_FILE" > "$TEST_ATTACH_FILE.tmp" && mv "$TEST_ATTACH_FILE.tmp" "$TEST_ATTACH_FILE"
@@ -38,6 +38,8 @@ exit 0
         for script in ['dispatch-to-session.sh','send-message.sh']: (self.chat/'scripts'/script).write_text(self.transport)
         self.env={k:v for k,v in os.environ.items() if not k.startswith(('SESSION_','KNOWLEDGE_','TMUX','CLAUDE_','CODEX_'))}
         self.env.update(HOME=str(self.base),SESSION_SCHEDULER_HOME=str(self.home),SESSION_CHAT_ROOT_OVERRIDE=str(self.chat),TEST_STATES=str(self.states),TEST_ROUTE_LOG=str(self.base/'route.log'))
+        self.env.update(PATH=str(ROOT/'scripts/fixtures/pane-actor')+os.pathsep+self.env['PATH'],
+                        TEST_PANE_PID=str(os.getpid()),TEST_PANE_NAME='owner',TMUX='contract-fixture',TMUX_PANE='%1')
         result=self.run_script('task-status.sh','--all');self.assertEqual(result.returncode,0,result.stderr)
 
     def run_script(self,name,*args,extra=None):

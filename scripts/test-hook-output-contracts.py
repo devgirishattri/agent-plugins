@@ -203,8 +203,9 @@ def knowledge_pending(box, provider, plugin_dir):
 
 
 def chat_in_tmux(box, provider, plugin_dir):
-    box.fake_tmux()
-    return {"TMUX": "/tmp/contract-tmux,1,0", "TMUX_PANE": "%1", "SESSION_CHAT_PANE_NAME": "me"}, {}
+    (box.bin / "tmux").symlink_to(ROOT / "scripts/fixtures/pane-actor/tmux")
+    return {"TMUX": "/tmp/contract-tmux,1,0", "TMUX_PANE": "%1", "SESSION_CHAT_PANE_NAME": "me",
+            "TEST_PANE_PID": str(os.getpid()), "TEST_PANE_NAME": "me"}, {}
 
 
 def chat_live_message(box, provider, plugin_dir):

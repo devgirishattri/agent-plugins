@@ -17,7 +17,14 @@ echo "handoffs dir:   $HANDOFFS_DIR ($(ls -1 "$HANDOFFS_DIR" 2>/dev/null | wc -l
 echo "locks dir:      $LOCKS_DIR ($(ls -1 "$LOCKS_DIR" 2>/dev/null | wc -l | tr -d ' ') held)"
 echo
 
-echo "current pane:   $(current_pane_name)"
+# Display only: the verified pane name, or the inherited name when tmux cannot
+# be reached. A failure here is the same refusal the verdict helpers would give.
+if DOCTOR_PANE=$(resolve_pane_actor --read-only 2>&1); then
+  echo "current pane:   ${DOCTOR_PANE:-?}"
+else
+  echo "current pane:   ? (not verified: ${DOCTOR_PANE:-no tmux pane owns this process})"
+  echo "  task-done, task-review, task-block and task-contract will refuse from this process."
+fi
 echo "TMUX_PANE:      ${TMUX_PANE:-(not in tmux)}"
 echo
 

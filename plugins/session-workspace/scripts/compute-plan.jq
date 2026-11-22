@@ -284,6 +284,8 @@ def coordination_var_name(store):
     ($cfg.sessions // [])[] | . as $s | ($s.panes // [])[] | select(has("worker"))
     | {name, role: .worker.role, checkout: .worker.checkout, owner: .worker.owner, visible: .worker.visible, running: null, session: $s.id}
   ]
+} elif $harness_active and ($pin | index("scheduler")) != null then {
+  scheduler_store: store_path($store_base; $store_overrides; "scheduler")
 } else {} end)
 + (if ($cfg.schema_version == 4 or $cfg.schema_version == 5 or $cfg.schema_version == 6) and ($cfg | has("orchestration")) then {
   orchestration: (if ($cfg.orchestration.enabled // false) then {

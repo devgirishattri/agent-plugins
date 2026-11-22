@@ -12,10 +12,10 @@ Every plugin below ships for both providers at the same version number.
 | Plugin | Version | Purpose |
 |--------|---------|---------|
 | `session-manager` | 1.8.1 | List, search, and delete local sessions. Codex also supports archive and unarchive. |
-| `session-chat` | 0.17.23 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.11 | Track and assign task ids across orchestrator, executor, and reviewer panes |
+| `session-chat` | 0.17.24 | Name tmux panes, send messages, and dispatch tasks between sessions |
+| `session-scheduler` | 0.7.13 | Track and assign task ids across orchestrator, executor, and reviewer panes |
 | `knowledge` | 0.5.14 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.17.1 | Config-driven tmux workspace with strict-v1 role policy, reviewed Git orchestration, and peer orchestrators with on-demand workers |
+| `session-workspace` | 0.18.1 | Config-driven tmux workspace with strict-v1 role policy, reviewed Git orchestration, and peer orchestrators with on-demand workers |
 | `chronos` | 0.1.5 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.1 | Walk users through session changes with a live in-browser overlay tour |
 
@@ -40,7 +40,7 @@ rather than assumed: the `session-scheduler` Claude suite passes 81/81 under 3.2
 | `jq` | `chronos` | Optional. Claude falls back to hand-built JSON; the Codex build never uses jq. |
 | `curl` | `session-workspace` browser integration | Required for DevTools readiness when starting a selected managed browser from `browser` or schema-v5 `browsers[]`. |
 | `tmux` | `session-chat`, `session-workspace` | Hard. `session-chat` additionally requires that the agent itself be running inside a tmux pane, not merely that tmux be installed. |
-| `tmux` | `session-scheduler` | Hard in practice. The ledger itself does not touch tmux, but every notify path goes through `session-chat`. |
+| `tmux`, `ps` | `session-scheduler` verdicts | Review, done and block require a named tmux pane and access to its process ancestry. Notifications use `session-chat`. |
 | `tmux` | `knowledge` | Required for `context-share`, inside an active tmux session. Otherwise optional for pane identity, where `KNOWLEDGE_PANE_NAME` substitutes. |
 | `git` | `knowledge` | Hard. Store resolution and `init` both require a repository. |
 | `python3` | `knowledge` search and recall | Hard. `memory-search.sh` calls it unguarded, so `/knowledge:search`, `/knowledge:recall`, and auto-recall all need it. |
@@ -317,10 +317,10 @@ substantive work.
 
 ### session-chat
 
-The agent must be running **inside** a tmux pane; having tmux installed is not
-enough, and the scripts exit with an error when `TMUX` is unset. Both ends of a
-conversation need names, since names are the addresses: an unnamed sender is
-refused, and an unnamed recipient cannot be resolved.
+Sending a message or recording a correlated reply requires a named tmux pane.
+Session-chat walks the calling process's parents to identify that pane. If the
+launcher supplied `SESSION_CHAT_PANE_NAME`, its value must match the pane's
+name. Read-only name lookup can use the supplied name when tmux is unreachable.
 
 A `SessionStart` hook names a pane automatically from the session's custom
 title, but only when the pane has no name yet. Set or change one explicitly with:
@@ -349,18 +349,18 @@ establish task completion. Live hook JSON needs Python or jq to decode its
 
 ### session-scheduler
 
-Needs `jq`, `SESSION_SCHEDULER_HOME`, and a working `session-chat` at **0.13.0
-or newer**, which it enforces at runtime and which exists so a dispatch to a
-busy pane is recovered from the durable inbox instead of lost. It layers a
-file-backed ledger on that transport, so set up `session-chat` first and confirm
-panes can actually message each other before assigning tasks.
+Needs `jq`, `SESSION_SCHEDULER_HOME`, and **session-chat 0.17.24 or newer**
+for notifications and verdict drafts. That version verifies senders and draft
+owners and supports durable delivery to busy panes. Confirm the panes can
+exchange messages before assigning tasks.
 
 Scheduler 0.7.5 accepts a complete reviewer verdict through
 `task-done <id> --note-file <own draft>` or `task-block` with the same operands.
-Contracted tasks also require `--generation <N>`. This option requires chat
-0.17.18 and workspace 0.11.5 for the matching strict-v1 grammar. Install the
-three versions together on both providers. Missing draft-validation support
-refuses this option before reading the file; legacy inline notes remain usable.
+Contracted tasks also require `--generation <N>`. Workspace 0.11.5 introduced
+the matching strict-v1 grammar. Install all three current plugins together on
+both providers. If the scheduler cannot verify the required chat version or
+find the draft checker, it refuses `--note-file` before reading the file.
+Inline verdicts still use the scheduler's verified actor.
 The transition and verdict event commit together, then one normal-path
 notification carries the complete verdict to the assigner. Task status shows
 the saved artifact and delivery outcome; `pending` means unconfirmed. Do not
@@ -368,10 +368,11 @@ rerun a transition to repair notification, or send a duplicate correlated
 reply. An unchanged own draft is consumed after commit unless
 `SESSION_CHAT_KEEP_DRAFTS=1`. Delivery does not prove recipient observation.
 
-The ledger itself does not touch tmux, so creating and querying tasks works
-outside it. Legacy assigning, reviewing, completing, and blocking notify through
-`session-chat`, which does require tmux. Attaching an explicit knowledge
-context (`--context NAME`) additionally requires `SESSION_CONTEXT_HOME`;
+You can create and query ordinary tasks outside tmux. Reviewing, completing,
+or blocking a task requires the verified calling pane before any verdict is
+recorded. Assignment and verdict notifications use `session-chat`.
+Attaching an explicit knowledge context (`--context NAME`) additionally requires
+`SESSION_CONTEXT_HOME`.
 `--context auto` writes a scheduler-owned handoff under the ledger home and
 needs nothing else.
 
@@ -722,7 +723,7 @@ or reload the session. Command-scoped exports affect only that invocation.
 | `SESSION_CHAT_KEEP_DRAFTS` | `0` | Set to `1` to retain eligible own-pane drafts after durable dispatch. Otherwise, the transport checks source identity and SHA-256 before removing them. Other prompt files are retained. |
 | `SESSION_CHAT_SKIP_VERIFY` | Unset (`0`) | Set to `1` to skip live marker verification. This weakens delivery guarantees. |
 | `SESSION_CHAT_ALLOW_SHELL_TARGET` | `0` | Set to `1` to permit sending to panes at a shell prompt. Use only for deliberate shell targets because the message may execute as shell input. |
-| `SESSION_CHAT_PANE_NAME` | Unset | Explicitly supplies the sender pane name and bypasses self-name lookup, primarily for sandboxed tmux environments. |
+| `SESSION_CHAT_PANE_NAME` | Unset | The engine supplies the expected pane name. A sender or verdict writer must match it to its process ancestry. Read-only name lookup can use it when tmux is unreachable. |
 | `SESSION_CHAT_TARGET_MESSAGES_DIR` | Auto-detected | Overrides the local mailbox and every target mailbox. Export the same absolute directory in all participating panes before starting their agents so live dispatch trust and queued recovery use one root. |
 | `SESSION_CHAT_PRIORITY` | `normal` | Queue priority: `high` or `1` surfaces before normal messages. Prefer the `--priority` command option. |
 | `SESSION_CHAT_TTL_MS` | `0` | Queue expiry in milliseconds; `0` means no expiry. Prefer the `--ttl` command option, which accepts minutes. |
@@ -799,7 +800,7 @@ rule as the scheduler's transport-bearing helpers.
 | `SESSION_SCHEDULER_FORCE` | Yes | Yes | `0` | Set to `1` to permit otherwise illegal legacy status transitions. Prefer `--force`. Contracted tasks refuse both overrides. |
 | `SESSION_CHAT_ROOT_OVERRIDE` | Yes | Yes | Unset | Development/integration override for locating the scheduler's `session-chat` dependency. |
 | `SESSION_CHAT_PLUGIN_ROOT` | No | Yes | Unset | Additional Codex-only explicit locator for `session-chat`. |
-| `SESSION_SCHEDULER_SKIP_VERSION_CHECK` | Yes | No | `0` | Claude-only escape hatch that bypasses the minimum `session-chat` version check when set to `1`. |
+| `SESSION_SCHEDULER_SKIP_VERSION_CHECK` | Yes | No | `0` | Set to `1` to bypass the Claude dispatch version check. Reading or consuming a verdict draft always requires a verified chat version. |
 
 The scheduler also reads the already-documented
 `SESSION_CHAT_INCOMING_MODE` in its doctor command. Scheduler storage, context

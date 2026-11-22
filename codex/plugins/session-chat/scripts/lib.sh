@@ -255,18 +255,7 @@ _private_tmp_subdir() {
   printf '%s\n' "$dir"
 }
 
-# get_pane_name normally swallows tmux's stderr so callers get a clean
-# empty-string result, but a silent "no name" is indistinguishable from tmux
-# failing to reach the pane at all (wrong/stale socket, dead server). Its
-# stderr is captured to a per-process file instead of a plain variable
-# because callers invoke it as `x=$(get_my_name)` — a command-substitution
-# subshell — so a variable assigned inside get_pane_name never makes it back
-# to the caller's shell. `$$` (unlike `$BASHPID`) stays fixed across that
-# subshell, so the file path below is predictable from either side. That
-# predictability is only safe inside a private (0700), ownership-checked
-# directory — a bare predictable path directly under the world-writable
-# $TMPDIR would let another local user pre-plant a symlink there and have
-# our `2>` redirect follow it into an arbitrary file of theirs.
+# Command substitutions share this PID-scoped private stderr directory.
 _pane_name_scratch_dir() {
   _private_tmp_subdir scratch
 }
@@ -294,29 +283,77 @@ _pop_tmux_err() {
   rm -f "$err_file" 2>/dev/null
 }
 
-get_pane_name() {
-  local pane_id="$1" err_file
-  if err_file="$(_tmux_err_file get-pane-name)"; then
-    tmux display-message -p -t "$pane_id" '#{@name}' 2>"$err_file"
-  else
-    tmux display-message -p -t "$pane_id" '#{@name}' 2>/dev/null
+resolve_pane_actor() {
+  local panes actor pid=$$ parent pane_pid pane_id record
+  local claimed=${SESSION_CHAT_PANE_NAME:-}
+  if ! panes=$(tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>&1); then
+    if [ "${1:-}" = --read-only ] && [[ "$claimed" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      printf '%s\n' "$claimed"
+      return 0
+    fi
+    echo "ERROR: Cannot resolve the calling tmux pane: $panes" >&2
+    case "$panes" in
+      *'Operation not permitted'*|*'Permission denied'*)
+        echo 'Re-run this command escalated/approved to access the tmux socket.' >&2 ;;
+    esac
+    return 1
   fi
+  while [ "$pid" -gt 1 ]; do
+    while read -r pane_pid pane_id; do
+      [ "$pane_pid" = "$pid" ] || continue
+      [[ "$pane_id" =~ ^%[0-9]+$ ]] || break
+      # Read the name only for the matched pane. Recheck its PID in the
+      # same response in case the pane was respawned during the walk.
+      record=$(tmux display-message -p -t "$pane_id" '#{pane_pid} #{@name}') || return 1
+      if [[ "$record" != "$pid "* ]]; then
+        echo 'ERROR: The calling tmux pane changed while resolving its actor.' >&2
+        return 1
+      fi
+      actor=${record#* }
+      if [ -n "$claimed" ] && [ "$claimed" != "$actor" ]; then
+        echo 'ERROR: SESSION_CHAT_PANE_NAME disagrees with the calling tmux pane.' >&2
+        return 1
+      fi
+      if [ "${1:-}" = --read-only ] && [ -z "$actor" ]; then
+        return 0
+      fi
+      if ! [[ "$actor" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo 'ERROR: The calling tmux pane has an empty or unsafe externally assigned name.' >&2
+        return 1
+      fi
+      if [ "${1:-}" = --with-id ]; then
+        printf '%s\t%s\n' "$actor" "$pane_id"
+      else
+        printf '%s\n' "$actor"
+      fi
+      return 0
+    done <<< "$panes"
+    if ! parent=$(/bin/ps -o ppid= -p "$pid" 2>&1); then
+      echo "ERROR: Cannot read the calling process ancestry: $parent" >&2
+      case "$parent" in
+        *'Operation not permitted'*|*'Permission denied'*)
+          echo 'Re-run this command escalated/approved to read process ancestry.' >&2 ;;
+      esac
+      return 1
+    fi
+    parent=${parent//[[:space:]]/}
+    [[ "$parent" =~ ^[0-9]+$ ]] && [ "$parent" != "$pid" ] || break
+    pid=$parent
+  done
+  echo 'ERROR: No tmux pane owns the calling process or its ancestors.' >&2
+  return 1
 }
 
+# Chat labels are also mailbox identifiers. Apply their existing grammar
+# after resolving the pane, including when returning its transport pane ID.
 get_my_name() {
-  # SESSION_CHAT_PANE_NAME lets a caller assert its own identity directly,
-  # bypassing the tmux self-query. Escape hatch for environments (e.g. some
-  # sandboxed exec contexts) where `tmux display-message -t $TMUX_PANE` on
-  # one's own pane can fail even though the pane genuinely has a name.
-  if [ -n "${SESSION_CHAT_PANE_NAME:-}" ]; then
-    printf '%s' "$SESSION_CHAT_PANE_NAME"
-    return 0
+  local origin
+  origin=$(resolve_pane_actor "$@") || return 1
+  if ! validate_label "${origin%%$'\t'*}" 2>/dev/null; then
+    echo 'ERROR: The calling tmux pane has an empty or unsafe externally assigned name.' >&2
+    return 1
   fi
-  get_pane_name "${TMUX_PANE:-}"
-}
-
-pop_pane_name_err() {
-  _pop_tmux_err get-pane-name
+  printf '%s\n' "$origin"
 }
 
 # Format the "(tmux: ...)" suffix for a tmux-command error. Permission errors
@@ -325,31 +362,14 @@ pop_pane_name_err() {
 # command escalated/approved, not merely retry one tmux call.
 tmux_err_detail() {
   local tmux_err="$1"
-  local allow_name_override="${2:-}"
   [ -n "$tmux_err" ] || return 0
   local hint=""
   case "$tmux_err" in
     *"Operation not permitted"*|*"Permission denied"*)
       hint=" — looks like a sandboxed exec denied the tmux socket; re-run this command escalated/approved"
-      if [ "$allow_name_override" = "allow-name-override" ]; then
-        hint="$hint, or set SESSION_CHAT_PANE_NAME to skip self-name resolution"
-      fi
       ;;
   esac
   printf ' (tmux: %s)%s' "$tmux_err" "$hint"
-}
-
-pane_name_err_detail() {
-  tmux_err_detail "$1" allow-name-override
-}
-
-report_current_pane_name_failure() {
-  local tmux_err="$1"
-  if [ -n "$tmux_err" ]; then
-    echo "ERROR: Cannot read the current tmux pane name$(pane_name_err_detail "$tmux_err")" >&2
-  else
-    echo "ERROR: This pane has no name. Run \$session-chat:whoami <name> first." >&2
-  fi
 }
 
 # Run a tmux command whose stdout is data consumed by a user-facing script.
@@ -1759,17 +1779,9 @@ ensure_agent_target() {
 send_message() {
   local target_name="$1"
   local message="$2"
-  local my_name tmux_err
-  my_name=$(get_my_name)
-  tmux_err=$(pop_pane_name_err)
-  if [ -z "$my_name" ]; then
-    report_current_pane_name_failure "$tmux_err"
-    return 1
-  fi
-  if ! validate_label "$my_name"; then
-    echo "ERROR: This pane has an unsafe externally assigned name. Rename it with \$session-chat:whoami <name>." >&2
-    return 1
-  fi
+  local origin my_name pane_id
+  origin=$(get_my_name --with-id) || return 1
+  IFS=$'\t' read -r my_name pane_id <<< "$origin"
   case "$SEND_MAX_LEN" in
     ''|*[!0-9]*) SEND_MAX_LEN=1024 ;;
   esac
@@ -1793,7 +1805,7 @@ send_message() {
   fi
   # Durable copy first so a busy/failed paste is never a lost message.
   enqueue_message "$target_name" "$uid" "send" "$my_name" "$message" "$target_messages_dir" || return 1
-  local formatted="[from:${my_name} pane:${TMUX_PANE:-} id:${uid}] ${message} [id:${uid}]"
+  local formatted="[from:${my_name} pane:${pane_id} id:${uid}] ${message} [id:${uid}]"
   local send_rc=0
   send_text "$target_pane" "$formatted" "id:${uid}" || send_rc=$?
   if [ "$send_rc" -eq 0 ]; then
@@ -1822,17 +1834,9 @@ dispatch_message() {
   DISPATCH_MESSAGE_ID=""
   local target_name="$1"
   local message="$2"
-  local my_name tmux_err
-  my_name=$(get_my_name)
-  tmux_err=$(pop_pane_name_err)
-  if [ -z "$my_name" ]; then
-    report_current_pane_name_failure "$tmux_err"
-    return 1
-  fi
-  if ! validate_label "$my_name"; then
-    echo "ERROR: This pane has an unsafe externally assigned name. Rename it with \$session-chat:whoami <name>." >&2
-    return 1
-  fi
+  local origin my_name pane_id
+  origin=$(get_my_name --with-id) || return 1
+  IFS=$'\t' read -r my_name pane_id <<< "$origin"
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
   ensure_agent_target "$target_name" "$target_pane" || return 1
@@ -1858,7 +1862,7 @@ dispatch_message() {
   # Durable copy first (points at the task file), then the live nudge.
   enqueue_message "$target_name" "$uid" "dispatch" "$my_name" "$msg_file" "$target_messages_dir" || return 1
   local send_rc=0
-  send_text "$target_pane" "[from:${my_name} pane:${TMUX_PANE:-} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" "id:${uid}" || send_rc=$?
+  send_text "$target_pane" "[from:${my_name} pane:${pane_id} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" "id:${uid}" || send_rc=$?
   if [ "$send_rc" -eq 0 ]; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"
     log_sent_message "$uid" "$my_name" "$target_name" "dispatch" "live" "$message"

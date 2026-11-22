@@ -81,11 +81,22 @@ Known limitation: two simultaneous *reassignments of the same task* still race o
 
 ## Hard prerequisites
 
-1. Install **session-chat ≥ 0.13.0**. An eligible receiver hook processes a busy pane's durable inbox as output space allows.
+1. Install **session-chat ≥ 0.17.24** in every participating pane. An eligible receiver hook processes a busy pane's durable inbox as output space allows. From this version, session-chat takes the sender of each message and the owner of each `--note-file` draft from the calling tmux pane.
 2. Run executors with `SESSION_CHAT_INCOMING_MODE=auto` for automatic handling, or `assist` for user-guided handling. The default `notify` tells the executor to leave the dispatch body unread. The `incoming-mode` command prints an export. Apply it in the executor's launch environment and relaunch the executor.
 3. **All participating panes have unique registered names** (via `/whoami <name>` or SessionStart auto-naming). Pane names are the addressing scheme.
 
 `/scheduler-doctor` checks the session-chat install/version (#1) and incoming-mode (#2), warning on misconfiguration, and reports the current pane name (it cannot inspect other panes for #3).
+
+### Acting pane
+
+`/task-review`, `/task-done`, `/task-block` and every `task-contract` operation except `inspect` record the acting pane. The helper follows its process ancestry to the tmux pane that owns it and uses that pane's name. It resolves the name before the first write.
+
+- The helper stops and changes nothing when no pane owns the process, when the pane has no name, or when tmux cannot be reached.
+- An inherited `SESSION_CHAT_PANE_NAME` must match the owning pane. A different value stops the helper. Do not set this variable to act as another pane.
+- `/task-new` and `/task-assign` record the assigner the same way. A caller with no pane identity in its environment (no `TMUX`, `TMUX_PANE` or `SESSION_CHAT_PANE_NAME`) stays anonymous and is recorded as `?`.
+- `/task-status --mine` and `/scheduler-doctor` are display only. When tmux cannot be reached, they can use the inherited name.
+- A pane name can contain a dot for these helpers. Contract actors and routes, and all session-chat messages, keep their narrower name rules.
+- An identity refusal prints the resolver's `ERROR:` line and exits non-zero before the diagnostics start. It prints no `DIAG` line. Report it. Do not retry through a wrapper, `bash -c`, or an environment prefix.
 
 ## Commands
 
@@ -163,7 +174,7 @@ A reviewer puts the complete verdict in the reviewer's own session-chat draft (`
 /task-block <id> --note-file <own draft> [short summary]        (contracted task only: <id> --generation <N> --note-file <own draft>)
 ```
 
-Before any change, the helper checks the draft with session-chat's `own-draft-check.sh` (run as a subprocess). It refuses a draft that is not this pane's own private regular file (peer draft, symlink, hardlink, other directory, bad name, unreadable). It also refuses a file larger than `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536; read on each call; the check uses the file size before it hashes or copies anything), a file with a NUL byte, and a file that is not valid UTF-8. An older session-chat with no `own-draft-check.sh` makes the helper refuse `--note-file` with an upgrade message before it reads the file. Inline notes still work with an older session-chat.
+Before any change, the helper checks the draft with session-chat's `own-draft-check.sh` (run as a subprocess). It refuses a draft that is not this pane's own private regular file (peer draft, symlink, hardlink, other directory, bad name, unreadable). It also refuses a file larger than `SESSION_SCHEDULER_NOTE_MAX_BYTES` (default 65536; read on each call; the check uses the file size before it hashes or copies anything), a file with a NUL byte, and a file that is not valid UTF-8. A session-chat older than 0.17.24, one whose version cannot be read, or one with no `own-draft-check.sh` makes the helper refuse `--note-file` with an upgrade message before it reads the file. `SESSION_SCHEDULER_SKIP_VERSION_CHECK` does not change that. After a committed verdict, the same condition keeps the draft. Inline notes still work with an older session-chat. Upgrade session-chat in each participating pane before you record verdicts from a note file.
 
 After the checks, the helper copies the verdict to an exclusive file `prompts/<id>-verdict-<event>.md` (mode 0600) and verifies its SHA-256. `<event>` is 16 random hex characters. One atomic ledger write then records the transition and the event `meta.verdict_events[<event>]`: transition (`done` or `blocked`), actor, `route_to` (the assigner at that time), `request_msg_id`, `generation`, artifact path, `artifact_sha256`, and `notification`. The history note is a short excerpt (at most 200 bytes of the first line) plus the artifact path and SHA-256.
 

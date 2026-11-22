@@ -8,6 +8,7 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
+ACTOR=$(resolve_pane_actor) || exit 1
 sched_diag_reset
 ensure_dirs || { sched_diag_emit; exit 1; }
 
@@ -48,7 +49,6 @@ if [ "$NOTE_FILE_SET" = 1 ]; then
 fi
 
 FILE=$(task_file "$ID") || exit 1
-ACTOR=$(current_pane_name)
 
 sched_diag_reset
 if ! append_history_update "$FILE" "done" "done" "$ACTOR" "$HIST_NOTE" "$VERDICT_ARG"; then

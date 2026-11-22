@@ -9,10 +9,12 @@ fi
 source "$HERE/lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo '{"state":"invalid","error":"python3 unavailable"}'; exit 2; }
 require_jq || { echo '{"state":"invalid","error":"jq unavailable"}'; exit 2; }
+if [ "${1:-}" != inspect ]; then
+  resolve_pane_actor >/dev/null || { echo '{"state":"invalid","error":"cannot verify the calling tmux pane"}'; exit 2; }
+fi
 ensure_dirs || { echo '{"state":"invalid","error":"scheduler store unavailable"}'; exit 2; }
-TASK_CONTRACT_ACTOR=$(current_pane_name)
 TASK_CONTRACT_CHAT_ROOT=$(session_chat_root 2>/dev/null || true)
-export TASK_CONTRACT_ACTOR TASK_CONTRACT_CHAT_ROOT
+export TASK_CONTRACT_CHAT_ROOT
 if [ "${1:-}" = route ]; then
   shift
   operation=${1:-}; shift || true

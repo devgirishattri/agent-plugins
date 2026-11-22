@@ -41,8 +41,8 @@ class Verdicts(unittest.TestCase):
             if source.exists(): shutil.copyfile(source, scripts / name)
         for meta in ['.claude-plugin', '.codex-plugin']:
             (chat / meta).mkdir()
-            (chat / meta / 'plugin.json').write_text('{"version":"0.17.18"}')
-        (scripts / 'get-my-name.sh').write_text('printf "%s" "$PROBE_ACTOR"\n')
+            (chat / meta / 'plugin.json').write_text('{"version":"0.17.24"}')
+        (scripts / 'get-my-name.sh').write_text('printf "%s" "$TEST_PANE_NAME"\n')
         (scripts / 'dispatch-to-session.sh').write_text('''printf '%s\\n' "$1" >> "$PROBE_LOG/dispatch.log"
 cp "$2" "$PROBE_LOG/payload.md"
 [ "${PROBE_DISPATCH:-ok}" != fail ] || { printf '%s\\n' 'fixture: no pane named reviewer' "${PROBE_ID_STDERR:-}" >&2; exit 1; }
@@ -53,7 +53,7 @@ exit 0
 ''')
         (scripts / 'send-message.sh').write_text('printf "%s\\n" "$2" >> "$PROBE_LOG/send.log"\nexit "${PROBE_SEND_RC:-0}"\n')
         bindir = base / 'bin'; bindir.mkdir()
-        tmux = bindir / 'tmux'; tmux.write_text('#!/bin/sh\nprintf "%s" "$PROBE_ACTOR"\n'); tmux.chmod(0o700)
+        (bindir / 'tmux').symlink_to(ROOT / 'scripts/fixtures/pane-actor/tmux')
         messages = base / 'messages'
         for actor in ['reviewer', 'foreign', 'executor']:
             (messages / 'drafts' / actor).mkdir(parents=True, exist_ok=True)
@@ -62,12 +62,13 @@ exit 0
         env = dict(self.env, SESSION_SCHEDULER_HOME=str(base / 'scheduler'),
                    SESSION_CHAT_ROOT_OVERRIDE=str(chat), SESSION_CHAT_TARGET_MESSAGES_DIR=str(messages),
                    PATH=str(bindir)+os.pathsep+self.env['PATH'], TMUX='fixture', TMUX_PANE='%1',
-                   PROBE_LOG=str(log), PROBE_ID_OUTPUT='Message id: aaaaaaaaaaaaaaaa')
+                   TEST_PANE_PID=str(os.getpid()), PROBE_LOG=str(log), PROBE_ID_OUTPUT='Message id: aaaaaaaaaaaaaaaa')
         return {'provider': provider, 'base': base, 'env': env, 'log': log, 'messages': messages,
                 'scripts': PROVIDERS[provider] / 'session-scheduler/scripts'}
 
     def run_helper(self, f, actor, script, *args, ok=True, extra=None):
-        env = dict(f['env'], PROBE_ACTOR=actor, SESSION_CHAT_PANE_NAME=actor, **(extra or {}))
+        env = dict(f['env'], TEST_PANE_NAME=actor, SESSION_CHAT_PANE_NAME=actor)
+        env.update(extra or {})
         result = subprocess.run(['bash', str(f['scripts'] / script), *args], env=env,
                                 capture_output=True, text=True, timeout=35)
         if ok: self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -115,6 +116,88 @@ exit 0
                     self.assertTrue((f['log'] / 'payload.md').read_text().startswith(f'[task:{task}] [event:{ve}] '))
                     self.assertFalse((f['log'] / 'send.log').exists()); self.assertFalse(draft.exists())
                     self.assertNotIn('[re:', (f['log'] / 'payload.md').read_text())
+
+    def test_actor_mismatch_preserves_verdict_and_draft(self):
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                f = self.fixture(provider, 'actor')
+                task = self.new(f)
+                draft = self.draft(f)
+                ledger = self.task_path(f, task)
+                before = ledger.read_bytes()
+                body = draft.read_bytes()
+                for note in (['inline note'], ['--note-file', str(draft)]):
+                    refused = self.run_helper(f, 'reviewer', 'task-done.sh', task, *note,
+                                              ok=False, extra={'SESSION_CHAT_PANE_NAME': 'foreign'})
+                    self.assertNotEqual(refused.returncode, 0)
+                    self.assertIn('disagrees', refused.stderr)
+                    self.assertEqual(ledger.read_bytes(), before)
+                    self.assertEqual(draft.read_bytes(), body)
+                    self.assertFalse((f['log'] / 'dispatch.log').exists())
+                self.run_helper(f, 'reviewer', 'task-done.sh', task, '--note-file', str(draft))
+                self.assertEqual(self.event(f, task)['actor'], 'reviewer')
+
+    def test_note_file_requires_verified_chat_version(self):
+        for provider in PROVIDERS:
+            f = self.fixture(provider, 'draft-version')
+            task = self.new(f)
+            draft = self.draft(f)
+            ledger = self.task_path(f, task)
+            before, body = ledger.read_bytes(), draft.read_bytes()
+            chat = Path(f['env']['SESSION_CHAT_ROOT_OVERRIDE'])
+            manifests = list(chat.glob('.*-plugin/plugin.json'))
+            checker = chat / 'scripts/own-draft-check.sh'
+            checker.rename(checker.with_name('real-checker.sh'))
+            checker.write_text('printf "%s\\n" "$1" >> "$PROBE_LOG/checker.log"\n'
+                               '[ "${PROBE_REJECT_CHECKER:-0}" != 1 ] || exit 1\n'
+                               'exec bash "$(dirname "$0")/real-checker.sh" "$@"\n')
+            marker = f['log'] / 'checker.log'
+            for version in ('0.17.23', None):
+                for manifest in manifests:
+                    if version is None:
+                        manifest.unlink()
+                    else:
+                        manifest.write_text(json.dumps({'version': version}))
+                for override in ('0', '1'):
+                    with self.subTest(provider=provider, version=version, transport_override=override):
+                        marker.unlink(missing_ok=True)
+                        result = self.run_helper(f, 'reviewer', 'task-done.sh', task, '--note-file', str(draft),
+                                                 ok=False, extra={'SESSION_SCHEDULER_SKIP_VERSION_CHECK': override,
+                                                                  'PROBE_REJECT_CHECKER': '1'})
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertFalse(marker.exists(), 'an unverified draft checker ran')
+                        self.assertIn('sched.note_file.checker_unavailable', result.stderr)
+                        self.assertEqual(ledger.read_bytes(), before)
+                        self.assertEqual(draft.read_bytes(), body)
+                        self.assertFalse(list((ledger.parent.parent / 'prompts').glob('*-verdict-*.md')))
+                        self.assertFalse((f['log'] / 'dispatch.log').exists())
+            for manifest in manifests:
+                manifest.write_text(json.dumps({'version': '0.17.24'}))
+            with self.subTest(provider=provider, version='0.17.24'):
+                marker.unlink(missing_ok=True)
+                self.run_helper(f, 'reviewer', 'task-done.sh', task, '--note-file', str(draft))
+                self.assertEqual(marker.read_text().splitlines(), ['--max-bytes', '--consume'])
+                self.assertEqual(self.event(f, task)['actor'], 'reviewer')
+                self.assertFalse(draft.exists())
+
+    def test_cleanup_keeps_draft_if_chat_version_changes_after_commit(self):
+        for provider in PROVIDERS:
+            with self.subTest(provider=provider):
+                f = self.fixture(provider, 'cleanup-version')
+                task = self.new(f)
+                draft = self.draft(f)
+                body = draft.read_bytes()
+                chat = Path(f['env']['SESSION_CHAT_ROOT_OVERRIDE'])
+                dispatch = chat / 'scripts/dispatch-to-session.sh'
+                # Swap only the test manifests during post-commit delivery.
+                dispatch.write_text('for manifest in "$SESSION_CHAT_ROOT_OVERRIDE"/.*-plugin/plugin.json; do\n'
+                                    '  echo \'{"version":"0.17.23"}\' > "$manifest"\ndone\n' + dispatch.read_text())
+                self.run_helper(f, 'reviewer', 'task-block.sh', task, '--note-file', str(draft))
+                event = self.event(f, task)
+                self.assertEqual(event['notification']['state'], 'delivered')
+                self.assertEqual(Path(event['artifact']).read_bytes(), body)
+                self.assertTrue(draft.is_file(), 'cleanup used a downgraded chat install')
+                self.assertEqual(draft.read_bytes(), body)
 
     def test_queued_fallback_and_unconfirmed_failure(self):
         for provider in PROVIDERS:

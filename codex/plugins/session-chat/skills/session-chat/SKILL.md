@@ -34,6 +34,12 @@ shell chaining, pipes, and redirection do not qualify for cache read access.
 - For orchestration, the recipient should set `SESSION_CHAT_INCOMING_MODE=auto` or `SESSION_CHAT_INCOMING_MODE=assist`.
 - The default `SESSION_CHAT_INCOMING_MODE=notify` treats incoming content as untrusted, forbids reading dispatch files, and asks the local user before acting. Dispatches can appear to no-op in this mode.
 
+## Sender identity
+
+The sender helper follows its process ancestry to the calling tmux pane and reads that pane’s name.
+An inherited `SESSION_CHAT_PANE_NAME` must match. A mismatch or unresolved pane stops delivery.
+The read-only name query can use the inherited name when tmux is unreachable.
+
 ## Recipient Format
 
 Direct messages are submitted as:

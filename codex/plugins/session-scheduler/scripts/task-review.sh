@@ -18,6 +18,7 @@ if [ "$#" -lt 2 ]; then
 fi
 
 require_jq || exit 1
+ACTOR=$(resolve_pane_actor) || exit 1
 sched_diag_reset
 ensure_dirs || { sched_diag_emit; exit 1; }
 
@@ -81,7 +82,6 @@ task_jq_update "$FILE" '
 }
 sched_diag_residual committed=false task="$ID"
 
-ACTOR=$(current_pane_name)
 REVIEWER=$(jq -r '.reviewer // empty' "$FILE")
 CURRENT_STATUS=$(jq -r '.status // ""' "$FILE")
 REVIEW_DISPATCHED_AT=$(jq -r '.meta.review_dispatched_at // empty' "$FILE")

@@ -202,7 +202,17 @@ export SESSION_CONTEXT_HOME="$TMP/shared context's store"
 export SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat"
 mkdir -p "$SESSION_CHAT_ROOT_OVERRIDE/.codex-plugin" "$SESSION_CHAT_ROOT_OVERRIDE/scripts" "$SESSION_CONTEXT_HOME"
 : > "$TMP/.parity-start"
-printf '{"name":"session-chat","version":"0.17.0"}\n' > "$SESSION_CHAT_ROOT_OVERRIDE/.codex-plugin/plugin.json"
+printf '{"name":"session-chat","version":"0.17.24"}\n' > "$SESSION_CHAT_ROOT_OVERRIDE/.codex-plugin/plugin.json"
+
+# Synthetic tmux server for the recording transport. The test shell is the
+# pane process, so each scheduler invocation follows its real parent chain.
+parity_original_path="$PATH"
+export PATH="$ROOT/scripts/fixtures/pane-actor:$PATH"
+export TEST_PANE_PID="$$" TMUX="parity-fixture" TMUX_PANE="%1"
+set_parity_identity() {
+  export TEST_PANE_NAME="$1" SESSION_CHAT_PANE_NAME="$1"
+}
+set_parity_identity parity-orchestrator
 
 printf '%s\n' '#!/usr/bin/env bash' 'if [ "${PARITY_DISPATCH_FAIL:-0}" = "1" ]; then exit 1; fi' \
   'printf "%s\t%s\n" "$1" "$2" >> "${PARITY_DISPATCH_LOG:?}"' \
@@ -211,7 +221,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'if [ "${PARITY_DISPATCH_FAIL:-0}" = "1" ]; 
 printf '%s\n' '#!/usr/bin/env bash' 'if [ "${PARITY_SEND_FAIL:-0}" = "1" ]; then exit 1; fi' \
   'printf "%s\t%s\n" "$1" "$2" >> "${PARITY_SEND_LOG:?}"' \
   > "$SESSION_CHAT_ROOT_OVERRIDE/scripts/send-message.sh"
-printf '%s\n' '#!/usr/bin/env bash' 'printf "parity-orchestrator\n"' \
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$TEST_PANE_NAME"' \
   > "$SESSION_CHAT_ROOT_OVERRIDE/scripts/get-my-name.sh"
 chmod +x "$SESSION_CHAT_ROOT_OVERRIDE/scripts/"*.sh
 export PARITY_DISPATCH_LOG="$TMP/dispatch.log"
@@ -447,31 +457,7 @@ new_ack_task() {
   printf '%s\n' "$id"
 }
 
-# Acks fire only when actor != assigner, so completion runs under a worker
-# identity; restored to the orchestrator identity after this section. The two
-# providers resolve their own pane name differently — Claude via session-chat's
-# get-my-name.sh (stubbed above), Codex via `tmux display-message` — so the
-# identity swap must cover both: rewrite the get-my-name stub AND shim tmux on
-# PATH to answer display-message with the same name.
-ACK_BIN="$TMP/ack-bin"
-mkdir -p "$ACK_BIN"
-printf '%s\n' '#!/usr/bin/env bash' \
-  'if [ "${1:-}" = "display-message" ]; then printf "%s\n" "${PARITY_TMUX_NAME:?}"; fi' \
-  'exit 0' \
-  > "$ACK_BIN/tmux"
-chmod +x "$ACK_BIN/tmux"
-ACK_SAVED_PATH="$PATH"
-ACK_SAVED_TMUX_PANE="${TMUX_PANE:-}"
-export PATH="$ACK_BIN:$PATH"
-export TMUX_PANE="%parity"
-
-set_parity_identity() {
-  printf '%s\n' '#!/usr/bin/env bash' "printf '%s\n' \"$1\"" \
-    > "$SESSION_CHAT_ROOT_OVERRIDE/scripts/get-my-name.sh"
-  chmod +x "$SESSION_CHAT_ROOT_OVERRIDE/scripts/get-my-name.sh"
-  export PARITY_TMUX_NAME="$1"
-}
-
+# Completion by a distinct worker sends an acknowledgement to the assigner.
 for provider in claude codex; do
   if [ "$provider" = "claude" ]; then
     ack_scripts="$CLAUDE_SCRIPTS"
@@ -542,12 +528,6 @@ for provider in claude codex; do
     || fail "$provider total ack failure did not record failed meta.last_ack (or rolled back the transition)"
 done
 set_parity_identity parity-orchestrator
-export PATH="$ACK_SAVED_PATH"
-if [ -n "$ACK_SAVED_TMUX_PANE" ]; then
-  export TMUX_PANE="$ACK_SAVED_TMUX_PANE"
-else
-  unset TMUX_PANE
-fi
 
 diff "$TMP/claude-ack-normalized.md" "$TMP/codex-ack-normalized.md" >/dev/null \
   || fail "done-ack packets are not byte-identical across providers after id normalization"
@@ -742,6 +722,8 @@ for provider in claude codex; do
     || fail "$provider tasks-clean treated a bare --older-than integer as something shorter than days"
 done
 
+export PATH="$parity_original_path"
+unset TMUX TMUX_PANE TEST_PANE_NAME TEST_PANE_PID SESSION_CHAT_PANE_NAME
 python3 -B "$ROOT/scripts/test-chat-draft-consumption.py" \
   || fail "cross-provider draft consumption regression failed"
 

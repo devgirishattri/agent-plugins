@@ -31,7 +31,6 @@ if options.provider != "all":
 
 SHIMS = r'''
 ensure_tmux() { return 0; }
-get_my_name() { printf 'sender\n'; }
 cat() {
   if [ "$#" -eq 1 ] && [ "$1" = "$DRAFT_PROBE_FILE" ]; then
     case "${DRAFT_PROBE_READ:-ok}" in
@@ -105,6 +104,9 @@ class DraftConsumption(unittest.TestCase):
                    if not key.startswith(("SESSION_", "KNOWLEDGE_", "BASH_FUNC_"))
                    and key not in {"TMUX", "TMUX_PANE", "BASH_ENV", "ENV"}}
             env.update({
+                "PATH": str(ROOT / "scripts/fixtures/pane-actor") + os.pathsep + env["PATH"],
+                "TEST_PANE_PID": str(os.getpid()), "TEST_PANE_NAME": "sender",
+                "TMUX": "draft-fixture", "TMUX_PANE": "%1",
                 "SESSION_CHAT_TARGET_MESSAGES_DIR": str(store),
                 "SESSION_CHAT_KEEP_DRAFTS": "1" if keep else "0",
                 "DRAFT_PROBE_FILE": str(draft),

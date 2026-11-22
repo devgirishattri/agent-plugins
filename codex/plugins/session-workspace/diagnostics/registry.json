@@ -926,6 +926,19 @@
       "description": "A privilege wrapper is used; strict-v1 forbids it for every role."
     },
     {
+      "code": "hook.shell.project_root",
+      "subjects": [
+        "admission"
+      ],
+      "phases": [
+        "admission"
+      ],
+      "outcomes": [
+        "refused"
+      ],
+      "description": "The command could remove or move the project root, one of its ancestors, or the home directory."
+    },
+    {
       "code": "hook.shell.sandbox_escape",
       "subjects": [
         "admission"

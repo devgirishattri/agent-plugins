@@ -554,7 +554,14 @@ def main():
     assign=sub.add_parser('assign');assign.add_argument('pane');assign.add_argument('id');assign.add_argument('prompt')
     args=parser.parse_args()
     try:
-        store=Store(args.id,os.environ.get('TASK_CONTRACT_ACTOR',''),os.environ.get('TASK_CONTRACT_CHAT_ROOT',''))
+        actor = ''
+        if args.operation != 'inspect':
+            probe = subprocess.run(['bash', '-c', 'source "$1" && resolve_pane_actor',
+                                    'task-contract', str(HERE / 'lib.sh')], stdout=subprocess.PIPE, text=True)
+            if probe.returncode != 0:
+                fail('cannot verify the calling tmux pane')
+            actor = probe.stdout.strip()
+        store=Store(args.id,actor,os.environ.get('TASK_CONTRACT_CHAT_ROOT',''))
         if args.operation=='attach': result=store.attach(args.spec)
         elif args.operation=='inspect': result=store.inspect(args.committed,args.fresh)
         elif args.operation=='assign': result=store.assign(args.pane,args.prompt)

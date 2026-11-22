@@ -31,6 +31,7 @@ TEST_MSGS_DIR="$(mktemp -d -t session-chat-test-msgs-XXXXXX)"
 cleanup() {
   tmux -L "$SOCKET" kill-server 2>/dev/null || true
   rm -rf "$TEST_MSGS_DIR" 2>/dev/null || true
+  [ -n "${SCT_SHIM_DIR:-}" ] && rm -rf "$SCT_SHIM_DIR" 2>/dev/null
   rm -rf "${TMPDIR:-/tmp}"/session-chat-locks* 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -73,6 +74,16 @@ cap_wait() {
   done
 }
 
+summary() {
+  echo
+  echo "=== Results: $PASS passed, $FAIL failed ==="
+  if [ "$FAIL" -gt 0 ]; then
+    for f in "${FAILURES[@]}"; do echo "  - $f"; done
+    exit 1
+  fi
+  exit 0
+}
+
 # --- Setup ---
 echo "=== session-chat tests (socket: $SOCKET) ==="
 # Baseline live-send tests assert rendered pane text after Enter. Use neutral
@@ -94,6 +105,272 @@ tmux -L "$SOCKET" set-option -p -t "$RECIPIENT_PANE" @name "alpha"
 tmux -L "$SOCKET" set-option -p -t "$EXTRA_PANE" @name "beta"
 tmux -L "$SOCKET" set-option -p -t "$SENDER_PANE" @name "sender"
 tmux -L "$SOCKET" set-option -p -t "$OTHER_PANE" @name "other-session"
+
+# --- Legacy fixture identity projection ---
+# Since 0.17.24 the sender/recipient identity is the tmux pane that OWNS the
+# calling process (resolve_pane_actor walks the process ancestry). The legacy
+# transport matrix below drives several `cat` panes from THIS test process and
+# selects the acting pane with TMUX_PANE, so it is not a descendant of any of
+# them. This PATH shim projects only the resolver's two queries onto the
+# selected fixture pane, reporting this driver's pid as the pane's pid: the
+# ancestry walk itself still runs for real. With a fake socket (TMUX=fake*, the
+# hook fixtures that need no server) the fixture pane's name is the inherited
+# SESSION_CHAT_PANE_NAME. Everything else passes through to the real tmux.
+# The projection is exported only AFTER the server started, so no pane inherits
+# it: the "real pane ancestry" section runs inside a pane with no projection
+# and proves the unprojected behaviour, including that TMUX_PANE and
+# SESSION_CHAT_PANE_NAME alone are refused.
+SCT_SHIM_DIR="$(mktemp -d -t session-chat-test-shim-XXXXXX)"
+SCT_REAL_TMUX="$(command -v tmux)"
+# The real tmux path is written into the shim itself: tmux starts a new pane
+# with the creating client's PATH, so panes created below resolve `tmux` to this
+# shim too, without inheriting any other variable from this driver.
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf 'real=%q\n' "$SCT_REAL_TMUX"
+  cat <<'SHIM'
+pre=()
+if [ "${1:-}" = -L ] && [ "$#" -ge 2 ]; then pre=(-L "$2"); shift 2; fi
+if [ -n "${SCT_DRIVER_PID:-}" ]; then
+  pane="${TMUX_PANE:-}"
+  fake=0
+  case "${TMUX:-}" in fake*) fake=1; pane="${pane:-%0}" ;; esac
+  if [ -n "$pane" ]; then
+    case "$*" in
+      'list-panes -a -F #{pane_pid} #{pane_id}')
+        printf '%s %s\n' "$SCT_DRIVER_PID" "$pane"; exit 0 ;;
+      "display-message -p -t $pane #{pane_pid} #{@name}")
+        if [ "$fake" = 1 ]; then
+          name="${SESSION_CHAT_PANE_NAME:-}"
+        else
+          name=$("$real" ${pre[@]+"${pre[@]}"} display-message -p -t "$pane" '#{@name}') || exit 1
+        fi
+        printf '%s %s\n' "$SCT_DRIVER_PID" "$name"; exit 0 ;;
+    esac
+  fi
+fi
+exec "$real" ${pre[@]+"${pre[@]}"} "$@"
+SHIM
+} > "$SCT_SHIM_DIR/tmux"
+chmod +x "$SCT_SHIM_DIR/tmux"
+export PATH="$SCT_SHIM_DIR:$PATH"
+export SCT_DRIVER_PID=$$
+
+# --- Real pane ancestry (no projection) ---
+# The cases below run INSIDE a pane of the private server, as real descendants
+# of that pane, with the fixture projection above disabled. They prove the
+# verified identity at the public entry points:
+#   success      the owning pane is the sender/recipient even when TMUX_PANE
+#                names a sibling pane
+#   mismatch     a SESSION_CHAT_PANE_NAME that disagrees with the owning pane is
+#                refused before any write
+#   unnamed      a writer refuses; the read-only name is empty
+#   dotted       a workspace/scheduler pane name with a dot is displayed, but
+#                is not a chat label: writers and the receive hook refuse it
+#   unreachable  with tmux unreachable a writer refuses even with the TRUE name
+#                inherited; only the read-only display falls back to it
+#   outsider     a process that no pane owns cannot act as a pane by exporting
+#                that pane's TMUX_PANE and name
+# Every refusal is checked for "nothing written": the mailbox digest (names and
+# bytes of every entry) is unchanged and nothing reached the peer pane.
+# SESSION_CHAT_TEST_ACTOR_SCRIPTS points this section at another copy of the
+# scripts (e.g. `git show HEAD:...` extracted to scratch) to show the negative
+# cases failing on the original code; SESSION_CHAT_TEST_ONLY=actor runs only
+# this section.
+ACT_SCRIPTS="${SESSION_CHAT_TEST_ACTOR_SCRIPTS:-$HERE}"
+ACT_DIR="$(mktemp -d -t session-chat-test-actor-XXXXXX)"
+ACT_SESSION="sct-actor"
+tmux -L "$SOCKET" new-session -d -s "$ACT_SESSION" -x 200 -y 50 "cat"
+tmux -L "$SOCKET" split-window -t "$ACT_SESSION" -h "cat"
+read -r ACT_MAIN ACT_PEER <<< "$(tmux -L "$SOCKET" list-panes -t "$ACT_SESSION" -F '#{pane_id}' | tr '\n' ' ')"
+tmux -L "$SOCKET" set-option -p -t "$ACT_MAIN" @name "actor-main"
+tmux -L "$SOCKET" set-option -p -t "$ACT_PEER" @name "actor-peer"
+
+cat > "$ACT_DIR/probe.sh" <<'PROBE'
+scripts=$1 store=$2 self=$3 peer=$4
+exec >"$store/probe.log" 2>&1
+unset SCT_DRIVER_PID SESSION_CHAT_PANE_NAME
+M="$store/mail"
+export SESSION_CHAT_TARGET_MESSAGES_DIR="$M" SESSION_CHAT_ALLOW_SHELL_TARGET=1
+export SESSION_CHAT_VERIFY_TIMEOUT_MS=2000 SESSION_CHAT_SETTLE_MS=50 SESSION_CHAT_INCOMING_MODE=auto
+export CLAUDE_PLUGIN_ROOT="$(cd "$scripts/.." && pwd)" HOME="$store/home"
+mkdir -p "$HOME"
+R="$store/results"; : > "$R"
+ok()  { printf 'PASS\t%s\n' "$1" >> "$R"; }
+bad() { printf 'FAIL\t%s\t%s\n' "$1" "$(printf '%s' "$2" | tr '\n\t' '  ')" >> "$R"; }
+if command -v shasum >/dev/null 2>&1; then sum() { shasum -a 256; }; else sum() { sha256sum; }; fi
+# digest <dir>: names and bytes of every entry ("absent" when it does not exist)
+digest() {
+  [ -e "$1" ] || { echo absent; return 0; }
+  ( cd "$1" && find . | LC_ALL=C sort && find . -type f | LC_ALL=C sort | while IFS= read -r f; do sum < "$f"; done ) | sum
+}
+peer_shows() {  # peer_shows <needle>: poll the peer pane for rendered text
+  local i
+  for i in $(seq 60); do
+    tmux capture-pane -J -p -t "$peer" -S -300 2>/dev/null | grep -qF -- "$1" && return 0
+    sleep 0.05
+  done
+  return 1
+}
+sent_rows() {  # sent_rows <type>: sent-log rows from actor-main to actor-peer
+  awk -F'\t' -v t="$1" '$3=="actor-main" && $4=="actor-peer" && $5==t {n++} END{print n+0}' "$M/sent-log.tsv" 2>/dev/null
+}
+hook() {  # hook: run the receive hook on a plain prompt, print its output
+  printf '{"hook_event_name":"UserPromptSubmit","prompt":"plain prompt"}' | bash "$scripts/detect-incoming-message.sh"
+}
+printf 'draft body\n' > "$store/prompt.md"
+# A socket path that never exists. It is short on purpose: a long path fails in
+# tmux as "File name too long", which is a different failure from "no server".
+dead_socket="/tmp/sct-no-server-$$.sock"
+
+# success: TMUX_PANE names the sibling, yet the sender is the owning pane.
+out=$(TMUX_PANE="$peer" bash "$scripts/send-message.sh" --reply-to abcd1234 actor-peer 'verified reply' 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$(sent_rows send)" = 1 ] && peer_shows "[from:actor-main pane:$self id:"; then
+  ok real_pane_send_is_from_owning_pane
+else bad real_pane_send_is_from_owning_pane "rc=$rc rows=$(sent_rows send) out=$out"; fi
+out=$(TMUX_PANE="$peer" bash "$scripts/dispatch-to-session.sh" --reply-to abcd1234 actor-peer "$store/prompt.md" 2>&1); rc=$?
+dfile=$(ls "$M"/*-actor-main-to-actor-peer.md 2>/dev/null | head -1)
+if [ "$rc" = 0 ] && [ -n "$dfile" ] && [ "$(sent_rows dispatch)" = 1 ] && peer_shows "[from:actor-main pane:$self msg:"; then
+  ok real_pane_dispatch_is_from_owning_pane
+else bad real_pane_dispatch_is_from_owning_pane "rc=$rc file=$dfile rows=$(sent_rows dispatch) out=$out"; fi
+name=$(TMUX_PANE="$peer" bash "$scripts/get-my-name.sh" 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$name" = actor-main ]; then ok real_pane_name_is_owning_pane
+else bad real_pane_name_is_owning_pane "rc=$rc name=$name"; fi
+# control for the mismatch cases: a claim that MATCHES the owning pane is accepted.
+out=$(SESSION_CHAT_PANE_NAME=actor-main bash "$scripts/send-message.sh" actor-peer 'matching claim' 2>&1); rc=$?
+if [ "$rc" = 0 ] && peer_shows 'matching claim'; then ok real_pane_matching_claim_accepted
+else bad real_pane_matching_claim_accepted "rc=$rc out=$out"; fi
+out=$(bash "$scripts/broadcast-message.sh" 'verified broadcast' 2>&1); rc=$?
+if [ "$rc" = 0 ] && peer_shows "[from:actor-main pane:$self id:" && peer_shows 'verified broadcast'; then ok real_pane_broadcast_is_from_owning_pane
+else bad real_pane_broadcast_is_from_owning_pane "rc=$rc out=$out"; fi
+
+# mismatch: every writer refuses a claim that disagrees with the owning pane.
+before=$(digest "$M"); miss=""
+for form in reply plain dispatch broadcast; do
+  case "$form" in
+    reply)     a=(send-message.sh --reply-to abcd1234 actor-peer 'spoofed reply') ;;
+    plain)     a=(send-message.sh actor-peer 'spoofed plain') ;;
+    dispatch)  a=(dispatch-to-session.sh --reply-to abcd1234 actor-peer "$store/prompt.md") ;;
+    broadcast) a=(broadcast-message.sh 'spoofed broadcast') ;;
+  esac
+  out=$(SESSION_CHAT_PANE_NAME=actor-peer bash "$scripts/${a[0]}" "${a[@]:1}" 2>&1); rc=$?
+  { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'SESSION_CHAT_PANE_NAME disagrees'; } || miss="$miss $form(rc=$rc $out)"
+done
+name=$(SESSION_CHAT_PANE_NAME=actor-peer bash "$scripts/get-my-name.sh" 2>/dev/null); rc=$?
+{ [ "$rc" -ne 0 ] && [ -z "$name" ]; } || miss="$miss name(rc=$rc $name)"
+sleep 0.3
+if [ -z "$miss" ] && [ "$(digest "$M")" = "$before" ] && ! tmux capture-pane -J -p -t "$peer" -S -300 | grep -q spoofed; then
+  ok real_pane_mismatched_claim_refused_before_any_write
+else bad real_pane_mismatched_claim_refused_before_any_write "miss=$miss digest_same=$([ "$(digest "$M")" = "$before" ] && echo y || echo n)"; fi
+
+# receive side: only the verified owning pane's inbox is read and claimed.
+( source "$scripts/lib.sh"
+  enqueue_message actor-main 0a0a0a0a0a0a0a01 send someone 'QUEUED-FOR-MAIN' "$M"
+  enqueue_message actor-peer 0b0b0b0b0b0b0b01 send someone 'QUEUED-FOR-PEER' "$M"
+  mark_message_ready actor-main 0a0a0a0a0a0a0a01 "$M"; mark_message_ready actor-peer 0b0b0b0b0b0b0b01 "$M" ) >/dev/null 2>&1
+before=$(digest "$M")
+out=$(SESSION_CHAT_PANE_NAME=actor-peer hook 2>&1)
+if ! printf '%s' "$out" | grep -q 'QUEUED-FOR' && [ "$(digest "$M")" = "$before" ]; then ok real_pane_hook_mismatched_claim_reads_and_writes_nothing
+else bad real_pane_hook_mismatched_claim_reads_and_writes_nothing "digest_same=$([ "$(digest "$M")" = "$before" ] && echo y || echo n) out=$out"; fi
+out=$(TMUX_PANE="$peer" hook 2>&1)
+if printf '%s' "$out" | grep -q 'QUEUED-FOR-MAIN' && ! printf '%s' "$out" | grep -q 'QUEUED-FOR-PEER' \
+   && ! grep -q 0a0a0a0a0a0a0a01 "$M/queue/actor-main.tsv" 2>/dev/null && grep -q 0b0b0b0b0b0b0b01 "$M/queue/actor-peer.tsv"; then
+  ok real_pane_hook_drains_owning_pane_inbox_only
+else bad real_pane_hook_drains_owning_pane_inbox_only "out=$out main=$(cat "$M/queue/actor-main.tsv" 2>/dev/null) peer=$(cat "$M/queue/actor-peer.tsv" 2>/dev/null)"; fi
+
+# unnamed: a writer refuses; the read-only name is empty and succeeds.
+tmux set-option -p -u -t "$self" @name
+before=$(digest "$M")
+out=$(bash "$scripts/send-message.sh" --reply-to abcd1234 actor-peer 'unnamed reply' 2>&1); rc=$?
+name=$(bash "$scripts/get-my-name.sh" 2>&1); nrc=$?
+tmux set-option -p -t "$self" @name actor-main
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'empty or unsafe externally assigned name' \
+   && [ "$nrc" = 0 ] && [ -z "$name" ] && [ "$(digest "$M")" = "$before" ]; then ok real_pane_unnamed_writer_refused_name_empty
+else bad real_pane_unnamed_writer_refused_name_empty "rc=$rc nrc=$nrc name=$name out=$out"; fi
+
+# dotted: a pane name the workspace and the scheduler accept (build.review) is
+# shown by the read-only name, but it is not a session-chat label: every
+# message writer and the receive hook refuse it and write nothing.
+tmux set-option -p -t "$self" @name build.review
+before=$(digest "$M"); miss=""
+for form in plain dispatch broadcast; do
+  case "$form" in
+    plain)     a=(send-message.sh actor-peer 'dotted plain') ;;
+    dispatch)  a=(dispatch-to-session.sh actor-peer "$store/prompt.md") ;;
+    broadcast) a=(broadcast-message.sh 'dotted broadcast') ;;
+  esac
+  out=$(bash "$scripts/${a[0]}" "${a[@]:1}" 2>&1); rc=$?
+  { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'unsafe externally assigned name'; } || miss="$miss $form(rc=$rc $out)"
+done
+out=$(hook 2>&1); printf '%s' "$out" | grep -q 'QUEUED-FOR' && miss="$miss hook($out)"
+name=$(bash "$scripts/get-my-name.sh" 2>&1); nrc=$?
+tmux set-option -p -t "$self" @name actor-main
+sleep 0.3
+if [ -z "$miss" ] && [ "$nrc" = 0 ] && [ "$name" = build.review ] && [ "$(digest "$M")" = "$before" ] \
+   && ! tmux capture-pane -J -p -t "$peer" -S -300 | grep -q dotted; then
+  ok real_pane_dotted_name_is_displayed_but_not_a_message_sender
+else bad real_pane_dotted_name_is_displayed_but_not_a_message_sender "miss=$miss nrc=$nrc name=$name digest_same=$([ "$(digest "$M")" = "$before" ] && echo y || echo n)"; fi
+
+# unreachable: the TRUE name is inherited, tmux cannot be reached.
+before=$(digest "$M"); miss=""
+for form in reply dispatch broadcast; do
+  case "$form" in
+    reply)     a=(send-message.sh --reply-to abcd1234 actor-peer 'unreachable reply') ;;
+    dispatch)  a=(dispatch-to-session.sh --reply-to abcd1234 actor-peer "$store/prompt.md") ;;
+    broadcast) a=(broadcast-message.sh 'unreachable broadcast') ;;
+  esac
+  out=$(TMUX="$dead_socket,1,0" SESSION_CHAT_PANE_NAME=actor-main bash "$scripts/${a[0]}" "${a[@]:1}" 2>&1); rc=$?
+  { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Cannot resolve the calling tmux pane'; } || miss="$miss $form(rc=$rc $out)"
+done
+out=$(TMUX="$dead_socket,1,0" SESSION_CHAT_PANE_NAME=actor-main hook 2>&1)
+printf '%s' "$out" | grep -q 'QUEUED-FOR' && miss="$miss hook($out)"
+name=$(TMUX="$dead_socket,1,0" SESSION_CHAT_PANE_NAME=actor-main bash "$scripts/get-my-name.sh" 2>/dev/null); nrc=$?
+sleep 0.3
+if [ -z "$miss" ] && [ "$(digest "$M")" = "$before" ] && [ "$nrc" = 0 ] && [ "$name" = actor-main ] \
+   && ! tmux capture-pane -J -p -t "$peer" -S -300 | grep -q unreachable; then
+  ok real_pane_unreachable_tmux_refuses_writers_read_only_name_falls_back
+else bad real_pane_unreachable_tmux_refuses_writers_read_only_name_falls_back "miss=$miss nrc=$nrc name=$name digest_same=$([ "$(digest "$M")" = "$before" ] && echo y || echo n)"; fi
+echo done > "$store/status.tmp"; mv "$store/status.tmp" "$store/status"
+exec /bin/cat
+PROBE
+
+actor_section() {
+  local verdict name detail i before out rc
+  tmux -L "$SOCKET" respawn-pane -k -t "$ACT_MAIN" bash "$ACT_DIR/probe.sh" "$ACT_SCRIPTS" "$ACT_DIR" "$ACT_MAIN" "$ACT_PEER"
+  for ((i = 0; i < 1200; i++)); do [ -f "$ACT_DIR/status" ] && break; sleep 0.05; done
+  if [ ! -f "$ACT_DIR/status" ]; then
+    fail "real_pane_probe_completed" "probe did not finish: $(tail -5 "$ACT_DIR/probe.log" 2>/dev/null)"
+  elif [ "$(grep -c . "$ACT_DIR/results")" != 11 ]; then
+    fail "real_pane_probe_completed" "expected 11 results, got: $(cat "$ACT_DIR/results")"
+  else
+    pass "real_pane_probe_completed"
+  fi
+  while IFS=$'\t' read -r verdict name detail; do
+    [ -n "$verdict" ] || continue
+    if [ "$verdict" = PASS ]; then pass "$name"; else fail "$name" "$detail"; fi
+  done < "$ACT_DIR/results"
+  [ "$VERBOSE" -eq 1 ] && cat "$ACT_DIR/probe.log" >&2
+
+  # outsider: this driver is owned by no pane of the private server. Exporting
+  # the acting pane's TMUX_PANE and its true name must not make it that pane.
+  if command -v shasum >/dev/null 2>&1; then _act_sum() { shasum -a 256; }; else _act_sum() { sha256sum; }; fi
+  _act_digest() { ( cd "$1" && find . | LC_ALL=C sort && find . -type f | LC_ALL=C sort | while IFS= read -r f; do _act_sum < "$f"; done ) | _act_sum; }
+  before=$(_act_digest "$ACT_DIR/mail")
+  out=$(env -u SCT_DRIVER_PID TMUX="$(tmux -L "$SOCKET" display-message -p '#{socket_path}'),0,0" TMUX_PANE="$ACT_MAIN" \
+    SESSION_CHAT_PANE_NAME=actor-main SESSION_CHAT_TARGET_MESSAGES_DIR="$ACT_DIR/mail" SESSION_CHAT_ALLOW_SHELL_TARGET=1 \
+    bash "$ACT_SCRIPTS/send-message.sh" --reply-to abcd1234 actor-peer 'outsider reply' 2>&1); rc=$?
+  sleep 0.3
+  if [ "$rc" -ne 0 ] && echo "$out" | grep -q 'No tmux pane owns the calling process' \
+     && [ "$(_act_digest "$ACT_DIR/mail")" = "$before" ] && ! cap "$ACT_PEER" | grep -q 'outsider reply'; then
+    pass "outsider_with_exported_pane_identity_refused_before_any_write"
+  else
+    fail "outsider_with_exported_pane_identity_refused_before_any_write" "rc=$rc out=$out"
+  fi
+}
+actor_section
+tmux -L "$SOCKET" kill-session -t "$ACT_SESSION" 2>/dev/null || true
+rm -rf "$ACT_DIR"
+if [ "${SESSION_CHAT_TEST_ONLY:-}" = actor ]; then summary; fi
 
 run_script() {
   TMUX_PANE="$SENDER_PANE" \
@@ -619,7 +896,7 @@ mfiles_before=$(find "$TEST_MSGS_DIR" -name '*.md' 2>/dev/null | wc -l | tr -d '
 out=$(run_lib "$EVIL_PANE" "dispatch_message alpha 'payload'" 2>&1)
 mfiles_after=$(find "$TEST_MSGS_DIR" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 escaped=$(find "$(cd "$TEST_MSGS_DIR"/.. && pwd)" -maxdepth 2 -name '*evil*to*' 2>/dev/null | wc -l | tr -d ' ')
-if echo "$out" | grep -q "unsafe characters" && [ "$mfiles_before" = "$mfiles_after" ] && [ "$escaped" = "0" ]; then
+if echo "$out" | grep -q "unsafe externally assigned name" && [ "$mfiles_before" = "$mfiles_after" ] && [ "$escaped" = "0" ]; then
   pass "malicious_sender_name_rejected"
 else
   fail "malicious_sender_name_rejected" "out=$out before=$mfiles_before after=$mfiles_after escaped=$escaped"
@@ -948,7 +1225,7 @@ rm -f "$OD_N3"
 # (o) own-draft-check.sh <file>: prints exactly OK<TAB>dev:inode<TAB>sha256<TAB>size
 # for this pane's own draft; every other shape exits non-zero with empty stdout.
 # The valid own draft in the same fixture is the control for each refusal.
-odc() { SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" bash "$HERE/own-draft-check.sh" "$@"; }
+odc() { TMUX="fake,0,0" SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" bash "$HERE/own-draft-check.sh" "$@"; }
 OD_V="$OD_M/drafts/sender/check-valid.md"; printf 'check body\nline two\n' > "$OD_V"
 odc_ok=$(odc "$OD_V" 2>/dev/null); odc_rc=$?
 odc_exp_sum=$(shasum -a 256 < "$OD_V" 2>/dev/null | awk '{print $1}')
@@ -993,7 +1270,7 @@ odcc_case() {  # odcc_case <label> <mutate-cmd> <expect kept|removed> [env assig
   printf 'consume body\n' > "$f"
   id=$(odc "$f" | cut -f2); sum=$(odc "$f" | cut -f3)
   eval "$mutate"
-  o=$(env SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" "$@" bash "$HERE/own-draft-check.sh" --consume "$f" "${ODCC_ID:-$id}" "${ODCC_SUM:-$sum}" 2>&1); r=$?
+  o=$(env TMUX="fake,0,0" SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" "$@" bash "$HERE/own-draft-check.sh" --consume "$f" "${ODCC_ID:-$id}" "${ODCC_SUM:-$sum}" 2>&1); r=$?
   state=removed; [ -e "$f" ] && state=kept
   { [ "$r" = 0 ] && [ "$state" = "$expect" ]; } || odcc_bad="$odcc_bad [$label rc=$r state=$state out=$o]"
   rm -f "$f"
@@ -1010,7 +1287,7 @@ unset ODCC_ID ODCC_SUM
 printf 'foreign body\n' > "$OD_M/drafts/beta/consume-foreign.md"
 fid=$(stat -c '%d:%i' "$OD_M/drafts/beta/consume-foreign.md" 2>/dev/null || stat -f '%d:%i' "$OD_M/drafts/beta/consume-foreign.md")
 fsum=$(shasum -a 256 < "$OD_M/drafts/beta/consume-foreign.md" | awk '{print $1}')
-SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" bash "$HERE/own-draft-check.sh" --consume "$OD_M/drafts/beta/consume-foreign.md" "$fid" "$fsum" >/dev/null 2>&1
+TMUX="fake,0,0" SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" bash "$HERE/own-draft-check.sh" --consume "$OD_M/drafts/beta/consume-foreign.md" "$fid" "$fsum" >/dev/null 2>&1
 [ -f "$OD_M/drafts/beta/consume-foreign.md" ] || odcc_bad="$odcc_bad [foreign draft removed]"
 rm -f "$OD_M/drafts/beta/consume-foreign.md"
 if [ -z "$odcc_bad" ]; then
@@ -1028,7 +1305,7 @@ for tool in shasum sha256sum; do
   real=$(command -v "$tool" 2>/dev/null) || continue
   printf '#!/bin/sh\necho x >> "%s"\nexec "%s" "$@"\n' "$OD_HASH_MARK" "$real" > "$OD_SHIM_Q/$tool"; chmod 755 "$OD_SHIM_Q/$tool"
 done
-odcq() { SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" PATH="$OD_SHIM_Q:$PATH" bash "$HERE/own-draft-check.sh" "$@"; }
+odcq() { TMUX="fake,0,0" SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" PATH="$OD_SHIM_Q:$PATH" bash "$HERE/own-draft-check.sh" "$@"; }
 OD_Q="$OD_M/drafts/sender/size-check.md"; printf 'q%.0s' $(seq 1 200) > "$OD_Q"
 odq_bad=""
 rm -f "$OD_HASH_MARK"; o=$(odcq --max-bytes 100 "$OD_Q" 2>/dev/null); r=$?
@@ -1068,10 +1345,10 @@ for tool in shasum sha256sum; do
   printf '#!/bin/sh\n[ -n "$OD_GROW" ] && printf "more\\n" >> "$OD_GROW"\nexec "%s" "$@"\n' "$real" > "$OD_SHIM_R/$tool"; chmod 755 "$OD_SHIM_R/$tool"
 done
 odr_bad=""
-o=$(SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" OD_GROW="$OD_R" PATH="$OD_SHIM_R:$PATH" bash "$HERE/own-draft-check.sh" --max-bytes 1000 "$OD_R" 2>"$OD_TMP/grow.err"); r=$?
+o=$(TMUX="fake,0,0" SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" OD_GROW="$OD_R" PATH="$OD_SHIM_R:$PATH" bash "$HERE/own-draft-check.sh" --max-bytes 1000 "$OD_R" 2>"$OD_TMP/grow.err"); r=$?
 { [ "$r" = 4 ] && [ -z "$o" ] && grep -q 'changed size' "$OD_TMP/grow.err"; } || odr_bad="$odr_bad [grow rc=$r out=$o]"
 printf 'grow body\n' > "$OD_R"
-o=$(SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" PATH="$OD_SHIM_R:$PATH" bash "$HERE/own-draft-check.sh" --max-bytes 1000 "$OD_R" 2>/dev/null); r=$?
+o=$(TMUX="fake,0,0" SESSION_CHAT_PANE_NAME=sender SESSION_CHAT_TARGET_MESSAGES_DIR="$OD_M" PATH="$OD_SHIM_R:$PATH" bash "$HERE/own-draft-check.sh" --max-bytes 1000 "$OD_R" 2>/dev/null); r=$?
 { [ "$r" = 0 ] && [ "$(printf '%s' "$o" | cut -c1-3)" = "OK$(printf '\t')" ]; } || odr_bad="$odr_bad [control rc=$r out=$o]"
 rm -f "$OD_R" "$OD_TMP/grow.err"
 if [ -z "$odr_bad" ]; then
@@ -1260,6 +1537,25 @@ exit 0
 OK_TMUX
 chmod +x "$OK_BIN/tmux"
 
+# Fake tmux that answers ONLY the two caller-identity queries (the fixture pane
+# %0, owned by this driver, named by the inherited SESSION_CHAT_PANE_NAME) and
+# denies every other subcommand. It lets a test get past the identity gate and
+# reach the session/listing queries, so their denial is still classified at its
+# own source.
+DENY_AFTER_ID_BIN=$(mktemp -d)
+cat > "$DENY_AFTER_ID_BIN/tmux" <<'FAKE_TMUX'
+#!/usr/bin/env bash
+case "$*" in
+  'list-panes -a -F #{pane_pid} #{pane_id}')
+    printf '%s %s\n' "$SCT_DRIVER_PID" "$TMUX_PANE"; exit 0 ;;
+  "display-message -p -t $TMUX_PANE #{pane_pid} #{@name}")
+    printf '%s %s\n' "$SCT_DRIVER_PID" "${SESSION_CHAT_PANE_NAME:-}"; exit 0 ;;
+esac
+echo "tmux: connect failed: Operation not permitted" >&2
+exit 1
+FAKE_TMUX
+chmod +x "$DENY_AFTER_ID_BIN/tmux"
+
 deny_run() { PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" bash "$@"; }
 ok_run()   { PATH="$OK_BIN:$PATH"   TMUX="fake,0,0" TMUX_PANE="%0" bash "$@"; }
 
@@ -1304,39 +1600,71 @@ else
   fail "denial_pane_health_current_scope_surfaced" "rc=$phc_rc out=$phc_out"
 fi
 
-# (c) get-my-name: denial -> ERROR + rc!=0 + empty stdout (self-name flavor hint,
-#     which additionally names the SESSION_CHAT_PANE_NAME escape hatch).
+# (c) get-my-name: denial with no inherited name -> ERROR + rc!=0 + empty stdout.
+#     The message must not offer SESSION_CHAT_PANE_NAME as a way around the
+#     verified identity.
 gmn_out=$(deny_run "$HERE/get-my-name.sh" 2>&1); gmn_rc=$?
 gmn_stdout=$(deny_run "$HERE/get-my-name.sh" 2>/dev/null)
-if [ "$gmn_rc" -ne 0 ] && has_denial "$gmn_out" && echo "$gmn_out" | grep -q "SESSION_CHAT_PANE_NAME" && [ -z "$gmn_stdout" ]; then
+if [ "$gmn_rc" -ne 0 ] && has_denial "$gmn_out" && ! echo "$gmn_out" | grep -q "SESSION_CHAT_PANE_NAME" && [ -z "$gmn_stdout" ]; then
   pass "denial_get_my_name_surfaced"
 else
   fail "denial_get_my_name_surfaced" "rc=$gmn_rc out=$gmn_out stdout=$gmn_stdout"
 fi
 
-# (d) broadcast, self-name path: no SESSION_CHAT_PANE_NAME -> the denied self-name
-#     query must report a resolution failure, NOT "This pane has no name".
+# (c2) Read-only fallback: with the socket denied, get-my-name (display only)
+#      prints a valid inherited name, also when TMUX itself is unset. A writer
+#      given the SAME environment refuses and writes nothing: the fallback is
+#      never an identity for a write. An unsafe inherited name is not printed.
+RO_HOME=$(mktemp -d); RO_MSGS="$RO_HOME/messages"
+ro_name=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me bash "$HERE/get-my-name.sh" 2>/dev/null); ro_rc=$?
+ro_notmux=$(env -u TMUX -u TMUX_PANE PATH="$DENY_BIN:$PATH" SESSION_CHAT_PANE_NAME=me bash "$HERE/get-my-name.sh" 2>/dev/null); ro_notmux_rc=$?
+ro_none=$(env -u TMUX -u TMUX_PANE -u SESSION_CHAT_PANE_NAME PATH="$DENY_BIN:$PATH" bash "$HERE/get-my-name.sh" 2>&1); ro_none_rc=$?
+ro_unsafe=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME='../me' bash "$HERE/get-my-name.sh" 2>/dev/null); ro_unsafe_rc=$?
+ro_send=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_TARGET_MESSAGES_DIR="$RO_MSGS" \
+  bash "$HERE/send-message.sh" --reply-to abcdef01 alpha "reply under denial" 2>&1); ro_send_rc=$?
+printf 'body\n' > "$RO_HOME/prompt.md"
+ro_disp=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me SESSION_CHAT_TARGET_MESSAGES_DIR="$RO_MSGS" \
+  bash "$HERE/dispatch-to-session.sh" --reply-to abcdef01 alpha "$RO_HOME/prompt.md" 2>&1); ro_disp_rc=$?
+if [ "$ro_rc" = 0 ] && [ "$ro_name" = "me" ] && [ "$ro_notmux_rc" = 0 ] && [ "$ro_notmux" = "me" ] \
+   && [ "$ro_none_rc" = 0 ] && [ -z "$ro_none" ] \
+   && [ "$ro_unsafe_rc" -ne 0 ] && [ -z "$ro_unsafe" ] \
+   && [ "$ro_send_rc" -ne 0 ] && has_denial "$ro_send" && [ "$ro_disp_rc" -ne 0 ] && has_denial "$ro_disp" \
+   && [ ! -e "$RO_MSGS" ]; then
+  pass "denial_read_only_name_fallback_never_authorizes_a_write"
+else
+  fail "denial_read_only_name_fallback_never_authorizes_a_write" "name=[$ro_name rc=$ro_rc] notmux=[$ro_notmux rc=$ro_notmux_rc] none=[$ro_none rc=$ro_none_rc] unsafe=[$ro_unsafe rc=$ro_unsafe_rc] send=[rc=$ro_send_rc $ro_send] disp=[rc=$ro_disp_rc $ro_disp] msgs=$(ls -A "$RO_MSGS" 2>/dev/null)"
+fi
+rm -rf "$RO_HOME"
+
+# (d) broadcast, self-name path: the denied caller-identity query must report a
+#     resolution failure, NOT "This pane has no name". An inherited
+#     SESSION_CHAT_PANE_NAME does not change that (broadcast is a writer).
 bc_self=$(deny_run "$HERE/broadcast-message.sh" "ping" 2>&1); bc_self_rc=$?
-if [ "$bc_self_rc" -ne 0 ] && has_denial "$bc_self" && ! echo "$bc_self" | grep -q "This pane has no name"; then
+bc_self_env=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me \
+  bash "$HERE/broadcast-message.sh" "ping" 2>&1); bc_self_env_rc=$?
+if [ "$bc_self_rc" -ne 0 ] && has_denial "$bc_self" && ! echo "$bc_self" | grep -q "This pane has no name" \
+   && [ "$bc_self_env_rc" -ne 0 ] && has_denial "$bc_self_env" && echo "$bc_self_env" | grep -q "Cannot resolve the calling tmux pane"; then
   pass "denial_broadcast_selfname_surfaced"
 else
-  fail "denial_broadcast_selfname_surfaced" "rc=$bc_self_rc out=$bc_self"
+  fail "denial_broadcast_selfname_surfaced" "rc=$bc_self_rc out=$bc_self env_rc=$bc_self_env_rc env_out=$bc_self_env"
 fi
 
-# (e) broadcast, enumeration path: self-name asserted via env AND --all scope so
-#     we skip the self-session query and reach the pane listing -> denial there
-#     must report a listing failure, NOT the benign "No named panes matched".
-bc_enum=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me \
+# (e) broadcast, enumeration path: the caller identity is answered by the
+#     fixture (DENY_AFTER_ID_BIN) AND --all scope skips the self-session query,
+#     so we reach the pane listing -> denial there must report a listing
+#     failure, NOT the benign "No named panes matched".
+bc_enum=$(PATH="$DENY_AFTER_ID_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me \
   bash "$HERE/broadcast-message.sh" --all "ping" 2>&1); bc_enum_rc=$?
-if [ "$bc_enum_rc" -ne 0 ] && has_denial "$bc_enum" && ! echo "$bc_enum" | grep -q "No named panes matched"; then
+if [ "$bc_enum_rc" -ne 0 ] && has_denial "$bc_enum" && echo "$bc_enum" | grep -q "could not list tmux panes" && ! echo "$bc_enum" | grep -q "No named panes matched"; then
   pass "denial_broadcast_enumeration_surfaced"
 else
   fail "denial_broadcast_enumeration_surfaced" "rc=$bc_enum_rc out=$bc_enum"
 fi
 
-# (e2) broadcast, CURRENT scope: self-name asserted via env so we pass the name
-#      gate, then the self-session display-message denial is the ROOT failure.
-bc_cur=$(PATH="$DENY_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me \
+# (e2) broadcast, CURRENT scope: the caller identity is answered by the fixture
+#      so we pass the identity gate, then the self-session display-message
+#      denial is the ROOT failure.
+bc_cur=$(PATH="$DENY_AFTER_ID_BIN:$PATH" TMUX="fake,0,0" TMUX_PANE="%0" SESSION_CHAT_PANE_NAME=me \
   bash "$HERE/broadcast-message.sh" "ping" 2>&1); bc_cur_rc=$?
 if [ "$bc_cur_rc" -ne 0 ] && has_denial "$bc_cur" && echo "$bc_cur" | grep -q "current tmux session" && ! echo "$bc_cur" | grep -q "No named panes matched"; then
   pass "denial_broadcast_current_scope_surfaced"
@@ -1361,7 +1689,7 @@ else
   fail "empty_list_not_misclassified_as_denial" "rc=$ctl_rc out=$ctl_out"
 fi
 
-rm -rf "$DENY_BIN" "$PERM_BIN" "$OK_BIN"
+rm -rf "$DENY_BIN" "$DENY_AFTER_ID_BIN" "$PERM_BIN" "$OK_BIN"
 
 # --- Test 32: reply correlation — apply_reply_to normalization ---
 # Exactly-one leading token; repeated same-id LEADING tokens collapse (a token
@@ -2498,9 +2826,4 @@ done
 rm -rf "$E_ROOT"
 
 # --- Summary ---
-echo
-echo "=== Results: $PASS passed, $FAIL failed ==="
-if [ "$FAIL" -gt 0 ]; then
-  for f in "${FAILURES[@]}"; do echo "  - $f"; done
-  exit 1
-fi
+summary

@@ -6,9 +6,15 @@ CONTRACT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/scheduler-contract.XXXXXX")"
 trap 'rm -rf "$CONTRACT_TMP"' EXIT
 export SESSION_SCHEDULER_HOME="$CONTRACT_TMP/scheduler"
 export SESSION_CHAT_ROOT_OVERRIDE="$CONTRACT_TMP/chat"
-export TMUX_PANE=contract-pane
-unset SESSION_CONTEXT_HOME
-tmux() { printf 'contract-owner\n'; }
+export TMUX_PANE=%1 CONTRACT_DRIVER_PID=$$
+unset SESSION_CONTEXT_HOME SESSION_CHAT_PANE_NAME
+tmux() {
+  case "$*" in
+    'list-panes -a -F #{pane_pid} #{pane_id}') echo "$CONTRACT_DRIVER_PID %1" ;;
+    'display-message -p -t %1 #{pane_pid} #{@name}') echo "$CONTRACT_DRIVER_PID contract-owner" ;;
+    *) echo contract-owner ;;
+  esac
+}
 export -f tmux
 source "$CONTRACT_SCRIPTS/lib.sh"
 ensure_dirs
@@ -24,7 +30,7 @@ seed() {
     > "$TASKS_DIR/$1.json"
 }
 mkdir -p "$SESSION_CHAT_ROOT_OVERRIDE/.codex-plugin" "$SESSION_CHAT_ROOT_OVERRIDE/scripts"
-printf '{"version":"0.17.9"}\n' > "$SESSION_CHAT_ROOT_OVERRIDE/.codex-plugin/plugin.json"
+printf '{"version":"0.17.24"}\n' > "$SESSION_CHAT_ROOT_OVERRIDE/.codex-plugin/plugin.json"
 printf '%s\n' '#!/usr/bin/env bash' \
   'test ! -d "$SESSION_SCHEDULER_HOME/locks/auto-task.lock" || exit 91' \
   'exit "${CONTRACT_DISPATCH_RESULT:-0}"' \
