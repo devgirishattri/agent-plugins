@@ -38,9 +38,266 @@ chmod 644 "$STUB_DIR"/*.sh
 # Version manifest so the stub satisfies the scheduler's session-chat floor
 # check (exercises the version-pass path on every dispatch test below).
 mkdir -p "$TMP/session-chat-stub/.claude-plugin"
-printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$TMP/session-chat-stub/.claude-plugin/plugin.json"
+printf '{ "name": "session-chat", "version": "0.17.24" }\n' > "$TMP/session-chat-stub/.claude-plugin/plugin.json"
 
 export SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub"
+
+# --- Legacy fixture identity projection ---
+# Since 0.7.13 the acting pane is the tmux pane that OWNS the calling process
+# (resolve_pane_actor walks the process ancestry); the scheduler no longer asks
+# session-chat's get-my-name.sh. The fixtures below need no tmux server and name
+# their acting pane through the stub get-my-name.sh in SESSION_CHAT_ROOT_OVERRIDE
+# (or through SESSION_CHAT_PANE_NAME, which that stub prints). This PATH shim
+# answers ONLY the resolver's two queries: the fixture pane is owned by this
+# driver process (its pid is written into the shim, so the ancestry walk itself
+# still runs for real, also under `env -i`) and is named by the active stub.
+# The "real pane ancestry" section near the end removes this shim and runs
+# inside a real pane of a private tmux server.
+SCHED_REAL_TMUX="$(command -v tmux 2>/dev/null || true)"
+SCHED_REAL_PATH="$PATH"
+SCHED_FIXTURE_BIN="$TMP/fixture-bin"; mkdir -p "$SCHED_FIXTURE_BIN"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf 'driver=%s\n' "$$"
+  cat <<'SHIM'
+pane="${TMUX_PANE:-%0}"
+case "$*" in
+  'list-panes -a -F #{pane_pid} #{pane_id}')
+    printf '%s %s\n' "$driver" "$pane"; exit 0 ;;
+  "display-message -p -t $pane #{pane_pid} #{@name}")
+    name=""
+    stub="${SESSION_CHAT_ROOT_OVERRIDE:-}/scripts/get-my-name.sh"
+    [ -f "$stub" ] && name=$(bash "$stub" 2>/dev/null)
+    name="${name##*$'\n'}"; name="${name//[[:space:]]/}"
+    # A fixture with no session-chat root at all names its pane explicitly.
+    [ -n "$name" ] || name="${SCHED_FIXTURE_PANE_NAME:-}"
+    printf '%s %s\n' "$driver" "$name"; exit 0 ;;
+esac
+echo "fixture tmux: no server (unsupported: $*)" >&2
+exit 1
+SHIM
+} > "$SCHED_FIXTURE_BIN/tmux"
+chmod +x "$SCHED_FIXTURE_BIN/tmux"
+export PATH="$SCHED_FIXTURE_BIN:$PATH" TMUX="fixture,0,0" TMUX_PANE="%0"
+
+# --- Real pane ancestry (no fixture projection) ---
+# The probe below runs INSIDE a pane of a private tmux server, as a real
+# descendant of that pane, with the fixture shim removed from PATH. It proves
+# the verified acting pane at the public helper entry points:
+#   success      the owning pane is recorded even when TMUX_PANE names a sibling
+#   mismatch     a SESSION_CHAT_PANE_NAME that disagrees with the owning pane is
+#                refused before any write (new, assign, review, done, block,
+#                task-contract.sh and task-contract.py entered directly)
+#   unnamed      a verdict helper refuses
+#   dotted       a pane name with a dot is a valid actor and read-only name
+#   unreachable  with tmux unreachable every writer refuses even with the TRUE
+#                name inherited; only task-status --mine (display) falls back
+#   standalone   with no pane identity in the environment task-new stays
+#                anonymous ('?'); a verdict helper still refuses
+#   outsider     a process no pane owns cannot act as a pane by exporting that
+#                pane's TMUX_PANE and name
+# Every refusal is checked for "nothing written": the digest of the whole
+# scheduler home (names and bytes) is unchanged and the recording transport
+# stub was never called.
+# SESSION_SCHEDULER_TEST_ACTOR_SCRIPTS points this section at another copy of
+# the scripts (e.g. `git show HEAD:...` extracted to scratch) to show the
+# negative cases failing on the original code. SESSION_SCHEDULER_TEST_ONLY=actor
+# runs only this section.
+actor_section() {
+ACT_SCRIPTS="${SESSION_SCHEDULER_TEST_ACTOR_SCRIPTS:-$HERE}"
+ACT_DIR="$(cd "$TMP" && pwd -P)/actor"; mkdir -p "$ACT_DIR/chat/scripts" "$ACT_DIR/chat/.claude-plugin" "$ACT_DIR/empty-tmux"
+ACT_SOCKET="session-scheduler-test-$$"
+printf '{ "name": "session-chat", "version": "0.17.24" }\n' > "$ACT_DIR/chat/.claude-plugin/plugin.json"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "dispatch $1" >> "$ACT_TRANSPORT_LOG"' 'echo "Dispatched task to '"'"'$1'"'"'"' 'exit 0' > "$ACT_DIR/chat/scripts/dispatch-to-session.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "send $1" >> "$ACT_TRANSPORT_LOG"' 'exit 0' > "$ACT_DIR/chat/scripts/send-message.sh"
+# The name helper and library that belong to the scripts under test (their
+# sibling session-chat tree). The current scheduler does not call them for the
+# acting pane. They are here so that a run against the original code, which
+# did, resolves a name the way that code really did.
+for act_f in lib.sh get-my-name.sh; do
+  [ -f "$ACT_SCRIPTS/../../session-chat/scripts/$act_f" ] && cp "$ACT_SCRIPTS/../../session-chat/scripts/$act_f" "$ACT_DIR/chat/scripts/"
+done
+chmod 644 "$ACT_DIR/chat/scripts"/*.sh
+
+cat > "$ACT_DIR/probe.sh" <<'PROBE'
+scripts=$1 store=$2 self=$3 peer=$4 realpath=$5
+exec >"$store/probe.log" 2>&1
+export PATH="$realpath"
+unset SESSION_CHAT_PANE_NAME SCHED_FIXTURE_PANE_NAME
+export SESSION_SCHEDULER_HOME="$store/ledger" SESSION_CHAT_ROOT_OVERRIDE="$store/chat" ACT_TRANSPORT_LOG="$store/transport.log"
+mkdir -p "$SESSION_SCHEDULER_HOME"; : > "$ACT_TRANSPORT_LOG"
+R="$store/results"; : > "$R"
+ok()  { printf 'PASS\t%s\n' "$1" >> "$R"; }
+bad() { printf 'FAIL\t%s\t%s\n' "$1" "$(printf '%s' "$2" | tr '\n\t' '  ')" >> "$R"; }
+if command -v shasum >/dev/null 2>&1; then sum() { shasum -a 256; }; else sum() { sha256sum; }; fi
+digest() { ( cd "$1" && find . | LC_ALL=C sort && find . -type f | LC_ALL=C sort | while IFS= read -r f; do sum < "$f"; done; cat "$ACT_TRANSPORT_LOG" ) | sum; }
+tf() { printf '%s/tasks/%s.json' "$SESSION_SCHEDULER_HOME" "$1"; }
+# A socket path that never exists. It is short on purpose: a long path fails in
+# tmux as "File name too long", which is a different failure from "no server".
+dead_socket="/tmp/sst-no-server-$$.sock"
+new_assigned() {  # new_assigned -> id of a fresh task forced to "assigned" (assigner someone-else)
+  local id
+  id=$(bash "$scripts/task-new.sh" "actor check" 2>/dev/null | awk '/Created task:/ {print $3}')
+  jq '.status = "assigned" | .assigner = "someone-else" | .assignee = "sched-reviewer"' "$(tf "$id")" > "$store/t.tmp" && mv "$store/t.tmp" "$(tf "$id")"
+  printf '%s' "$id"
+}
+
+# success: TMUX_PANE names the sibling, yet the recorded actor is the owning pane.
+miss=""
+for op in review done block; do
+  id=$(new_assigned)
+  out=$(TMUX_PANE="$peer" bash "$scripts/task-$op.sh" "$id" "verified $op" 2>&1); rc=$?
+  actor=$(jq -r '.history[-1].actor' "$(tf "$id")"); status=$(jq -r '.status' "$(tf "$id")")
+  { [ "$rc" = 0 ] && [ "$actor" = sched-reviewer ] && [ "$status" != assigned ]; } || miss="$miss $op(rc=$rc actor=$actor status=$status $out)"
+done
+if [ -z "$miss" ]; then ok real_pane_verdicts_record_owning_pane; else bad real_pane_verdicts_record_owning_pane "$miss"; fi
+out=$(TMUX_PANE="$peer" bash "$scripts/task-new.sh" "owned task" 2>&1); rc=$?
+nid=$(printf '%s\n' "$out" | awk '/Created task:/ {print $3}')
+out2=$(TMUX_PANE="$peer" bash "$scripts/task-assign.sh" sched-executor "$nid" "do it" 2>&1); rc2=$?
+if [ "$rc" = 0 ] && [ "$rc2" = 0 ] && [ "$(jq -r '.assigner' "$(tf "$nid")")" = sched-reviewer ] \
+   && [ "$(jq -r '.history[-1].actor' "$(tf "$nid")")" = sched-reviewer ] && [ "$(jq -r '.status' "$(tf "$nid")")" = assigned ]; then
+  ok real_pane_new_and_assign_record_owning_pane
+else bad real_pane_new_and_assign_record_owning_pane "rc=$rc rc2=$rc2 task=$(cat "$(tf "$nid")" 2>/dev/null) out=$out out2=$out2"; fi
+# control for the mismatch cases: a claim that MATCHES the owning pane is accepted.
+id=$(new_assigned)
+out=$(SESSION_CHAT_PANE_NAME=sched-reviewer bash "$scripts/task-done.sh" "$id" "matching claim" 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$(jq -r '.status' "$(tf "$id")")" = "done" ]; then ok real_pane_matching_claim_accepted
+else bad real_pane_matching_claim_accepted "rc=$rc out=$out"; fi
+
+# mismatch: every writer refuses a claim that disagrees with the owning pane.
+id=$(new_assigned); cid=$(bash "$scripts/task-new.sh" "created task" 2>/dev/null | awk '/Created task:/ {print $3}')
+before=$(digest "$SESSION_SCHEDULER_HOME"); miss=""
+refused() {  # refused <label> <expected stderr/stdout text> <command...>
+  local label="$1" want="$2" out rc; shift 2
+  out=$("$@" 2>&1); rc=$?
+  { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- "$want"; } || miss="$miss $label(rc=$rc $out)"
+}
+for op in review done block; do
+  refused "$op" 'SESSION_CHAT_PANE_NAME disagrees' env SESSION_CHAT_PANE_NAME=sched-executor bash "$scripts/task-$op.sh" "$id" "spoofed $op"
+done
+refused new 'SESSION_CHAT_PANE_NAME disagrees' env SESSION_CHAT_PANE_NAME=sched-executor bash "$scripts/task-new.sh" "spoofed new"
+refused assign 'SESSION_CHAT_PANE_NAME disagrees' env SESSION_CHAT_PANE_NAME=sched-executor bash "$scripts/task-assign.sh" sched-executor "$cid" "spoofed assign"
+refused contract.sh 'cannot verify the calling tmux pane' env SESSION_CHAT_PANE_NAME=sched-executor bash "$scripts/task-contract.sh" reconcile "$id" --generation 1 --note spoofed
+refused contract.py 'cannot verify the calling tmux pane' env SESSION_CHAT_PANE_NAME=sched-executor TASK_CONTRACT_ACTOR=sched-reviewer python3 "$scripts/task-contract.py" reconcile "$id" --generation 1 --note spoofed
+# control: the same engine call from the verified pane gets PAST the identity
+# gate (it then stops on the missing contract, not on identity).
+cout=$(python3 "$scripts/task-contract.py" reconcile "$id" --generation 1 --note control 2>&1)
+printf '%s' "$cout" | grep -q 'cannot verify the calling tmux pane' && miss="$miss contract-control($cout)"
+if [ -z "$miss" ] && [ "$(digest "$SESSION_SCHEDULER_HOME")" = "$before" ]; then ok real_pane_mismatched_claim_refused_before_any_write
+else bad real_pane_mismatched_claim_refused_before_any_write "miss=$miss digest_same=$([ "$(digest "$SESSION_SCHEDULER_HOME")" = "$before" ] && echo y || echo n)"; fi
+
+# unnamed: a verdict helper refuses and writes nothing.
+tmux set-option -p -u -t "$self" @name
+before=$(digest "$SESSION_SCHEDULER_HOME")
+out=$(bash "$scripts/task-done.sh" "$id" "unnamed" 2>&1); rc=$?
+tmux set-option -p -t "$self" @name sched-reviewer
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'empty or unsafe externally assigned name' \
+   && [ "$(digest "$SESSION_SCHEDULER_HOME")" = "$before" ]; then ok real_pane_unnamed_verdict_refused
+else bad real_pane_unnamed_verdict_refused "rc=$rc out=$out"; fi
+
+# dotted: a pane name with a dot (the workspace and scheduler grammar) is a
+# valid verified actor for an ordinary transition, and for the read-only lookup
+# with and without a reachable tmux.
+tmux set-option -p -t "$self" @name build.review
+did=$(new_assigned)
+out=$(bash "$scripts/task-done.sh" "$did" "dotted actor" 2>&1); rc=$?
+own=$(bash "$scripts/task-new.sh" "dotted owned" 2>/dev/null | awk '/Created task:/ {print $3}')
+mine=$(bash "$scripts/task-status.sh" --mine 2>&1); mrc=$?
+fb=$(env TMUX="$dead_socket,1,0" SESSION_CHAT_PANE_NAME=build.review bash "$scripts/task-status.sh" --mine 2>&1); frc=$?
+tmux set-option -p -t "$self" @name sched-reviewer
+if [ "$rc" = 0 ] && [ "$(jq -r '.history[-1].actor' "$(tf "$did")")" = build.review ] && [ -n "$own" ] \
+   && [ "$mrc" = 0 ] && printf '%s' "$mine" | grep -q "$own" && [ "$frc" = 0 ] && printf '%s' "$fb" | grep -q "$own"; then
+  ok real_pane_dotted_name_is_a_verified_actor_and_read_only_name
+else bad real_pane_dotted_name_is_a_verified_actor_and_read_only_name "rc=$rc out=$out mrc=$mrc mine=$mine frc=$frc fb=$fb"; fi
+
+# unreachable: the TRUE name is inherited, tmux cannot be reached.
+before=$(digest "$SESSION_SCHEDULER_HOME"); miss=""
+dead=(env TMUX="$dead_socket,1,0" SESSION_CHAT_PANE_NAME=sched-reviewer)
+for op in review done block; do
+  refused "$op" 'Cannot resolve the calling tmux pane' "${dead[@]}" bash "$scripts/task-$op.sh" "$id" "unreachable $op"
+done
+refused new 'Cannot resolve the calling tmux pane' "${dead[@]}" bash "$scripts/task-new.sh" "unreachable new"
+refused assign 'Cannot resolve the calling tmux pane' "${dead[@]}" bash "$scripts/task-assign.sh" sched-executor "$cid" "unreachable assign"
+refused contract.sh 'cannot verify the calling tmux pane' "${dead[@]}" bash "$scripts/task-contract.sh" reconcile "$id" --generation 1 --note unreachable
+same=$([ "$(digest "$SESSION_SCHEDULER_HOME")" = "$before" ] && echo y || echo n)
+mine=$("${dead[@]}" bash "$scripts/task-status.sh" --mine 2>&1); mrc=$?
+if [ -z "$miss" ] && [ "$same" = y ] && [ "$mrc" = 0 ] && printf '%s' "$mine" | grep -q "$nid"; then
+  ok real_pane_unreachable_tmux_refuses_writers_status_mine_falls_back
+else bad real_pane_unreachable_tmux_refuses_writers_status_mine_falls_back "miss=$miss digest_same=$same mrc=$mrc mine=$mine"; fi
+printf '%s\n' "$id" > "$store/assigned-id"
+echo done > "$store/status.tmp"; mv "$store/status.tmp" "$store/status"
+exec /bin/cat
+PROBE
+
+if [ -z "$SCHED_REAL_TMUX" ]; then
+  fail "real_pane_probe_completed" "tmux is required for the real pane ancestry section"
+else
+  act_tmux() { "$SCHED_REAL_TMUX" -L "$ACT_SOCKET" "$@"; }
+  ( unset TMUX TMUX_PANE; PATH="$SCHED_REAL_PATH" act_tmux -f /dev/null new-session -d -s sched-actor -x 200 -y 50 "cat" \
+      && PATH="$SCHED_REAL_PATH" act_tmux split-window -t sched-actor -h "cat" )
+  read -r ACT_MAIN ACT_PEER <<< "$(act_tmux list-panes -t sched-actor -F '#{pane_id}' | tr '\n' ' ')"
+  act_tmux set-option -p -t "$ACT_MAIN" @name sched-reviewer
+  act_tmux set-option -p -t "$ACT_PEER" @name sched-executor
+  act_tmux respawn-pane -k -t "$ACT_MAIN" bash "$ACT_DIR/probe.sh" "$ACT_SCRIPTS" "$ACT_DIR" "$ACT_MAIN" "$ACT_PEER" "$SCHED_REAL_PATH"
+  for ((i = 0; i < 2400; i++)); do [ -f "$ACT_DIR/status" ] && break; sleep 0.05; done
+  if [ ! -f "$ACT_DIR/status" ]; then
+    fail "real_pane_probe_completed" "probe did not finish: $(tail -5 "$ACT_DIR/probe.log" 2>/dev/null)"
+  elif [ "$(grep -c . "$ACT_DIR/results")" != 7 ]; then
+    fail "real_pane_probe_completed" "expected 7 results, got: $(cat "$ACT_DIR/results")"
+  else
+    pass "real_pane_probe_completed"
+  fi
+  while IFS=$'\t' read -r act_verdict act_name act_detail; do
+    [ -n "$act_verdict" ] || continue
+    if [ "$act_verdict" = PASS ]; then pass "$act_name"; else fail "$act_name" "$act_detail"; fi
+  done < "$ACT_DIR/results"
+
+  # The two cases below run from THIS driver, which no pane of the private
+  # server owns, with the fixture shim off PATH.
+  if command -v shasum >/dev/null 2>&1; then act_sum() { shasum -a 256; }; else act_sum() { sha256sum; }; fi
+  act_digest() { ( cd "$ACT_DIR/ledger" && find . | LC_ALL=C sort && find . -type f | LC_ALL=C sort | while IFS= read -r f; do act_sum < "$f"; done; cat "$ACT_DIR/transport.log" ) | act_sum; }
+  ACT_ID=$(cat "$ACT_DIR/assigned-id" 2>/dev/null)
+  act_env=(env -u TMUX -u TMUX_PANE -u SESSION_CHAT_PANE_NAME -u SCHED_FIXTURE_PANE_NAME PATH="$SCHED_REAL_PATH"
+    TMUX_TMPDIR="$ACT_DIR/empty-tmux" SESSION_SCHEDULER_HOME="$ACT_DIR/ledger" SESSION_CHAT_ROOT_OVERRIDE="$ACT_DIR/chat"
+    ACT_TRANSPORT_LOG="$ACT_DIR/transport.log")
+  # standalone: no pane identity in the environment at all.
+  sa_out=$("${act_env[@]}" bash "$ACT_SCRIPTS/task-new.sh" "standalone task" 2>&1); sa_rc=$?
+  SA_ID=$(printf '%s\n' "$sa_out" | awk '/Created task:/ {print $3}')
+  sa_before=$(act_digest)
+  sa_done=$("${act_env[@]}" bash "$ACT_SCRIPTS/task-done.sh" "$ACT_ID" "standalone verdict" 2>&1); sa_done_rc=$?
+  if [ "$sa_rc" = 0 ] && [ "$(jq -r '.assigner' "$ACT_DIR/ledger/tasks/$SA_ID.json" 2>/dev/null)" = "?" ] \
+     && [ "$sa_done_rc" -ne 0 ] && echo "$sa_done" | grep -q 'Cannot resolve the calling tmux pane' && [ "$(act_digest)" = "$sa_before" ]; then
+    pass "standalone_new_is_anonymous_and_verdict_is_refused"
+  else
+    fail "standalone_new_is_anonymous_and_verdict_is_refused" "new_rc=$sa_rc out=$sa_out done_rc=$sa_done_rc done=$sa_done"
+  fi
+  # outsider: export the acting pane's TMUX_PANE and its true name.
+  os_before=$(act_digest); os_bad=""
+  os_env=("${act_env[@]}" TMUX="$(act_tmux display-message -p '#{socket_path}'),0,0" TMUX_PANE="$ACT_MAIN" SESSION_CHAT_PANE_NAME=sched-reviewer)
+  for os_op in review "done" block; do
+    os_out=$("${os_env[@]}" bash "$ACT_SCRIPTS/task-$os_op.sh" "$ACT_ID" "outsider $os_op" 2>&1); os_rc=$?
+    { [ "$os_rc" -ne 0 ] && echo "$os_out" | grep -q 'No tmux pane owns the calling process'; } || os_bad="$os_bad [$os_op rc=$os_rc $os_out]"
+  done
+  os_out=$("${os_env[@]}" bash "$ACT_SCRIPTS/task-new.sh" "outsider new" 2>&1); os_rc=$?
+  { [ "$os_rc" -ne 0 ] && echo "$os_out" | grep -q 'No tmux pane owns the calling process'; } || os_bad="$os_bad [new rc=$os_rc $os_out]"
+  if [ -z "$os_bad" ] && [ "$(act_digest)" = "$os_before" ]; then
+    pass "outsider_with_exported_pane_identity_refused_before_any_write"
+  else
+    fail "outsider_with_exported_pane_identity_refused_before_any_write" "$os_bad digest_same=$([ "$(act_digest)" = "$os_before" ] && echo y || echo n)"
+  fi
+  act_tmux kill-server 2>/dev/null || true
+fi
+}
+if [ "${SESSION_SCHEDULER_TEST_ONLY:-}" = actor ]; then
+  actor_section
+  echo
+  echo "=== Results: $PASS passed, $FAIL failed ==="
+  if [ "$FAIL" -gt 0 ]; then
+    for f in "${FAILURES[@]}"; do echo "  - $f"; done
+    exit 1
+  fi
+  exit 0
+fi
 
 # make_session_chat_stub <dir> <dispatch_rc> <send_rc> <actor_name> [send_sentinel_file]
 # Builds a session-chat stub tree at <dir> (version manifest included, so it
@@ -53,7 +310,7 @@ export SESSION_CHAT_ROOT_OVERRIDE="$TMP/session-chat-stub"
 make_session_chat_stub() {
   local dir="$1" dispatch_rc="$2" send_rc="$3" actor="$4" sentinel="${5:-}"
   mkdir -p "$dir/scripts" "$dir/.claude-plugin"
-  printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$dir/.claude-plugin/plugin.json"
+  printf '{ "name": "session-chat", "version": "0.17.24" }\n' > "$dir/.claude-plugin/plugin.json"
   printf '%s\n' '#!/usr/bin/env bash' 'echo "stub-dispatched to $1 with $2"' "exit $dispatch_rc" > "$dir/scripts/dispatch-to-session.sh"
   if [ -n "$sentinel" ]; then
     printf '%s\n' '#!/usr/bin/env bash' "touch \"$sentinel\"" 'echo "stub-sent to $1: $2"' "exit $send_rc" > "$dir/scripts/send-message.sh"
@@ -619,7 +876,7 @@ fi
 # review, must WARN, and must have written a review packet with the original.
 REV_FAIL="$TMP/session-chat-revfail"
 mkdir -p "$REV_FAIL/scripts" "$REV_FAIL/.claude-plugin"
-printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$REV_FAIL/.claude-plugin/plugin.json"
+printf '{ "name": "session-chat", "version": "0.17.24" }\n' > "$REV_FAIL/.claude-plugin/plugin.json"
 SENTINEL="$TMP/send-fallback-called"
 cat > "$REV_FAIL/scripts/dispatch-to-session.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -1292,11 +1549,11 @@ JF_FILE="$SESSION_SCHEDULER_HOME/tasks/$JF_ID.json"
 JF_BEFORE=$(cksum < "$JF_FILE")
 printf '%s\n' "source \"$HERE/lib.sh\"" \
   'jq() { case "$*" in *".status = \$status"*) return 5 ;; esac; command jq "$@"; }' > "$JQLIB/lib.sh"
-jf_out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/no-chat" bash "$JQLIB/task-block.sh" "$JF_ID" "jq broke" 2>&1); jf_rc=$?
+jf_out=$(SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/no-chat" SCHED_FIXTURE_PANE_NAME=test-orchestrator bash "$JQLIB/task-block.sh" "$JF_ID" "jq broke" 2>&1); jf_rc=$?
 JF_AFTER=$(cksum < "$JF_FILE")
 # Control: the same copy with the real lib performs the transition.
 printf '%s\n' "source \"$HERE/lib.sh\"" > "$JQLIB/lib.sh"
-SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/no-chat" bash "$JQLIB/task-block.sh" "$JF_ID" "control" >/dev/null 2>&1
+SESSION_SCHEDULER_HOME="$SESSION_SCHEDULER_HOME" SESSION_CHAT_ROOT_OVERRIDE="$TMP/no-chat" SCHED_FIXTURE_PANE_NAME=test-orchestrator bash "$JQLIB/task-block.sh" "$JF_ID" "control" >/dev/null 2>&1
 if [ -n "$JF_ID" ] && [ "$jf_rc" != 0 ] && [ "$JF_BEFORE" = "$JF_AFTER" ] && echo "$jf_out" | grep -q "NOT marked blocked" \
    && [ "$(jq -r '.status' "$JF_FILE")" = "blocked" ]; then
   pass "status_flip_jq_failure_preserves_task"
@@ -1488,6 +1745,8 @@ c_out=$(PATH="$ID_SHIM:$PATH" id_new "urandom-control"); c_id=$(echo "$c_out" | 
 [[ "$c_id" =~ ^task-[0-9]+-0a1b2c3d$ ]] || ur_bad="$ur_bad [control id=$c_id out=$c_out]"
 # no od on PATH at all
 NO_OD="$TMP/no-od-bin"; mkdir -p "$NO_OD"
+# the fixture tmux first, so a real tmux in those dirs is never linked
+ln -s "$SCHED_FIXTURE_BIN/tmux" "$NO_OD/tmux"
 # every executable the script needs (system dirs + jq's dir) EXCEPT od
 for d in /bin /usr/bin "$(dirname "$(command -v jq)")"; do
   for f in "$d"/*; do
@@ -1704,7 +1963,7 @@ chmod 700 "$VD_MSGS" "$VD_MSGS/drafts" "$VD_MSGS/drafts/reviewer-1" "$VD_MSGS/dr
 vd_chat_root() { # vd_chat_root <dir> [with-helper|no-helper]
   local d="$1"
   mkdir -p "$d/scripts" "$d/.claude-plugin"
-  printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$d/.claude-plugin/plugin.json"
+  printf '{ "name": "session-chat", "version": "0.17.24" }\n' > "$d/.claude-plugin/plugin.json"
   cp "$VD_CHAT_SRC/lib.sh" "$d/scripts/" 2>/dev/null
   # Identity stub: the real get-my-name.sh needs tmux; the real lib.sh (used by
   # own-draft-check.sh) honours the same SESSION_CHAT_PANE_NAME.
@@ -1953,6 +2212,42 @@ ctl_out=$(vd reviewer-1 task-done.sh "$id" --note-file "$D" 2>&1); ctl_rc=$?
 id=$(vd_task assigned); vd_reset_log
 VD_CHAT_USE="$VD_CHAT_NOHELPER" vd reviewer-1 task-done.sh "$id" "inline note still works" >/dev/null 2>&1; inl_rc=$?
 { [ "$inl_rc" = 0 ] && [ "$(jq -r .status "$(vd_tf "$id")")" = "done" ] && [ "$(jq -r '(.meta.verdict_events // {}) | length' "$(vd_tf "$id")")" = 0 ]; } || vd_bad="$vd_bad [inline note with old chat rc=$inl_rc]"
+# The checker needs a VERIFIABLE session-chat at or above the floor. A root that
+# has own-draft-check.sh but an older version, or no readable version, refuses
+# --note-file before the draft is read, also with the dispatch-path override
+# set. Inline notes keep working, and the supported root is the control above.
+OLDV_CHAT="$VD_ROOT/chat-oldver"; vd_chat_root "$OLDV_CHAT" with-helper
+printf '{ "name": "session-chat", "version": "0.17.23" }\n' > "$OLDV_CHAT/.claude-plugin/plugin.json"
+UNKV_CHAT="$VD_ROOT/chat-unknownver"; vd_chat_root "$UNKV_CHAT" with-helper; rm -f "$UNKV_CHAT/.claude-plugin/plugin.json"
+for fl_case in old unknown override; do
+  id=$(vd_task assigned); vd_reset_log; D=$(vd_draft reviewer-1 "floor-$fl_case.md" "verdict under $fl_case")
+  case "$fl_case" in
+    old)      fl_out=$(VD_CHAT_USE="$OLDV_CHAT" vd reviewer-1 task-done.sh "$id" --note-file "$D" 2>&1); fl_rc=$?; fl_want='0.17.23' ;;
+    unknown)  fl_out=$(VD_CHAT_USE="$UNKV_CHAT" vd reviewer-1 task-done.sh "$id" --note-file "$D" 2>&1); fl_rc=$?; fl_want='unknown version' ;;
+    override) fl_out=$(VD_CHAT_USE="$OLDV_CHAT" SESSION_SCHEDULER_SKIP_VERSION_CHECK=1 vd reviewer-1 task-block.sh "$id" --note-file "$D" 2>&1); fl_rc=$?; fl_want='0.17.23' ;;
+  esac
+  { [ "$fl_rc" != 0 ] && echo "$fl_out" | grep -q '>= 0.17.24' && echo "$fl_out" | grep -q "$fl_want" && echo "$fl_out" | grep -q 'not read' \
+    && echo "$fl_out" | grep -q 'sched.note_file.checker_unavailable' && vd_unchanged "$id" assigned && [ -f "$D" ] && [ "$(vd_artifacts "$id")" = 0 ]; } \
+    || vd_bad="$vd_bad [floor/$fl_case rc=$fl_rc out=$fl_out]"
+  rm -f "$D"
+done
+id=$(vd_task assigned); vd_reset_log
+VD_CHAT_USE="$OLDV_CHAT" vd reviewer-1 task-done.sh "$id" "inline note with an older chat" >/dev/null 2>&1; fl_rc=$?
+{ [ "$fl_rc" = 0 ] && [ "$(jq -r .status "$(vd_tf "$id")")" = "done" ]; } || vd_bad="$vd_bad [floor/inline rc=$fl_rc]"
+# Cleanup uses the same gate: with a root below the floor the committed draft is
+# kept; the supported root removes the identical draft (control).
+for fl_root in "$OLDV_CHAT" "$VD_CHAT"; do
+  D=$(vd_draft reviewer-1 floor-consume.md "consume body")
+  fl_ident=$(stat -c '%d:%i' "$D" 2>/dev/null || stat -f '%d:%i' "$D"); fl_sum=$({ shasum -a 256 < "$D" 2>/dev/null || sha256sum < "$D"; } | awk '{print $1}')
+  fl_out=$(SESSION_SCHEDULER_HOME="$VD_HOME" SESSION_CHAT_ROOT_OVERRIDE="$fl_root" SESSION_CHAT_PANE_NAME=reviewer-1 SESSION_CHAT_TARGET_MESSAGES_DIR="$VD_MSGS" \
+    bash -c 'source "$1"; verdict_consume_draft "$2" "$3" "$4"' fl "$VD_SCRIPTS/lib.sh" "$D" "$fl_ident" "$fl_sum" 2>&1)
+  if [ "$fl_root" = "$OLDV_CHAT" ]; then
+    { [ -f "$D" ] && echo "$fl_out" | grep -q 'NOTE: kept draft (session-chat cleanup helper unavailable)'; } || vd_bad="$vd_bad [floor/consume-old out=$fl_out]"
+  else
+    { [ ! -e "$D" ] && echo "$fl_out" | grep -q 'Removed delivered draft'; } || vd_bad="$vd_bad [floor/consume-control out=$fl_out]"
+  fi
+  rm -f "$D"
+done
 # an installed chat whose helper prints malformed output is refused before any change
 BAD_CHAT="$VD_ROOT/chat-badhelper"; vd_chat_root "$BAD_CHAT" no-helper
 for variant in 'echo "OK	1:2	abc	5"' 'printf "OK\t1:2\t%064d\t5\nextra\n" 0' 'printf "NOPE\t1:2\t%064d\t5\n" 0' 'exit 0'; do
@@ -2569,6 +2864,8 @@ for op in "done" block; do
 done
 if [ -z "$vd_bad" ]; then pass "contracted_crash_boundaries_sigkill_consistent_pending_no_replay"
 else fail "contracted_crash_boundaries_sigkill_consistent_pending_no_replay" "$vd_bad"; fi
+
+actor_section
 
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="

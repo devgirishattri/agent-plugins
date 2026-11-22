@@ -15,13 +15,15 @@ class Packaging(unittest.TestCase):
             root=Path(temp); canonical=root/"shared/shell/validate-label.sh"
             canonical.parent.mkdir(parents=True)
             canonical.write_text("validate_label() {\n  return 0\n}\n")
+            canonical.with_name("pane-actor.sh").write_text("resolve_pane_actor() {\n  return 0\n}\n")
             for prefix in ("plugins","codex/plugins"):
-                for plugin,name in (("session-chat","validate_label"),("knowledge","kc_validate_label")):
+                for plugin,names in (("session-chat", ("validate_label", "resolve_pane_actor")),
+                                     ("session-scheduler", ("resolve_pane_actor",)), ("knowledge", ("kc_validate_label",))):
                     path=root/prefix/plugin/"scripts/lib.sh"; path.parent.mkdir(parents=True)
-                    path.write_text(f"# preserve\n{name}() {{\n  return 1\n}}\n# preserve end\n")
-            self.assertEqual(len(pack.package(root)),4)
+                    path.write_text("# preserve\n" + "".join(f"{name}() {{\n  return 1\n}}\n" for name in names) + "# preserve end\n")
+            self.assertEqual(len(pack.package(root)),8)
             pack.package(root,"codex",True)
-            self.assertEqual(len(pack.package(root)),2)
+            self.assertEqual(len(pack.package(root)),4)
             self.assertEqual(pack.package(root,"codex"),[])
             pack.package(root,"claude",True)
             self.assertEqual(pack.package(root),[])

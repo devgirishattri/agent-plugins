@@ -139,7 +139,9 @@ transition are not allowed. Use the normal task commands.
 Receipts, digests, and admissions establish local consistency on this host.
 They are not signatures. They do not resist tampering by the same user. They
 do not authenticate an external CI runner. They do not authorize commit, push,
-merge, or release. Pane identity outside the harness is self-asserted. A repository
+merge, or release. Contract mutations require a named tmux pane, verified through the
+calling process's ancestry. That binds the actor to a pane on this host's tmux
+server. It does not identify a person or an external runner. A repository
 containing tracked symlinks or hard-linked files cannot be bound in v1. The
 assignment prompt is stored in the task JSON, where every pane that can read
 the ledger can see it.

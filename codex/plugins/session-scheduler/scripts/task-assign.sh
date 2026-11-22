@@ -15,6 +15,7 @@ if [ "$#" -lt 3 ]; then
 fi
 
 require_jq || exit 1
+ASSIGNER=$(current_pane_name) || exit 1
 ensure_dirs || exit 1
 
 
@@ -118,7 +119,6 @@ if [ -n "$CONTEXT" ] && [ "$CONTEXT" != "auto" ]; then
   fi
 fi
 
-ASSIGNER=$(current_pane_name)
 [ -z "$ASSIGNER" ] && ASSIGNER=$(jq -r '.assigner // "?"' "$FILE")
 [ -n "$ASSIGNER" ] || ASSIGNER="?"
 PROMPT_FILE=$(prompt_file "$ID") || exit 1

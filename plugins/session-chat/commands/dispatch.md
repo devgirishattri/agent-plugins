@@ -32,6 +32,6 @@ Lead with the result. Add text only for errors or the follow-ups below. Run the 
    Then add: "Use `/panes` to check status or `/send <target> <message>` to follow up. Note: if `<target>` runs with `SESSION_CHAT_INCOMING_MODE=notify` (default), they will be **told not to read** the dispatch file. Set `auto` or `assist` for orchestration."
 
 5. If the error says the target is not found, run `/panes` to show available sessions.
-6. If the error is about no name, tell the user to run `/whoami <name>` first.
+6. If the error says the calling pane has an empty or unsafe name, tell the user to run `/whoami <name>` first. If it says `SESSION_CHAT_PANE_NAME disagrees with the calling tmux pane` or `No tmux pane owns the calling process`, report it verbatim. Do not change that variable, and do not retry through a wrapper.
 7. If the error mentions duplicate names, ask the user to rename one pane via `/whoami`.
 8. Raising `SESSION_CHAT_VERIFY_TIMEOUT_MS` only makes more dispatches land *live*. It does not change whether delivery happens. Retry only a **hard failure**, and only after fixing the named cause. A hard failure is an `ERROR:` print with a non-zero exit (no name, unknown or ambiguous target).

@@ -25,19 +25,25 @@ def function(text,name):
 
 
 def package(root,provider=None,write=False):
-    canonical=(root/"shared/shell/validate-label.sh").read_text()
-    body=function(canonical,"validate_label").group(1)
     problems=[]
+    fragments = (
+        ("validate-label.sh", "validate_label", (("session-chat", "validate_label"), ("knowledge", "kc_validate_label"))),
+        ("pane-actor.sh", "resolve_pane_actor", (("session-chat", "resolve_pane_actor"), ("session-scheduler", "resolve_pane_actor"))),
+    )
     for current,prefix in (("claude",Path("plugins")),("codex",Path("codex/plugins"))):
         if provider and provider!=current: continue
-        for plugin,name in (("session-chat","validate_label"),("knowledge","kc_validate_label")):
-            path=root/prefix/plugin/"scripts/lib.sh"
-            text=path.read_text(); match=function(text,name)
-            if match.group(1)==body: continue
-            if write:
-                path.write_text(text[:match.start(1)]+body+text[match.end(1):])
-            else:
-                problems.append(f"{path.relative_to(root)}: {name} differs from canonical fragment")
+        for filename, canonical_name, targets in fragments:
+            canonical = (root / "shared/shell" / filename).read_text()
+            body = function(canonical, canonical_name).group(1)
+            for plugin, name in targets:
+                path = root / prefix / plugin / "scripts/lib.sh"
+                text = path.read_text()
+                match = function(text, name)
+                if match.group(1) == body: continue
+                if write:
+                    path.write_text(text[:match.start(1)] + body + text[match.end(1):])
+                else:
+                    problems.append(f"{path.relative_to(root)}: {name} differs from canonical fragment")
     return problems
 
 

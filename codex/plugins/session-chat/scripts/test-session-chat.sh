@@ -63,7 +63,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-unset TMUX TMUX_PANE
+unset TMUX TMUX_PANE SESSION_CHAT_PANE_NAME
 export HOME="$TEST_HOME/home" TMPDIR="$TEST_HOME/tmp" TMUX_TMPDIR="$TEST_HOME/tmp"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CACHE_HOME="$HOME/.cache" XDG_STATE_HOME="$HOME/.local/state"
@@ -81,6 +81,18 @@ while [ "$#" -gt 0 ]; do
     *) break ;;
   esac
 done
+# The legacy transport matrix drives several cat panes from this test process.
+# Project only its two actor queries onto that selected fixture pane. The
+# ancestry integration below runs inside a pane with this projection disabled.
+if [ -n "${SMOKE_DRIVER_PID:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
+  case "$*" in
+    'list-panes -a -F #{pane_pid} #{pane_id}')
+      printf '%s %s\n' "$SMOKE_DRIVER_PID" "$TMUX_PANE"; exit 0 ;;
+    "display-message -p -t $TMUX_PANE #{pane_pid} #{@name}")
+      name=$("$real" -f /dev/null -N -S "$sock" display-message -p -t "$TMUX_PANE" '#{@name}') || exit 1
+      printf '%s %s\n' "$SMOKE_DRIVER_PID" "$name"; exit 0 ;;
+  esac
+fi
 exec "$real" -f /dev/null -N -S "$sock" "$@"
 SH
 } > "$TEST_HOME/tmux-bin/tmux"
@@ -103,6 +115,7 @@ if [ ! -S "$SMOKE_SOCKET" ] || [ "$(smoke_client display-message -p '#{pid}' 2>/
   exit 1
 fi
 SMOKE_SOCKET_ID="$(smoke_file_id "$SMOKE_SOCKET")"
+export SMOKE_DRIVER_PID=$$
 
 PROMPT_FILE="$TEST_HOME/prompt.md"
 ERR_FILE="$TEST_HOME/error.log"
@@ -184,7 +197,10 @@ printf '%s\n' \
 chmod +x "$DENIED_BIN/tmux"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
-  'exit 0' > "$EMPTY_BIN/tmux"
+  'case "$*" in' \
+  '  "list-panes -a -F #{pane_pid} #{pane_id}") echo "$SMOKE_DRIVER_PID $TMUX_PANE" ;;' \
+  '  "display-message -p -t $TMUX_PANE #{pane_pid} #{@name}") echo "$SMOKE_DRIVER_PID " ;;' \
+  'esac' > "$EMPTY_BIN/tmux"
 chmod +x "$EMPTY_BIN/tmux"
 
 run_with_denied_tmux() {
@@ -211,6 +227,65 @@ tmux set-option -p -t "$SENDER" @name sender-test
 tmux set-option -p -t "$RECIPIENT" @name recipient-test
 tmux set-option -p -t "$OTHER_PANE" @name other-session-test
 TMUX_ENV="$(require_tmux_env "$SENDER")"
+
+# A reachable server without this caller as a descendant cannot supply an
+# actor, even for a name lookup. Only a socket failure permits the fallback.
+if env -u SMOKE_DRIVER_PID TMUX="$TMUX_ENV" TMUX_PANE="$SENDER" SESSION_CHAT_PANE_NAME=sender-test \
+    bash "$SCRIPT_DIR/get-my-name.sh" >"$TEST_HOME/detached.out" 2>"$TEST_HOME/detached.err"; then
+  fail "detached caller could assert a pane name"
+fi
+assert_file_contains "$TEST_HOME/detached.err" "No tmux pane owns the calling process"
+
+# Real process ancestry: no projected metadata in the sender pane. Check the
+# actor at the public entry points and the identity actually sent to the peer.
+cat > "$TEST_HOME/actor-probe.sh" <<'SH'
+scripts=$1 store=$2 actual=$3 other=$4
+(
+  set -eu
+  unset SMOKE_DRIVER_PID
+  export CODEX_HOME="$store" SESSION_CHAT_TARGET_MESSAGES_DIR="$store/mail" SESSION_CHAT_ALLOW_SHELL_TARGET=1
+  export SESSION_CHAT_PANE_NAME=sender-test TMUX_PANE="$other"
+  [ "$(bash "$scripts/get-my-name.sh")" = sender-test ]
+  # Workspace pane names may contain dots. Only the read-only lookup accepts
+  # them here. Both sender endpoints and the receive hook use chat labels.
+  tmux set-option -p -t "$actual" @name build.review
+  export SESSION_CHAT_PANE_NAME=build.review
+  [ "$(bash "$scripts/get-my-name.sh")" = build.review ]
+  printf '%s\n' 'draft reply' > "$store/draft.txt"
+  if bash "$scripts/send-message.sh" --reply-to abcd1234 recipient-test probe 2>"$store/label"; then exit 1; fi
+  grep -q 'unsafe externally assigned name' "$store/label"
+  if bash "$scripts/dispatch-to-session.sh" --reply-to abcd1234 recipient-test "$store/draft.txt" 2>"$store/label"; then exit 1; fi
+  grep -q 'unsafe externally assigned name' "$store/label"
+  printf '%s\n' '[from:recipient-test pane:%1 id:deadbeef] [re:abcd1234] note' \
+    | PLUGIN_ROOT="${scripts%/scripts}" bash "$scripts/detect-incoming-message.sh" >"$store/dotted-hint"
+  [ ! -e "$store/mail" ]
+  tmux set-option -p -t "$actual" @name sender-test
+  export SESSION_CHAT_PANE_NAME=sender-test
+  for form in send dispatch; do
+    if [ "$form" = send ]; then
+      args=(send-message.sh --reply-to abcd1234 recipient-test 'reply refused')
+    else
+      args=(dispatch-to-session.sh --reply-to abcd1234 recipient-test "$store/draft.txt")
+    fi
+    if SESSION_CHAT_PANE_NAME=recipient-test bash "$scripts/${args[0]}" "${args[@]:1}" 2>"$store/mismatch"; then exit 1; fi
+    grep -q SESSION_CHAT_PANE_NAME "$store/mismatch"
+  done
+  printf '%s\n' '[from:recipient-test pane:%1 id:deadbeef] [re:abcd1234] note' \
+    | SESSION_CHAT_PANE_NAME=recipient-test PLUGIN_ROOT="${scripts%/scripts}" bash "$scripts/detect-incoming-message.sh" >"$store/hint"
+  [ ! -e "$store/mail" ]
+  bash "$scripts/send-message.sh" --reply-to abcd1234 recipient-test 'verified reply'
+  unset SESSION_CHAT_PANE_NAME
+  bash "$scripts/dispatch-to-session.sh" --reply-to abcd1234 recipient-test "$store/draft.txt"
+  tmux capture-pane -J -p -t "$other" -S -100 | grep -F "[from:sender-test pane:$actual " >/dev/null
+  [ "$(awk -F '\t' '$3 == "sender-test" && $4 == "recipient-test" {n++} END{print n+0}' "$store/mail/sent-log.tsv")" = 2 ]
+) >"$store/result.log" 2>&1
+echo "$?" >"$store/result"
+exec /bin/cat
+SH
+mkdir -p "$TEST_HOME/actor-probe"
+tmux respawn-pane -k -t "$SENDER" bash "$TEST_HOME/actor-probe.sh" "$SCRIPT_DIR" "$TEST_HOME/actor-probe" "$SENDER" "$RECIPIENT"
+for ((i=0; i<400; i++)); do [ ! -f "$TEST_HOME/actor-probe/result" ] || break; sleep 0.05; done
+[ "$(cat "$TEST_HOME/actor-probe/result")" = 0 ] && ok || fail "real pane actor/replies: $(cat "$TEST_HOME/actor-probe/result.log")"
 
 HOOK_OUT="$(printf '%s\n' '[from:sender-test pane:%999 id:feedface] hook hello' | TMUX="$TMUX_ENV" TMUX_PANE="$RECIPIENT" CODEX_HOME="$TEST_HOME" PLUGIN_ROOT="$PLUGIN_ROOT" SESSION_CHAT_INCOMING_MODE=auto bash "$SCRIPT_DIR/detect-incoming-message.sh")"
 assert_contains '"hookSpecificOutput"' "$HOOK_OUT"
@@ -361,6 +436,15 @@ for denied_case in list-panes list-panes-all pane-health pane-health-all get-my-
   assert_file_not_contains "$DENIED_ERR" "This pane has no name"
   assert_file_not_contains "$DENIED_ERR" "No named panes matched"
 done
+
+if [ "$(run_with_denied_tmux env SESSION_CHAT_PANE_NAME=build.review bash "$SCRIPT_DIR/get-my-name.sh")" != build.review ]; then
+  fail "read-only identity fallback lost the inherited name"
+fi
+if run_with_denied_tmux env SESSION_CHAT_PANE_NAME=sender-test bash "$SCRIPT_DIR/send-message.sh" \
+    --reply-to abcdef01 recipient-test "test reply" >"$DENIED_OUT" 2>"$DENIED_ERR"; then
+  fail "a reply accepted the read-only identity fallback"
+fi
+assert_file_contains "$DENIED_ERR" "Operation not permitted"
 
 # The other common socket-denial signature receives the same classification.
 PERMISSION_ERR="$TEST_HOME/permission-denied.err"

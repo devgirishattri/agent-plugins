@@ -98,6 +98,10 @@ class PeerStateWrite(unittest.TestCase):
             ctx, failure = self.r.load(fixture["A"], SESSION_SCHEDULER_HOME=str(self.scratch))
             self.assertIsNone(failure)
             self.check(ctx, f"touch {target}/new.json", rule)
+            for command in (f"echo {target}/new.json | xargs rm",
+                            f"""python3 -c 'open("{target}/new.json", "w")'"""):
+                self.check(ctx, command, rule)
+            self.check(ctx, f"echo {self.tasks}/new.json | xargs rm")
             self.check(ctx, f"touch {self.tasks}/new.json")
             self.check(ctx, f"touch {self.scratch}/tasks/new.json")
             self.assertIsNone(ctx.scheduler_root)
@@ -161,8 +165,9 @@ class PeerStateWrite(unittest.TestCase):
         self.check(ctx, 'echo "count $n" > "$dest"', rule, word="$dest")
         self.check(ctx, "rm -rf {.tmp,notes}", rule)
         for command in ("chmod -R g+w *", f"tar czf {self.scratch}/a.tgz *",
-                        f"grep -c TODO * > {self.scratch}/counts.txt"):
+                        "grep -c TODO * > component-a/counts.txt"):
             self.check(ctx, command, "orchestrator.child_write")
+        self.check(ctx, f"grep -c TODO * > {self.scratch}/counts.txt")
         self.check(ctx, "touch *", cwd=str(self.scratch))
         (self.scratch / ".alias").symlink_to(self.tasks)
         self.check(ctx, "touch *", rule, word="*", cwd=str(self.scratch))
@@ -207,8 +212,104 @@ class PeerStateWrite(unittest.TestCase):
         old = fixture["V5Root"]()
         self.addCleanup(old.close)
         ctx = old.ctx("root")
-        self.check(ctx, f"touch {ctx.scheduler_root}/tasks/new.json")
-        self.check(ctx, f"cp {self.scratch}/*.md {self.scratch}/out/", "orchestrator.child_write")
+        rule = "orchestrator.state_write"
+        tasks = ctx.scheduler_root / "tasks"
+        record = tasks / "t.json"
+        outside = self.scratch / "t.json"
+        sibling = tasks.with_name("tasks-archive") / record.name
+        for command in (f"rm {record}", f"touch {record}", f"echo x > {record}", f"tee {record}",
+                        f"sed -i '' 's/a/b/' {record}", f"mv {outside} {record}", f"cp {outside} {record}",
+                        f"find {tasks} -delete", f"cd {tasks} && rm t.json", f"env -C {tasks} rm t.json",
+                        f"python3 edit.py {record}", f'touch "{tasks}/$name"', f'cd {tasks} && cp t.json "$out"',
+                        'touch "$SESSION_SCHEDULER_HOME/tasks/$name"', 'rm -rf "$SESSION_SCHEDULER_HOME"',
+                        'touch "${SESSION_WORKSPACE_PROJECT_ROOT}/.tmp/scheduler/tasks/t.json"'):
+            self.check(ctx, command, rule)
+        for command in (f"cat {record}", f"cd {tasks} && ls", f"cd {tasks} && cat t.json >/dev/null",
+                        f"jq . {record} > {outside}", f"cp {record} {outside}", f"touch {sibling}",
+                        f"cd {tasks} && jq . t.json > {outside}", f"cd {tasks} && cp t.json {outside}",
+                        f'cp "$source" {outside}', 'touch "$file"', f"python3 edit.py {sibling}"):
+            self.check(ctx, command)
+        for tool in ("Edit", "Write"):
+            self.check_payload(ctx, {"tool_name": tool, "tool_input": {"file_path": str(record)}}, rule)
+            self.check_payload(ctx, {"tool_name": tool, "tool_input": {"file_path": str(sibling)}}, "allow")
+        alias = tasks / "link.json"
+        alias.symlink_to(self.scratch / "in.md")
+        self.check(ctx, f"rm {alias}", rule)
+        self.check(ctx, f"cat {alias}")
+        self.check_payload(ctx, {"tool_name": "Edit", "tool_input": {"file_path": str(alias)}}, rule)
+        self.check(ctx, f"cp {self.scratch}/*.md {self.scratch}/out/")
+        self.check(ctx, f"cp {self.scratch}/in.md {ctx.child_roots[0]}/result.md", "orchestrator.child_write")
+
+        for role in old.cfg["roles"].values():
+            if "scheduler" in role.get("grants", []):
+                role["grants"].remove("scheduler")
+        old.cfg["stores"].setdefault("overrides", {})["scheduler"] = "control-web/.ledger"
+        old.path.write_text(json.dumps(old.cfg))
+        pinned = old.root / "control-web/.ledger/tasks/t.json"
+        ctx = old.ctx("root")
+        self.assertIsNone(ctx.scheduler_root)
+        self.check(ctx, f"echo {pinned} | xargs ls", rule)
+        self.check(ctx, f"echo {record} | xargs ls")
+        self.check(ctx, f"touch {pinned}", rule)
+        self.check(ctx, f"touch {record}")
+        local = old.ctx("web-master")
+        self.assertTrue(local.confined_orchestrator)
+        self.assertIsNone(local.scheduler_root)
+        self.check(local, "touch .ledger/tasks/t.json", rule)
+        self.check(local, "touch notes.json")
+        self.check_payload(local, {"tool_name": "Write", "tool_input": {"file_path": ".ledger/tasks/t.json"}}, rule)
+        self.check_payload(local, {"tool_name": "Write", "tool_input": {"file_path": "notes.json"}}, "allow")
+        old.cfg["orchestration"] = {"enabled": False}  # Reviewed Git orchestration requires a scheduler pin.
+        old.cfg["stores"]["pin"].remove("scheduler")
+        del old.cfg["stores"]["overrides"]["scheduler"]
+        old.path.write_text(json.dumps(old.cfg))
+        ctx = old.ctx("root")
+        self.check(ctx, f"touch {pinned}")
+        self.check_payload(ctx, {"tool_name": "Edit", "tool_input": {"file_path": str(record)}}, "allow")
+
+    def test_child_write_destination_and_protected_ancestors(self):
+        # A peer owns each declared checkout even when it has no workers.
+        self.r.cfg["harness"]["guards"]["orchestrator"]["deny_child_chdir"] = False
+        self.r.write_config()
+        ctx = self.r.ctx(fixture["A"])
+        child = self.r.root / "component-a"
+        for command in (f"jq . {child}/package.json > {self.scratch}/x.json",
+                        f"cp {child}/package.json {self.scratch}/x.json",
+                        f'for f in {child}/*.json; do wc -l "$f"; done',
+                        f"cd {child} && ls"):
+            self.check(ctx, command)
+        for command in (f"jq . {self.scratch}/x.json > {child}/package.json",
+                        f"cp {self.scratch}/x.json {child}/package.json",
+                        f"git -C {child} config --get user.name", f"git -C {child} fetch",
+                        f"pushd {child} && npm install"):
+            self.check(ctx, command, "orchestrator.child_write")
+        # A directory operand copies to DIR/basename. A link at that final
+        # name can lead into the checkout through an otherwise safe directory.
+        copy_to_dir = f"cp {child}/package.json {self.scratch}/out"
+        self.check(ctx, copy_to_dir)
+        (self.scratch / "out/package.json").symlink_to(child / "package.json")
+        self.check(ctx, copy_to_dir, "orchestrator.child_write")
+        for command in (f"mv {self.r.root} {self.scratch}/moved", f"rm -rf {self.r.root.parent}",
+                        f"env -C {child} rm -rf ..", "rm -rf ~"):
+            self.check(ctx, command, "shell.project_root")
+        self.check(ctx, f"rm -rf {self.scratch}/build")
+
+    def test_destructive_directory_operands(self):
+        ctx = self.r.ctx(fixture["A"])
+        rule = "shell.project_root"
+        self.check(ctx, f"rmdir -p {self.r.root}/build/empty", rule)
+        self.check(ctx, "rmdir -p build/empty")
+        self.check(ctx, "rm -rf {build,.}", rule)
+        self.check(ctx, "rm -rf {build,output}")
+
+    def test_ledger_heredoc_and_feeder_scope(self):
+        ctx = self.r.ctx(fixture["A"])
+        task = self.tasks / "sample.json"
+        source = "python3 - <<PY\nprint(1)\nPY"
+        self.check(ctx, f"cat {task}; {source}")
+        for program in ("xargs ls", "parallel ls"):
+            self.check(ctx, f"{program} <<LIST\n{task}\nLIST", "orchestrator.state_write")
+            self.check(ctx, f"{program} <<LIST\n{self.scratch}/sample.json\nLIST")
 
     def test_symlinked_ledger(self):
         actual = self.r.root / "task-files"

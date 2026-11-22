@@ -29,7 +29,7 @@
     {
       "name": "session-chat",
       "description": "Peer-to-peer messaging and task dispatch between Claude (and Codex) sessions via tmux. Durable delivery routes fallback/dispatch into the recipient runtime's messages dir.",
-      "version": "0.17.23",
+      "version": "0.17.24",
       "author": {
         "name": "Girish Attri"
       },
@@ -85,8 +85,8 @@
     },
     {
       "name": "session-scheduler",
-      "description": "Thin file-backed task ledger for orchestrator \u2192 executor workflows. Layered on session-chat (>=0.13.0) for durable transport.",
-      "version": "0.7.11",
+      "description": "Thin file-backed task ledger for orchestrator \u2192 executor workflows. Uses session-chat (>=0.17.24) for pane-verified transport.",
+      "version": "0.7.13",
       "author": {
         "name": "Girish Attri"
       },
@@ -105,7 +105,7 @@
     {
       "name": "session-workspace",
       "description": "Config-driven tmux workspace with strict-v1 role policy, reviewed Git orchestration, and on-demand peer orchestrators for Claude and Codex.",
-      "version": "0.17.1",
+      "version": "0.18.1",
       "author": {
         "name": "Girish Attri"
       },

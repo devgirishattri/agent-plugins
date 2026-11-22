@@ -402,9 +402,15 @@ require_jq() {
 # The scheduler's correctness contract depends on session-chat's durable inbox
 # (a dispatch/ack to a busy pane is recovered next turn, not lost) plus the
 # owner-only privacy/trust hardening that dispatched task + handoff files rely
-# on. Coordinated floor with the Codex side is 0.13.0. Keep this constant, the
+# on. From 0.17.24 session-chat also takes the sender of every send, dispatch
+# and own-draft check from the tmux pane that owns the calling process, which
+# the scheduler's notifications and --note-file verdicts depend on. The
+# dispatch path enforces the floor in session_chat_dispatch_ready (with the
+# SESSION_SCHEDULER_SKIP_VERSION_CHECK escape hatch); the --note-file path
+# enforces it in session_chat_checker_ok (no escape hatch).
+# Coordinated floor with the Codex side is 0.17.24. Keep this constant, the
 # plugin.json description, the SKILL prerequisites, and the doctor in sync.
-SESSION_CHAT_MIN_VERSION="0.13.0"
+SESSION_CHAT_MIN_VERSION="0.17.24"
 
 # version_ge <a> <b> — true when semver <a> >= <b>. Plain x.y.z only (the
 # marketplace versions have no pre-release suffixes); sort -V handles ordering.
@@ -434,6 +440,21 @@ session_chat_version() {
     [ -n "$ver" ] && { printf '%s\n' "$ver"; return 0; }
   done
   return 1
+}
+
+# session_chat_checker_ok <root>: 0 when <root> is a session-chat whose version
+# can be READ and is at or above the floor. This gates own-draft-check.sh, the
+# helper that decides whose draft a --note-file verdict is: before 0.17.24 it
+# took the owner from the environment. Unlike the dispatch path, an
+# undetectable version is refused and SESSION_SCHEDULER_SKIP_VERSION_CHECK does
+# not apply. The version is read ONCE; that same value decides the result and
+# is printed on stdout (empty when it cannot be read), so a caller's refusal
+# message reports exactly what was judged, also while an install is switching.
+session_chat_checker_ok() {
+  local ver
+  ver=$(session_chat_version "$1") || ver=""
+  printf '%s' "$ver"
+  [ -n "$ver" ] && version_ge "$ver" "$SESSION_CHAT_MIN_VERSION"
 }
 
 # Locate session-chat scripts. Prefer the test override env var, then the
@@ -501,7 +522,7 @@ session_chat_dispatch_ready() {
   if [ "${SESSION_SCHEDULER_SKIP_VERSION_CHECK:-0}" != "1" ] && ver=$(session_chat_version "$root"); then
     if ! version_ge "$ver" "$SESSION_CHAT_MIN_VERSION"; then
       echo "ERROR: session-chat $ver is below the required >= ${SESSION_CHAT_MIN_VERSION}." >&2
-      echo "  The scheduler needs 0.13.0+ so a dispatch/ack to a busy pane is recovered from the durable inbox, not lost." >&2
+      echo "  The scheduler needs ${SESSION_CHAT_MIN_VERSION}+ so a dispatch/ack to a busy pane is recovered from the durable inbox, not lost, and its sender is the verified calling pane." >&2
       echo "  Update session-chat, or set SESSION_SCHEDULER_SKIP_VERSION_CHECK=1 to override at your own risk." >&2
       return 1
     fi
@@ -620,20 +641,90 @@ EOF
   return 0
 }
 
-# Get current pane name via session-chat helper, or fall back to '?'.
+# Verified acting pane for every ledger write that records who acted (the
+# review, done and block transitions and every task-contract operation except
+# inspect). The body below is the reviewed shared fragment
+# shared/shell/pane-actor.sh, packaged inline by
+# scripts/package-shared-helpers.py (--write --provider claude). Do not edit
+# it here. It prints the @name of the tmux pane that owns this process or one
+# of its ancestors and returns non-zero when no such pane can be verified, when
+# the pane is unnamed, or when SESSION_CHAT_PANE_NAME disagrees with it.
+# Callers resolve it BEFORE any write and stop on failure; there is no '?'
+# fallback on these paths. Display-only callers (task-status --mine, the
+# doctor) pass --read-only.
+resolve_pane_actor() {
+  local panes actor pid=$$ parent pane_pid pane_id record
+  local claimed=${SESSION_CHAT_PANE_NAME:-}
+  if ! panes=$(tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>&1); then
+    if [ "${1:-}" = --read-only ] && [[ "$claimed" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      printf '%s\n' "$claimed"
+      return 0
+    fi
+    echo "ERROR: Cannot resolve the calling tmux pane: $panes" >&2
+    case "$panes" in
+      *'Operation not permitted'*|*'Permission denied'*)
+        echo 'Re-run this command escalated/approved to access the tmux socket.' >&2 ;;
+    esac
+    return 1
+  fi
+  while [ "$pid" -gt 1 ]; do
+    while read -r pane_pid pane_id; do
+      [ "$pane_pid" = "$pid" ] || continue
+      [[ "$pane_id" =~ ^%[0-9]+$ ]] || break
+      # Read the name only for the matched pane. Recheck its PID in the
+      # same response in case the pane was respawned during the walk.
+      record=$(tmux display-message -p -t "$pane_id" '#{pane_pid} #{@name}') || return 1
+      if [[ "$record" != "$pid "* ]]; then
+        echo 'ERROR: The calling tmux pane changed while resolving its actor.' >&2
+        return 1
+      fi
+      actor=${record#* }
+      if [ -n "$claimed" ] && [ "$claimed" != "$actor" ]; then
+        echo 'ERROR: SESSION_CHAT_PANE_NAME disagrees with the calling tmux pane.' >&2
+        return 1
+      fi
+      if [ "${1:-}" = --read-only ] && [ -z "$actor" ]; then
+        return 0
+      fi
+      if ! [[ "$actor" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo 'ERROR: The calling tmux pane has an empty or unsafe externally assigned name.' >&2
+        return 1
+      fi
+      if [ "${1:-}" = --with-id ]; then
+        printf '%s\t%s\n' "$actor" "$pane_id"
+      else
+        printf '%s\n' "$actor"
+      fi
+      return 0
+    done <<< "$panes"
+    if ! parent=$(/bin/ps -o ppid= -p "$pid" 2>&1); then
+      echo "ERROR: Cannot read the calling process ancestry: $parent" >&2
+      case "$parent" in
+        *'Operation not permitted'*|*'Permission denied'*)
+          echo 'Re-run this command escalated/approved to read process ancestry.' >&2 ;;
+      esac
+      return 1
+    fi
+    parent=${parent//[[:space:]]/}
+    [[ "$parent" =~ ^[0-9]+$ ]] && [ "$parent" != "$pid" ] || break
+    pid=$parent
+  done
+  echo 'ERROR: No tmux pane owns the calling process or its ancestors.' >&2
+  return 1
+}
+
+# Acting pane for a write that also supports a standalone caller: task-new and
+# task-assign record the assigner. With no pane identity in the environment
+# (TMUX, TMUX_PANE and SESSION_CHAT_PANE_NAME all unset) the caller is anonymous
+# and '?' is recorded. Once any of them is set, a pane identity is claimed, so
+# it is verified by resolve_pane_actor and a failure is returned: the caller
+# must stop before writing. This never uses the read-only fallback.
 current_pane_name() {
-  local root
-  if ! root=$(session_chat_root); then
+  if [ -z "${TMUX:-}${TMUX_PANE:-}${SESSION_CHAT_PANE_NAME:-}" ]; then
     echo "?"
     return 0
   fi
-  local name
-  name=$(bash "$root/scripts/get-my-name.sh" 2>/dev/null | tail -1 | tr -d '[:space:]')
-  if [ -z "$name" ] || [ "$name" = "(unnamed)" ]; then
-    echo "?"
-  else
-    echo "$name"
-  fi
+  resolve_pane_actor
 }
 
 # Generate a task id: task-<epoch>-<8 hex>, the hex from /dev/urandom via od
@@ -1189,7 +1280,7 @@ task_verdict_artifacts() {
 # shellcheck disable=SC2034  # VERDICT_* are read by the sourcing task-* scripts
 verdict_note_prepare() {
   local id="$1" file="$2" summary="${3:-}"
-  local root helper out rc tag ident sum size max pout prc event artifact
+  local root helper out rc tag ident sum size max pout prc event artifact chat_ver
   VERDICT_EVENT=""; VERDICT_ARTIFACT=""; VERDICT_SHA=""; VERDICT_NOTE=""; VERDICT_IDENT=""; VERDICT_SRC="$file"
   # Diagnostics: every refusal below notes ONE typed code (direct call, this
   # function never runs inside $(...)). The checker is a subprocess: its status
@@ -1202,6 +1293,15 @@ verdict_note_prepare() {
   fi
   if ! root=$(session_chat_root); then
     echo "ERROR: --note-file needs session-chat (own-draft-check.sh); no session-chat install was found. Nothing was read or changed." >&2
+    _sched_diag_note sched.note_file.checker_unavailable
+    return 1
+  fi
+  # The checker decides whose draft this is, so it runs only from a session-chat
+  # whose version is verifiable and at or above the floor (see
+  # session_chat_checker_ok). Nothing is read before this refusal.
+  if ! chat_ver=$(session_chat_checker_ok "$root"); then
+    echo "ERROR: --note-file needs session-chat >= ${SESSION_CHAT_MIN_VERSION}; the installed copy is ${chat_ver:-of unknown version}. From that version its own-draft check takes the draft owner from the calling tmux pane." >&2
+    echo "  Update session-chat, or give the verdict inline. The note file was not read and the task was not changed." >&2
     _sched_diag_note sched.note_file.checker_unavailable
     return 1
   fi
@@ -1502,7 +1602,10 @@ verdict_record_outcome() {
 # failed cleanup never undoes the verdict.
 verdict_consume_draft() {
   local file="$1" ident="$2" sum="$3" root helper
-  if ! root=$(session_chat_root) || [ ! -f "$root/scripts/own-draft-check.sh" ]; then
+  # Same gate as verdict_note_prepare: the cleanup helper runs only from a
+  # session-chat with a verifiable version at or above the floor. Otherwise the
+  # draft is kept (best effort; the verdict is already committed).
+  if ! root=$(session_chat_root) || ! session_chat_checker_ok "$root" >/dev/null || [ ! -f "$root/scripts/own-draft-check.sh" ]; then
     echo "NOTE: kept draft (session-chat cleanup helper unavailable): $file"
     return 0
   fi

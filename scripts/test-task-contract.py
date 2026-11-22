@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from tmux_test_fixtures import run_in_pane
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -16,7 +17,7 @@ class Contracts(unittest.TestCase):
     provider='codex/plugins'
 
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory(prefix='contract-')
+        self.temp=tempfile.TemporaryDirectory(prefix='contract-',dir='/tmp')
         self.base=Path(self.temp.name).resolve();self.repo=self.base/'repo';self.repo.mkdir()
         self.home=self.base/'scheduler'
         for child in ['tasks','handoffs','locks','prompts']: (self.home/child).mkdir(parents=True,exist_ok=True)
@@ -187,12 +188,20 @@ class Contracts(unittest.TestCase):
                      SESSION_CHAT_ROOT_OVERRIDE=str(ROOT/self.provider/'session-chat'))
             (self.base/'messages').mkdir()
             def run(pane,script,*args):
-                result=subprocess.run(['bash',str(self.module_path.with_name(script)),*args],env=dict(env,TMUX_PANE=pane),capture_output=True,text=True)
+                result=run_in_pane(tmux,pane,['bash',str(self.module_path.with_name(script)),*args],
+                                   dict(env,TMUX_PANE=pane),self.base)
                 self.assertEqual(result.returncode,0,(result.stdout,result.stderr))
                 return result
             run(panes[0],'task-assign.sh','executor','T1','Implement fixture source')
             run(panes[1],'task-contract.sh','verify','T1','--generation','1','--spec-digest',self.mod.hashed(self.spec))
             run(panes[1],'task-review.sh','T1','--generation','1','ready for independent review')
+            before = self.path.read_bytes()
+            done = ['python3', str(self.module_path), 'done', 'T1', '--generation', '1', '--note', 'fixture verdict']
+            wrong_pane = dict(env, TMUX_PANE=panes[2], SESSION_CHAT_PANE_NAME='reviewer')
+            refused = run_in_pane(tmux, panes[0], done, wrong_pane, self.base)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('disagrees', refused.stderr)
+            self.assertEqual(self.path.read_bytes(), before)
             run(panes[2],'task-done.sh','T1','--generation','1','APPROVE inspected source')
             self.assertEqual(self.store.inspect()['state'],'admitted')
             self.assertTrue(list((self.home/'handoffs/T1').glob('dispatch-*')))

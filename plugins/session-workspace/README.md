@@ -604,6 +604,50 @@ role floor is off. The floor:
   read-only `--list --dismissed`, from 0.7.2); reviewers get neither.
   `memory-write` — including the knowledge 0.3.30 `dismiss`/`restore` verbs —
   stays orchestrator-only.
+- **Project root, ancestors and home (every role, 0.18.1)** — `rm`, `mv`,
+  `rmdir` and `find -delete` are refused when an operand can remove or move
+  the project root, one of its ancestors, or the home directory
+  (`shell.project_root`). The check resolves `cd`/`pushd` hops, the supported
+  launch wrappers, brace lists, `$HOME`, `$PWD` and
+  `$SESSION_WORKSPACE_PROJECT_ROOT`, and the text of an inline `sh -c` or
+  `eval`. Only these four commands and literal paths are covered: other
+  utilities, and paths that a running program constructs, are outside this
+  rule. A destructive `find` starting at a protected directory can be refused
+  even when its name predicates narrow the matches. Ordinary subdirectories
+  stay governed by the role rules.
+- **Installed helpers are literal segments (every role, 0.18.1)** — a helper
+  from the selected plugin cache runs only as its own `bash <helper> ...`
+  segment. A helper named inside `bash -c`, `sh -c`, `zsh -c`, `eval`,
+  `env -S`, a here-document, a here-string or piped shell input is refused
+  (`helper.launch` / `helper.segment`). Hook limit: the hook inspects the
+  visible command text. A program loaded from a separate file (a script, a
+  compiled binary, computed code) is outside command inspection. The
+  session-chat and session-scheduler helpers therefore verify the acting pane
+  themselves, from the calling process's tmux ancestry. That verification
+  trusts the tmux server and its pane metadata: a process that controls the
+  server can rename a pane or drive it, and non-peer workspaces permit raw
+  tmux administration. Treat tmux control as a trust boundary. A raw tmux
+  command that visibly launches a named helper must pass the helper rules.
+- **Scheduler ledger tripwire (orchestrator, 0.18.1)** — the task ledger is
+  `<pinned scheduler store>/tasks`; the plan exposes that store to the policy
+  also when no role holds a scheduler grant. A ledger path in `xargs` or
+  `parallel` input, in inline interpreter code (`python -c`, `node -e`,
+  `perl -e`, `ruby -e`) or in interpreter input from a here-document is
+  refused (`orchestrator.state_write`), and so is a direct write to the
+  ledger. Use the scheduler helpers to change the ledger. The same hook limit
+  applies: a program loaded from a separate file, and a path computed inside a
+  program, are outside this check.
+- **Child reads and write destinations (orchestrator, 0.18.1)** — an ordinary
+  `cp` or a shell redirection may read a child file and write outside every
+  child checkout; the destination decides, and a destination inside a child
+  or a symlink into one is refused. A loop may run read commands on child
+  files, and `cd`/`pushd` into a child permit reads. Writes, installs,
+  commits, pushes and every form of child `git config` or `git fetch` stay
+  refused (`orchestrator.child_write`). The checks follow literal command
+  operands and child paths bound by a `for` loop, also in a visible shell
+  program supplied on standard input, with `-c`, or with `eval`. Other
+  variable assignments, and filenames that a pipeline produces, have limited
+  coverage.
 - **Orchestrator** — may not edit or run mutating commands against any
   child checkout root (read-only commands and `git` reads against a child
   are fine), and never runs `git push` — including behind `env`, `command`,

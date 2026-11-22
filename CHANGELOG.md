@@ -1,5 +1,95 @@
 # Changelog
 
+## session-workspace 0.18.1 — 2026-11-22
+
+- Strict-v1 requires a literal installed helper invocation, including when a
+  command names the helper through an inline shell, a variable, or a group.
+  Every role protects the project root, its ancestors, and the home directory
+  from `rm`, `mv`, `rmdir`, and `find -delete`.
+  A destructive `find` starting at a protected directory can be refused even
+  when its name predicates narrow the matches.
+- The orchestrator checks the destination of ordinary copies and redirects.
+  Reading child files into an external output and looping over them with read
+  commands are allowed. A mutating command that uses the loop variable is a
+  child write, including after the loop. Child Git configuration and fetches
+  also trigger the child-write floor. The policy applies these checks to shell
+  code in a visible here-document, here-string, or literal pipe into a shell.
+  Child paths supplied by other variable assignments or generated pipelines
+  have limited coverage.
+- The orchestrator refuses direct writes to its configured scheduler ledger
+  and a ledger path in an operand feeder
+  (`xargs` or `parallel`), inline interpreter code, or a heredoc feeding it.
+  The check uses the workspace's configured store. It inspects the command
+  submitted to the hook. A program saved to a separate file and then run,
+  or a path computed inside a program, is outside this inspection.
+
+## session-chat 0.17.24 — 2026-11-22
+
+- Senders and receivers resolve their pane from the calling process's tmux
+  ancestry. The outgoing envelope carries the resolved name and pane ID.
+  A matching launcher-supplied `SESSION_CHAT_PANE_NAME` works as before.
+  A mismatch refuses the operation before mailbox or reply-correlation writes.
+  Read-only name lookup can use the supplied name when tmux is unreachable.
+  Attribution trusts the tmux server. A process with administrative access to
+  that server can rename or drive a pane, including in a non-peer workspace.
+
+## session-scheduler 0.7.13 — 2026-11-22
+
+- Ordinary and contracted review, done and block transitions require the
+  calling pane's verified actor before the scheduler writes a record or a
+  verdict artifact. An unavailable tmux socket or process table refuses the
+  transition. Scheduler notifications require session-chat 0.17.24 or later.
+  Both providers also verify that version before reading a `--note-file` draft.
+  If the installed version becomes too old or unknown after commit, cleanup
+  keeps the draft.
+  Existing tasks and verdicts need no data migration.
+
+### Verify the upgrade
+
+Upgrade all three plugins together. Reload Claude plugins with `/reload-plugins`.
+Restart affected Codex panes and accept plugin trust. Run
+`/session-workspace:harness-status --probe --json` in each affected Claude pane
+or `$session-workspace:harness-status --probe --json` in each affected Codex pane.
+The probe evaluates synthetic commands without executing them.
+
+From a shell with the pane's inherited environment, this assertion checks the
+same report for the new rule, enforce mode, and a passing result for every case.
+
+```sh
+workspace harness-status --probe --json | jq -e '
+  .active and .mode == "enforce" and .probe.ran
+  and any(.probe.cases[]; .rule == "shell.project_root")
+  and all(.probe.cases[]; .ok)'
+```
+
+For the full regression checks, use a terminal with tmux and process-table
+access and a checkout of the matching marketplace revision. Run from its root.
+The harness suite passes the reported command strings to `--decision-json`.
+The actor and mismatch checks use disposable task stores and private tmux servers.
+The standalone dispatch test runs the sender and receiver inside their own panes.
+
+```sh
+(
+set -e
+scratch=$(mktemp -d /tmp/strict.XXXXXX)
+trap 'rm -rf "$scratch"' EXIT
+mkdir "$scratch/home" "$scratch/tmp"
+env -i PATH="$PATH" HOME="$scratch/home" TMPDIR="$scratch/tmp" TMUX_TMPDIR="$scratch/tmp" LANG="${LANG:-en_US.UTF-8}" bash -e <<'VERIFY'
+for provider in plugins codex/plugins; do
+  bash "$provider/session-workspace/scripts/test-harness-policy.sh"
+  python3 -B "$provider/session-chat/scripts/test-dispatch-read.py"
+  bash "$provider/session-chat/scripts/test-session-chat.sh"
+  bash "$provider/session-scheduler/scripts/test-session-scheduler.sh"
+done
+bash scripts/test-provider-parity.sh
+VERIFY
+)
+```
+
+If rollback is necessary, finish pending tasks, restore the previous three
+plugin versions together, and reload or restart the affected panes. Rollback
+also restores the earlier policy and actor behavior.
+
 ## session-workspace 0.17.0 — 2026-11-19
 
 - Schema 6 adds optional peer orchestrators. Declare one root orchestrator and

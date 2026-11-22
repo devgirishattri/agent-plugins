@@ -23,6 +23,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from tmux_test_fixtures import run_in_pane
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV = {k: v for k, v in os.environ.items() if not k.startswith(("SESSION_", "KNOWLEDGE_")) and k not in ("TMUX", "TMUX_PANE")}
@@ -243,7 +244,7 @@ class DraftCases:
                 with patch.dict(os.environ, env, clear=True):
                     self.policy.validate_bash(ctx, shlex.join(args), {})
                 before = set(self.store.glob("*.md"))
-                result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=30)
+                result = run_in_pane(tmux, sender, args, env, self.root)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("Dispatched task", result.stdout)
                 files = set(self.store.glob("*.md")) - before
@@ -254,8 +255,8 @@ class DraftCases:
                 uid = delivered.name.split("-")[2]
                 notice = f"[from:{ctx.pane_name} pane:{sender} msg:{delivered} id:{uid}] dispatch"
                 receive_env = dict(env, TMUX_PANE=recipient, PLUGIN_ROOT=str(cache), CLAUDE_PLUGIN_ROOT=str(cache))
-                received = subprocess.run(["bash", str(cache / "scripts/detect-incoming-message.sh")], input=notice, env=receive_env,
-                                          capture_output=True, text=True, timeout=30)
+                received = run_in_pane(tmux, recipient, ["bash", str(cache / "scripts/detect-incoming-message.sh")],
+                                       receive_env, self.root, input=notice)
                 self.assertEqual(received.returncode, 0, received.stderr)
                 self.assertIn("Read-only report", received.stdout)
                 self.assertIn("deadbeef", (self.store / "replies-log.tsv").read_text())

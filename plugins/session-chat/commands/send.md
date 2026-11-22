@@ -17,7 +17,7 @@ Lead with the result. Add text only for errors or the follow-ups below. Run the 
    ```
 3. If the output says "Sent to ..." (delivered live) or "Queued to ..." (recipient busy), report success. "Queued to ..." is durable delivery. It surfaces on the recipient's next turn. "Unsubmitted to ..." (exit status 4) is **not** success: the line sits unsubmitted in the recipient's input. Do not resend. Tell the user to press Enter in that pane, then check `/pane-health <target>`.
 4. If the error mentions newlines or length, retry with `/dispatch <target> <message>`.
-5. If the error is about no name, tell the user to run `/whoami <name>` first.
+5. If the error says the calling pane has an empty or unsafe name, tell the user to run `/whoami <name>` first. If it says `SESSION_CHAT_PANE_NAME disagrees with the calling tmux pane` or `No tmux pane owns the calling process`, report it verbatim. Do not change that variable, and do not retry through a wrapper.
 6. If the target is not found, run `/panes` to show available targets.
 7. If the error mentions duplicate names, ask the user to rename one pane via `/whoami`.
 8. A busy recipient yields a "Queued to ..." result. That result is durable success, so **do not retry it**. It arrives on the recipient's next turn, and resending duplicates it. Raising `SESSION_CHAT_VERIFY_TIMEOUT_MS` only makes more sends land *live*. It does not affect delivery. Retry only a hard failure (no name, unknown or ambiguous target), and only after fixing the named cause.

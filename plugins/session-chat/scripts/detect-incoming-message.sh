@@ -42,22 +42,30 @@ if [ "$HOOK_EVENT" = "Stop" ] && printf '%s' "$HOOK_INPUT" | grep -q '"stop_hook
 fi
 
 # Pull in queue/lock/name helpers; degrade to live-only if unavailable.
+# The recipient is the tmux pane that owns this hook process, verified through
+# resolve_pane_actor. Every mutable receive path below (hardening the messages
+# root, inbox peek and claim, the recent-id ledger, reply correlation and the
+# archive) runs only with that verified name, so HAVE_LIB is set only then. An
+# unverifiable, unnamed or mismatched pane is handled like a missing library:
+# the hook only annotates the live paste already in the prompt and writes
+# nothing.
 HAVE_LIB=0
+MY_NAME=""
 if [ -n "$PLUGIN_ROOT" ] && [ -f "$PLUGIN_ROOT/scripts/lib.sh" ]; then
   # shellcheck source=/dev/null
-  source "$PLUGIN_ROOT/scripts/lib.sh" 2>/dev/null && HAVE_LIB=1
-fi
-
-MY_NAME=""
-if [ "$HAVE_LIB" = "1" ]; then
-  MY_NAME=$(get_my_name 2>/dev/null)
+  if source "$PLUGIN_ROOT/scripts/lib.sh" 2>/dev/null \
+     && MY_NAME=$(get_my_name 2>/dev/null) && [ -n "$MY_NAME" ]; then
+    HAVE_LIB=1
+  else
+    MY_NAME=""
+  fi
 fi
 
 # Before trusting or inlining ANY dispatch file, verify the messages ROOT itself
 # is safe via the hardened ensure_messages_dir (rejects a symlinked or
 # other-user-owned messages dir). If the root is unsafe we refuse to trust any
-# file under it. When the lib isn't available (HAVE_LIB=0) we can't run this
-# check, so we fall back to trusted_message_file's own per-file guards (symlink,
+# file under it. When the lib isn't available or this pane is not verified
+# (HAVE_LIB=0) we can't run this check, so we fall back to trusted_message_file's own per-file guards (symlink,
 # ownership, owner-only mode, canonical containment).
 MSGDIR_SAFE=1
 if [ "$HAVE_LIB" = "1" ]; then

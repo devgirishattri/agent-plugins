@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from tmux_test_fixtures import run_in_pane
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = {
@@ -113,8 +114,16 @@ class Envelope(unittest.TestCase):
                         prompt = f'[from:peer pane:%2{field} id:22222222] ' + ('dispatch' if dispatch else body)
                         data = {'metadata': '[from:decoy pane:%1 id:11111111] ignored'} if decoy else {}
                         data.update(hook_event_name='UserPromptSubmit', prompt=prompt)
-                        result = self.script(provider, dict(env, TMUX='isolated-hook-fixture'),
-                                             'detect-incoming-message.sh', input=json.dumps(data))
+                        mock = ROOT / 'scripts/fixtures/pane-actor'
+                        env.update(PATH=str(mock) + os.pathsep + env['PATH'],
+                                   TEST_PANE_PID=str(os.getpid()), TEST_PANE_NAME='local', TMUX='isolated-hook-fixture')
+                        refused = self.script(provider, dict(env, SESSION_CHAT_PANE_NAME='other'),
+                                              'detect-incoming-message.sh', input=json.dumps(data))
+                        # A prompt hook returns success to the provider and leaves the
+                        # correlation ledger untouched when the pane claim disagrees.
+                        self.assertEqual(refused.returncode, 0, refused.stderr)
+                        self.assertFalse((messages / 'replies-log.tsv').exists())
+                        result = self.script(provider, env, 'detect-incoming-message.sh', input=json.dumps(data))
                         self.assertEqual(result.returncode, 0, result.stderr)
                         rows = (messages / 'replies-log.tsv').read_text().splitlines()
                         self.assertEqual(len(rows), 1)
@@ -223,15 +232,16 @@ class Envelope(unittest.TestCase):
                         env.update(TMUX=transport, TMUX_PANE=sender,
                                    SESSION_CHAT_ALLOW_SHELL_TARGET='1', SESSION_CHAT_SKIP_VERIFY='1',
                                    SESSION_CHAT_SETTLE_MS='0')
-                        failed = self.script(provider, dict(env, PATH=str(shim) + ':' + env['PATH']),
-                                             script, 'peer', payload)
+                        wrapper = ['bash', str(SCRIPTS[provider] / script)]
+                        failed = run_in_pane(tmux, sender, wrapper + ['peer', payload],
+                                             dict(env, PATH=str(shim) + ':' + env['PATH']), self.root)
                         self.assertNotEqual(failed.returncode, 0)
                         self.assertNotIn('Message id:', failed.stdout)
                         self.assertFalse(list(messages.glob('*.md')))
                         self.assertFalse((messages / 'sent-log.tsv').exists())
                         self.assertFalse(list(messages.glob('queue/*.tsv')))
-                        control = self.script(provider, env, script, '--reply-to', 'aaaaaaaa',
-                                              '--task', 'task-1', 'peer', payload)
+                        control = run_in_pane(tmux, sender, wrapper + ['--reply-to', 'aaaaaaaa', '--task',
+                                                                      'task-1', 'peer', payload], env, self.root)
                         self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
                         sent = (messages / 'sent-log.tsv').read_text().splitlines()[-1].split('\t')
                         self.assertRegex(sent[1], r'^[a-f0-9]{16}$')

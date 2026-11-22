@@ -40,18 +40,14 @@ case "$INCOMING_MODE" in
   *) INCOMING_MODE="notify" ;;
 esac
 
-# Pull in queue/lock/name helpers; degrade to live-only if unavailable.
+# Only the process descended from this pane can claim its queued messages
+# and record replies. A live paste still appears when the library is absent.
 HAVE_LIB=0
-if [ -f "$PLUGIN_ROOT/scripts/lib.sh" ]; then
-  # shellcheck source=/dev/null
-  if source "$PLUGIN_ROOT/scripts/lib.sh" 2>/dev/null && ensure_messages_dir "$MESSAGES_DIR"; then
+MY_NAME=""
+if [ -f "$PLUGIN_ROOT/scripts/lib.sh" ] && source "$PLUGIN_ROOT/scripts/lib.sh" 2>/dev/null; then
+  if MY_NAME=$(get_my_name 2>/dev/null) && ensure_messages_dir "$MESSAGES_DIR"; then
     HAVE_LIB=1
   fi
-fi
-
-MY_NAME=""
-if [ "$HAVE_LIB" = "1" ]; then
-  MY_NAME=$(get_my_name 2>/dev/null)
 fi
 
 json_escape() {

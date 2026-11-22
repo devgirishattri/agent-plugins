@@ -60,7 +60,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-unset TMUX TMUX_PANE
+unset TMUX TMUX_PANE SESSION_CHAT_PANE_NAME
 export HOME="$TEST_HOME/home" TMPDIR="$TEST_HOME/tmp" TMUX_TMPDIR="$TEST_HOME/tmp"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CACHE_HOME="$HOME/.cache" XDG_STATE_HOME="$HOME/.local/state"
@@ -78,6 +78,18 @@ while [ "$#" -gt 0 ]; do
     *) break ;;
   esac
 done
+# The legacy transport matrix drives several cat panes from this test process.
+# Project only its two actor queries onto that selected fixture pane. The
+# ancestry integration below runs inside a pane with this projection disabled.
+if [ -n "${SMOKE_DRIVER_PID:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
+  case "$*" in
+    'list-panes -a -F #{pane_pid} #{pane_id}')
+      printf '%s %s\n' "$SMOKE_DRIVER_PID" "$TMUX_PANE"; exit 0 ;;
+    "display-message -p -t $TMUX_PANE #{pane_pid} #{@name}")
+      name=$("$real" -f /dev/null -N -S "$sock" display-message -p -t "$TMUX_PANE" '#{@name}') || exit 1
+      printf '%s %s\n' "$SMOKE_DRIVER_PID" "$name"; exit 0 ;;
+  esac
+fi
 exec "$real" -f /dev/null -N -S "$sock" "$@"
 SH
 } > "$TEST_HOME/tmux-bin/tmux"
@@ -100,6 +112,7 @@ if [ ! -S "$SMOKE_SOCKET" ] || [ "$(smoke_client display-message -p '#{pid}' 2>/
   exit 1
 fi
 SMOKE_SOCKET_ID="$(smoke_file_id "$SMOKE_SOCKET")"
+export SMOKE_DRIVER_PID=$$
 
 SESSION="session-scheduler-test-$$"
 
@@ -202,11 +215,44 @@ tmux set-option -p -t "$RECIPIENT" @name scheduler-executor
 tmux set-option -p -t "$REVIEWER" @name scheduler-reviewer
 TMUX_ENV=$(tmux display-message -p -t "$SENDER" '#{socket_path},#{pid},0')
 
+# Run every verdict in the real reviewer pane with a sibling TMUX_PANE value.
+# Compare each file byte-for-byte before the positive transition.
+cat > "$TEST_HOME/actor-probe.sh" <<'SH'
+scripts=$1 store=$2 other=$3
+(
+  set -eu
+  unset SMOKE_DRIVER_PID SESSION_CHAT_PANE_NAME
+  export SESSION_SCHEDULER_HOME="$store/ledger"
+  tmux set-option -p -t "$TMUX_PANE" @name build.review
+  export SESSION_CHAT_PANE_NAME=build.review
+  for op in done block review; do
+    created=$(bash "$scripts/task-new.sh" 'actor check')
+    id=$(awk '/^Created task/{sub(/:$/, "", $3); print $3}' <<< "$created")
+    file="$SESSION_SCHEDULER_HOME/tasks/$id.json"
+    jq '.status="assigned" | .assigner="build.review"' "$file" > "$store/before"
+    cp "$store/before" "$file"
+    if SESSION_CHAT_PANE_NAME=scheduler-executor TMUX_PANE="$other" bash "$scripts/task-$op.sh" "$id" check 2>"$store/mismatch"; then exit 1; fi
+    grep -q SESSION_CHAT_PANE_NAME "$store/mismatch"
+    cmp "$store/before" "$file"
+    if [ "$op" != block ]; then export SESSION_CHAT_PANE_NAME=build.review; else unset SESSION_CHAT_PANE_NAME; fi
+    TMUX_PANE="$other" bash "$scripts/task-$op.sh" "$id" check
+    jq -e '.history[-1].actor == "build.review"' "$file" >/dev/null
+  done
+  tmux set-option -p -t "$TMUX_PANE" @name scheduler-reviewer
+) >"$store/result.log" 2>&1
+echo "$?" >"$store/result"
+exec /bin/cat
+SH
+mkdir -p "$TEST_HOME/actor-probe"
+tmux respawn-pane -k -t "$REVIEWER" bash "$TEST_HOME/actor-probe.sh" "$SCRIPT_DIR" "$TEST_HOME/actor-probe" "$RECIPIENT"
+for ((i=0; i<400; i++)); do [ ! -f "$TEST_HOME/actor-probe/result" ] || break; sleep 0.05; done
+[ "$(cat "$TEST_HOME/actor-probe/result")" = 0 ] && ok || fail "real pane scheduler verdicts: $(cat "$TEST_HOME/actor-probe/result.log")"
+
 # Deterministic lifecycle-ack transport: dispatch and inline calls are logged
 # separately so the tests can prove durable dispatch is the primary path.
 ACK_SUCCESS_ROOT="$TEST_HOME/ack-success-stub"
 mkdir -p "$ACK_SUCCESS_ROOT/.codex-plugin" "$ACK_SUCCESS_ROOT/scripts"
-printf '{"name":"session-chat","version":"0.16.5"}\n' > "$ACK_SUCCESS_ROOT/.codex-plugin/plugin.json"
+printf '{"name":"session-chat","version":"0.17.24"}\n' > "$ACK_SUCCESS_ROOT/.codex-plugin/plugin.json"
 printf '#!/usr/bin/env bash\nprintf "dispatch:%%s:%%s\\n" "$1" "$2" >> "$ACK_STUB_LOG"\nexit 0\n' \
   > "$ACK_SUCCESS_ROOT/scripts/dispatch-to-session.sh"
 printf '#!/usr/bin/env bash\nprintf "send:%%s:%%s\\n" "$1" "$2" >> "$ACK_STUB_LOG"\nexit 0\n' \
@@ -725,13 +771,13 @@ LOW_ID=$(printf '%s\n' "$low" | awk '/^Created task/{print $3}' | sed 's/:$//')
 if run_sender env SESSION_CHAT_ROOT_OVERRIDE="$LOW_CHAT" bash "$SCRIPT_DIR/task-assign.sh" scheduler-executor "$LOW_ID" "Should fail" 2> "$TEST_HOME/low-chat.txt"; then
   fail "session-chat below minimum was accepted"
 fi
-grep 'session-chat >= 0.13.0 is required' "$TEST_HOME/low-chat.txt" >/dev/null && ok || fail "minimum-version error missing"
+grep 'session-chat >= 0.17.24 is required' "$TEST_HOME/low-chat.txt" >/dev/null && ok || fail "minimum-version error missing"
 run_sender bash "$SCRIPT_DIR/task-status.sh" "$LOW_ID" | grep 'created' >/dev/null && ok || fail "old transport failure changed ledger"
 
 # --- dispatch failure rolls back new prompt + leaves ledger untouched ---
 FAIL_STUB="$TEST_HOME/failstub/scripts"
 mkdir -p "$FAIL_STUB" "$TEST_HOME/failstub/.codex-plugin"
-printf '{"name":"session-chat","version":"0.16.5"}\n' > "$TEST_HOME/failstub/.codex-plugin/plugin.json"
+printf '{"name":"session-chat","version":"0.17.24"}\n' > "$TEST_HOME/failstub/.codex-plugin/plugin.json"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$FAIL_STUB/dispatch-to-session.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAIL_STUB/send-message.sh"
 chmod +x "$FAIL_STUB"/*.sh
@@ -740,7 +786,7 @@ chmod +x "$FAIL_STUB"/*.sh
 # that outcome, and leaves the landed transition intact.
 FALLBACK_ACK_ROOT="$TEST_HOME/fallback-ack-stub"
 mkdir -p "$FALLBACK_ACK_ROOT/.codex-plugin" "$FALLBACK_ACK_ROOT/scripts"
-printf '{"name":"session-chat","version":"0.16.5"}\n' > "$FALLBACK_ACK_ROOT/.codex-plugin/plugin.json"
+printf '{"name":"session-chat","version":"0.17.24"}\n' > "$FALLBACK_ACK_ROOT/.codex-plugin/plugin.json"
 printf '#!/usr/bin/env bash\nprintf "dispatch:%%s:%%s\\n" "$1" "$2" >> "$ACK_STUB_LOG"\nexit 1\n' \
   > "$FALLBACK_ACK_ROOT/scripts/dispatch-to-session.sh"
 printf '#!/usr/bin/env bash\nprintf "send:%%s:%%s\\n" "$1" "$2" >> "$ACK_STUB_LOG"\nexit 0\n' \
@@ -773,7 +819,7 @@ jq -e '.meta.last_ack.status == "inline-fallback" and .meta.last_ack.event == "d
 # still exits successfully, and the warning forbids replay/--force repair.
 FAIL_ACK_ROOT="$TEST_HOME/fail-ack-stub"
 mkdir -p "$FAIL_ACK_ROOT/.codex-plugin" "$FAIL_ACK_ROOT/scripts"
-printf '{"name":"session-chat","version":"0.16.5"}\n' > "$FAIL_ACK_ROOT/.codex-plugin/plugin.json"
+printf '{"name":"session-chat","version":"0.17.24"}\n' > "$FAIL_ACK_ROOT/.codex-plugin/plugin.json"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$FAIL_ACK_ROOT/scripts/dispatch-to-session.sh"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$FAIL_ACK_ROOT/scripts/send-message.sh"
 chmod +x "$FAIL_ACK_ROOT/scripts"/*.sh
@@ -784,7 +830,7 @@ PARTIAL_DONE_FILE="$TEST_HOME/scheduler/tasks/$PARTIAL_DONE_ID.json"
 jq '.status="assigned" | .assigner="stub-assigner" | .started_at=.created_at' \
   "$PARTIAL_DONE_FILE" > "$TEST_HOME/partial-done.tmp"
 mv "$TEST_HOME/partial-done.tmp" "$PARTIAL_DONE_FILE"
-if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
+if ! run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
   bash "$SCRIPT_DIR/task-done.sh" "$PARTIAL_DONE_ID" "completed without ack" \
   > "$TEST_HOME/partial-done.out" 2> "$TEST_HOME/partial-done.err"; then
   fail "task-done aborted after a best-effort notification failure"
@@ -814,7 +860,7 @@ PARTIAL_BLOCK_ID=$(printf '%s\n' "$partial_block" | awk '/^Created task/{print $
 PARTIAL_BLOCK_FILE="$TEST_HOME/scheduler/tasks/$PARTIAL_BLOCK_ID.json"
 jq '.assigner="stub-assigner"' "$PARTIAL_BLOCK_FILE" > "$TEST_HOME/partial-block.tmp"
 mv "$TEST_HOME/partial-block.tmp" "$PARTIAL_BLOCK_FILE"
-if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
+if ! run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
   bash "$SCRIPT_DIR/task-block.sh" "$PARTIAL_BLOCK_ID" "blocked without ack" \
   > "$TEST_HOME/partial-block.out" 2> "$TEST_HOME/partial-block.err"; then
   fail "task-block aborted after a best-effort notification failure"
@@ -845,7 +891,7 @@ PARTIAL_REVIEW_FILE="$TEST_HOME/scheduler/tasks/$PARTIAL_REVIEW_ID.json"
 jq '.status="assigned" | .assigner="stub-assigner" | .started_at=.created_at' \
   "$PARTIAL_REVIEW_FILE" > "$TEST_HOME/partial-review.tmp"
 mv "$TEST_HOME/partial-review.tmp" "$PARTIAL_REVIEW_FILE"
-if ! run_without_tmux env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
+if ! run_recipient env SESSION_CHAT_ROOT_OVERRIDE="$FAIL_ACK_ROOT" \
   bash "$SCRIPT_DIR/task-review.sh" "$PARTIAL_REVIEW_ID" "review without ack" \
   > "$TEST_HOME/partial-review.out" 2> "$TEST_HOME/partial-review.err"; then
   fail "task-review aborted after both assigner ack transports failed"
@@ -872,7 +918,7 @@ jq -e --arg file "$TEST_HOME/scheduler/prompts/$PARTIAL_REVIEW_ID-ack-review.md"
 UNSUB_ROOT="$TEST_HOME/unsubmitted-stub"
 UNSUB_LOG="$TEST_HOME/unsubmitted.log"
 mkdir -p "$UNSUB_ROOT/.codex-plugin" "$UNSUB_ROOT/scripts"
-printf '{"name":"session-chat","version":"0.17.21"}\n' > "$UNSUB_ROOT/.codex-plugin/plugin.json"
+printf '{"name":"session-chat","version":"0.17.24"}\n' > "$UNSUB_ROOT/.codex-plugin/plugin.json"
 printf '#!/usr/bin/env bash\nprintf "dispatch:%%s:%%s\\n" "$1" "$2" >> "%s"\necho "Unsubmitted dispatch to '"'"'$1'"'"'"\necho "Message id: dddddddddddddddd"\nexit 4\n' "$UNSUB_LOG" \
   > "$UNSUB_ROOT/scripts/dispatch-to-session.sh"
 printf '#!/usr/bin/env bash\nprintf "send:%%s:%%s\\n" "$1" "$2" >> "%s"\nexit 0\n' "$UNSUB_LOG" \

@@ -38,7 +38,7 @@ The token goes at the very start of the message body. Only that leading position
 3. Report the result:
    - Report `Sent to …`, `Dispatched task to …` or `Queued …` as the transport result. The sender's `/check-replies` can confirm a correlated reply after a receiving hook records it.
    - If `--reply-to` reports an invalid id, re-check the `id:<hex>` from the received message.
-   - If the error is about no name, tell the user to run `/whoami <name>` first.
+   - If the error says the calling pane has an empty or unsafe name, tell the user to run `/whoami <name>` first. If it says `SESSION_CHAT_PANE_NAME disagrees with the calling tmux pane` or `No tmux pane owns the calling process`, report it verbatim. Do not change that variable, and do not retry through a wrapper.
    - If the target is not found, run `/panes` to show available targets.
    - If it mentions duplicate names, ask the user to rename one pane via `/whoami`.
    - `Queued …` is durable success. A receiving hook will process the row when it fits. Once it is queued, do not resend it.

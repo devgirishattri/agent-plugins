@@ -96,6 +96,12 @@ cat > "$SHIM/jq" <<EOF
 # DG_JQ_FAIL_CN=1: fail only the serializer-style first argument -cn.
 a=""
 for x in "\$@"; do a="\$a\$x"; done
+# DG_RACE_TASK: add a contract to that task when the helper reads the task's
+# assigner, that is after the early contract check and before the locked write.
+if [ -n "\${DG_RACE_TASK:-}" ] && [[ "\$a" == "-r.assigner/"* ]]; then
+  f="\$SESSION_SCHEDULER_HOME/tasks/\$DG_RACE_TASK.json"
+  "$REAL_JQ" '.contract = {"raced": true}' "\$f" > "\$f.race" && "$REAL_MV" "\$f.race" "\$f"
+fi
 if [ -n "\${DG_JQ_FAIL_PAT:-}" ] && [[ "\$a" == *"\$DG_JQ_FAIL_PAT"* ]]; then exit 1; fi
 if [ -n "\${DG_JQ_EMPTY_PAT:-}" ] && [[ "\$a" == *"\$DG_JQ_EMPTY_PAT"* ]]; then cat >/dev/null 2>&1; exit 0; fi
 if [ "\${DG_JQ_FAIL_CN:-}" = 1 ] && [ "\${1:-}" = "-cn" ]; then exit 1; fi
@@ -155,6 +161,41 @@ NOJQ_PATH="$ROOT/path-nojq"; mk_pathdir "$NOJQ_PATH" jq
 NOPY_PATH="$ROOT/path-nopy"; mk_pathdir "$NOPY_PATH" python3 python
 FULL_PATH="$ROOT/path-full"; mk_pathdir "$FULL_PATH"
 
+# Fixture tmux (identity projection). The acting pane is the tmux pane that
+# OWNS the calling process (resolve_pane_actor walks the process ancestry).
+# These fixtures need no tmux server and name the acting pane through
+# SESSION_CHAT_PANE_NAME, which the stub get-my-name.sh in each chat root
+# prints. This shim answers ONLY the resolver's two queries: the fixture pane
+# is owned by this test process (its pid is written into the shim because every
+# run uses `env -i`, so the ancestry walk itself still runs for real) and is
+# named by the active chat root's stub. It replaces any real tmux in every PATH
+# directory a run can use. Real pane ancestry is covered in
+# test-session-scheduler.sh ("real pane ancestry").
+mk_fixture_tmux() { # mk_fixture_tmux <dir>
+  rm -f "$1/tmux"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf 'driver=%s\n' "$$"
+    cat <<'FIXTURE_TMUX'
+pane="${TMUX_PANE:-%0}"
+case "$*" in
+  'list-panes -a -F #{pane_pid} #{pane_id}')
+    printf '%s %s\n' "$driver" "$pane"; exit 0 ;;
+  "display-message -p -t $pane #{pane_pid} #{@name}")
+    name=""
+    stub="${SESSION_CHAT_ROOT_OVERRIDE:-}/scripts/get-my-name.sh"
+    [ -f "$stub" ] && name=$(bash "$stub" 2>/dev/null)
+    name="${name##*$'\n'}"; name="${name//[[:space:]]/}"
+    printf '%s %s\n' "$driver" "$name"; exit 0 ;;
+esac
+echo "fixture tmux: no server (unsupported: $*)" >&2
+exit 1
+FIXTURE_TMUX
+  } > "$1/tmux"
+  chmod +x "$1/tmux"
+}
+for _d in "$SHIM" "$NOJQ_PATH" "$NOPY_PATH" "$FULL_PATH"; do mk_fixture_tmux "$_d"; done
+
 # ------------------------------------------------------------ chat roots -----
 # Hybrid session-chat root: the REAL lib.sh and own-draft-check.sh next to
 # recording stubs. Behaviour per target comes from env: DG_D_<pane> (dispatch:
@@ -163,7 +204,7 @@ FULL_PATH="$ROOT/path-full"; mk_pathdir "$FULL_PATH"
 mk_chat() { # mk_chat <dir> [with-helper|no-helper]
   local d="$1"
   mkdir -p "$d/scripts" "$d/.claude-plugin"
-  printf '{ "name": "session-chat", "version": "0.17.0" }\n' > "$d/.claude-plugin/plugin.json"
+  printf '{ "name": "session-chat", "version": "0.17.24" }\n' > "$d/.claude-plugin/plugin.json"
   cp "$CHAT_SRC/lib.sh" "$d/scripts/"
   printf '%s\n' '#!/usr/bin/env bash' 'printf "%s" "${SESSION_CHAT_PANE_NAME:-}"' > "$d/scripts/get-my-name.sh"
   [ "${2:-with-helper}" = with-helper ] && cp "$CHAT_SRC/own-draft-check.sh" "$d/scripts/"
@@ -204,18 +245,11 @@ STUB
   chmod 644 "$1/scripts/own-draft-check.sh"
 }
 CHAT_CHK="$ROOT/chat-chk"; mk_chat_checker "$CHAT_CHK"
-# Race hook: add a contract to the task while the pane name is read (after the
-# early contract check, before the locked write).
+# Race hook: DG_RACE_TASK adds a contract to the task after the early contract
+# check and before the locked write. The hook lives in the jq shim (it fires on
+# the helper's read of the task's assigner): the acting pane is now resolved
+# before the early contract check, so the name lookup is no longer in between.
 CHAT_RACE="$ROOT/chat-race"; mk_chat "$CHAT_RACE" with-helper
-cat > "$CHAT_RACE/scripts/get-my-name.sh" <<'STUB'
-#!/usr/bin/env bash
-printf "%s" "${SESSION_CHAT_PANE_NAME:-}"
-if [ -n "${DG_RACE_TASK:-}" ]; then
-  f="$SESSION_SCHEDULER_HOME/tasks/$DG_RACE_TASK.json"
-  jq '.contract = {"raced": true}' "$f" > "$f.race" && mv "$f.race" "$f"
-fi
-STUB
-chmod 644 "$CHAT_RACE/scripts/get-my-name.sh"
 # Lock hook: take the task lock with a LIVE pid (the next lock attempt times out).
 cat > "$ROOT/hook-lock.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -675,6 +709,37 @@ ck rc [ "$RC" = 1 ]; dg_n 1; dg_expect 1 sched.note_file.checker_unavailable ver
 nf_control
 finish "diag_note_file_checker_unavailable_old_chat_with_control"
 
+# The checker also needs a VERIFIABLE session-chat at or above the floor: an
+# install with the helper but an older version, an unreadable version, and the
+# dispatch-path override are all refused before the draft is read. Control: the
+# same draft with the supported install.
+new_fx
+CHAT_NF_OLD="$ROOT/chat-nf-oldver"; rm -rf "$CHAT_NF_OLD"; cp -R "$CHAT" "$CHAT_NF_OLD"
+printf '{ "name": "session-chat", "version": "0.17.23" }\n' > "$CHAT_NF_OLD/.claude-plugin/plugin.json"
+CHAT_NF_UNK="$ROOT/chat-nf-unknown"; rm -rf "$CHAT_NF_UNK"; cp -R "$CHAT" "$CHAT_NF_UNK"; rm -f "$CHAT_NF_UNK/.claude-plugin/plugin.json"
+# A checker that leaves a sentinel when it is invoked, in the old-version root
+# and in a supported-version root (the control that the sentinel works).
+CHAT_NF_SENT="$ROOT/chat-nf-sentinel"; rm -rf "$CHAT_NF_SENT"; cp -R "$CHAT" "$CHAT_NF_SENT"
+for _r in "$CHAT_NF_OLD" "$CHAT_NF_SENT"; do
+  printf '%s\n' '#!/usr/bin/env bash' 'touch "$DG_LOG/checker-ran"' 'exit 1' > "$_r/scripts/own-draft-check.sh"
+  chmod 644 "$_r/scripts/own-draft-check.sh"
+done
+vnew; CHAT_USE="$CHAT_NF_OLD"; run rev1 task-done.sh "$TID" --note-file "$DRAFT"
+ck "old rc" [ "$RC" = 1 ]; dg_n 1; dg_expect 1 sched.note_file.checker_unavailable verdict_event validate refused false; human_first; nf_untouched
+ckx "old: names the floor and the found version" 'printf "%s" "$ERR" | grep -q ">= 0.17.24" && printf "%s" "$ERR" | grep -q "0.17.23"'
+ck "old: the checker never ran" [ ! -e "$FX/log/checker-ran" ]
+vnew; CHAT_USE="$CHAT_NF_SENT"; run rev1 task-done.sh "$TID" --note-file "$DRAFT"
+ck "sentinel control: a supported install does invoke the checker" [ -e "$FX/log/checker-ran" ]
+rm -f "$FX/log/checker-ran"
+vnew; CHAT_USE="$CHAT_NF_UNK"; run rev1 task-done.sh "$TID" --note-file "$DRAFT"
+ck "unknown rc" [ "$RC" = 1 ]; dg_n 1; dg_expect 1 sched.note_file.checker_unavailable verdict_event validate refused false; human_first; nf_untouched
+ckx "unknown: says so" 'printf "%s" "$ERR" | grep -q "unknown version"'
+vnew; CHAT_USE="$CHAT_NF_OLD"; RUN_ENV=(SESSION_SCHEDULER_SKIP_VERSION_CHECK=1); run rev1 task-block.sh "$TID" --note-file "$DRAFT"
+ck "override rc" [ "$RC" = 1 ]; dg_n 1; dg_expect 1 sched.note_file.checker_unavailable verdict_event validate refused false; human_first; nf_untouched
+ck "override: the checker never ran" [ ! -e "$FX/log/checker-ran" ]
+nf_control
+finish "diag_note_file_checker_requires_verifiable_floor_old_unknown_override_with_control"
+
 new_fx
 vnew; RUN_PATH="$NOPY_PATH"; run rev1 task-done.sh "$TID" --note-file "$DRAFT"
 ck rc [ "$RC" = 1 ]; dg_n 1; dg_expect 1 sched.note_file.python_missing verdict_event validate refused false; human_first; nf_untouched
@@ -1125,6 +1190,7 @@ finish "r2_notification_for_closed_enum_for_bookkeeping_records_with_control"
 # ================================================= R3: observed only when transport ran
 # Version-floor refusal: session-chat below the durable-inbox floor; the reviewer dispatch
 # script is never run. Control: the supported install dispatches to both routes.
+mk_flip_chat() { CHAT_FLIP="$ROOT/chat-flip"; rm -rf "$CHAT_FLIP"; cp -R "$CHAT" "$CHAT_FLIP"; FLIP_META="$CHAT_FLIP/.claude-plugin/plugin.json"; }
 CHAT_OLDVER="$ROOT/chat-oldver"; rm -rf "$CHAT_OLDVER"; cp -R "$CHAT" "$CHAT_OLDVER"
 printf '{ "name": "session-chat", "version": "0.1.0" }\n' > "$CHAT_OLDVER/.claude-plugin/plugin.json"
 new_fx; mk_task assigned rev1
@@ -1169,10 +1235,17 @@ ck "notice: no transport" [ "$(tcount dispatch boss1)" = 0 ]
 mk_task review rev1; mk_draft rev1 d-r3c.md "transport body"
 RUN_ENV=(DG_D_boss1=fail DG_S_boss1=fail); run rev1 task-done.sh "$TID" --note-file "$DRAFT"
 dg_n 1; dg_expect 1 sched.notify.failed verdict_event notify partial true; dg_notif 1 verdict_event failed failed
-mk_task review rev1; mk_draft rev1 d-r3d.md "floor body"
-CHAT_USE="$CHAT_OLDVER"; RUN_ENV=(DG_S_boss1=fail); run rev1 task-done.sh "$TID" --note-file "$DRAFT"
+# --note-file itself refuses an install below the floor before anything changes
+# (see diag_note_file_checker_unavailable_*). The floor can still be met at
+# notification time when the install changes after the checker's read: the
+# manifest is flipped after that first read.
+mk_task review rev1; mk_draft rev1 d-r3d.md "floor body"; mk_flip_chat; rm -f "$FX/log/flipcount"
+CHAT_USE="$CHAT_FLIP"; RUN_ENV=(DG_S_boss1=fail DG_FLIP_META="$FLIP_META" DG_FLIP_AFTER=1); run rev1 task-done.sh "$TID" --note-file "$DRAFT"
 dg_n 1; dg_expect 1 sched.notify.failed verdict_event notify partial true; dg_notif 1 verdict_event failed failed
 ck "floor then failing inline pointer: the send script ran" [ "$(tcount send boss1)" = 1 ]
+ck "floor: no dispatch script ran" [ "$(tcount dispatch boss1)" = 0 ]
+ck "floor: the manifest was flipped after the checker read" [ "$(cat "$FX/log/flipcount")" -ge 1 ]
+ck "floor: the draft is kept (cleanup helper not trusted any more)" [ -f "$DRAFT" ]
 for mode in delivered queued; do
   mk_task review rev1; mk_draft rev1 "d-r3e-$mode.md" "ctl body"; RUN_ENV=(DG_D_boss1="$mode"); run rev1 task-done.sh "$TID" --note-file "$DRAFT"; dg_none
 done
@@ -1188,7 +1261,6 @@ finish "r3_verdict_notify_preflight_refusals_observed_null_transport_failure_fai
 # read; a caller that re-checked would refuse a dispatch it had already declared ready and
 # report observed:failed although no script ran. With one resolution, the script is invoked
 # exactly once and nothing is reported. Controls: no flip (one invocation), real failure.
-mk_flip_chat() { CHAT_FLIP="$ROOT/chat-flip"; rm -rf "$CHAT_FLIP"; cp -R "$CHAT" "$CHAT_FLIP"; FLIP_META="$CHAT_FLIP/.claude-plugin/plugin.json"; }
 new_fx
 # (a) task-review reviewer dispatch (no assigner, so the reviewer is the only reader of the manifest)
 run "" task-new.sh "flip" --reviewer rev1; FID=$(printf '%s\n' "$OUT" | awk '/Created task:/ {print $3}'); run "" task-assign.sh worker1 "$FID" "do it"
@@ -1217,8 +1289,11 @@ ck "ack control: one invocation" [ "$(tcount dispatch boss1)" = 1 ]; dg_none
 mk_task assigned; mk_flip_chat; CHAT_USE="$CHAT_FLIP"; RUN_ENV=(DG_D_boss1=fail DG_S_boss1=fail); run worker1 task-done.sh "$TID" ok
 dg_n 1; dg_expect 1 sched.notify.failed assigner_ack notify partial true; dg_notif 1 assigner_ack failed failed
 # (c) verdict_notify
-mk_task review rev1; mk_draft rev1 d-flip.md "flip body"; mk_flip_chat
-CHAT_USE="$CHAT_FLIP"; RUN_ENV=(DG_FLIP_META="$FLIP_META" DG_FLIP_AFTER=1); run rev1 task-done.sh "$TID" --note-file "$DRAFT"
+# The --note-file checker reads the manifest first and the notification
+# readiness reads it second, so the flip is armed after the second read.
+mk_task review rev1; mk_draft rev1 d-flip.md "flip body"; mk_flip_chat; rm -f "$FX/log/flipcount"
+CHAT_USE="$CHAT_FLIP"; RUN_ENV=(DG_FLIP_META="$FLIP_META" DG_FLIP_AFTER=2); run rev1 task-done.sh "$TID" --note-file "$DRAFT"
+ck "verdict: the manifest was really flipped after the readiness read" [ "$(cat "$FX/log/flipcount")" -ge 2 ] && ck "verdict: flipped" grep -q '"0.1.0"' "$FLIP_META"
 ck "verdict: rc 0" [ "$RC" = 0 ]; ck "verdict: the dispatch script ran exactly once" [ "$(tcount dispatch boss1)" = 1 ]
 ck "verdict: no inline pointer" [ "$(tcount send boss1)" = 0 ]; dg_none
 ck "verdict: recorded delivered" [ "$(jq -r '.meta.verdict_events | to_entries[0].value.notification.state' "$(tf "$TID")")" = delivered ]

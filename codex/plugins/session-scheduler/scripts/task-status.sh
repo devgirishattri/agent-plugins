@@ -19,7 +19,8 @@ if [ "$MODE" = "--workflow" ]; then
   WORKFLOW_FILTER="${2:-}"
   validate_route_name "workflow id" "$WORKFLOW_FILTER" || exit 1
 fi
-MINE=$(current_pane_name)
+MINE=""
+if [ "$MODE" = --mine ]; then MINE=$(resolve_pane_actor --read-only) || exit 1; fi
 
 ROW_FILTER='[.id,.status,(.meta.workflow_id // .workflow_id // "-"),(.stage // "-"),(if (.assignee // "") == "" then "-" else .assignee end),(.reviewer // "-"),.assigner,.updated_at,.name] | @tsv'
 

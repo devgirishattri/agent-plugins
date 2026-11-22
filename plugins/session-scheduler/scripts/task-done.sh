@@ -12,6 +12,11 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
+# The acting pane is the tmux pane that owns this process, verified before the
+# first write (ensure_dirs, the contract route, the verdict copy and the
+# transition all come after). An unverifiable, unnamed or mismatched pane stops
+# here with the resolver's message and changes nothing.
+ACTOR=$(resolve_pane_actor) || exit 1
 # Diagnostics (diag/1): every exit below that is an ordinary-path fault emits one
 # DIAG line AFTER its human text (see lib.sh). The contracted route emits none.
 sched_diag_reset
@@ -58,7 +63,6 @@ if [ "$NOTE_FILE_SET" = 1 ]; then
   VERDICT_ARG=$(verdict_event_arg)
 fi
 
-ACTOR=$(current_pane_name)
 ASSIGNER=$(task_get "$ID" '.assigner')
 NAME=$(task_get "$ID" '.name')
 

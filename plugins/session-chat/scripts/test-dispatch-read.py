@@ -11,19 +11,29 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parent
 WORKSPACE = HERE.parent.parent / 'session-workspace' / 'scripts'
+# The sender and the receiving hook take their identity from the tmux pane that
+# owns their process, so both run as real descendants of the fixture panes.
+sys.path.insert(0, str(next(parent / 'scripts' for parent in HERE.parents
+                            if (parent / 'scripts/tmux_test_fixtures.py').is_file())))
+from tmux_test_fixtures import run_in_pane  # noqa: E402
 
 
 class DispatchRead(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='dispatch-read-', dir='/tmp')
         self.root = Path(self.tmp.name).resolve()
+        # SCT_DRIVER_PID is the surrounding chat suite's fixture projection. It
+        # is dropped so this test never depends on that projection: identity
+        # here always comes from real pane ancestry.
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(('SESSION_', 'KNOWLEDGE_')) and k not in ('TMUX', 'TMUX_PANE')}
+                    if not k.startswith(('SESSION_', 'KNOWLEDGE_'))
+                    and k not in ('TMUX', 'TMUX_PANE', 'SCT_DRIVER_PID')}
         # The socket is separate from the surrounding plugin suite's server.
         self.socket = str(self.root / 'tmux.sock')
         self.messages = self.root / "it's messages"
@@ -66,8 +76,9 @@ class DispatchRead(unittest.TestCase):
     def probe(self, role, limit):
         name = 'harness-sample-component-' + role
         env = dict(self.env, TMUX_PANE=self.panes[self.master])
-        result = subprocess.run(['bash', str(HERE / 'dispatch-to-session.sh'), name, str(self.draft)],
-                                env=env, capture_output=True, text=True, timeout=45)
+        result = run_in_pane(self.tmux, self.panes[self.master],
+                             ['bash', str(HERE / 'dispatch-to-session.sh'), name, str(self.draft)],
+                             env, self.root, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         files = list(self.messages.glob('*-to-' + name + '.md'))
         self.assertEqual(len(files), 1)
@@ -77,9 +88,8 @@ class DispatchRead(unittest.TestCase):
         prompt = '[from:%s pane:%s msg:%s id:%s] dispatch (20 KB) — read msg file id:%s' % (
             self.master, self.panes[self.master], delivered, uid, uid)
         env.update(TMUX_PANE=self.panes[name], SESSION_CHAT_DISPATCH_INLINE_MAX=str(limit))
-        hook = subprocess.run(['bash', str(HERE / 'detect-incoming-message.sh')], env=env,
-                              input=json.dumps({'hook_event_name': 'UserPromptSubmit', 'prompt': prompt}),
-                              capture_output=True, text=True, timeout=20)
+        hook = run_in_pane(self.tmux, self.panes[name], ['bash', str(HERE / 'detect-incoming-message.sh')], env, self.root,
+                           input=json.dumps({'hook_event_name': 'UserPromptSubmit', 'prompt': prompt}), timeout=20)
         self.assertEqual(hook.returncode, 0, hook.stderr)
         output = json.loads(hook.stdout)
         text = output.get('systemMessage', output.get('hookSpecificOutput', {}).get('additionalContext', ''))

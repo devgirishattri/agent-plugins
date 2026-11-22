@@ -21,6 +21,16 @@ This plugin lets Claude/Codex sessions running in different tmux panes message e
 
 `/send` enforces the contract. It **refuses** to send when the payload contains newlines or exceeds 1024 chars (configurable via `SESSION_CHAT_SEND_MAX_LEN`). If you hit that error, switch to `/dispatch`.
 
+## Sender and recipient identity
+
+The helpers take this pane's identity from tmux. Each helper follows its process ancestry to the tmux pane that owns it and reads that pane's name.
+
+- `/send`, `/dispatch`, `/reply` and `/broadcast` stop before any write when no pane owns the process, when the pane has no name, or when the name is not a session-chat label (letters, digits, `_`, `-`).
+- An inherited `SESSION_CHAT_PANE_NAME` must match the owning pane. A different value stops the helper. Do not set or change this variable to send as another pane.
+- The receive hook reads and claims queued messages only for the verified pane. Without a verified name it only annotates the live message already in the prompt. It writes nothing.
+- `/whoami` is display only. When tmux cannot be reached, it can show the inherited name. That fallback never authorizes a write.
+- If a sandbox denies the tmux socket or the process list, re-run the exact helper with approval. No environment variable replaces that approval.
+
 ## Recipient prerequisites (read before dispatching)
 
 A recipient pane receives messages only if **both** conditions are true:
@@ -231,7 +241,10 @@ Report the helper's result line as printed. These words describe transport statu
 ## Common failure modes
 
 - **"pane 'X' is at a shell prompt"** — the recipient's agent exited, and their shell would have executed the message. Restart the agent in that pane. Set `SESSION_CHAT_ALLOW_SHELL_TARGET=1` only for deliberate shell targets, e.g. tests.
-- **"This pane has no name"** — run `/whoami <name>` in the sending pane first.
+- **"The calling tmux pane has an empty or unsafe externally assigned name"** — run `/whoami <name>` in the sending pane first. A name with a dot, or with another character outside letters, digits, `_` and `-`, cannot send or receive messages.
+- **"SESSION_CHAT_PANE_NAME disagrees with the calling tmux pane"** — the pane was renamed after launch, or the variable was changed. Restore the launch name with `/whoami <name>`, or relaunch the pane. Do not override the variable.
+- **"No tmux pane owns the calling process or its ancestors"** — the helper ran outside the pane's process tree. Run it directly from the agent in that pane.
+- **"Cannot resolve the calling tmux pane"** or **"Cannot read the calling process ancestry"** — tmux or the process list could not be reached. If the message names `Operation not permitted`, re-run the exact command with approval.
 - **"No pane named X"** — run `/panes all` to see registered names across tmux sessions. The recipient might not have run `/whoami`.
 - **"Multiple panes named X"** — duplicate names exist; rename one with `/whoami` in that pane.
 - **"did not land within Xms after N attempts"** — the recipient stayed busy through all retries. The message is **not lost**. It is in the recipient's durable inbox and waits for an eligible receiver hook (the sender reports "Queued …"). To make more sends land *live*, raise `SESSION_CHAT_VERIFY_TIMEOUT_MS` or `SESSION_CHAT_SEND_RETRIES`.

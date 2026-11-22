@@ -241,13 +241,12 @@ set_pane_name() {
   tmux set-option -p -t "$pane_id" @name "$name"
 }
 
-# get_pane_name normally swallows tmux's stderr so callers get a clean
-# empty-string result, but a silent "no name" is indistinguishable from tmux
-# failing to reach the pane at all (wrong/stale socket, dead server). Its
-# stderr is captured to a per-process file instead of a plain variable
-# because callers invoke it as `x=$(get_my_name)` — a command-substitution
-# subshell — so a variable assigned inside get_pane_name never makes it back
-# to the caller's shell. `$$` (unlike `$BASHPID`) stays fixed across that
+# A tmux query that swallows its stderr makes "no result" indistinguishable
+# from tmux failing to reach the server at all (wrong/stale socket, dead
+# server). The stderr is captured to a per-process file instead of a plain
+# variable because callers run the query as `x=$(...)` — a command-substitution
+# subshell — so a variable assigned inside it never makes it back to the
+# caller's shell. `$$` (unlike `$BASHPID`) stays fixed across that
 # subshell, so the file path below is predictable from either side. That
 # predictability is only safe inside a private (0700), ownership-checked
 # directory — a bare predictable path directly under the world-writable
@@ -267,7 +266,7 @@ _pane_name_scratch_dir() {
 
 # Per-tag stderr capture file inside the private scratch dir — one file per
 # (tag, process) so unrelated tmux calls in the same process (e.g. the
-# self-name query in get_my_name vs. the pane search in resolve_pane) don't
+# session query in broadcast vs. the pane search in resolve_pane) don't
 # clobber each other's captured stderr.
 _tmux_err_file() {
   local tag="${1:-tmux}"
@@ -298,7 +297,7 @@ _pop_tmux_err() {
 # On failure (nonzero exit OR anything on stderr): <stdout_var>="" (the data
 # output is CLEARED so callers cannot accidentally treat a denial as empty
 # data), <err_var>=the captured stderr, rc 1. Callers classify <err_var> with
-# tmux_err_detail / pane_name_err_detail and surface it.
+# tmux_err_detail and surface it.
 #
 # Primary path routes stderr to a private per-tag file. If that private scratch
 # dir is unavailable, the fallback still captures stderr via 2>&1 (folded into
@@ -329,59 +328,103 @@ tmux_capture_checked() {
   return 0
 }
 
-get_pane_name() {
-  local pane_id="$1" err_file
-  if err_file="$(_tmux_err_file get-pane-name)"; then
-    tmux display-message -p -t "$pane_id" '#{@name}' 2>"$err_file"
-  else
-    tmux display-message -p -t "$pane_id" '#{@name}' 2>/dev/null
+# Verified caller identity. The body below is the reviewed shared fragment
+# shared/shell/pane-actor.sh, packaged inline by
+# scripts/package-shared-helpers.py (--write --provider claude). Do not edit
+# it here. It prints the @name of the tmux pane that owns this process or one
+# of its ancestors and returns non-zero when no such pane can be verified.
+#   (no option)  the verified name; an unnamed or unsafely named pane fails
+#   --with-id    "<name><TAB><pane id>" for outbound envelopes
+#   --read-only  display use only: an unnamed verified pane prints nothing and
+#                succeeds, and SESSION_CHAT_PANE_NAME is accepted alone only
+#                when tmux itself cannot be reached
+# SESSION_CHAT_PANE_NAME is never an identity source for a write: a value that
+# disagrees with the owning pane is refused.
+resolve_pane_actor() {
+  local panes actor pid=$$ parent pane_pid pane_id record
+  local claimed=${SESSION_CHAT_PANE_NAME:-}
+  if ! panes=$(tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>&1); then
+    if [ "${1:-}" = --read-only ] && [[ "$claimed" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      printf '%s\n' "$claimed"
+      return 0
+    fi
+    echo "ERROR: Cannot resolve the calling tmux pane: $panes" >&2
+    case "$panes" in
+      *'Operation not permitted'*|*'Permission denied'*)
+        echo 'Re-run this command escalated/approved to access the tmux socket.' >&2 ;;
+    esac
+    return 1
   fi
+  while [ "$pid" -gt 1 ]; do
+    while read -r pane_pid pane_id; do
+      [ "$pane_pid" = "$pid" ] || continue
+      [[ "$pane_id" =~ ^%[0-9]+$ ]] || break
+      # Read the name only for the matched pane. Recheck its PID in the
+      # same response in case the pane was respawned during the walk.
+      record=$(tmux display-message -p -t "$pane_id" '#{pane_pid} #{@name}') || return 1
+      if [[ "$record" != "$pid "* ]]; then
+        echo 'ERROR: The calling tmux pane changed while resolving its actor.' >&2
+        return 1
+      fi
+      actor=${record#* }
+      if [ -n "$claimed" ] && [ "$claimed" != "$actor" ]; then
+        echo 'ERROR: SESSION_CHAT_PANE_NAME disagrees with the calling tmux pane.' >&2
+        return 1
+      fi
+      if [ "${1:-}" = --read-only ] && [ -z "$actor" ]; then
+        return 0
+      fi
+      if ! [[ "$actor" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo 'ERROR: The calling tmux pane has an empty or unsafe externally assigned name.' >&2
+        return 1
+      fi
+      if [ "${1:-}" = --with-id ]; then
+        printf '%s\t%s\n' "$actor" "$pane_id"
+      else
+        printf '%s\n' "$actor"
+      fi
+      return 0
+    done <<< "$panes"
+    if ! parent=$(/bin/ps -o ppid= -p "$pid" 2>&1); then
+      echo "ERROR: Cannot read the calling process ancestry: $parent" >&2
+      case "$parent" in
+        *'Operation not permitted'*|*'Permission denied'*)
+          echo 'Re-run this command escalated/approved to read process ancestry.' >&2 ;;
+      esac
+      return 1
+    fi
+    parent=${parent//[[:space:]]/}
+    [[ "$parent" =~ ^[0-9]+$ ]] && [ "$parent" != "$pid" ] || break
+    pid=$parent
+  done
+  echo 'ERROR: No tmux pane owns the calling process or its ancestors.' >&2
+  return 1
 }
 
+# The verified name for a message write or a receive (pass --with-id for
+# "<name><TAB><pane id>"). resolve_pane_actor accepts the pane-name grammar the
+# workspace and the scheduler use; a message writer keeps the narrower
+# session-chat label grammar, because the name becomes a dispatch file name and
+# a queue key. A verified name outside that grammar is refused here, before any
+# write. Display-only callers (get-my-name.sh) call resolve_pane_actor
+# --read-only themselves.
 get_my_name() {
-  # SESSION_CHAT_PANE_NAME lets a caller assert its own identity directly,
-  # bypassing the tmux self-query. Escape hatch for environments (e.g. some
-  # sandboxed exec contexts) where `tmux display-message -t $TMUX_PANE` on
-  # one's own pane can fail even though the pane genuinely has a name.
-  if [ -n "${SESSION_CHAT_PANE_NAME:-}" ]; then
-    printf '%s' "$SESSION_CHAT_PANE_NAME"
-    return 0
+  local result
+  result=$(resolve_pane_actor "$@") || return 1
+  if ! validate_label "${result%%$'\t'*}" 2>/dev/null; then
+    echo 'ERROR: The calling tmux pane has an empty or unsafe externally assigned name.' >&2
+    return 1
   fi
-  get_pane_name "${TMUX_PANE:-}"
+  printf '%s\n' "$result"
 }
 
-pop_pane_name_err() {
-  _pop_tmux_err get-pane-name
-}
-
-# Format the "(tmux: ...)" suffix for a tmux-command error, given the stderr
-# _pop_tmux_err returned. "Operation not permitted" is the signature of a
-# sandboxed exec (e.g. a Codex sandbox profile) denying the tmux socket
-# connect() outright — confirmed live 2026-07-09 (REPRO-0162, self-name query;
-# and again via fresh-session data hitting resolve_pane instead): the exact
-# same command succeeds on a later, differently-
-# classified invocation, so this is not a fixable state within the current
-# process — the caller needs to re-run the whole command escalated/approved,
-# not just retry the tmux call.
-pane_name_err_detail() {
-  local tmux_err="$1"
-  [ -n "$tmux_err" ] || return 0
-  local hint=""
-  case "$tmux_err" in
-    *"Operation not permitted"*|*"Permission denied"*)
-      hint=" — looks like a sandboxed exec denied the tmux socket; re-run this command escalated/approved, or set SESSION_CHAT_PANE_NAME to skip self-name resolution"
-      ;;
-  esac
-  printf ' (tmux: %s)%s' "$tmux_err" "$hint"
-}
-
-# General-purpose sibling of pane_name_err_detail for callers that ENUMERATE
-# panes (list-panes, pane-health, broadcast) or resolve the current session,
-# rather than resolve one pane by name. Same socket-denial classification
-# ("Operation not permitted" or "Permission denied"), minus the self-name
-# SESSION_CHAT_PANE_NAME escape hatch — that hint is meaningless when you are
-# listing every pane rather than resolving your own. Callers use this to turn a
-# silently-empty tmux result under sandbox denial into a loud, actionable error
+# Format the "(tmux: ...)" suffix for a tmux-command error, given the captured
+# stderr. "Operation not permitted" or "Permission denied" is the signature of
+# a sandboxed exec denying the tmux socket connect() outright: it is not
+# fixable inside the current process, so the caller must re-run the whole
+# command escalated/approved, not just retry the tmux call. Callers that
+# enumerate panes, resolve a pane by name or resolve the current session use
+# this to turn a silently-empty tmux result into a loud, actionable error
 # instead of falsely reporting "no named panes".
 tmux_err_detail() {
   local tmux_err="$1"
@@ -429,7 +472,7 @@ resolve_pane() {
     # cause when we have one instead of always implying the target is
     # unregistered — confirmed live 2026-07-09 in fresh Codex sessions: this
     # was the actual, and only, failure point in 4/4 attempts.
-    echo "ERROR: No pane named '$label'. Run /panes all to see all available named panes.$(pane_name_err_detail "$tmux_err")" >&2
+    echo "ERROR: No pane named '$label'. Run /panes all to see all available named panes.$(tmux_err_detail "$tmux_err")" >&2
     return 1
   fi
   if [ "$count" -gt 1 ]; then
@@ -1693,20 +1736,14 @@ SEND_MAX_LEN="${SESSION_CHAT_SEND_MAX_LEN:-1024}"
 send_message() {
   local target_name="$1"
   local message="$2"
-  local my_name tmux_err
-  my_name=$(get_my_name)
-  tmux_err=$(pop_pane_name_err)
-  if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run /whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
-    return 1
-  fi
-  # The sender name is written raw into the dispatch file name and durable
-  # records; refuse an externally/manually-set @name with path metacharacters
-  # before any write, so a hostile @name (slashes, ..) can't steer a file path.
-  if ! validate_label "$my_name" 2>/dev/null; then
-    echo "ERROR: this pane's name ('$my_name') has unsafe characters; rename it with /whoami <name> (letters, digits, _, - only) before sending." >&2
-    return 1
-  fi
+  # The sender is the tmux pane that owns this process, verified before any
+  # write. Its name is written raw into the dispatch file name and durable
+  # records, and its pane id into the envelope; get_my_name refuses an
+  # unnamed pane, a name outside the session-chat label grammar, and a
+  # SESSION_CHAT_PANE_NAME that disagrees with the owning pane.
+  local origin my_name origin_pane
+  origin=$(get_my_name --with-id) || return 1
+  IFS=$'\t' read -r my_name origin_pane <<< "$origin"
   # Length / newline guard: tmux send-keys -l truncates large literal pastes
   # and the first \n submits a partial prompt. Refuse and steer to /dispatch.
   case "$message" in
@@ -1736,7 +1773,7 @@ send_message() {
     echo "ERROR: cannot queue message — recipient messages dir is unsafe (symlink/unowned) or unavailable: $target_messages_dir" >&2
     return 1
   fi
-  local formatted="[from:${my_name} pane:${TMUX_PANE} id:${uid}] ${message} [id:${uid}]"
+  local formatted="[from:${my_name} pane:${origin_pane} id:${uid}] ${message} [id:${uid}]"
   local send_rc=0
   send_text "$target_pane" "$formatted" "id:${uid}" || send_rc=$?
   if [ "$send_rc" -eq 0 ]; then
@@ -1766,20 +1803,14 @@ dispatch_message() {
   DISPATCH_MESSAGE_ID=""
   local target_name="$1"
   local message="$2"
-  local my_name tmux_err
-  my_name=$(get_my_name)
-  tmux_err=$(pop_pane_name_err)
-  if [ -z "$my_name" ]; then
-    echo "ERROR: This pane has no name. Run /whoami <name> first.$(pane_name_err_detail "$tmux_err")" >&2
-    return 1
-  fi
-  # The sender name is written raw into the dispatch file name and durable
-  # records; refuse an externally/manually-set @name with path metacharacters
-  # before any write, so a hostile @name (slashes, ..) can't steer a file path.
-  if ! validate_label "$my_name" 2>/dev/null; then
-    echo "ERROR: this pane's name ('$my_name') has unsafe characters; rename it with /whoami <name> (letters, digits, _, - only) before sending." >&2
-    return 1
-  fi
+  # The sender is the tmux pane that owns this process, verified before any
+  # write. Its name is written raw into the dispatch file name and durable
+  # records, and its pane id into the envelope; get_my_name refuses an
+  # unnamed pane, a name outside the session-chat label grammar, and a
+  # SESSION_CHAT_PANE_NAME that disagrees with the owning pane.
+  local origin my_name origin_pane
+  origin=$(get_my_name --with-id) || return 1
+  IFS=$'\t' read -r my_name origin_pane <<< "$origin"
   local target_pane
   target_pane=$(resolve_pane "$target_name") || return 1
   ensure_agent_target "$target_name" "$target_pane" || return 1
@@ -1845,7 +1876,7 @@ dispatch_message() {
   # live and queued dispatches uniformly.
   local send_rc=0
   send_text "$target_pane" \
-    "[from:${my_name} pane:${TMUX_PANE} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" \
+    "[from:${my_name} pane:${origin_pane} msg:${msg_file} id:${uid}] dispatch (${line_count} lines) — read msg file for full task id:${uid}" \
     "id:${uid}" || send_rc=$?
   if [ "$send_rc" -eq 0 ]; then
     dequeue_message_id "$target_name" "$uid" "$target_messages_dir"

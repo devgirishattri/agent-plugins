@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Unit fixture: the test driver is the pane's process. Its descendants run
+# the real resolver and walk real process parents. Live tests use private tmux.
+case "$1|${!#}" in
+  'list-panes|#{pane_pid} #{pane_id}')
+    printf '%s %%1\n' "${TEST_PANE_PID:?}" ;;
+  'display-message|#{pane_pid} #{@name}')
+    [ "${4:-}" = '%1' ] || exit 1
+    printf '%s %s\n' "${TEST_PANE_PID:?}" "${TEST_PANE_NAME:?}" ;;
+  'display-message|#{@name}')
+    printf '%s\n' "${TEST_PANE_NAME:?}" ;;
+  *) exit 1 ;;
+esac

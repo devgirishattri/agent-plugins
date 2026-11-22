@@ -505,26 +505,42 @@ class Workers(Base):
 
     def test_10b_session_chat_delivery(self):
         sender = REPO_ROOT / 'plugins/session-chat/scripts/send-message.sh'
-        if not sender.exists():
-            self.skipTest('plugins/session-chat/scripts/send-message.sh is not in this checkout')
+        if not sender.is_file():
+            self.skipTest('cross-plugin delivery requires the sibling session-chat source tree')
+        repo = REPO_ROOT.parent if REPO_ROOT.name == 'codex' else REPO_ROOT
+        run_in_pane = runpy.run_path(str(repo / 'scripts/tmux_test_fixtures.py'))['run_in_pane']
         for show, checkout in [(False, 'web'), (True, 'vue3')]:
             r = self.worker(checkout=checkout, show=show, owner='sample-master')
             self.assertEqual(r.returncode, 0, self.out(r))
-        got = {}
-        for show, checkout in [(False, 'web'), (True, 'vue3')]:
+        master = self.pane('sample-master')['id']
+        transport = self.tmux('display-message', '-p', '-t', master, '#{socket_path},#{pid},0').strip()
+        messages = self.root / '.tmp/messages'
+        env = dict(self.env, TMUX=transport, SESSION_CHAT_PANE_NAME='sample-master',
+                   SESSION_CHAT_ALLOW_SHELL_TARGET='1', SESSION_CHAT_TARGET_MESSAGES_DIR=str(messages))
+        deliveries = []
+        for checkout in ('web', 'vue3'):
             name = 'sample-%s-executor' % checkout
-            # send-message.sh must run "inside" the server: TMUX names its socket, TMUX_PANE is the sender.
-            client = self.tmux('display-message', '-p', '-t', self.pane('sample-master')['id'], '#{socket_path},#{pid},#{session_id}').strip()
-            e = dict(self.env, TMUX=client, TMUX_PANE=self.pane('sample-master')['id'], SESSION_CHAT_ALLOW_SHELL_TARGET='1', SESSION_CHAT_TARGET_MESSAGES_DIR=str(self.root / '.tmp/messages'))
-            r = subprocess.run(['bash', str(sender), name, 'hello-%s' % checkout], env=e, capture_output=True, text=True, timeout=60)
-            time.sleep(1)
-            screen = self.tmux('capture-pane', '-p', '-t', self.pane(name)['id'])
-            got[show] = (r.returncode, 'hello-%s' % checkout in screen, r.stdout.split(' to ')[0], r.stderr[-300:])
-        if got[False][0] not in (0, 3, 4) or got[True][0] not in (0, 3, 4):
-            self.skipTest('send-message.sh could not deliver on this private server: %r' % (got,))
-        self.assertEqual(got[False][0], got[True][0], got)
-        self.assertEqual(got[False][1], got[True][1], got)
-        self.assertEqual(got[False][2], got[True][2], got)
+            message = 'hello-%s' % checkout
+            result = run_in_pane(self.tmux, master, ['bash', str(sender), name, message], env, self.root, timeout=60)
+            self.assertIn(result.returncode, (0, 4), self.out(result))
+            sent = (messages / 'sent-log.tsv').read_text().splitlines()[-1].split('\t')
+            self.assertEqual(sent[2:5], ['sample-master', name, 'send'])
+            self.assertEqual(sent[6], message)
+            uid, delivery = sent[1], sent[5]
+            self.assertRegex(uid, r'^[0-9a-f]{16}$')
+            if delivery == 'live':
+                self.assertEqual(result.returncode, 0, self.out(result))
+                screen = self.tmux('capture-pane', '-p', '-J', '-t', self.pane(name)['id'])
+                self.assertIn('id:%s' % uid, screen)
+                self.assertIn(message, screen)
+            else:
+                self.assertIn(delivery, ('queued', 'unsubmitted'), sent)
+                self.assertEqual(result.returncode, 4 if delivery == 'unsubmitted' else 0, self.out(result))
+                queue = (messages / 'queue' / (name + '.tsv')).read_text().splitlines()
+                self.assertTrue(any(row.split('\t')[:3] == [uid, 'send', 'sample-master']
+                                    and row.split('\t')[-1] == message for row in queue), queue)
+            deliveries.append(delivery)
+        self.assertEqual(deliveries[0], deliveries[1], deliveries)
 
     def test_11_stale_records(self):
         r = self.worker(owner='sample-master')

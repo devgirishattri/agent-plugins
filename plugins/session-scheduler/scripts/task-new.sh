@@ -6,6 +6,11 @@ set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_jq || exit 1
+# The assigner is resolved before the first write. A caller with no pane
+# identity in its environment is anonymous ('?'); a claimed pane identity is
+# verified against the tmux pane that owns this process and a failure stops
+# here, changing nothing (see current_pane_name in lib.sh).
+ASSIGNER=$(current_pane_name) || exit 1
 ensure_dirs || exit 1
 
 USAGE="Usage: task-new.sh <name> [--meta k=v ...] [--stage NAME] [--workflow ID] [--reviewer PANE] [--depends-on id1,id2]"
@@ -114,7 +119,6 @@ if ! ID=$(generate_task_id); then
   echo "ERROR: task NOT created — could not generate a task id (needs od reading /dev/urandom; there is no fallback)." >&2
   exit 1
 fi
-ASSIGNER=$(current_pane_name)
 NOW=$(iso_now)
 
 JSON=$(jq -n \

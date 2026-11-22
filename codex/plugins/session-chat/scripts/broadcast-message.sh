@@ -58,19 +58,15 @@ fi
 
 ensure_tmux
 
-MY_NAME=$(get_my_name)
-TMUX_ERR=$(pop_pane_name_err)
-if [ -z "$MY_NAME" ]; then
-  report_current_pane_name_failure "$TMUX_ERR"
-  exit 1
-fi
+ORIGIN=$(get_my_name --with-id) || exit 1
+IFS=$'\t' read -r MY_NAME ORIGIN_PANE <<< "$ORIGIN"
 
 if [ "$SCOPE" = "all" ]; then
   LIST_ARGS=(-a)
 else
   CURRENT_SESSION=$(tmux_capture_checked broadcast-session \
     "Cannot determine the current tmux session" \
-    display-message -p -t "${TMUX_PANE:-}" '#{session_name}') || exit $?
+    display-message -p -t "$ORIGIN_PANE" '#{session_name}') || exit $?
   LIST_ARGS=(-s -t "$CURRENT_SESSION")
 fi
 
@@ -82,7 +78,7 @@ TARGETS=()
 SEEN=""
 while IFS=$'\t' read -r name pane_id; do
   [ -n "$name" ] || continue
-  [ "$pane_id" = "${TMUX_PANE:-}" ] && continue
+  [ "$pane_id" = "$ORIGIN_PANE" ] && continue
   [ "$name" = "$MY_NAME" ] && continue
   # shellcheck disable=SC2254
   case "$name" in

@@ -13,7 +13,7 @@ echo "scheduler dir: $SCHEDULER_DIR"
 echo "tasks dir: $TASKS_DIR"
 echo "prompts dir: $PROMPTS_DIR"
 echo "handoffs dir: $HANDOFFS_DIR ($(find "$HANDOFFS_DIR" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ') file(s))"
-echo "pane name: $(current_pane_name)"
+echo "pane name: $(resolve_pane_actor --read-only)"
 echo "context dir: ${SESSION_CONTEXT_HOME:-(not set)}"
 
 if CHAT_ROOT=$(session_chat_root 2>/dev/null); then

@@ -234,6 +234,230 @@ as_master() { expect "$1" master "$MASTER_PANE" "$ROOT" "$CONFIG" enforce "$2" "
 as_master_v3() { expect "$1" master "$MASTER_PANE" "$ROOT" "$V3_CONFIG" enforce "$2" "$3" SESSION_WORKSPACE_GUARDS_JSON="$V3_GUARDS"; }
 as_exec_v3() { expect "$1" executor "$EXEC_PANE" "$CHILD" "$V3_CONFIG" enforce "$2" "$3" SESSION_WORKSPACE_GUARDS_JSON="$V3_GUARDS"; }
 
+echo "== strict-v1 helper launches, protected roots, and child write destinations =="
+# All commands in this section are data passed to --decision-json.
+POLICY_ALLOW='.active and .decision == "allow"'
+HELPER_DENY='.decision == "deny" and (.rule == "helper.launch" or .rule == "helper.segment")'
+ROOT_DENY='.decision == "deny" and .rule == "shell.project_root"'
+LEDGER_DENY='.decision == "deny" and .rule == "orchestrator.state_write"'
+CHILD_DENY='.decision == "deny" and .rule == "orchestrator.child_write"'
+DONE_COMMAND="bash $SCHED/task-done.sh task-1-abcdef12 \"AUDIT: clean\""
+as_review "selected literal task-done from reviewer" "$(bash_payload "$DONE_COMMAND")" "$POLICY_ALLOW"
+expect "selected task-done with the reviewer's injected name" reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce \
+  "$(bash_payload "$DONE_COMMAND")" "$POLICY_ALLOW" SESSION_CHAT_PANE_NAME="$REVIEW_PANE"
+as_master "same literal task-done from orchestrator" "$(bash_payload "$DONE_COMMAND")" '.decision == "deny" and .rule == "coordination.write"'
+as_master "bare identity assignment before task-done" "$(bash_payload "SESSION_CHAT_PANE_NAME=$REVIEW_PANE $DONE_COMMAND")" "$HELPER_DENY"
+for body in "$DONE_COMMAND" "SESSION_CHAT_PANE_NAME=$REVIEW_PANE $DONE_COMMAND"; do
+  for launcher in 'bash -c' 'sh -c' 'zsh -c' 'bash -lc' eval; do
+    as_master "indirect helper via $launcher in $body" "$(bash_payload "$launcher '$body'")" "$HELPER_DENY"
+  done
+  as_master "env split-string with helper in $body" "$(bash_payload "env -S '$body'")" \
+    '.decision == "deny" and (.rule == "shell.wrapper" or (.rule | startswith("helper.")))'
+done
+as_review "even the reviewer must run the helper as a literal segment" "$(bash_payload "bash -c '$DONE_COMMAND'")" "$HELPER_DENY"
+as_master "an inline shell with ordinary work is allowed" "$(bash_payload "sh -c 'printf ready'")" "$POLICY_ALLOW"
+as_master "a message may discuss a selected helper" "$(bash_payload "bash $SEND $REVIEW_PANE 'Review $SCHED/task-done.sh'")" "$POLICY_ALLOW"
+for command in "cd '$SCHED' && bash task-done.sh t check" \
+    "cd '$SCHED' && SESSION_CHAT_PANE_NAME=$REVIEW_PANE bash task-done.sh t check" \
+    "env -C '$SCHED' bash task-done.sh t check" \
+    "h='$SCHED/task-done.sh'; bash \"\$h\" t check" \
+    "for h in '$SCHED/task-done.sh'; do bash \"\$h\" t check; done" \
+    "find '$SCHED' -name task-done.sh -exec bash {} t check +" \
+    "tmux run-shell 'bash $SCHED/task-done.sh t check'" \
+    "source <(echo 'bash $SCHED/task-done.sh t check')"; do
+  as_master "indirect helper source in $command" "$(bash_payload "$command")" "$HELPER_DENY"
+done
+as_exec "process substitution cannot supply a selected helper to source" \
+  "$(bash_payload "source <(echo 'bash $SCHED/task-done.sh t check')")" "$HELPER_DENY"
+as_master "list the cached scripts directory" "$(bash_payload "cd '$SCHED' && ls")" "$POLICY_ALLOW"
+as_master "find a helper by name without launching it" "$(bash_payload "find '$SCHED' -name task-done.sh")" "$POLICY_ALLOW"
+as_master "read a file named by a variable" "$(bash_payload "h='$SCHED/task-done.sh'; cat \"\$h\"")" "$POLICY_ALLOW"
+as_master "an assignment printed as data does not bind a script variable" \
+  "$(bash_payload "h=local.sh; echo 'h=$SCHED/task-done.sh'; bash \"\$h\"")" "$POLICY_ALLOW"
+as_master "inspect the names of tmux panes" "$(bash_payload "tmux list-panes -a -F '#{pane_id} #{@name}'")" "$POLICY_ALLOW"
+as_master "source input unrelated to a cached helper" "$(bash_payload "source <(printf 'true')")" "$POLICY_ALLOW"
+
+LEDGER_PATH="$ROOT/.tmp/scheduler/tasks"
+LEDGER_FILE="$LEDGER_PATH/t.json"
+mkdir -p "$LEDGER_PATH" "$TMPROOT/output" "$TMPROOT/user-home"
+printf '{}\n' > "$LEDGER_FILE"
+printf '{}\n' > "$CHILD/package.json"
+printf '{}\n' > "$TMPROOT/output/x.json"
+ln -s "$CHILD" "$TMPROOT/output-child"
+for feeder in xargs parallel; do
+  as_master "ledger filename sent to $feeder" "$(bash_payload "echo $LEDGER_FILE | $feeder rm")" "$LEDGER_DENY"
+  as_master "ledger directory sent to $feeder" "$(bash_payload "echo $LEDGER_PATH | $feeder ls")" "$LEDGER_DENY"
+  as_master "unrelated filename sent to $feeder" "$(bash_payload "echo $TMPROOT/output/t.json | $feeder rm")" "$POLICY_ALLOW"
+done
+as_master "a pipeline reading the ledger" "$(bash_payload "cat $LEDGER_FILE | wc -c")" "$POLICY_ALLOW"
+as_master "inline Python names the ledger file" "$(bash_payload "python3 -c 'open(\"$LEDGER_FILE\",\"w\")'")" "$LEDGER_DENY"
+for interpreter in 'python -c' 'node -e' 'perl -e' 'ruby -e'; do
+  as_master "$interpreter names a ledger file" "$(bash_payload "$interpreter '\"$LEDGER_FILE\"'")" "$LEDGER_DENY"
+  as_master "$interpreter names a sibling with the same prefix" "$(bash_payload "$interpreter '\"${LEDGER_PATH}-archive/t.json\"'")" "$POLICY_ALLOW"
+done
+as_master "interpreter reads an unquoted heredoc mentioning the ledger" \
+  "$(bash_payload "python3 - <<PY
+open(\"$LEDGER_FILE\", \"w\")
+PY")" "$LEDGER_DENY"
+as_master "interpreter reads an unrelated unquoted heredoc" \
+  "$(bash_payload "python3 - <<PY
+print(\"$TMPROOT/output/t.json\")
+PY")" "$POLICY_ALLOW"
+
+as_master "shell redirect into a non-peer ledger" "$(bash_payload "echo x > $LEDGER_FILE")" "$LEDGER_DENY"
+as_master "remove a record after changing into the ledger" "$(bash_payload "cd $LEDGER_PATH && rm t.json")" "$LEDGER_DENY"
+as_master "copy a record out of the ledger" "$(bash_payload "cp $LEDGER_FILE $TMPROOT/output/x.json")" "$POLICY_ALLOW"
+as_master "native edit inside the non-peer ledger" "$(edit_payload "$LEDGER_FILE")" "$LEDGER_DENY"
+as_master "native edit inside a sibling directory" "$(edit_payload "${LEDGER_PATH}-archive/t.json")" "$POLICY_ALLOW"
+
+for role in master executor reviewer; do
+  case "$role" in
+    master) pane="$MASTER_PANE"; cwd="$ROOT" ;;
+    executor) pane="$EXEC_PANE"; cwd="$CHILD" ;;
+    reviewer) pane="$REVIEW_PANE"; cwd="$CHILD" ;;
+  esac
+  for destructive in "rm -rf '$ROOT'" "rm -rf '$TMPROOT'" 'rm -rf ~' 'rm -rf "$HOME"' \
+      "mv '$ROOT' '$TMPROOT/output/moved'" "rmdir '$ROOT'" "find '$ROOT' -delete" \
+      "cd '$CHILD' && rm -rf .." "command env -C '$CHILD' rm -rf .."; do
+    expect "$role protects project and home from $destructive" "$role" "$pane" "$cwd" "$CONFIG" enforce \
+      "$(bash_payload "$destructive")" "$ROOT_DENY" HOME="$TMPROOT/user-home"
+  done
+done
+as_master "relative removal resolves from the shell tool's working directory" \
+  "$(jq -cn --arg cwd "$TMPROOT/output" '{tool_name:"shell",tool_input:{command:"rm -rf ../project",workdir:$cwd}}')" "$ROOT_DENY"
+for control in 'rm -rf build' 'mv build build-old' 'rmdir build' 'find build -delete'; do
+  as_master "ordinary project subdirectory in $control" "$(bash_payload "$control")" "$POLICY_ALLOW"
+done
+as_exec "executor removes an ordinary file in its checkout" "$(bash_payload 'rm generated.txt')" "$POLICY_ALLOW"
+as_review "reviewer reads its own checkout" "$(bash_payload 'ls .')" "$POLICY_ALLOW"
+
+# The commands are strings for the decision hook. No removal command runs.
+for role_case in as_master as_exec as_review; do
+  for indirect in "find '$ROOT' -maxdepth 0 -exec rm -rf '{}' +" \
+      "find '$TMPROOT' -maxdepth 0 -exec mv '{}' '$TMPROOT/output/moved' \\;" \
+      'find "$HOME" -maxdepth 0 -execdir rmdir {} \;' \
+      "printf '%s\\0' '$ROOT' | xargs -0 -n 1 /bin/rm -rf --" \
+      "printf '%s\\n' '$TMPROOT' | xargs -I ITEM mv ITEM '$TMPROOT/output/moved'" \
+      "find '$ROOT' -maxdepth 0 -print0 | xargs -0 rmdir" \
+      'echo "$HOME" | parallel -j 2 rmdir {}' \
+      "parallel 'rm -rf {}' ::: '$ROOT'" \
+      "parallel mv '{}' '$TMPROOT/output/moved' ::: '$ROOT'"; do
+    HOME="$TMPROOT/user-home" "$role_case" "removal through a find action or operand feeder: $indirect" "$(bash_payload "$indirect")" "$ROOT_DENY"
+  done
+done
+for ordinary in "find '$ROOT' -maxdepth 0 -exec ls -d '{}' \\;" \
+    "find build -exec rm -rf '{}' +" "find . -maxdepth 1 -type f -exec rm -f '{}' +" \
+    "find build -exec mv '{}' '$ROOT' \\;" \
+    "echo '$ROOT' | xargs -I ITEM ls -d ITEM" "echo ordinary | xargs rm -f" \
+    "find . -maxdepth 1 -type f -print0 | xargs -0 rm -f" \
+    "parallel ls -d '{}' ::: '$ROOT'" "parallel rm -f '{}' ::: build/output" \
+    "parallel mv '{}' '$ROOT' ::: build/output"; do
+  as_master "find and feeder read or ordinary removal: $ordinary" "$(bash_payload "$ordinary")" "$POLICY_ALLOW"
+done
+
+for child_read in "jq . $CHILD/package.json > $TMPROOT/output/x.json" \
+    "cp $CHILD/package.json $TMPROOT/output/x.json" \
+    "for f in $CHILD/*.json; do wc -l \"\$f\"; done" \
+    "jq . $CHILD/package.json >/dev/null" "test -f $CHILD/package.json" "[ -f $CHILD/package.json ]" \
+    "until test -f $CHILD/package.json; do sleep 1; done" \
+    "echo \"\$(wc -l $CHILD/package.json)\"" "wc -l <(cat $CHILD/package.json)" \
+    "cd $CHILD && ls"; do
+  as_master "allow child read $child_read" "$(bash_payload "$child_read")" "$POLICY_ALLOW"
+done
+for child_write in "jq . $CHILD/package.json > $CHILD/generated.json" \
+    "cp $TMPROOT/output/x.json $CHILD/generated.json" \
+    "cp $CHILD/package.json $TMPROOT/output-child/generated.json" \
+    "for f in $CHILD/*.json; do echo x > \"\$f\"; done" \
+    "git -C $CHILD config" "git -C $CHILD config --get user.name" \
+    "git -C $CHILD config --list" "git -C $CHILD config user.name sample" "git -C $CHILD fetch"; do
+  as_master "refuse child write $child_write" "$(bash_payload "$child_write")" "$CHILD_DENY"
+done
+for chdir in cd pushd; do
+  for write in 'echo x > changed' 'git commit -m change' 'npm install' 'git push'; do
+    as_master "refuse $write after $chdir to child" "$(bash_payload "$chdir $CHILD && $write")" \
+      '.decision == "deny" and (.rule == "orchestrator.child_write" or .rule == "orchestrator.push")'
+  done
+done
+
+echo "== child paths in shell variables and brace groups =="
+for update in 'sed -i "" s/before/after/ "$entry"' 'perl -pi -e s/before/after/ "$entry"' \
+    'python3 format.py "$entry"' 'npx prettier --write "$entry"' 'git add "${entry}"' \
+    'make -C "$entry"' 'npm --prefix "$entry" install'; do
+  case "$update" in
+    make*|npm*) child_list="$CHILD"; outside_list="$TMPROOT/output" ;;
+    *) child_list="$CHILD/*.json"; outside_list="$TMPROOT/output/*.json" ;;
+  esac
+  as_master "loop binds child path used by $update" \
+    "$(bash_payload "for entry in $child_list; do $update; done")" "$CHILD_DENY"
+  as_master "loop binds unrelated path used by $update" \
+    "$(bash_payload "for entry in $outside_list; do $update; done")" "$POLICY_ALLOW"
+done
+for update in 'sed -i "" s/before/after/ "$entry"' 'custom-editor "${entry}"'; do
+  as_master "loop's final child path used after done by $update" \
+    "$(bash_payload "for entry in $CHILD/*.json; do :; done; $update")" "$CHILD_DENY"
+done
+as_master "unrelated scalar remains an allowed file operand outside children" \
+  "$(bash_payload 'touch "$file"')" "$POLICY_ALLOW"
+as_master "loop variable as a cp source with an outside destination" \
+  "$(bash_payload "for entry in $CHILD/*.json; do cp \"\$entry\" $TMPROOT/output/x.json; done")" "$POLICY_ALLOW"
+as_master "mutating command independent of the child loop variable" \
+  "$(bash_payload "for entry in $CHILD/*.json; do wc -l \"\$entry\"; done; touch $TMPROOT/output/x.json")" "$POLICY_ALLOW"
+as_master "single-quoted variable spelling is ordinary data" \
+  "$(bash_payload "for entry in $CHILD/*.json; do custom-editor '\$entry'; done")" "$POLICY_ALLOW"
+as_master "nested loop preserves the outer binding" \
+  "$(bash_payload "for entry in $CHILD/*.json; do for n in one; do custom-editor \"\$entry\"; done; done")" "$CHILD_DENY"
+as_master "substitution inherits the child loop binding" \
+  "$(bash_payload "for entry in $CHILD/*.json; do echo \"\$(custom-editor \"\$entry\")\"; done")" "$CHILD_DENY"
+as_master "nested groups and substitutions reading a child loop binding" \
+  "$(bash_payload "for entry in $CHILD/*.json; do { { wc -l \"\$entry\"; }; echo \"\$(wc -l \"\$entry\")\"; }; done")" "$POLICY_ALLOW"
+as_master "first group command invokes a helper through bash -c" \
+  "$(bash_payload "{ bash -c '$DONE_COMMAND'; }")" "$HELPER_DENY"
+as_master "first group command invokes a literal helper" "$(bash_payload "{ $DONE_COMMAND; }")" "$HELPER_DENY"
+as_master "first group command sets a helper identity" \
+  "$(bash_payload "{ SESSION_CHAT_PANE_NAME=$REVIEW_PANE $DONE_COMMAND; }")" "$HELPER_DENY"
+as_master "first group command removes the project" "$(bash_payload "{ rm -rf $ROOT; }")" "$ROOT_DENY"
+as_master "first command in a nested group removes the project cwd" "$(bash_payload '{ { rm -rf .; }; }')" "$ROOT_DENY"
+as_master "time applies the same floor inside a brace group" "$(bash_payload 'time { rm -rf .; }')" "$ROOT_DENY"
+as_master "time permits a group that reads a child" "$(bash_payload "time { wc -l $CHILD/package.json; }")" "$POLICY_ALLOW"
+as_master "a group tracks the directory of its first command" \
+  "$(bash_payload "{ cd $CHILD; touch changed; }")" "$CHILD_DENY"
+as_master "first group command names the ledger in inline code" \
+  "$(bash_payload "{ python3 -c 'open(\"$LEDGER_FILE\",\"w\")'; }")" "$LEDGER_DENY"
+as_master "nested groups read child paths and write outside" \
+  "$(bash_payload "{ { wc -l $CHILD/package.json; }; cp $CHILD/package.json $TMPROOT/output/x.json; }")" "$POLICY_ALLOW"
+as_master "quoted braces and bare brace arguments are data" \
+  "$(bash_payload "printf '%s' '{' '}' '{}' { }")" "$POLICY_ALLOW"
+
+echo "== shell programs supplied on stdin or as inline arguments =="
+for body in "cd '$CHILD' && touch generated" "touch '$CHILD/generated'" \
+    "echo changed > '$CHILD/generated'" "git -C '$CHILD' commit -m change"; do
+  as_master "child write in a shell heredoc: $body" "$(bash_payload "sh <<EOF
+$body
+EOF")" "$CHILD_DENY"
+done
+for command in "sh -c 'touch $CHILD/generated'" "eval 'touch $CHILD/generated'" \
+    "bash <<< 'touch $CHILD/generated'" "echo 'touch $CHILD/generated' | sh" \
+    "bash -c 'cd $CHILD && npm install'"; do
+  as_master "child write in a visible shell program: $command" "$(bash_payload "$command")" "$CHILD_DENY"
+done
+for command in "bash -s <<'EOF'
+rm -rf '$ROOT'
+EOF" "bash <<< 'rm -rf $ROOT'" "echo 'rm -rf $ROOT' | sh" \
+    "printf '%s\\n' 'rm -rf $ROOT' | cat | sh"; do
+  as_master "protected removal in a stdin shell: $command" "$(bash_payload "$command")" "$ROOT_DENY"
+  as_exec "executor also protects the root in a stdin shell: $command" "$(bash_payload "$command")" "$ROOT_DENY"
+done
+for command in "sh <<EOF
+ls '$CHILD'
+EOF" "echo 'wc -l $CHILD/package.json' | sh" "bash <<< 'rm -rf build'" \
+    "cat <<'EOF'
+rm -rf '$ROOT'
+EOF" "bash tool.sh <<'EOF'
+touch '$CHILD/generated'
+EOF"; do
+  as_master "shell reads and literal stdin data: $command" "$(bash_payload "$command")" "$POLICY_ALLOW"
+done
+
 echo "== decision object shape =="
 OUT="$(run_policy reviewer "$REVIEW_PANE" "$CHILD" "$CONFIG" enforce "$(edit_payload src/file.ts)")"
 if printf '%s' "$OUT" | jq -e 'keys == ["active","decision","diagnostic","mode","pane","profile","reason","role","rule","tool"]' >/dev/null 2>&1; then
@@ -1030,8 +1254,8 @@ as_master "literal gh operand to read command is unchanged" "$(bash_payload 'ech
 # but the exact same spelling remains a path for ordinary commands.
 as_master "gh identifier colliding with child path" "$(bash_payload 'gh pr list -R component-a/src')" "$GH_ALLOW"
 as_master "non-gh colliding child path still denied" "$(bash_payload 'rm component-a/src')" '.decision == "deny" and .rule == "orchestrator.child_write"'
-as_master "git stderr redirect unchanged" "$(bash_payload 'git -C component-a status 2>/dev/null')" '.decision == "deny" and .rule == "orchestrator.child_write"'
-as_master "git loop unchanged" "$(bash_payload 'for repo in component-a; do git -C "$repo" status; done')" '.decision == "deny" and .rule == "orchestrator.child_write"'
+as_master "child git status with stderr sent to /dev/null is allowed" "$(bash_payload 'git -C component-a status 2>/dev/null')" "$POLICY_ALLOW"
+as_master "loop reading child git status is allowed" "$(bash_payload 'for repo in component-a; do git -C "$repo" status; done')" "$POLICY_ALLOW"
 as_exec "executor gh remote mutation floor unchanged" "$(bash_payload 'gh api repositories/123/actions/runs -X DELETE')" '.decision == "allow" and .rule == "allow"'
 as_exec "executor gh local config control" "$(bash_payload 'GH_CONFIG_DIR=./config gh pr list --repo sample-org/component-a')" '.decision == "allow" and .rule == "allow"'
 as_exec "executor gh config escape unchanged" "$(bash_payload 'GH_CONFIG_DIR=../component-b gh pr list --repo sample-org/component-a')" '.decision == "deny" and .rule == "executor.containment"'

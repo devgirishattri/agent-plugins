@@ -11,8 +11,6 @@ if [ "$#" -lt 1 ]; then
   exit 1
 fi
 
-require_jq || exit 1
-ensure_dirs || exit 1
 
 NAME="$1"
 # The task NAME is positional, so anything flag-shaped in that slot is a
@@ -29,6 +27,9 @@ case "$NAME" in
     exit 1
     ;;
 esac
+require_jq || exit 1
+ASSIGNER=$(current_pane_name) || exit 1
+ensure_dirs || exit 1
 shift
 meta_json='{}'
 STAGE=""
@@ -108,7 +109,6 @@ FILE=$(task_file "$ID") || exit 1
 lock_task_for_command "$ID" || exit 1
 [ ! -e "$FILE" ] && [ ! -L "$FILE" ] || { echo "ERROR: task ID collision: $ID" >&2; exit 1; }
 NOW=$(now_iso)
-ASSIGNER=$(current_pane_name)
 
 jq -n \
   --arg id "$ID" \

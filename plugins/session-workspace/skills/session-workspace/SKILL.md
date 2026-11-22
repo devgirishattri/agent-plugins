@@ -394,9 +394,15 @@ Installed plugin and skill reads:
 
 ### Orchestrator
 
-- It cannot edit or run mutating commands against a child checkout.
+- It reads child checkouts and routes writes to their executors. It cannot edit a child checkout.
+- An ordinary `cp` or a shell redirection can read from a child and write outside every child checkout. The destination decides: a destination inside a child, or a symlink into one, is refused.
+- A loop can run read commands on child files. Inside a child, `cd` and `pushd` permit reads.
+- Writes, installs, commits and pushes in a child are refused. Every form of child `git config` and `git fetch` is refused. The optional `deny_child_chdir` guard also refuses the directory change.
+- These checks follow literal command operands and child paths bound by a `for` loop. They also apply to a visible shell program supplied on standard input, with `-c`, or with `eval`. Other variable assignments, and filenames that a pipeline produces, have limited coverage.
 - It routes only to its configured executor/reviewer panes.
 - `broadcast` is not available under strict-v1.
+- Use the scheduler helpers to change the task ledger. Strict-v1 checks direct writes to the ledger. It also checks a ledger path in `xargs` or `parallel` input, in inline interpreter code (`python -c`, `node -e`, and similar), and in interpreter input from a here-document.
+- Limit: the hook inspects the visible command text only. A program loaded from a separate file, and a path computed inside a program, are outside this check. The scheduler helpers still verify the acting pane themselves.
 
 #### `gh` rules
 
@@ -441,6 +447,24 @@ helper (implicit inbox-only `remember`). Reviewers are denied.
 
 - `sudo`/`doas`/`su`/`runuser`/`pkexec` are refused for every role at any
   wrapper hop.
+- `rm`, `mv`, `rmdir` and `find -delete` are refused for every role when they
+  can remove or move the project root, one of its ancestors, or the home
+  directory (`shell.project_root`). The check resolves directory changes,
+  supported launch wrappers, and literal paths given to these four commands.
+  Other utilities, and paths that a running program constructs, are outside
+  this rule. A destructive `find` starting at a protected directory can be
+  refused even when its name predicates narrow the matches. Subdirectories of
+  the project stay governed by the role rules.
+- A helper named inside inline shell code (`bash -c`, `sh -c`, `zsh -c`),
+  `eval`, `env -S`, a variable, a here-document, piped shell input or a sourced
+  process substitution is refused (`helper.launch` or `helper.segment`; `env -S`
+  is refused as `shell.wrapper`). Run the helper as its own literal command. A raw tmux command that visibly launches a named helper
+  must pass the same helper rules.
+- Verdict attribution trusts the tmux server and its pane metadata. A process
+  that controls that server can rename a pane or drive it. Non-peer workspaces
+  permit raw tmux administration. The ancestry check identifies the process
+  that invoked the helper in the pane. It does not make tmux control safe to
+  grant: treat tmux control as a trust boundary.
 - Any unsupported wrapper option is also refused (`exec -a`, `nohup --`,
   `time -o`, `env -S` all fail closed).
 - The plugin README enumerates the accepted `env`/`command`/`builtin`/`exec`/
