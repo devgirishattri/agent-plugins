@@ -1,0 +1,23 @@
+{
+  "id": "workspace-bounded-state-positive",
+  "kind": "positive",
+  "note": "Behavioral outcome UNMEASURED: no model run was made. Checks that an order-dependent retry question loads verification-recipe and that the outline mentions bounds, an invariant and a mutant control. Limits: regexes match prose only; the model's correctness, the controls' quality and the absence of written files are not graded. No case exists for a simple recipe that must not get a state model: the portable schema has no negative regex.",
+  "prompt": "Our queue retries a delivery when the ack is lost, and a late ack from the first attempt can arrive after the retry. I want a repeatable verification recipe that covers those orderings. Outline what it should contain; do not write files yet.",
+  "expectations": {
+    "regex": [
+      "(?i)bound",
+      "(?i)invariant",
+      "(?i)mutant|remov\\w+ (the|a|one) guard|without the guard"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "/skills/verification-recipe/SKILL.md"
+    ],
+    "forbidden_skills": [
+      "workspace-start",
+      "workspace-stop",
+      "workspace-restart"
+    ],
+    "files": {}
+  }
+}

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Catch up"
+  short_description: "Summarize this session and decisions that need you"
+policy:
+  allow_implicit_invocation: true

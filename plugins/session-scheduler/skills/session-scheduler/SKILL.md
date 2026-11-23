@@ -201,11 +201,57 @@ Rules:
 - These claims are narrow: the helper does not promise exactly-once delivery or that the assigner sees the message. A crash before the draft check or before the ledger write leaves no event and keeps the draft. A crash before the artifact is referenced can leave one unreferenced artifact file; `/tasks-clean` removes it after the task is removed or when it ages as an orphan.
 - Under the strict harness, `--note-file` is allowed only for the pane's own existing draft inside its messages grant, and only as `<id> --note-file <draft>` or `<id> --generation <N> --note-file <draft>`.
 
+## Decision notes
+
+A decision note lets a reviewer or a later session reconstruct why a consequential choice was made from the task record alone.
+
+**When.** Write one only when the work or the recovery included a consequential choice. A consequential choice is one that a reasonable reviewer could have made differently and that changes what is reviewed, retried or accepted. Examples:
+
+- Reconciling before a retry.
+- Choosing between two fixes.
+- Skipping or replacing a check.
+- Accepting a known limit.
+- Forcing a transition.
+
+Routine work keeps a short note. A commit SHA or a one-line summary stays valid.
+
+**What.** Put four parts in the existing note, in this order:
+
+1. The decision.
+2. Its reason.
+3. The evidence. Give a pointer: a commit SHA, repository path, receipt or log path, or message id. Do not paste content.
+4. The observed result. Write `unknown` when the outcome is not established.
+
+Put no secret or credential in a note.
+
+**Where.** Use the existing note argument of these commands:
+
+- The review note of `/task-review`.
+- The approval note of `/task-done`.
+- The reason of `/task-block`.
+- The complete verdict in a `--note-file` draft. Its existing rules are unchanged.
+- The `--note` of a contracted `task-contract.sh reconcile`.
+
+The note stays one plain argument on one line. There is no new field, ledger or transition, and the helpers do not validate the shape.
+
+Example:
+
+```
+Decision: reconcile generation 2 before reassigning. Reason: review delivery was uncertain and the first worker was still running. Evidence: task-status shows phase uncertain; worker pane stopped at 14:02. Result: task blocked and reconciled; no retry sent.
+```
+
+**Verbatim.** When the user or the caller supplies the note text, pass it verbatim. Do not rewrite it into this shape. Do not add parts. If a part that the reviewer needs is missing, say so in your report.
+
+**Drafting.** A request to draft, write, or show a note is not a request for a transition. Show the note. Do not run a task helper until the user asks for the transition.
+
+**Reading it back.** `/task-status <id>` shows every history note. For a contracted task, the helper records the review note with the `review-dispatching` history event. The note therefore survives an uncertain reviewer dispatch. A knowledge handoff can point to the task id and event instead of copying the note.
+
 ## Conventions
 
 - The ledger records status. Ordinary eligible transitions also notify the assigner. Contract review dispatches to the independent reviewer. The orchestrator reads the ledger via `/task-status`.
 - **Assigner is recorded at `/task-new` time**, derived from the current pane's `@name`. If you create tasks from an unnamed pane, assigner = `?` and the ack will be skipped.
 - **Reassign isn't automatic**. If an executor goes silent, run `/task-status <id>` to inspect. Then run `/task-assign <new-pane> <id> <prompt>`. The script regenerates the prompt file and history records the reassignment.
+- **Decision notes**: for a consequential choice, put the decision, reason, evidence and observed result in the existing note. See "Decision notes" above.
 
 ## Failure modes
 

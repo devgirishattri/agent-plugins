@@ -1,0 +1,5 @@
+interface:
+  display_name: "Design sketch"
+  short_description: "Compare interfaces and identify what would decide"
+policy:
+  allow_implicit_invocation: true

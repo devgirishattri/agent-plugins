@@ -59,6 +59,13 @@ before push or deploy.
    evidence and expires after `plan_review_ttl_minutes`.
 5. Stop after approval unless the user explicitly confirms executor dispatch.
 
+Optional: when the plan introduces an interface or has competing designs, the
+plan can include a design sketch. The sketch gives the actual caller, the
+proposed interface, a simpler alternative, and the observation that would
+change the decision. See the
+[`design-sketch` skill](../../design-sketch/SKILL.md). Skip it for simple plans.
+The sketch adds no approval step and no extra evidence file.
+
 ## Executor dispatch and audit
 
 1. Re-run status; verify the exact correlated plan approval is fresh; obtain

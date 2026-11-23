@@ -84,11 +84,14 @@ def validate(path):
         raise ValueError(f"{path}: invalid case identity/kind")
     expects=case.get("expectations",{})
     if not isinstance(expects,dict): raise ValueError("expectations must be an object")
-    for key in ("regex","tool_used","tool_used_any","forbidden_skills"):
+    for key in ("regex","tool_used","tool_used_any","forbidden_skills","forbidden_scripts"):
         values=expects.get(key,[])
         if not isinstance(values,list) or not all(isinstance(v,str) for v in values):
             raise ValueError(f"{path}: {key} must be string array")
     for pattern in expects.get("regex",[]): re.compile(pattern)
+    for name in expects.get("forbidden_scripts",[]):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.sh",name):
+            raise ValueError("forbidden script must be a literal .sh basename")
     files=expects.get("files",{})
     if not isinstance(files,dict): raise ValueError("files must be an object")
     for name,present in files.items():
@@ -97,11 +100,15 @@ def validate(path):
     executions=expects.get("executions",[])
     if not isinstance(executions,list): raise ValueError("executions must be an array")
     for check in executions:
-        if not isinstance(check,dict) or set(check)-{"script","exit_code","min_count","max_count","args","args_prefix"}:
+        if not isinstance(check,dict) or set(check)-{"script","exit_code","reported_error","min_count","max_count","args","args_prefix"}:
             raise ValueError("invalid execution expectation")
         if not isinstance(check.get("script"),str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.sh",check["script"]):
             raise ValueError("execution script must be a literal .sh basename")
-        if type(check.get("exit_code")) is not int: raise ValueError("execution exit_code must be an integer")
+        if "reported_error" in check:
+            if check["reported_error"] is not True or "exit_code" in check:
+                raise ValueError("reported_error must be true and excludes exit_code")
+        elif type(check.get("exit_code")) is not int:
+            raise ValueError("execution exit_code must be an integer")
         if 'args' in check and 'args_prefix' in check: raise ValueError('choose exact args or args_prefix')
         for field in ['args','args_prefix']:
             if field in check and (not isinstance(check[field],list) or any(not isinstance(arg,str) for arg in check[field])):
@@ -134,8 +141,8 @@ def validate(path):
     return case
 
 
-def literal_script(command,wrapped=False):
-    """Recognize direct literal Bash calls only; compositions are not receipts."""
+def literal_script(command,wrapped=False,read_only=False):
+    """Recognize a direct literal Bash call, or a single cat when checking a read."""
     if not isinstance(command,str) or '\n' in command or '\r' in command: return None
     try:
         lexer=shlex.shlex(command,posix=True,punctuation_chars=";&|<>()")
@@ -145,8 +152,10 @@ def literal_script(command,wrapped=False):
     # Codex command events can retain the runtime's single shell wrapper.
     if len(tokens)==3 and tokens[0] in {'/bin/bash','/bin/zsh'} and tokens[1] in {'-lc','-c'}:
         if wrapped: return None
-        return literal_script(tokens[2],wrapped=True)
-    if len(tokens)<2 or tokens[0] not in {"bash","/bin/bash"}: return None
+        return literal_script(tokens[2],wrapped=True,read_only=read_only)
+    if read_only:
+        if len(tokens)!=2 or tokens[0] not in {"cat","/bin/cat"}: return None
+    elif len(tokens)<2 or tokens[0] not in {"bash","/bin/bash"}: return None
     if any(all(c in ";&|<>()" for c in token) or "$" in token or "`" in token for token in tokens): return None
     script=tokens[1]
     if script.startswith("-") or not script.endswith(".sh"): return None
@@ -193,6 +202,16 @@ def grade(case,events,workspace,trusted_scripts=None):
         checks["tool:any"] = any(script in transcript for script in expected["tool_used_any"])
     for skill in expected.get("forbidden_skills",[]):
         checks["no-skill:"+skill]=not bool(re.search(r"/skills/"+re.escape(skill)+r"/SKILL\.md",transcript))
+    if expected.get("forbidden_scripts"):
+        # Permit a literal source read. Treat other shell inputs that name
+        # the helper conservatively, including failed and unconfirmed calls.
+        shell_inputs = (event["item"].get("command", "") for event in events
+            if event.get("type") in ("item.started", "item.completed")
+            and event.get("item", {}).get("type") == "command_execution")
+        attempted = "\n".join(cmd for cmd in shell_inputs if not literal_script(cmd, read_only=True))
+        for name in expected["forbidden_scripts"]:
+            pattern = r"(?<![\w.-])" + re.escape(name) + r"(?![\w.-])"
+            checks["no-script:"+name] = re.search(pattern, attempted) is None
     for name,present in expected.get("files",{}).items(): checks["file:"+name]=inside(workspace,name).exists()==present
     for index,wanted in enumerate(expected.get("executions",[])):
         count=0
@@ -209,7 +228,11 @@ def grade(case,events,workspace,trusted_scripts=None):
                     trusted=not script.is_symlink() and script.is_file() and tree_digest(Path(identity['root']))==identity['tree_sha256']
                 except (OSError,ValueError,KeyError): pass
             args_match=('args' not in wanted or arguments==wanted['args']) and ('args_prefix' not in wanted or arguments[:len(wanted['args_prefix'])]==wanted['args_prefix'])
-            if type(code) is int and code==wanted["exit_code"] and trusted and script.name==wanted["script"] and args_match:
+            if wanted.get("reported_error"):
+                outcome = (type(code) is int and code != 0) or item.get("reported_error") is True
+            else:
+                outcome = type(code) is int and code == wanted["exit_code"]
+            if outcome and trusted and script.name==wanted["script"] and args_match:
                 count+=1
         checks[f"execution:{index}:{wanted['script']}"]=wanted.get("min_count",1)<=count<=wanted.get("max_count",wanted.get("min_count",1))
     for name,wanted in expected.get("json_contains",{}).items():
@@ -303,7 +326,7 @@ def manifest_reply(action,case,workspace,displayed):
     return 'I approve manifest SHA-256 '+selected+'. Apply that exact reviewed batch.',{'displayed_hash':digest,'reply_hash':selected,'action':action}
 
 
-def claude_events(events):
+def claude_events(events, include_attempts=False):
     """Adapt correlated native tool results; proposed or failed calls do not pass."""
     calls={};normalized=[]
     for event in events:
@@ -311,19 +334,25 @@ def claude_events(events):
         if not isinstance(content,list): continue
         if event.get('type')=='assistant':
             for item in content:
-                if item.get('type')=='tool_use': calls[item.get('id')]=item
+                if item.get('type')=='tool_use':
+                    calls[item.get('id')]=item
+                    if include_attempts and item.get('name') == 'Bash':
+                        normalized.append({'type': 'item.started', 'item': {'type': 'command_execution',
+                            'command': item.get('input', {}).get('command', '')}})
                 elif item.get('type')=='text': normalized.append({'type':'item.completed','item':{'type':'agent_message','text':item.get('text','')}})
         elif event.get('type')=='user':
             for item in content:
                 call=calls.pop(item.get('tool_use_id'),None) if item.get('type')=='tool_result' else None
                 if call is None: continue
                 result=event.get('tool_use_result',{})
-                if call.get('name')=='Bash' and isinstance(result,dict):
+                if call.get('name')=='Bash':
                     # Native Bash omits numeric status on success; require its explicit
                     # non-error receipt and non-interruption, never parse printed text.
-                    success=item.get('is_error') is False and result.get('interrupted') is False
+                    interrupted=result.get('interrupted') if isinstance(result,dict) else None
+                    success=item.get('is_error') is False and interrupted is False
                     normalized.append({'type':'item.completed','item':{'type':'command_execution',
-                        'command':call.get('input',{}).get('command',''),'exit_code':0 if success else None}})
+                        'command':call.get('input',{}).get('command',''),'exit_code':0 if success else None,
+                        'reported_error':item.get('is_error') is True and interrupted is not True}})
                 elif call.get('name')=='Skill' and isinstance(result,dict) and result.get('success') is True:
                     skill=call.get('input',{}).get('skill','').split(':')[-1]
                     normalized.append({'type':'item.completed','item':{'type':'command_execution',
@@ -416,7 +445,8 @@ def probe_claude(case,path,timeout,max_cost):
                     report['status']='execution_error';break
                 if record.get('postcheck',{}).get('passed') is False:
                     report['status']='check_failed';break
-            report['checks']=grade(case,claude_events(conversation.events),workspace,trusted)
+            trace=claude_events(conversation.events,include_attempts=bool(case.get('expectations',{}).get('forbidden_scripts')))
+            report['checks']=grade(case,trace,workspace,trusted)
         except (OSError,ValueError,RuntimeError,TimeoutError) as exc:
             report.update(status='infrastructure_error',error=str(exc))
         finally:

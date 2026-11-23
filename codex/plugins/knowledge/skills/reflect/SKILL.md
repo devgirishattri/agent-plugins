@@ -1,14 +1,13 @@
 ---
 name: reflect
-description: Reflect on the current task only and propose durable learnings, each routed to its existing writer (memory candidate, docs, instructions, or tracker) without writing anything. Use when the user asks to reflect on, review lessons from, or capture learnings from the task just completed.
+description: Propose a guard when the same mistake recurs, or lessons when the user asks to reflect on this task. Read-only, with each proposal routed to its owner.
 ---
 
 # Reflect
 
 Turn what happened in the current task into a short list of proposals. This
 skill writes nothing: no memory, inbox, docs, instruction files, policy, or
-tracker items. Each proposal names the existing surface and the user-run step
-that would apply it.
+tracker items. Each proposal names the owner and the step that would apply it.
 
 ## Scope
 
@@ -32,14 +31,23 @@ names of other projects, and anything already in memory unless this task
 materially changed it — then propose an update to that entry, citing its slug.
 Proposing nothing is a valid result.
 
+When two distinct occurrences in the current task or evidence supplied for
+it point to the same mistake, surface one prevention proposal when useful.
+Two reports of one event count once. Name the shared cause, the owning
+component and the two observations. Choose the smallest structural change
+that would prevent it, such as a single writer, a validation rule or a
+regression test. Specify a case that fails on the old behavior and a valid
+control that should still pass. Label any checks that have yet to run.
+Handle an isolated correction directly within the task.
+
 ## Propose
 
 For each item give: the learning in one line, the evidence from this task,
 confidence, and one route:
 
-- **memory candidate** — the user can capture it with `$knowledge:remember` and
-  review it through `$knowledge:consolidate`; both are user-run, and the memory
-  writer still refuses in `*-reviewer` roles.
+- **memory candidate** — the user can capture it with `$knowledge:remember`
+  and review it through `$knowledge:consolidate`. The memory writer still
+  refuses in `*-reviewer` roles.
 - **docs change** — the affected doc and the change; apply through `docs-create`
   only when the user asks.
 - **instruction or policy change** — quote the proposed wording and the file;
@@ -48,5 +56,7 @@ confidence, and one route:
 - **tracker item** — a draft title, owner role, and acceptance criteria; never
   file tickets automatically.
 
-Present the list and stop. Apply nothing unless the user then runs or requests
-the named step, which keeps its own write boundary and confirmation.
+Finish a reflection request with the proposals. When a repeated mistake
+surfaces during other work, offer the relevant proposal and continue the
+authorized task. Applying a proposal goes through the named writer and its
+existing authorization.

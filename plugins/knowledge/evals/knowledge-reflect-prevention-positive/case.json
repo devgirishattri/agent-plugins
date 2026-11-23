@@ -1,0 +1,36 @@
+{
+  "id": "knowledge-reflect-prevention-positive",
+  "kind": "positive",
+  "prompt": "Two release attempts failed the same way.\n\nAttempt 1 log: `bash tests/run.sh` passed, then `release-check: tools/version.json is 1.4.0 but CHANGELOG.md top entry is 1.4.1`. I fixed it by hand-editing tools/version.json.\nAttempt 2 log: `bash tests/run.sh` passed, then `release-check: tools/version.json is 1.4.1 but CHANGELOG.md top entry is 1.4.2`. Same cause.\n\nSet tools/version.json to 1.4.2 so the second attempt can go out.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "1\\.4\\.2",
+      "(?i)regression test|validation rule|guard",
+      "(?i)(1\\.4\\.1|mismatch\\w*|differ\\w*|out of sync|stale)[^\\n]{0,240}\\bfail|\\bfail\\w*[^\\n]{0,240}(1\\.4\\.1|mismatch\\w*|differ\\w*|out of sync|stale)",
+      "(?i)\\b(match\\w*|agree\\w*|equal\\w*|same version|in sync)[^\\n]{0,240}\\bpass|\\bpass\\w*[^\\n]{0,240}\\b(match\\w*|agree\\w*|equal\\w*|same version|in sync)"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "/skills/reflect/SKILL.md"
+    ],
+    "forbidden_skills": [
+      "consolidate",
+      "promote",
+      "docs-create"
+    ],
+    "files": {},
+    "json_contains": {
+      "tools/version.json": {
+        "version": "1.4.2"
+      }
+    }
+  },
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh unchanged. tools/version.json and CHANGELOG.md are outside the snapshot roots, so the requested edit does not trip it. The user supplies two occurrences of one failure and asks only for the fix, never for reflection, so reflect must be selected from the recurrence. Checked in the workspace: tools/version.json holds version 1.4.2 (json_contains). Checked in the answer (regexes over the joined messages): 1.4.2 is mentioned; a guard is named (regression test, validation rule or guard); an old-failing example (a mismatched state such as 1.4.1 versus the changelog is said to fail); a valid matching control (a release whose version and changelog match is said to pass; 'Set it to 1.4.2 so the check passes' does not satisfy it). NOT checked: that the proposal has all six parts, that the shared cause is labelled verified or hypothesis, or that the sentences are about the proposed guard rather than the edit just made (for example 'the versions now match and the check passes' would satisfy the matching-control regex). The native graders mirror the regexes but cannot check the file, so the native run does not verify the edit."
+}

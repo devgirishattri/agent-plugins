@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: workspace-bounded-state-negative-simple
+tags: [workspace, negative, verification-recipe]
+context:
+  scaffold_script: scaffold.sh

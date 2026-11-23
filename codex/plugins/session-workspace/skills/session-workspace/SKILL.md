@@ -39,7 +39,8 @@ is not a scaffold.
 | `$session-workspace:harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), which strict-v1 role floor applies (`--probe` decides its cases), which optional guard packs add to it, and does this pane's engine identity match the plan |
 | `$session-workspace:harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
 | `$session-workspace:workspace-orchestrator` | Coordinate the reviewed Git lifecycle in schemas 4–6. With peers, use your own workers for the target checkout. |
-| `$session-workspace:verification-recipe` | Create or maintain a project-local, executed verification recipe with retained evidence |
+| `$session-workspace:design-sketch` | Compare interfaces or competing designs from a real caller before implementation |
+| `$session-workspace:verification-recipe` | Create or maintain a behavioral recipe, including bounded checks for retries and event orderings |
 | `$session-workspace:blast-radius` | Report indirect breakage risks and check the assumptions that make a diff safe |
 | `$session-workspace:adversarial-review` | Optional independent review with bounded effort and evidence-based dispositions |
 | `$session-workspace:benchmark-check` | Validate comparable measurements, correctness, work counts, and uncertainty |

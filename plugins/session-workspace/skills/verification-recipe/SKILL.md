@@ -1,6 +1,6 @@
 ---
 name: verification-recipe
-description: Create or maintain a project-local recipe that exercises real behavior and preserves verification evidence. Use when a project needs repeatable verification instructions or its existing recipe has drifted.
+description: Create or maintain a project-local recipe that exercises real behavior and preserves verification evidence. Use when a project needs repeatable verification instructions or its existing recipe has drifted. The recipe can include an optional bounded state check for concurrency or retry behavior.
 ---
 
 # Verification recipe
@@ -53,6 +53,22 @@ Run one mapped feature through launch, doctor, drive, evidence, and cleanup.
 Confirm the artifacts still exist after cleanup. A recipe that has not completed
 this pass remains a draft. Report the actual result as passed, failed, blocked,
 or inconclusive, with coverage and omissions. Missing prerequisites cannot pass.
+
+## Optional bounded state check
+
+Add a bounded state check only when correctness depends on the order of events
+across concurrent actors, retries, uncertain delivery, or late results. Example
+tests cannot enumerate those interleavings. Skip the check for single-actor,
+deterministic behavior. Keep simple recipes simple.
+
+The check is optional. It adds no runtime, permission, or approval gate. By
+default, use the project's existing test tooling and the standard library. Add
+no external model checker or other dependency unless the project already uses
+one or the user asks. A bounded search establishes the property only for the
+model and the ranges it explored.
+
+Read [references/bounded-state-check.md](references/bounded-state-check.md) for
+the procedure.
 
 ## Maintain and consume
 

@@ -1,0 +1,28 @@
+{
+  "id": "workspace-design-sketch-positive",
+  "kind": "positive",
+  "note": "Behavioral outcome UNMEASURED: no model run was made. Checks that an interface-design request loads design-sketch, names the caller and an alternative, and starts no lifecycle in a fixture with no .agent-workspace directory. Limits: regexes match prose only; the sketch's quality, read-only behavior and completeness are not graded.",
+  "prompt": "Other tools need to ask which team owns a file path. I can't decide between a new `owners` CLI subcommand, a JSON file they read directly, or an environment variable. tools/route.sh is the only caller today. Sketch the design before we plan anything.",
+  "expectations": {
+    "regex": [
+      "(?i)caller",
+      "(?i)alternative",
+      "tools/route\\.sh"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "/skills/design-sketch/SKILL.md"
+    ],
+    "forbidden_skills": [
+      "workspace-plan",
+      "workspace-start",
+      "workspace-stop",
+      "workspace-restart",
+      "workspace-orchestrator"
+    ],
+    "files": {
+      ".agent-workspace/state.json": false
+    }
+  },
+  "scaffold": "scaffold.sh"
+}

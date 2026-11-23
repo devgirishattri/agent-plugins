@@ -1,9 +1,17 @@
 ---
 name: task-review
-description: "Move an assigned task to review and auto-dispatch its audit packet to the configured reviewer."
+description: "Submit an assigned task for review. Preserve the reason and evidence for consequential choices in the existing review note."
 ---
 
 # Task Review
+
+When drafting a note for a consequential choice, state what you chose,
+why, the evidence a reviewer can inspect, and the result or open question.
+For example, “Kept the original assignment after the delivery check.
+The dispatch receipt is in the task handoff. Reviewer response is pending.”
+Use a short ordinary note for a routine handoff. Preserve a note the user
+supplies verbatim and the stored note used on a retry. Drafting a note
+alone does not request a transition.
 
 For an ordinary dispatch-only retry, supply a note. The helper reuses the latest stored review note when present and otherwise uses the supplied value.
 The output labels the note used as `(original review note reused on retry)`.

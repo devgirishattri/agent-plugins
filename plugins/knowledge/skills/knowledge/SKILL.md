@@ -1,6 +1,6 @@
 ---
 name: knowledge
-description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 22 command and skill surfaces to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
+description: Understand the knowledge plugin's full taxonomy (docs, memory, context) and which of its 24 command and skill surfaces to reach for. Use this before invoking any /knowledge:* command — it covers the three write boundaries and their role rules, zero-config memory-store discovery, and pointers to each surface's complete write contract.
 ---
 
 # Knowledge
@@ -54,7 +54,9 @@ This table only routes. Argument shapes and per-command detail are in `reference
 | Find a slug or ranked memory matches | `search` (memory only), `find` (docs + memory + context) | no |
 | Prior knowledge before acting | `recall <query>` — slug citations + snippets, untrusted framing | no |
 | Link structure of memories | `graph neighbors\|reverse\|orphans\|components` | no |
-| Propose learnings from the current task | `reflect` — proposals routed to existing writers | no |
+| Propose learnings from the current task | `reflect` — proposals routed to existing writers; also offers one prevention proposal after the same failure recurs | no |
+| Understand how code works and why ("how does X work", "why is it done this way") | `explain <subsystem, file, or behavior>` — cited flow; each reason labelled recorded, inferred, or unknown | no |
+| Brief on the current session ("where are we", "what changed", "catch me up", "what do you need from me") | `catch-up [task-id]` — changed, verified, reported, open work, and real decisions | no |
 | Jot a candidate for later review (also selected implicitly for verified lessons) | `remember` | inbox only; implicit capture needs `evidence:`, never promotes or purges |
 | Wrap up session docs, memory, configured tickets and context in one reviewed batch | `distill` | one explicit in-conversation approval, then existing writers |
 | Durable memory writes | `consolidate`, `promote` | memory store, user-run, `disable-model-invocation` |
@@ -77,11 +79,14 @@ Three write boundaries exist. Each has its own stated role rule. There is no uni
 
 `doctor`, `search`, `recall`, `graph`, and `lint` are read-only. They run anywhere, including reviewer panes.
 
+`explain`, `catch-up` and `reflect` also write nothing.
+
 ## Automatic recall and capture
 
 The agent can select `recall` and inbox-only `remember` implicitly during work.
 - `remember` uses the guarded capture wrapper with `evidence:` and writer-assigned session provenance. It never promotes or purges implicitly.
 - `distill` composes existing writers after one explicit approval of the concrete batch.
+- The agent can also select `explain`, `catch-up`, and the `reflect` prevention offer implicitly from ordinary language. All three write nothing. Selection is best-effort, because the skill listing can drop descriptions under its budget.
 - These surfaces depend on skill selection and are best-effort. They are not guaranteed lifecycle hooks.
 
 ## Automatic recall / capture hooks (opt-in, OFF by default)

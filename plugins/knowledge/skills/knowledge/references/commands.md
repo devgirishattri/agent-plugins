@@ -46,6 +46,14 @@ Context snapshot and handoff names are canonical knowledge item names. They are 
 | `/knowledge:distill` (or just "wrap up this session") | Wrap up the current session: inventory its candidates, memory learnings, docs and configured tickets, present ONE concrete batch, obtain one explicit in-conversation approval, apply through the existing guarded writers, and save the context snapshot last. No deletion, promotion, or scheduler transitions. |
 | `/knowledge:promote [context <name> \| memory <slug>] [--store <path>]` | Promote a stabilized context/handoff item or memory file into a memory create/UPDATE or a proposed docs patch, then — as a SEPARATE confirmation — delete the source. The lifecycle-closing surface for a handoff or a superseded memory file. |
 
+**Understanding and briefing — read-only skills.** `explain`, `catch-up`, and `reflect` write nothing. Claude can also select them implicitly.
+
+| Command | Purpose |
+|---|---|
+| `/knowledge:reflect` | Propose durable learnings from the current task, each routed to an existing writer, and write nothing. Also offers one prevention proposal (occurrences, shared cause, owner, guard, control, route) after the same failure occurs twice. |
+| `/knowledge:explain <subsystem, file, or behavior>` | Read-only explanation of how current code works and why it was built that way. Cites `path:line` and labels each reason **recorded**, **inferred**, or **unknown**. Saving the explanation belongs to `docs-create`. |
+| `/knowledge:catch-up [task-id]` | Read-only brief of the current session: changed, verified, reported but not verified, open work, and real pending decisions ("No decision needs you now" is valid). A named task is reported only from `task-status` output or a report already in the conversation, with its source and time. The skill never queries the ledger. Saving state belongs to `context-generate`. |
+
 ## Search/recall ranking
 
 `search` and `recall` rank by field weight. The weights are slug 8, name 6, tags 5, description 4, type 3, headings 2, backlink slugs 2, and body 1. The scorer sums the weights per matching field. It halves the score of `stale`, `superseded`, and `archived` entries. It orders results by score descending, then slug ascending.

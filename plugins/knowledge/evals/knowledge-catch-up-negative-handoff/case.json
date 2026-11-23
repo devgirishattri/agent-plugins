@@ -1,0 +1,19 @@
+{
+  "id": "knowledge-catch-up-negative-handoff",
+  "kind": "negative",
+  "prompt": "Save a handoff of where we are as release_prep so another session can pick this up.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [],
+    "tool_used": [],
+    "tool_used_any": [
+      "/skills/context-generate/SKILL.md",
+      "save-context.sh"
+    ],
+    "forbidden_skills": [
+      "catch-up"
+    ],
+    "files": {}
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. A request to save a handoff must route to context-generate, not catch-up. No postcheck: context-generate legitimately writes a snapshot, so the scaffold has no baseline. The alternative save-context.sh in tool_used_any admits a direct helper call. The case does not measure the snapshot content."
+}

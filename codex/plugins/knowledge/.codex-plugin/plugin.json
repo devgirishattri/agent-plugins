@@ -1,6 +1,6 @@
 {
   "name": "knowledge",
-  "version": "0.5.14",
+  "version": "0.6.0",
   "description": "Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin.",
   "author": {
     "name": "Girish Attri",
@@ -32,7 +32,7 @@
     "defaultPrompt": [
       "Document this project feature.",
       "Generate a context snapshot.",
-      "List saved context snapshots."
+      "Explain how this code works and why this design was chosen."
     ],
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/icon.svg",

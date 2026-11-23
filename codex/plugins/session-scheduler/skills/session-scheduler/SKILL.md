@@ -23,6 +23,11 @@ Use this skill when the user asks to coordinate multiple panes, track assigned w
 
 ## Lifecycle
 
+For consequential choices in a review or recovery, include the choice,
+reason, evidence and observed result in the existing review or reconciliation
+note. A handoff can point to that task. Keep routine notes short and preserve
+caller-supplied text.
+
 Every command enforces these legal status transitions:
 
 | Current state | Allowed next states |

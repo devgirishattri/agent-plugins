@@ -1,0 +1,20 @@
+{
+  "id": "workspace-design-sketch-negative-simple",
+  "kind": "negative",
+  "note": "Behavioral outcome UNMEASURED: no model run was made. Checks that a simple, already-decided edit loads none of design-sketch, workspace-plan or workspace-orchestrator. Limits: it does not grade the edit itself beyond the word serve in the reply.",
+  "prompt": "Rename the `dev` script to `serve` in package.json.",
+  "expectations": {
+    "regex": [
+      "serve"
+    ],
+    "tool_used": [],
+    "tool_used_any": [],
+    "forbidden_skills": [
+      "design-sketch",
+      "workspace-plan",
+      "workspace-orchestrator"
+    ],
+    "files": {}
+  },
+  "scaffold": "scaffold.sh"
+}

@@ -1,0 +1,27 @@
+{
+  "id": "scheduler-decision-note-positive",
+  "kind": "positive",
+  "prompt": "I'm the executor on task t7. The reviewer rejected my first fix, which retried the upload, because a retry can double-post. I made the upload idempotent instead, and tests/run.sh passes at commit abc1234. Write the review note I should submit for t7 and show it to me before you send anything.",
+  "expectations": {
+    "regex": [
+      "(?i)idempoten",
+      "(?i)double.?post|duplicat",
+      "abc1234",
+      "(?i)pass"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "/skills/session-scheduler/SKILL.md",
+      "/skills/task-review/SKILL.md"
+    ],
+    "forbidden_skills": [],
+    "files": {},
+    "forbidden_scripts": [
+      "task-review.sh"
+    ]
+  },
+  "unset_env": [
+    "SESSION_SCHEDULER_HOME"
+  ],
+  "note": "Behavioral outcome UNMEASURED: no model run was made. A natural request (no slash command) to write a review note after a consequential choice. The agent should load the scheduler guidance and show a note that carries the concrete choice (idempotent upload), its reason (a retry can double-post), the evidence pointer (commit abc1234) and the observed result (the tests pass), without submitting it. The regexes grade that content, not literal field labels. Limits: the same facts are in the prompt, so the regexes alone do not separate a guided note from an echo; the guidance-loaded check carries that. Order, quality and the single-line shape are not graded. The agent is told not to send: forbidden_scripts fails the case on any attempt to run task-review.sh, including a failed one; a literal cat of the helper source is allowed. The helper is therefore not exercised; fail-closed behavior is covered by scheduler-task-new-positive."
+}

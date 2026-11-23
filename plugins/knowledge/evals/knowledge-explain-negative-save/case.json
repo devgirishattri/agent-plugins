@@ -1,0 +1,18 @@
+{
+  "id": "knowledge-explain-negative-save",
+  "kind": "negative",
+  "prompt": "Explain how tools/notify.sh works and save it as docs/notify.md.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [],
+    "tool_used": [],
+    "tool_used_any": [
+      "/skills/docs-create/SKILL.md"
+    ],
+    "forbidden_skills": [
+      "explain"
+    ],
+    "files": {}
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. A request that explains code AND asks to save it must route to docs-create, not explain. No postcheck: docs-create legitimately writes docs/notify.md, so the scaffold has no baseline. The case does not measure the quality of the written doc."
+}

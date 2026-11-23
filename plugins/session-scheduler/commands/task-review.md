@@ -8,6 +8,10 @@ allowed-tools: Bash(bash:*)
 
 Lead with the result. Add text only for errors or the follow-ups below. The note is required. Use a commit SHA or a one-line summary of what to audit.
 
+When the work included a consequential choice, write the decision, its reason, the evidence and the observed result in the same single-line note. See "Decision notes" in the `session-scheduler` skill. Pass a note that the user supplied verbatim.
+
+**Draft or submit.** Decide this before you run anything. If the user asked only to draft, write, or show a review note, do not run the helper. Show the note and stop. Run the helper below only when the user asks to move the task to review.
+
 For a task with a verification contract (see the `task-contract` skill), pass `<id> --generation <N> "<note>"` as the assignee. Do this only after a passing `task-contract.sh verify`. `--force` is refused.
 
 `SESSION_SCHEDULER_HOME` must already be present in this session's environment. It is inherited when the agent process started. The pane/session launcher sets it. Never export or derive it here.

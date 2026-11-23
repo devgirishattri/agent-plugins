@@ -1,6 +1,6 @@
 ---
 name: verification-recipe
-description: Create or maintain a project-local recipe that exercises real behavior and preserves verification evidence. Use when a project needs repeatable verification instructions or its existing recipe has drifted.
+description: Create a behavioral verification recipe or repair one that has drifted. Use bounded state checks when retries, races or late results depend on event order.
 ---
 
 # Verification recipe
@@ -8,6 +8,11 @@ description: Create or maintain a project-local recipe that exercises real behav
 Create a recipe another agent can execute without rediscovering the environment.
 Maintain an existing recipe when one already covers the requested surface.
 This is authoring and verification guidance, not a new runtime or approval gate.
+
+When a failure depends on the order of events, use the
+[bounded state check](references/bounded-state-check.md) to explore the
+relevant sequences. A direct regression with a known sequence usually needs
+only the ordinary recipe below.
 
 ## Establish the target
 

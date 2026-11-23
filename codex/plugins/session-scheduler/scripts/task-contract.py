@@ -309,11 +309,11 @@ class Store:
         return {'state':'admitted','task':self.id,'generation':c['generation'],'reviewer':c['reviewer'],
                 'source':receipt['source'],'admitted_at':admitted_at,'freshness_checked':bool(committed or fresh),'notice':NOTICE}
 
-    def reserve(self,data,phase,seconds):
+    def reserve(self,data,phase,seconds,note='operation reserved; interrupted operations require reconciliation'):
         c=self.contract(data)
         c['phase']=phase
         c['reservation']={'actor':self.actor,'pid':os.getpid(),'expires_at':int(time.time())+seconds}
-        self.change(data,phase,'operation reserved; interrupted operations require reconciliation')
+        self.change(data,phase,note)
         return c['revision']
 
     def finish(self,revision,change):
@@ -477,7 +477,7 @@ class Store:
                 self.require_actor(data.get('assignee'))
                 if data.get('status')!='assigned': fail('review requires assigned task')
                 self.receipt(data);data['status']='review'
-                revision=self.reserve(data,'review-dispatching',75);target=c['reviewer']
+                revision=self.reserve(data,'review-dispatching',75,note);target=c['reviewer']
             elif operation=='done':
                 self.require_actor(c['reviewer'])
                 if data.get('status')!='review': fail('completion requires independent review')

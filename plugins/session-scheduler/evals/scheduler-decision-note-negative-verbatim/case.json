@@ -1,0 +1,30 @@
+{
+  "id": "scheduler-decision-note-negative-verbatim",
+  "kind": "negative",
+  "prompt": "Move task t7 to review with exactly this note: abc1234",
+  "expectations": {
+    "regex": [
+      "SESSION_SCHEDULER_HOME"
+    ],
+    "tool_used": [
+      "task-review.sh"
+    ],
+    "tool_used_any": [],
+    "forbidden_skills": [],
+    "files": {},
+    "executions": [
+      {
+        "script": "task-review.sh",
+        "reported_error": true,
+        "args": [
+          "t7",
+          "abc1234"
+        ]
+      }
+    ]
+  },
+  "unset_env": [
+    "SESSION_SCHEDULER_HOME"
+  ],
+  "note": "Behavioral outcome UNMEASURED: no model run was made. Confusable control for scheduler-decision-note-positive: when the user supplies the note text, the agent must pass it verbatim and must not expand it into a decision note. Two distinct outcomes are graded separately. Exact note: the executions expectation requires one direct task-review.sh run whose arguments are exactly t7 and abc1234 and that reported an error (reported_error: a correlated native tool error or a real nonzero exit). It asserts no numeric exit status, because the portable Claude adapter reports none for a failed call; a run with an expanded note has different arguments and does not count. Fail-closed outcome: the reply must name SESSION_SCHEDULER_HOME (the runner must NOT pre-export it). The case does not show that the note was stored verbatim, because the fail-closed path writes nothing; a stored-note check needs a runner-provided scheduler home on both providers."
+}

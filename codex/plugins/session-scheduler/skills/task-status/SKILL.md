@@ -28,3 +28,7 @@ Present tab-separated output as id, status, workflow, stage, assignee, reviewer,
 `--pending` selects only status `created`; `--active` selects `created`, `assigned`, and `review`. `--mine` matches the current pane as assigner, assignee, or reviewer. Value-taking flags require a value.
 
 Contract flags report CONTRACT:<state>. A bare done status does not establish admission.
+
+For a named task, the detail also shows recorded review and reconciliation
+notes with their actor and event. Use this view to read a consequential
+decision or check the original note after an uncertain review dispatch.
