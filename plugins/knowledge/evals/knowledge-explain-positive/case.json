@@ -1,0 +1,31 @@
+{
+  "id": "knowledge-explain-positive",
+  "kind": "positive",
+  "prompt": "How does tools/notify.sh decide whether to send a notification, and why does it retry three times and skip weekends? Keep it short.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "tools/notify\\.sh",
+      "(?i)\\bon[- ]call\\b",
+      "(?i)\\b(three|3)\\b[^.\\n]{0,40}(attempt|tr(y|ies)|times|retr)|(attempt|retr\\w*)[^.\\n]{0,40}\\b(three|3)\\b",
+      "(?i)\\b(retr\\w+|attempts?|three|\\b3\\b)(?:(?!weekend|\\.\\s)[^\\n]){0,200}\\b(inferred|unknown|no record|not recorded|unrecorded)|\\b(inferred|unknown|no record|not recorded|unrecorded)(?:(?!weekend|\\.\\s)[^\\n]){0,100}\\b(why|explain\\w*|rationale|count)\\b(?:(?!weekend|\\.\\s)[^\\n]){0,100}\\b(retr\\w+|attempts?|three|\\b3\\b)"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "/skills/explain/SKILL.md"
+    ],
+    "forbidden_skills": [
+      "docs-create",
+      "consolidate",
+      "promote"
+    ],
+    "files": {}
+  },
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh unchanged (zero delta across memory, MEMORY.md, .inbox, docs, context store). The seeded tools/notify.sh has two commits: the second records why weekends are skipped (no on-call cover, alerts went unread) ONLY in its commit body; the three-attempt retry has no recorded reason. Checked: (1) the answer names tools/notify.sh; (2) it says on-call (that text exists only in the commit body, so the history was read); (3) it states three attempts; (4) the retry rationale is labelled inferred/unknown/no record/not recorded/unrecorded within the same sentence (a period followed by whitespace ends it) as retry/attempt/three wording, not separated from it by the word weekend, and a label placed before the retry wording needs why/explain/rationale/count between them; (5) the explain skill ran, no writer skill ran, and nothing changed (postcheck). NOT checked: that the weekend reason is attributed to the weekend rule, that the label is true, or that the three-attempt claim is correct; regexes match the whole answer, so one sentence can satisfy (3) and (4) while another is wrong. The reviewer counterexample 'skips weekends for unknown reasons and never retries.' satisfies none of (2), (3), (4). The prompt never says explain, so the skill must be chosen from ordinary language."
+}

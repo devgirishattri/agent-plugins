@@ -4,6 +4,11 @@ Read when selecting command flags, context naming/evidence rules, or memory rank
 
 ## Which command, when
 
+`$knowledge:explain` traces current code or answers why a design was chosen.
+`$knowledge:catch-up` briefs the user on progress in this conversation.
+`$knowledge:reflect` can propose a guard for a repeated mistake. Each
+responds in the conversation and can be selected from ordinary language.
+
 `$knowledge:distill` (or “wrap up this session”) prepares session documents,
 memory, configured ticket updates and context as one batch, then applies only
 the exact approved changes through their existing writers. Missing integration

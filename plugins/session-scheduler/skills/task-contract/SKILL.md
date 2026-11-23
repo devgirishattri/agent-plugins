@@ -89,6 +89,8 @@ unaffected.
    external effects; stop or fence the old worker before reassigning. Nothing
    is retried automatically.
 
+   Write the reconcile `--note` as one line. State the decision, its reason, the evidence and the observed result. The result covers what happened to the earlier attempt, what you verified and what remains unknown. Before you reconcile an uncertain review dispatch, read the assignee's review note in the `review-dispatching` history event with `/task-status <id>`. See "Decision notes" in the `session-scheduler` skill.
+
 ## Reading the state
 
 `inspect <id>` prints one JSON object. Its exit code gives the state:
@@ -133,6 +135,10 @@ Earlier checks in the same run may already have executed, and the run then
 yields no passing receipt. An interrupted run leaves its reservation in place
 until the owner reconciles it. Direct calls to `task-contract.sh` for a
 transition are not allowed. Use the normal task commands.
+
+## Stale and late results: source-checkout pilot
+
+The agent-plugins source checkout carries a bounded state-model pilot for stale and late assignment results. Its path is `scripts/test-scheduler-state-model.py`, relative to the checkout root. The installed plugin does not include it. Use it only from that checkout: run `python3 -B scripts/test-scheduler-state-model.py` at the checkout root. It explores the bounded model and replays the stale and late sequences against both providers' engines. Read the script itself for its current bounds and coverage. The `bounded-state-check` reference of the session-workspace `verification-recipe` skill describes the method. A bounded search establishes a property only for the model and the ranges it explored.
 
 ## Limits
 

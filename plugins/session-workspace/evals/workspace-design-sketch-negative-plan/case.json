@@ -1,0 +1,24 @@
+{
+  "id": "workspace-design-sketch-negative-plan",
+  "kind": "negative",
+  "note": "Behavioral outcome UNMEASURED: no model run was made. Confusable control: a request for the workspace lifecycle preview must run workspace-plan and must not load design-sketch. Limits: it grades skill selection, the fixture session name and absence of state.json only; on Claude the workspace-plan skill expands its script before the model runs, so tool_used_any also accepts the normalized skill marker /skills/workspace-plan/SKILL.md besides the real helper names.",
+  "prompt": "Show me the plan for this workspace: what would starting it create? Use --config .agent-workspace/workspace.json and do not start anything.",
+  "expectations": {
+    "regex": [
+      "fixture-main"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "workspace-plan.sh",
+      "lifecycle.sh",
+      "/skills/workspace-plan/SKILL.md"
+    ],
+    "forbidden_skills": [
+      "design-sketch"
+    ],
+    "files": {
+      ".agent-workspace/state.json": false
+    }
+  },
+  "scaffold": "scaffold.sh"
+}

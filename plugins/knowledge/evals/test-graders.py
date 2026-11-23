@@ -234,6 +234,59 @@ CONTROLS = {
         (B('rm -f /tmp/stage.md'), False), (B('rm stage.md; cat .agents/memory/.lock'), False),
         (B(f'bash "{K}memory-write.sh" purge --store s --expired'), False),
     ],
+    # explain / catch-up / reflect-prevention fixtures
+    'mentions-script.md': [(M('tools/notify.sh retries three times'), True), (M('the notify script retries'), False)],
+    # The reviewer's counterexample below must satisfy none of the three evidence graders.
+    'finds-oncall-reason.md': [(M('No one has on-call cover at weekends, so it skips them'), True), (M('Skipped because nobody is on call'), True),
+                               (M('It retries the notification call three times'), False), (M('a function call decides'), False),
+                               (M('Weekends are skipped: no on-call cover'), True),
+                               (M('skips weekends for unknown reasons and never retries.'), False), (M('It skips weekends'), False)],
+    'states-three-attempts.md': [(M('It retries three times'), True), (M('The retry count is 3'), True), (M('Three attempts, one second apart'), True),
+                                 (M('sent on attempt 3'), True), (M('it tries 3 times'), True),
+                                 (M('skips weekends for unknown reasons and never retries.'), False), (M('It retries on failure'), False),
+                                 (M('Only one attempt is made. 3 files change'), False)],
+    'labels-rationale.md': [
+        (M('The reason for three attempts is not recorded (unknown).'), True),
+        (M('Retry count: inferred from the loop; no commit explains it.'), True),
+        (M('The retry count is inferred from the loop'), True), (M('Reason for the retry count: unknown'), True),
+        (M('No record explains the retry count'), True), (M('The retry count is not recorded'), True),
+        (M('The rationale for three attempts in tools/notify.sh is unrecorded.'), True),
+        (M('It is unknown why it retries three times.'), True),
+        (M('Skips weekends (no on-call cover); the three-attempt retry is unrecorded.'), True),
+        (M('skips weekends for unknown reasons and never retries.'), False),   # label precedes retry word, no why/explain
+        (M('It never retries and skips weekends for unknown reasons.'), False),  # weekend sits between retry word and label
+        (M('It retries three times. The weekend rule is unknown.'), False),    # label in the next sentence
+        (M('It retries three times because it is flaky'), False)],
+    'explain-not-fired.md': [(SK('knowledge:explain'), True), (SK('explain'), True),
+                             (SK('knowledge:docs-create'), False), (SK('knowledge:explainer'), False), (SK('session-chat:send'), False)],
+    'docs-create-fired.md': [(SK('knowledge:docs-create'), True), (SK('docs-create'), True),
+                             (SK('knowledge:explain'), False), (SK('knowledge:docs-review'), False)],
+    'catch-up-not-fired.md': [(SK('knowledge:catch-up'), True), (SK('catch-up'), True),
+                              (SK('knowledge:context-generate'), False), (SK('knowledge:distill'), False), (SK('knowledge:catch-upper'), False)],
+    'context-generate-fired.md': [(SK('knowledge:context-generate'), True), (SK('context-generate'), True),
+                                  (SK('knowledge:catch-up'), False), (SK('knowledge:context-load'), False)],
+    'sets-version.md': [(M('Set tools/version.json to 1.4.2'), True), (M('Set it to 1.4.1'), False), (M('1x4x2'), False)],
+    'names-guard.md': [(M('Add a regression test'), True), (M('Add a validation rule at the boundary'), True), (M('Add a guard'), True),
+                       (M('Edit the file by hand each time'), False)],
+    # old-failing example: the mismatched state must fail
+    'names-old-failing-example.md': [
+        (M('The check fails when version.json is 1.4.1 and the changelog says 1.4.2'), True),
+        (M('A mismatched version.json must fail the check'), True),
+        (M('It fails on the old state: the files are out of sync'), True),
+        (M('The stale version fails the check'), True),
+        (M('Set it to 1.4.2 so the check passes'), False), (M('It passes'), False), (M('Add a guard'), False),
+        (M('Run the check again'), False)],
+    # valid matching control: a matching release must pass
+    'names-matching-control.md': [
+        (M('A release where version.json and the changelog match must still pass'), True),
+        (M('When both files are in sync the check passes'), True),
+        (M('The check passes when the versions agree'), True),
+        (M('Set it to 1.4.2 so the check passes'), False),                      # reviewer counterexample: only the fix
+        (M('A mismatched release must fail'), False), (M('The check fails when the versions differ'), False),
+        (M('It fails on the old state; run it before the fix'), False)],
+    'no-reflect-or-writer-skill.md': [(SK('knowledge:reflect'), True), (SK('reflect'), True), (SK('knowledge:consolidate'), True),
+                                      (SK('promote'), True), (SK('knowledge:docs-create'), True),
+                                      (SK('knowledge:explain'), False), (SK('knowledge:catch-up'), False), (SK('knowledge:reflector'), False)],
     'reports-lock.md': [(M('The store is locked'), True), (M('Lock held by pid 1'), True), (M('Saved the note'), False)],
     'reports-not-saved.md': [
         (M('Not saved: the store is locked'), True), (M('The capture failed (exit 5)'), True), (M('writer rejected the candidate'), True),
@@ -265,6 +318,10 @@ PER_CASE = {
                                                       (SK('knowledge:distill'), False), (SK('session-chat:send'), False)],
     ('knowledge-recall-spontaneous', 'skill-fired.md'): [(SK('knowledge:recall'), True), (SK('recall'), True),
                                                          (SK('knowledge:search'), False), (SK('knowledge:distill'), False)],
+    ('knowledge-explain-positive', 'skill-fired.md'): [(SK('knowledge:explain'), True), (SK('explain'), True),
+                                                       (SK('knowledge:docs-create'), False), (SK('knowledge:recall'), False)],
+    ('knowledge-reflect-prevention-positive', 'skill-fired.md'): [(SK('knowledge:reflect'), True), (SK('reflect'), True),
+                                                                  (SK('knowledge:consolidate'), False), (SK('knowledge:explain'), False)],
     ('knowledge-remember-implicit-positive', 'answers.md'): [(M('Run TZ=UTC tests/run.sh'), True), (M('Run tests/run.sh'), False)],
     ('knowledge-remember-implicit-negative', 'answers.md'): [(M('You are halfway through'), True), (M('The cache is guilty'), True), (M('ok'), False)],
 }
@@ -335,6 +392,43 @@ if trace.is_file():
                 fail(f'trace hit: {gp.name} matched a recorded live-distill tool call')
         n += 1
 
+
+REPLIES = {'approve_manifest', 'mismatched_manifest', 'tamper_manifest_then_approve'}
+def followup_errors(c):
+    """Pure check of a case dict's followups/manifest pairing; returns error strings.
+    Manifest rules apply when the case declares `manifest` OR any followup uses `reply`;
+    a case with only literal-prompt followups and no manifest needs none."""
+    errs = []
+    fus = c.get('followups', [])
+    manifest_mode = bool(c.get('manifest')) or any('reply' in fu for fu in fus)
+    for fu in fus:
+        if ('reply' in fu) == ('prompt' in fu): errs.append('followup needs exactly one of reply/prompt')
+        if 'reply' in fu and fu['reply'] not in REPLIES: errs.append('bad reply')
+        if fu.get('postcheck', {}).get('script') != 'check-outcome.sh': errs.append('followup postcheck missing')
+    if manifest_mode:
+        m = c.get('manifest')
+        if not m: errs.append('reply followup requires a declared manifest')
+        prev = None
+        for fu in fus:
+            if 'prompt' in fu and (not m or m not in fu['prompt']): errs.append('followup prompt must name the manifest path')
+            if fu.get('reply') == 'approve_manifest' and prev is not None and 'reply' in prev: errs.append('approve_manifest directly after a reply needs a fresh proposal prompt')
+            prev = fu
+        if fus and (not m or m not in c.get('prompt', '')): errs.append('manifest path must be named in the prompt')
+        if m and m not in c.get('prompt', ''): errs.append('declared manifest must be named in the prompt')
+    return errs
+
+PC = {'postcheck': {'script': 'check-outcome.sh', 'args': ['unchanged']}}
+for label, case, want_err in [
+    ('reply followup without manifest', {'prompt': 'p', 'followups': [{'reply': 'approve_manifest', **PC}]}, True),
+    ('manifest declared, prompt omits it', {'prompt': 'p', 'manifest': '.m.md', 'followups': [{'reply': 'approve_manifest', **PC}]}, True),
+    ('manifest declared, prompt followup omits it', {'prompt': 'write .m.md', 'manifest': '.m.md', 'followups': [{'prompt': 'go on', **PC}]}, True),
+    ('literal followup without manifest', {'prompt': 'p', 'followups': [{'prompt': 'catch me up', **PC}]}, False),
+    ('literal followup without postcheck', {'prompt': 'p', 'followups': [{'prompt': 'catch me up'}]}, True),
+    ('manifest case control', {'prompt': 'write .m.md', 'manifest': '.m.md', 'followups': [{'reply': 'approve_manifest', **PC}]}, False),
+]:
+    n += 1
+    if bool(followup_errors(case)) != want_err: fail(f'followup_errors self-check: {label} expected error={want_err}')
+
 # portable-case invariants (offline mirror of the runner's validate() plus pairing checks)
 cases = 0
 for cj in sorted(HERE.glob('*/case.json')):
@@ -346,21 +440,40 @@ for cj in sorted(HERE.glob('*/case.json')):
     if pc is not None:
         if pc.get('script') != 'check-outcome.sh' or not (HERE / pc['script']).is_file(): fail(f'{cj}: bad postcheck script')
         if pc['args'][0] not in {'unchanged', 'candidate', 'typo-fix', 'approved-doc'}: fail(f'{cj}: unknown postcheck mode')
-    for fu in c.get('followups', []):
-        if ('reply' in fu) == ('prompt' in fu): fail(f'{cj}: followup needs exactly one of reply/prompt')
-        if 'reply' in fu and fu['reply'] not in {'approve_manifest', 'mismatched_manifest', 'tamper_manifest_then_approve'}: fail(f'{cj}: bad reply')
-        if fu.get('postcheck', {}).get('script') != 'check-outcome.sh': fail(f'{cj}: followup postcheck missing')
-    prev = None
-    for fu in c.get('followups', []):
-        if 'prompt' in fu and c.get('manifest') not in fu['prompt']: fail(f'{cj}: followup prompt must name the manifest path')
-        if fu.get('reply') == 'approve_manifest' and prev is not None and 'reply' in prev: fail(f'{cj}: approve_manifest directly after a reply needs a fresh proposal prompt')
-        prev = fu
-    if c.get('followups') and (not c.get('manifest') or c['manifest'] not in c['prompt']): fail(f'{cj}: manifest path must be named in the prompt')
+    for e in followup_errors(c): fail(f'{cj}: {e}')
     if c.get('scaffold') and 'eval-snapshot' in (d / c['scaffold']).read_text() and pc is None:
         fail(f'{cj}: scaffold writes a baseline but case has no postcheck')
     if (d / 'prompt.md').exists():
         body = (d / 'prompt.md').read_text().split('---\n', 2)[2].strip()
         if body != c['prompt']: fail(f'{cj}: prompt.md body differs from case.json prompt')
+
+# portable regex controls: patterns come from the real case.json, selected by index
+PORTABLE_REGEX = {
+    ('knowledge-catch-up-positive', 0): [('Created notes/todo.txt', True), ('Created a todo file', False)],
+    ('knowledge-catch-up-positive', 1): [('tests/run.sh printed 3 passed, 0 failed', True), ('Tests passed', False), ('2 passed, 1 failed', False)],
+    ('knowledge-catch-up-positive', 2): [('Verified: tests/run.sh printed 3 passed', True), ('I verified it myself', True),
+                                         ('unverified; none', False), ('Reported only', False)],
+    ('knowledge-catch-up-positive', 3): [('No decision needs you now.', True), ('Nothing is needed from you', True), ('Nothing required from you', True),
+                                         ('I do not need anything', True), ("I don't need anything", True), ('Decisions: none', True),
+                                         ('unverified; none', False), ('None', False), ('Approve the batch before I continue', False),
+                                         ('The file was nonexistent', False)],
+}
+for (cid, idx), ctl in PORTABLE_REGEX.items():
+    rx = re.compile(json.load(open(HERE / cid / 'case.json'))['expectations']['regex'][idx], re.M)
+    if not any(e for _, e in ctl) or not any(not e for _, e in ctl): fail(f'{cid}[{idx}]: needs matching and non-matching controls')
+    for s, e in ctl:
+        n += 1
+        if bool(rx.search(s)) != e: fail(f'{cid}[{idx}]: {s!r} expected {e}')
+
+# every native regex grader must appear (modulo the (?i) prefix) in its case.json regex list,
+# so the native and portable checks of the touched cases cannot drift apart
+for cid in ['knowledge-explain-positive', 'knowledge-reflect-prevention-positive']:
+    portable = {re.sub(r'^\(\?i\)', '', p) for p in json.load(open(HERE / cid / 'case.json'))['expectations']['regex']}
+    for gp in sorted((HERE / cid / 'graders').glob('*.md')):
+        g = parse(gp)
+        if g['type'] == 'regex':
+            n += 1
+            if g['pattern'] not in portable: fail(f'{cid}/{gp.name}: native pattern missing from case.json regex list')
 
 print(f'graders {graders} cases {cases} control-assertions {n} failures {bad}')
 sys.exit(1 if bad else 0)

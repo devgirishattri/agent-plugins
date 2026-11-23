@@ -1,0 +1,31 @@
+{
+  "id": "knowledge-reflect-negative-single-failure",
+  "kind": "negative",
+  "prompt": "The release check failed once: `release-check: tools/version.json is 1.4.1 but CHANGELOG.md top entry is 1.4.2`. Set tools/version.json to 1.4.2.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "1\\.4\\.2"
+    ],
+    "tool_used": [],
+    "forbidden_skills": [
+      "reflect",
+      "consolidate",
+      "promote",
+      "docs-create"
+    ],
+    "files": {},
+    "json_contains": {
+      "tools/version.json": {
+        "version": "1.4.2"
+      }
+    }
+  },
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  },
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. case.postcheck runs check-outcome.sh unchanged. A single failure must not trigger reflect or any writer skill; the agent just applies the fix. The seed is identical to the positive case, so the pair differs only in the number of occurrences. Checked: no reflect/writer skill fired, the answer names 1.4.2, and tools/version.json holds version 1.4.2 in the workspace (json_contains). It cannot prove that no prevention proposal was offered in prose. The native graders cannot check the file."
+}

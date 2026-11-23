@@ -48,12 +48,14 @@ pending.
 | Need | Command |
 |---|---|
 | Search all local knowledge | `find` |
+| Explain runtime flow, ownership or design rationale from evidence | `explain` |
+| Brief the user on changes and pending decisions in this conversation | `catch-up` |
 | Wrap up session docs, memory, configured tickets and context in one reviewed batch | `distill` |
 | Inform this task from stored memory | `recall` |
 | Inspect memory matches or links | `search`, `graph` |
 | Check store health | `doctor`; `lint` for memory schema/index |
 | Capture a learning for review | `remember` |
-| Propose learnings from the current task without writes | `reflect` |
+| Propose lessons or a guard for an evidenced recurring mistake | `reflect` |
 | Review and apply durable memory updates | `consolidate` |
 | Promote stable knowledge | `promote` |
 | Bootstrap a memory store | `init` |

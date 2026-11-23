@@ -26,7 +26,8 @@ planning, runtime argv/env construction, and create/adopt/reconcile/stop/restart
 | `/session-workspace:harness-status` | Read-only: is the opt-in harness active (mode/profile/roles/gates), which strict-v1 role floor applies (`--probe` decides its cases), which optional guard packs add to it, and does this pane's engine identity match the plan |
 | `/session-workspace:harness-doctor` | Read-only harness health: config validity, activation, hook registration, python3, live identity match |
 | `/session-workspace:workspace-orchestrator` | Schema-v4 status/plan/dispatch/review/commit/push/deploy lifecycle using configured executor/reviewer pairs |
-| `/session-workspace:verification-recipe` | Author or maintain a project-local launch/doctor/drive/evidence/cleanup recipe; guidance only, no new runtime, permission, or approval gate |
+| `/session-workspace:verification-recipe` | Author or maintain a project-local launch/doctor/drive/evidence/cleanup recipe; guidance only, no new runtime, permission, or approval gate; optional bounded state check for concurrency/retry |
+| `/session-workspace:design-sketch` | Read-only sketch for an ambiguous interface or competing designs: actual caller, proposed interface, simpler alternative, discriminating observation; needs no configured orchestrator; guidance only |
 | `/session-workspace:blast-radius` | Report-only review of a diff's indirect consumers and safety assumptions, with checks only within existing authorization |
 | `/session-workspace:adversarial-review` | Optional budgeted independent pass that tries to break an exact subject; evidence-based dispositions; consensus is not approval |
 | `/session-workspace:benchmark-check` | Check a performance claim: comparable inputs, correctness/work counts, interleaved repeated samples, limiter, explicit inconclusive |

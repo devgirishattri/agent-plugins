@@ -1,6 +1,6 @@
 {
   "name": "session-workspace",
-  "version": "0.18.1",
+  "version": "0.19.0",
   "description": "Config-driven tmux workspace, strict-v1 role policy, reviewed Git orchestration, and on-demand peer orchestrators for Codex sessions.",
   "author": {
     "name": "Girish Attri",
@@ -31,7 +31,7 @@
     "websiteURL": "https://github.com/devgirishattri/agent-plugins",
     "defaultPrompt": [
       "Check session-workspace and harness health with doctor.",
-      "Show or start the configured workspace sessions from their validated plan.",
+      "Compare two designs for a proposed interface before we implement it.",
       "Coordinate the reviewed Git lifecycle for a configured target."
     ],
     "composerIcon": "./assets/icon.svg",

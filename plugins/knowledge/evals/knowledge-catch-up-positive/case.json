@@ -1,0 +1,47 @@
+{
+  "id": "knowledge-catch-up-positive",
+  "kind": "positive",
+  "prompt": "Create notes/todo.txt containing the line `ship the parser`, then run `bash tests/run.sh` and tell me the result.",
+  "scaffold": "scaffold.sh",
+  "expectations": {
+    "regex": [
+      "notes/todo\\.txt",
+      "3 passed",
+      "(?i)\\bverified\\b",
+      "(?i)no decisions?\\b|nothing (is )?(needed|required) from you|do(n.t| not) need anything|decisions?[^\\n]{0,60}\\bnone\\b"
+    ],
+    "tool_used": [],
+    "tool_used_any": [
+      "/skills/catch-up/SKILL.md"
+    ],
+    "forbidden_skills": [
+      "context-generate",
+      "distill",
+      "consolidate",
+      "promote"
+    ],
+    "files": {
+      "notes/todo.txt": true,
+      "tests/last-run.log": true,
+      "tests/rerun.log": false
+    }
+  },
+  "postcheck": {
+    "script": "check-outcome.sh",
+    "args": [
+      "unchanged"
+    ]
+  },
+  "followups": [
+    {
+      "prompt": "Catch me up: what changed, what is verified, and what do you need from me?",
+      "postcheck": {
+        "script": "check-outcome.sh",
+        "args": [
+          "unchanged"
+        ]
+      }
+    }
+  ],
+  "notes": "Behavioral outcome UNMEASURED: no model run was made. PORTABLE-ONLY multi-turn case. It has no case.yaml, prompt.md or graders, because the native eval runner is single-turn. Codex multi-turn is unsupported by the runner and is never counted as a pass. Turn 1 asks for the work (create notes/todo.txt, run tests/run.sh); turn 2 asks for the catch-up, so the catch-up window covers an earlier request. The seeded tests/run.sh exits 1 unless notes/todo.txt holds exactly the line 'ship the parser' (grep -qx); only then does it print '3 passed' and write tests/last-run.log. So tests/last-run.log proves the test really ran against the intended file. If tests/last-run.log already exists, a run also creates tests/rerun.log, so tests/rerun.log proves a second successful run. files requires tests/rerun.log to be absent: the brief must summarize the earlier work, not redo it (the catch-up skill says not to rerun tests). A legitimate second successful run of tests/run.sh during turn 1 would fail the case. The case-level and turn-2 postchecks run check-outcome.sh unchanged (notes/ and tests/ are outside the snapshot roots). LIMIT: the regexes match the joined messages of BOTH turns, so '3 passed', notes/todo.txt and 'verified' can come from turn 1; they cannot prove the turn-2 brief states them. The no-decision regex needs an explicit statement (no decision, nothing needed from you, do not need anything, decision ... none), so a bare 'none' fails; 'unverified' does not satisfy the verified regex. Skills: catch-up must run; context-generate, distill, consolidate and promote must not."
+}

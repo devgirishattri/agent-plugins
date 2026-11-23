@@ -13,9 +13,9 @@ Every plugin below ships for both providers at the same version number.
 |--------|---------|---------|
 | `session-manager` | 1.8.1 | List, search, and delete local sessions. Codex also supports archive and unarchive. |
 | `session-chat` | 0.17.24 | Name tmux panes, send messages, and dispatch tasks between sessions |
-| `session-scheduler` | 0.7.13 | Track and assign task ids across orchestrator, executor, and reviewer panes |
-| `knowledge` | 0.5.14 | Unified taxonomy tooling for durable project knowledge: docs, memory, and context snapshots in one plugin. Adds a native memory store with consolidation, promotion, deterministic search/recall, a backlink graph, and a read-only cross-store doctor. Absorbs the retired `session-context` and `creating-docs` |
-| `session-workspace` | 0.18.1 | Config-driven tmux workspace with strict-v1 role policy, reviewed Git orchestration, and peer orchestrators with on-demand workers |
+| `session-scheduler` | 0.7.14 | Track and assign tasks, retain decision notes, and route work to reviewers |
+| `knowledge` | 0.6.0 | Manage project docs, memory and handoffs with deterministic recall, consolidation, promotion, a backlink graph and a cross-store doctor. Explain code, summarize progress and propose safeguards for repeated mistakes |
+| `session-workspace` | 0.19.0 | Config-driven tmux workspace with strict-v1 role policy, reviewed Git orchestration, and peer orchestrators with on-demand workers |
 | `chronos` | 0.1.5 | Inject fresh current date/time context with every prompt for time/day-aware agents |
 | `session-walkthrough` | 0.3.1 | Walk users through session changes with a live in-browser overlay tour |
 
@@ -256,7 +256,17 @@ Knowledge 0.5.0 adds `distill`: say “wrap up this session” or invoke
 memory, configured tickets and context as one concrete batch. After approval,
 it applies the changes through existing writers and saves context last with
 actual outcomes. It does not ask you to invoke each writer separately.
-`reflect` remains the write-free current-task alternative.
+`reflect` proposes lessons from the current task. When two distinct
+occurrences show the same mistake, it can propose a guard and a regression
+check for the owning plugin.
+
+Ask “How does this work, and why was it designed this way?” to select
+`explain`. It traces the current code and cites the recorded rationale.
+Ask “Catch me up since my last request” to select `catch-up`. It reports
+verified outcomes, open work and any decisions that need you. Both answer
+in the conversation. Explicit entry points include `/knowledge:explain`
+and `/knowledge:catch-up` on Claude, or `$knowledge:explain` and
+`$knowledge:catch-up` on Codex.
 
 Distill uses existing, configured tracker tools; it does not ship a Jira client
 or configure credentials. Missing tracker access yields drafts. It avoids
@@ -396,6 +406,11 @@ and consumers need scheduler 0.7.0. Verification needs Python 3 and Git, runs
 with an isolated environment, and preserves the active harness policy. Local
 digests do not authenticate an external runner or authorize a release.
 
+For a consequential review or recovery, the author can put the choice,
+reason, evidence and result in the existing note. Contracted review stores
+the exact note before dispatch, including when delivery later becomes
+uncertain. Read the recorded notes with `task-status <id>` on either provider.
+
 New scheduler IDs use `task-<epoch>-<8hex>` from OS randomness. Existing task
 IDs remain valid. Creation refuses collisions among cooperating scheduler
 writers under the shared task lock, then atomically publishes complete JSON.
@@ -438,6 +453,18 @@ comparable repeated measurements, and end-to-end effects. `behavioral-eval`
 grades observable actions and artifacts, with model runs still requiring an
 explicit spending ceiling. `pr-status` performs one structured, read-only GitHub
 check for CI, review, thread and merge blockers; unknown data never becomes ready.
+
+Ask “Which interface fits these callers?” to select `design-sketch`. It
+compares a proposed design with a simpler alternative and identifies the
+observation that could settle the choice. It works without workspace setup
+and can contribute to a configured plan review. For races, retries and
+late results, `verification-recipe` includes guidance on bounded state
+checks. In this checkout, `python3 -B scripts/test-scheduler-state-model.py`
+explores two assignment generations. It replays both a delayed verification
+request and a completed check that tries to publish after reassignment.
+
+These workflows and the related knowledge and scheduler additions adapt ideas
+from Lauren Tan’s [pstack skill collection](https://github.com/cursor/plugins/tree/0b46ec399d55f2829e88822998f53b84944837d3/pstack).
 
 In this source checkout, run the isolated scheduler pilot with
 `python3 -B scripts/verify-scheduler-workflow.py run --provider codex --output .tmp/verification/codex-run-1`

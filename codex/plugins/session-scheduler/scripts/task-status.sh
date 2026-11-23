@@ -93,6 +93,10 @@ case "$MODE" in
     [ "$flags" != "-" ] && printf 'Flags\t%s\n' "$flags"
     home=$(jq -r '.meta.scheduler_home // .scheduler_home // empty' "$task")
     [ -n "$home" ] && printf 'Scheduler home\t%s\n' "$home"
+    jq -r '.history | arrays | .[] | objects
+      | select(.event == "review" or .event == "review-dispatching" or .event == "reconciled")
+      | select((.note | type) == "string")
+      | "Review/recovery note\t" + ({ts, event, actor, note} | tojson)' "$task"
     print_verdict_events "$task"
     deps=$(jq -r '(.depends_on // [])[]' "$task" 2>/dev/null)
     if [ -n "$deps" ]; then

@@ -1291,6 +1291,22 @@ The bundled [scheduler pilot](skills/verification-recipe/references/scheduler-pi
 verification pilot that only works from the agent-plugins source checkout;
 its root runner is not installed with the plugin.
 
+## Design sketch and bounded state check (0.19.0)
+
+- `design-sketch` — a read-only sketch for an ambiguous interface or competing
+  designs. It names the actual caller, the proposed interface, a simpler
+  alternative, and the observation that would change the decision. It works in
+  any session and needs no configured orchestrator. Simple or already-decided work needs no
+  sketch. A plan review can include the sketch; it adds no approval step.
+- `verification-recipe` gains an optional bounded state check for concurrency
+  and retry behavior. It explores every event ordering within stated bounds to
+  test one invariant, with a mutant control and a valid-sequence control. It
+  uses the project's existing test tooling by default.
+
+Neither addition adds a config field, hook, permission grant, ledger, or default
+external dependency. Claude invokes them as `/session-workspace:<skill>` and
+Codex as `$session-workspace:<skill>`.
+
 ## The bootstrap shim
 
 The per-project alternative to the machine-wide dispatcher (see "The two entry

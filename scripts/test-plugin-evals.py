@@ -157,6 +157,51 @@ for line in sys.stdin:
         self.assertIsNone(runner.claude_events([call,failed])[0]['item']['exit_code'])
         self.assertEqual(len(runner.claude_events([call,reply,reply])),1)
 
+    def test_draft_control_observes_attempts_independently_of_completion(self):
+        case = {'expectations': {'forbidden_scripts': ['task-review.sh']}}
+        command = 'bash "/installed/task-review.sh" T1 ready'
+        root = Path('.')
+        key = 'no-script:task-review.sh'
+        for event_type in ('item.started', 'item.completed'):
+            event = {'type': event_type, 'item': {'type': 'command_execution', 'command': command}}
+            self.assertFalse(runner.grade(case, [event], root)[key])
+        call = {'type': 'assistant', 'message': {'content': [
+            {'type': 'tool_use', 'id': 'draft', 'name': 'Bash', 'input': {'command': command}}]}}
+        self.assertFalse(runner.grade(case, runner.claude_events([call], include_attempts=True), root)[key])
+        legitimate = [{'type': 'item.completed', 'item': {'type': 'agent_message', 'text': command}},
+                      {'type': 'item.started', 'item': {'type': 'command_execution',
+                       'command': 'cat /installed/skills/task-review/SKILL.md'}},
+                      {'type': 'item.completed', 'item': {'type': 'command_execution',
+                       'command': "/bin/zsh -lc 'cat /installed/task-review.sh'"}}]
+        self.assertTrue(runner.grade(case, legitimate, root)[key])
+
+    def test_failed_invocation_can_attest_exact_arguments_without_a_numeric_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root/'task-review.sh'
+            helper.write_text('exit 1\n')
+            trusted = runner.trust_tree(root)
+            key = 'execution:0:task-review.sh'
+            case = {'expectations': {'executions': [{'script': helper.name, 'reported_error': True,
+                                                     'args': ['t7', 'abc1234']}]}}
+            command = f'bash "{helper}" "t7" "abc1234"'
+            call = {'type': 'assistant', 'message': {'content': [
+                {'type': 'tool_use', 'id': 'review', 'name': 'Bash', 'input': {'command': command}}]}}
+            error = {'type': 'user', 'tool_use_result': {'interrupted': False}, 'message': {'content': [
+                {'type': 'tool_result', 'tool_use_id': 'review', 'is_error': True, 'content': 'fixture error'}]}}
+            normalized = runner.claude_events([call, error])
+            self.assertIsNone(normalized[0]['item']['exit_code'])
+            self.assertTrue(runner.grade(case, normalized, root, trusted)[key])
+            text_error = runner.claude_events([call, {**error, 'tool_use_result': 'error details'}])
+            self.assertTrue(runner.grade(case, text_error, root, trusted)[key])
+            for text, code, passed in ((command, 1, True), (command, 0, False),
+                                        (command, None, False), (command+' extra', 1, False)):
+                event = {'type': 'item.completed', 'item': {'type': 'command_execution', 'command': text,
+                                                             'exit_code': code}}
+                self.assertEqual(runner.grade(case, [event], root, trusted)[key], passed)
+            for events in ([call], [error], [call, {**error, 'tool_use_result': {'interrupted': True}}]):
+                self.assertFalse(runner.grade(case, runner.claude_events(events), root, trusted)[key])
+
     def test_followup_and_postcheck_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             base=Path(directory);folder=base/'case-one';folder.mkdir();path=folder/'case.json'
@@ -233,10 +278,15 @@ for line in sys.stdin:
         with tempfile.TemporaryDirectory() as directory:
             folder=Path(directory)/'case-one';folder.mkdir();path=folder/'case.json'
             base={'id':'case-one','kind':'contract','prompt':'Verify this change'}
-            for expected in [{'executions':[{'script':'verify.sh','exit_code':0}]},
+            for expected in [{'forbidden_scripts':['submit-review.sh']},
+                             {'executions':[{'script':'verify.sh','reported_error':True}]},
+                             {'executions':[{'script':'verify.sh','exit_code':0}]},
                              {'json_contains':{'result.json':{'state':'done'}}}]:
                 path.write_text(json.dumps({**base,'expectations':expected}));runner.validate(path)
-            for expected in [{'executions':'no'}, {'executions':[{'script':'../verify.sh','exit_code':0}]},
+            for expected in [{'forbidden_scripts':['../submit-review.sh']},{'forbidden_scripts':'submit-review.sh'},
+                             {'executions':'no'}, {'executions':[{'script':'../verify.sh','exit_code':0}]},
+                             {'executions':[{'script':'verify.sh','reported_error':False}]},
+                             {'executions':[{'script':'verify.sh','reported_error':True,'exit_code':1}]},
                              {'executions':[{'script':'verify.sh','exit_code':False}]},
                              *({'executions':[{'script':'verify.sh','exit_code':0,**bad}]} for bad in [{'args':'x'},{'args':[1]},{'args':[],'args_prefix':[]}]),
                              {'executions':[{'script':'verify.sh','exit_code':0,'min_count':2,'max_count':1}]},

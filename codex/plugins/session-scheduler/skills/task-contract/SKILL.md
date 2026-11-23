@@ -80,6 +80,12 @@ unaffected.
    bash "<PLUGIN_ROOT>/scripts/task-contract.sh" reconcile <id> --generation <N> --note "<observed outcome and recovery rationale>"
    ```
 
+   For a consequential choice, put the decision, reason, evidence reference
+   and observed result or remaining uncertainty in this existing note.
+   Preserve supplied wording. The task history retains the review note at
+   reservation time and the reconciliation note at its transition. Read both
+   with `$session-scheduler:task-status <task-id>`.
+
    A session-chat status 4 warning means the input is staged and the durable packet is queued. Press Enter once in the named pane. Do not resend or reconcile solely for this warning.
 
    An in-flight reservation must have expired first. Reconcile never undoes
@@ -132,6 +138,12 @@ until the owner reconciles it. Direct calls to `task-contract.sh` for a
 transition are not allowed. Use the normal task commands.
 
 ## Limits
+
+The marketplace source checkout has a bounded state model for ambiguous
+delivery, reconciliation and late verification results. Run
+`python3 -B scripts/test-scheduler-state-model.py` there to replay its
+counterexample against both provider implementations. The check uses
+disposable tasks and reports the bounds and source identity.
 
 Receipts, digests, and admissions establish local consistency on this host.
 They are not signatures, do not resist tampering by the same user, do not

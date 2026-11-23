@@ -1,0 +1,5 @@
+interface:
+  display_name: "Explain project code"
+  short_description: "Trace how code works and why a design was chosen"
+policy:
+  allow_implicit_invocation: true

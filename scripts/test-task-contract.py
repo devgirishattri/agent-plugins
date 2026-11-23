@@ -13,7 +13,7 @@ from tmux_test_fixtures import run_in_pane
 ROOT=Path(__file__).resolve().parents[1]
 
 
-class Contracts(unittest.TestCase):
+class ContractFixture(unittest.TestCase):
     provider='codex/plugins'
 
     def setUp(self):
@@ -44,6 +44,8 @@ class Contracts(unittest.TestCase):
     def review(self): self.store.actor='executor';return self.store.transition('review',1,'ready')
     def complete(self): self.store.actor='reviewer';return self.store.transition('done',1,'APPROVE inspected exact source')
 
+
+class Contracts(ContractFixture):
     def test_full_cycle_and_source_log_receipt_expiry_tampering(self):
         self.assign();self.assertEqual(self.verify()['state'],'passed');self.review();self.complete()
         self.assertEqual(self.store.inspect()['state'],'admitted')
@@ -99,6 +101,46 @@ class Contracts(unittest.TestCase):
         revision=data['contract']['revision'];self.store.reconcile(1,'confirmed no running worker')
         with self.assertRaises(ValueError): self.store.finish(revision,lambda d,c: c.update(phase='idle'))
         self.store.dispatch=lambda *args: True;self.assertEqual(self.assign()['state'],'assigned')
+
+    def test_review_note_survives_uncertain_delivery_and_reconciliation(self):
+        self.assign()
+        self.verify()
+        note = "Keep the original assignment. The second receipt matched the source.\nReview is pending."
+        def uncertain_delivery(target, packet):
+            self.assertEqual(target, 'reviewer')
+            self.assertIn(note, packet)
+            event = self.read()['history'][-1]
+            self.assertEqual((event['event'], event['note']), ('review-dispatching', note))
+            return False
+
+        self.store.dispatch = uncertain_delivery
+        self.assertEqual(self.store.transition('review', 1, note)['state'], 'uncertain')
+        self.store.actor = 'owner'
+        recovery = 'Worker stopped. The dispatch outcome was checked before retry.'
+        self.store.reconcile(1, recovery)
+        events = [(item['event'], item['note']) for item in self.read()['history']]
+        self.assertEqual(events.count(('review-dispatching', note)), 1)
+        self.assertEqual(events[-1], ('reconciled', recovery))
+
+    def test_single_task_status_shows_recorded_decision_notes(self):
+        note = 'Used the original receipt.\nThe review remains open.'
+        recovery = 'Receipt confirmed. The executor stopped before retry.'
+        status = ['bash', str(self.module_path.with_name('task-status.sh'))]
+        data = self.read()
+        data['history'] = [
+            {'event': 'review', 'actor': 'executor', 'note': 'Initial review'},
+            {'event': 'review-dispatching', 'actor': 'executor', 'note': note},
+            {'event': 'reconciled', 'actor': 'owner', 'note': recovery},
+        ]
+        self.write(data)
+        before = self.path.read_bytes()
+        detail = subprocess.run([*status, 'T1'], check=True, capture_output=True, text=True).stdout
+        for value in ('Initial review', note, recovery):
+            self.assertIn(json.dumps(value), detail)
+        listing = subprocess.run([*status, '--all'], check=True, capture_output=True, text=True).stdout
+        self.assertIn('T1', listing)
+        self.assertNotIn(recovery, listing)
+        self.assertEqual(self.path.read_bytes(), before)
 
     def test_legacy_close_cannot_satisfy_admission(self):
         self.assign();data=self.read();data['status']='done';self.write(data)
@@ -195,6 +237,8 @@ class Contracts(unittest.TestCase):
             run(panes[0],'task-assign.sh','executor','T1','Implement fixture source')
             run(panes[1],'task-contract.sh','verify','T1','--generation','1','--spec-digest',self.mod.hashed(self.spec))
             run(panes[1],'task-review.sh','T1','--generation','1','ready for independent review')
+            notes = [e['note'] for e in self.read()['history'] if e['event'] == 'review-dispatching']
+            self.assertEqual(notes, ['ready for independent review'])
             before = self.path.read_bytes()
             done = ['python3', str(self.module_path), 'done', 'T1', '--generation', '1', '--note', 'fixture verdict']
             wrong_pane = dict(env, TMUX_PANE=panes[2], SESSION_CHAT_PANE_NAME='reviewer')

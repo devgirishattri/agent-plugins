@@ -52,8 +52,7 @@ command -v ruby >/dev/null 2>&1 || fail "ruby is required to validate command YA
 ruby <<'RUBY'
 require "yaml"
 
-files = Dir.glob("{plugins,codex/plugins}/*/commands/*.md").sort
-files.each do |path|
+def descriptor(path)
   content = File.read(path, encoding: "UTF-8")
   match = content.match(/\A---\s*\n(.*?)\n---\s*\n/m)
   abort("ERROR: #{path}: missing or unclosed YAML frontmatter") unless match
@@ -64,11 +63,41 @@ files.each do |path|
   end
   abort("ERROR: #{path}: frontmatter must be a mapping") unless data.is_a?(Hash)
   abort("ERROR: #{path}: description must be a non-empty string") unless data["description"].is_a?(String) && !data["description"].strip.empty?
+  data
+end
+
+Dir.glob("{plugins,codex/plugins}/*/commands/*.md").sort.each do |path|
+  data = descriptor(path)
   if data.key?("argument-hint") && !data["argument-hint"].is_a?(String)
     abort("ERROR: #{path}: argument-hint must be a quoted/string scalar")
   end
 end
 puts "OK: command YAML frontmatter is valid"
+
+# Natural-language workflows need a visible description and an eligible entry
+# point on each provider. Selection frequency is measured by behavioral evals.
+discoverable = {
+  "knowledge" => %w[explain catch-up reflect],
+  "session-scheduler" => %w[task-review task-contract],
+  "session-workspace" => %w[design-sketch verification-recipe]
+}
+discoverable.each do |plugin, names|
+  names.each do |name|
+    base = "plugins/#{plugin}"
+    claude = ["#{base}/skills/#{name}/SKILL.md", "#{base}/commands/#{name}.md"].find { |file| File.file?(file) }
+    abort("ERROR: missing Claude workflow #{plugin}:#{name}") unless claude
+    abort("ERROR: #{claude} disables model invocation") unless descriptor(claude).fetch("disable-model-invocation", false) == false
+    codex = "codex/#{base}/skills/#{name}"
+    descriptor("#{codex}/SKILL.md")
+    path = "#{codex}/agents/openai.yaml"
+    next unless File.file?(path)
+    metadata = YAML.safe_load(File.read(path), permitted_classes: [], aliases: false)
+    unless metadata.fetch("policy", {}).fetch("allow_implicit_invocation", true) == true
+      abort("ERROR: #{path} disables implicit invocation")
+    end
+  end
+end
+puts "OK: both providers expose the seven workflow entry points for implicit selection"
 RUBY
 
 # CI runs the release suites as parallel shard jobs behind one gating job named
@@ -1202,6 +1231,7 @@ bash codex/plugins/knowledge/scripts/test-runner-guard.sh
 python3 -B scripts/test-verification-evidence.py
 python3 -B scripts/test-pr-status.py
 python3 -B scripts/test-task-contract.py
+python3 -B scripts/test-scheduler-state-model.py
 python3 -B scripts/test-contract-legacy.py
 python3 -B scripts/test-reliability-grammar.py
 python3 -B scripts/test-contract-harness.py --provider claude

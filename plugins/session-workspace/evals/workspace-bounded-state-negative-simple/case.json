@@ -1,0 +1,24 @@
+{
+  "id": "workspace-bounded-state-negative-simple",
+  "kind": "negative",
+  "note": "Behavioral outcome UNMEASURED: no model run was made. Nearby control for workspace-bounded-state-positive: the same retry and late-ack subject, but the user asks to run a check that already exists. The agent must run tests/run.sh directly and report its result without loading verification-recipe. Limits: tool_used matches the script path as a substring of a completed command; the fixture script is not a trusted plugin script, so no executions expectation is used and its exit status is not graded.",
+  "prompt": "We already have tests/run.sh for the queue's retry and late-ack ordering. Run it and tell me the result.",
+  "expectations": {
+    "regex": [
+      "4 passed"
+    ],
+    "tool_used": [
+      "tests/run.sh"
+    ],
+    "tool_used_any": [],
+    "forbidden_skills": [
+      "verification-recipe",
+      "design-sketch",
+      "workspace-start",
+      "workspace-stop",
+      "workspace-restart"
+    ],
+    "files": {}
+  },
+  "scaffold": "scaffold.sh"
+}

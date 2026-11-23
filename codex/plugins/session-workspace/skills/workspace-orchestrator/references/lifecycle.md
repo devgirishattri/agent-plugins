@@ -48,6 +48,11 @@ before push or deploy.
 
 ## Plan review
 
+When the plan introduces an interface or leaves competing designs open, use
+the [design sketch](../../design-sketch/SKILL.md) in the existing plan packet.
+Include the caller, simpler alternative and the observation that would
+change the choice. Ordinary plans use the existing packet directly.
+
 1. Run status and obtain the applicable target `AGENTS.md` files. A v5 environment coordinator obtains them through its executor and has its reviewer verify the supplied evidence.
 2. File-dispatch a read-only `PLAN REVIEW` to the configured reviewer. Include
    the shared packet, complete plan, files, acceptance criteria, verification,
